@@ -6,10 +6,9 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorRef, ActorResult, Down, DownReason, GraphBuilder, MonitorEvent, MonitorRef,
-    RawActor, RebindPolicy, RunnableActor, RunnableActorFactory, SupervisedActors,
-    prelude::Continue,
+    RawActor, RebindPolicy, RunnableActor, RunnableActorFactory, Runtime, prelude::Continue,
 };
-use tokio_supervisor::{ShutdownPolicy, SupervisorBuilder};
+use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Copy)]
@@ -1128,9 +1127,10 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
         }
     });
     let graph = builder.build().expect("valid graph");
-    let runtime = SupervisedActors::new(graph)
+    let runtime = Runtime::builder()
+        .graph(graph)
         .actor_shutdown(&peer_ref, ShutdownPolicy::abort())
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
     started(&mut peer_started).await;

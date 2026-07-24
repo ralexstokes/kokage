@@ -99,7 +99,7 @@ cycle and the actor is respawned.
 
 These defaults apply only to actors added with `add_actor`. Actors declared in
 the static graph remain registered after terminal exit, even when
-`SupervisedActors::actor_restart` gives them `RestartPolicy::Never`; static
+`RuntimeBuilder::actor_restart` gives them `RestartPolicy::Never`; static
 membership can be recreated from the graph when its supervisor restarts.
 
 `add_actor` returns an actor ref matching the factory's actor message type, and
@@ -208,12 +208,12 @@ otherwise identical local ids and epochs in sibling or restarted subtrees.
 
 For a raw nested `Supervisor` that does not need actor-aware behavior, start
 from `RuntimeHandle::supervisor_handle` and use
-`SupervisorHandle::add_supervisor`, `SupervisorHandle::supervisor`,
-`Graph::dynamic_factory`, and `SupervisorHandleExt` as the lower-level escape
-hatch. Actors added through that raw path are not part of runtime actor stats.
-Raw removals also bypass the runtime registry's immediate bookkeeping; the
-next `actor_stats()` sample reconciles tracked entries against the supervisor
-snapshot and prunes removed children.
+`SupervisorHandle::add_supervisor`, `SupervisorHandle::supervisor`, and the
+ordinary `tokio-supervisor` child APIs as the lower-level escape hatch. Raw
+children are not part of runtime actor stats. Raw removals also bypass the
+runtime registry's immediate bookkeeping; the next `actor_stats()` sample
+reconciles tracked entries against the supervisor snapshot and prunes removed
+children.
 
 ## Name-based discovery, when you want it
 

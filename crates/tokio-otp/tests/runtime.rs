@@ -15,12 +15,11 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, SupervisedActors,
-    SupervisorHandleExt, prelude::Continue,
+    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, prelude::Continue,
 };
 use tokio_supervisor::{
-    ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
-    Strategy, SupervisorBuilder, SupervisorError, SupervisorStateView,
+    ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
+    ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -85,8 +84,10 @@ where
     let actor_ref = builder.actor("worker", factory);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
 
     (runtime, actor_ref)
@@ -481,15 +482,12 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .remove_child("worker")
         .await
         .expect("tracked actor removed through raw handle");
-    let mut factory_graph = GraphBuilder::new();
-    factory_graph.actor("anchor", Drain::<()>::new);
-    let factory_graph = factory_graph.build().expect("factory graph builds");
-    let (replacement, _replacement_ref) = factory_graph
-        .dynamic_factory()
-        .actor("worker", Drain::<()>::new);
     handle
         .supervisor_handle()
-        .add_actor(replacement, DynamicActorOptions::default())
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
         .await
         .expect("untracked replacement added");
 
@@ -555,17 +553,14 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         Err(SendError::ActorTerminated { .. })
     ));
 
-    let mut factory_graph = GraphBuilder::new();
-    factory_graph.actor("anchor", Drain::<()>::new);
-    let factory_graph = factory_graph.build().expect("factory graph builds");
-    let (replacement, _replacement_ref) = factory_graph
-        .dynamic_factory()
-        .actor("dynamic-worker", Drain::<()>::new);
     subtree
         .supervisor_handle()
-        .add_actor(replacement, DynamicActorOptions::default())
+        .add_child(ChildSpec::new("dynamic-worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
         .await
-        .expect("same-id raw actor added in replacement subtree incarnation");
+        .expect("same-id raw child added in replacement subtree incarnation");
     assert!(
         handle
             .actor_stats()
@@ -896,14 +891,65 @@ async fn runtime_builder_wires_graph_into_supervised_runtime() {
 }
 
 #[tokio::test]
+async fn runtime_builder_mixes_actor_and_non_actor_children() {
+    let mut builder = GraphBuilder::new();
+    builder.actor("actor", Drain::<()>::new);
+    let graph = builder.build().expect("valid graph");
+    let sidecar_started = Arc::new(Notify::new());
+
+    let sidecar = ChildSpec::new("sidecar", {
+        let sidecar_started = sidecar_started.clone();
+        move |ctx| {
+            let sidecar_started = sidecar_started.clone();
+            async move {
+                sidecar_started.notify_one();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    });
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .child(sidecar)
+        .build()
+        .expect("runtime builds");
+    let handle = runtime.spawn();
+
+    timeout(Duration::from_secs(1), sidecar_started.notified())
+        .await
+        .expect("sidecar started");
+    timeout(
+        Duration::from_secs(1),
+        handle.subscribe_snapshots().wait_for(|snapshot| {
+            snapshot
+                .child("actor")
+                .is_some_and(|child| child.state == ChildStateView::Running)
+                && snapshot
+                    .child("sidecar")
+                    .is_some_and(|child| child.state == ChildStateView::Running)
+        }),
+    )
+    .await
+    .expect("actor and sidecar reported running")
+    .expect("snapshot channel stays open");
+
+    handle
+        .shutdown_and_wait()
+        .await
+        .expect("runtime shut down cleanly");
+}
+
+#[tokio::test]
 async fn snapshot_wait_reports_all_children_running_after_spawn() {
     let mut builder = GraphBuilder::new();
     builder.actor("one", Drain::<()>::new);
     builder.actor("two", Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -972,91 +1018,6 @@ async fn runtime_handle_exposes_restart_monitor_via_supervisor_handle() {
         .shutdown_and_wait()
         .await
         .expect("runtime shut down cleanly");
-}
-
-#[tokio::test]
-async fn nested_supervisor_handle_adds_and_restarts_runnable_actor() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph_builder = GraphBuilder::new();
-    graph_builder.actor("factory-anchor", Drain::<()>::new);
-    let graph = graph_builder.build().expect("graph is valid");
-    let (actor, actor_ref) =
-        graph
-            .dynamic_factory()
-            .actor("subscription", move || FailAfterObserve {
-                observed: observed_tx.clone(),
-            });
-
-    let nested = SupervisorBuilder::new()
-        .build()
-        .expect("empty nested supervisor is valid");
-    let outer = SupervisorBuilder::new()
-        .supervisor("venue", nested)
-        .build()
-        .expect("outer supervisor is valid");
-    let handle = outer.spawn();
-    let venue = handle
-        .supervisor("venue")
-        .expect("nested supervisor handle is available");
-
-    let unavailable = venue
-        .add_actor(actor.clone(), DynamicActorOptions::default())
-        .await;
-    assert!(matches!(
-        unavailable,
-        Err(tokio_supervisor::ControlError::Unavailable)
-    ));
-
-    timeout(
-        Duration::from_secs(1),
-        handle.subscribe_snapshots().wait_for(|snapshot| {
-            snapshot
-                .child("venue")
-                .and_then(|child| child.supervisor.as_ref())
-                .is_some_and(|supervisor| supervisor.state == SupervisorStateView::Running)
-        }),
-    )
-    .await
-    .expect("nested supervisor started within timeout")
-    .expect("snapshot channel remains open");
-
-    venue
-        .add_actor(actor, DynamicActorOptions::default())
-        .await
-        .expect("actor added to nested supervisor");
-    let restart = venue
-        .monitor_restart("subscription")
-        .expect("actor child is known to nested supervisor");
-
-    actor_ref
-        .send("first".to_owned())
-        .await
-        .expect("first message sent");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("first"));
-    timeout(Duration::from_secs(1), restart.into_future())
-        .await
-        .expect("actor restarted within timeout")
-        .expect("restart monitor succeeded");
-
-    actor_ref
-        .send("second".to_owned())
-        .await
-        .expect("ref rebound after restart");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("second"));
-
-    venue
-        .remove_child("subscription")
-        .await
-        .expect("actor removed from nested supervisor");
-    assert!(matches!(
-        actor_ref.send("after removal".to_owned()).await,
-        Err(SendError::ActorTerminated { .. })
-    ));
-
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("outer supervisor shut down cleanly");
 }
 
 #[derive(Clone)]
@@ -1241,9 +1202,10 @@ async fn actor_deadline_can_complete_before_strict_supervisor_deadline() {
             started: started.clone(),
         }
     });
-    let runtime = SupervisedActors::new(builder.build().expect("valid graph"))
+    let runtime = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
         .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_secs(1)))
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -1267,11 +1229,12 @@ async fn strict_supervisor_deadline_can_abort_before_actor_deadline() {
             started: started.clone(),
         }
     });
-    let runtime = SupervisedActors::new(builder.build().expect("valid graph"))
+    let runtime = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
         .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
             20,
         )))
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -1295,11 +1258,12 @@ async fn aborting_supervisor_deadline_can_complete_before_actor_deadline() {
             started: started.clone(),
         }
     });
-    let runtime = SupervisedActors::new(builder.build().expect("valid graph"))
+    let runtime = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
         .shutdown(ShutdownPolicy::cooperative_then_abort(
             Duration::from_millis(20),
         ))
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 

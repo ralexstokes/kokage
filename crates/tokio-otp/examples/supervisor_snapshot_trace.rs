@@ -10,10 +10,9 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, SupervisedActors,
-    prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, Runtime, prelude::Continue,
 };
-use tokio_supervisor::{RestartIntensity, Strategy, SupervisorBuilder};
+use tokio_supervisor::{RestartIntensity, Strategy};
 
 #[derive(Clone)]
 struct Frontend {
@@ -74,12 +73,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let graph = builder.build()?;
 
-    let runtime = SupervisedActors::new(graph)
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
         .actor_restart_intensity(
             &worker_ref,
             RestartIntensity::new(2, Duration::from_secs(1)),
         )
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))?;
+        .build()?;
     let handle = runtime.spawn();
     let mut events = handle.supervisor_handle().subscribe();
     let mut snapshots = handle.subscribe_snapshots();

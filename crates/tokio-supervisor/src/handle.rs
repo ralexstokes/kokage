@@ -411,8 +411,8 @@ pub(crate) struct SupervisorHandleInit {
 /// - **Shutdown**: [`shutdown`](Self::shutdown) /
 ///   [`shutdown_and_wait`](Self::shutdown_and_wait).
 /// - **Dynamic children**: [`add_child`](Self::add_child) /
-///   [`remove_child`](Self::remove_child) (and `_at` variants for nested
-///   supervisors).
+///   [`remove_child`](Self::remove_child). Use [`supervisor`](Self::supervisor)
+///   to obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`subscribe`](Self::subscribe) for (lossy) events,
 ///   [`snapshot`](Self::snapshot) / [`subscribe_snapshots`](Self::subscribe_snapshots)
 ///   for state, [`watch_restarts`](Self::watch_restarts) for reliable restart
@@ -717,15 +717,6 @@ impl SupervisorHandle {
     /// Returns a clone of the latest [`SupervisorSnapshot`].
     pub fn snapshot(&self) -> SupervisorSnapshot {
         self.snapshots_rx().borrow().clone()
-    }
-
-    /// Returns the broadcast sender for supervisor lifecycle events.
-    ///
-    /// This is useful when you need to create multiple independent receivers
-    /// (e.g. one per WebSocket connection) by calling
-    /// [`broadcast::Sender::subscribe`] on the returned sender.
-    pub fn event_sender(&self) -> broadcast::Sender<SupervisorEvent> {
-        self.events_tx()
     }
 
     /// Returns a watch receiver that is updated each time the supervisor's

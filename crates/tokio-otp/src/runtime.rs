@@ -1,10 +1,6 @@
 use std::{
     collections::HashMap,
-    future::Future,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -375,103 +371,11 @@ struct DynamicChildOptions {
     remove_on_exit: bool,
 }
 
-mod sealed {
-    pub trait Sealed {}
-
-    impl Sealed for tokio_supervisor::SupervisorHandle {}
-}
-
-/// Actor-aware extensions for any supervisor handle, including handles for
-/// nested supervisors.
-///
-/// Import this trait to connect actor-aware behavior to a raw supervisor
-/// handle. It can add a [`RunnableActor`] minted by
-/// [`Graph::dynamic_factory`](crate::Graph::dynamic_factory) directly to a
-/// running supervisor subtree, or pump reliable restart counts into an actor
-/// mailbox with [`watch_restarts_to`](Self::watch_restarts_to).
-///
-/// This trait is sealed and cannot be implemented outside `tokio-otp`.
-pub trait SupervisorHandleExt: sealed::Sealed {
-    /// Adds a runnable actor as a supervised child.
-    ///
-    /// The actor's label becomes the child id. Its stable binding is rebound
-    /// according to `options.restart`, and is terminated when the supervisor
-    /// can no longer restart the child or the child is removed.
-    ///
-    /// Actors added through this extension are not tracked by
-    /// [`RuntimeHandle::actor_stats`] or external observers built on it, even
-    /// when this is the root handle returned by
-    /// [`RuntimeHandle::supervisor_handle`]. Use [`RuntimeHandle::add_actor`]
-    /// when runtime stats visibility matters.
-    ///
-    /// If adding fails, the actor's binding is left intact so the call can be
-    /// retried with the same actor; senders on its ref keep waiting until an
-    /// add succeeds.
-    fn add_actor(
-        &self,
-        actor: RunnableActor,
-        options: DynamicActorOptions,
-    ) -> impl Future<Output = Result<(), ControlError>> + Send;
-
-    /// Pumps this supervisor's cumulative restart count into `target`.
-    ///
-    /// This is the actor-mailbox form of [`SupervisorHandle::watch_restarts`].
-    /// Each observation is the cumulative number of restarts since this watch
-    /// was created. It is passed to `map` and delivered with the target's
-    /// ordinary mailbox policy. Cumulative values make latest-wins conflation
-    /// safe, and the latest value is sent again after a target restart so a
-    /// fresh incarnation can restore its state. Consumers should therefore
-    /// treat observations as idempotent totals, not additive deltas.
-    ///
-    /// The pump stops when the returned [`RestartWatchRef`] is dropped or
-    /// cancelled, when the watched supervisor reaches a terminal state, or
-    /// when the target actor permanently terminates. It follows the target
-    /// through ordinary actor restarts.
-    fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchRef
-    where
-        M: Send + 'static,
-        F: FnMut(u64) -> M + Send + 'static;
-}
-
-impl SupervisorHandleExt for SupervisorHandle {
-    fn add_actor(
-        &self,
-        actor: RunnableActor,
-        options: DynamicActorOptions,
-    ) -> impl Future<Output = Result<(), ControlError>> + Send {
-        let options = options.child_options();
-        let (child, termination) = actor_child_spec_with_termination(
-            actor,
-            options.restart,
-            options.shutdown,
-            options.restart_intensity,
-            options.remove_on_exit,
-        );
-
-        async move {
-            let result = self.add_child(child).await.map(|_| ());
-            if result.is_err() {
-                termination.disarm();
-            }
-            result
-        }
-    }
-
-    fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchRef
-    where
-        M: Send + 'static,
-        F: FnMut(u64) -> M + Send + 'static,
-    {
-        spawn_restart_watch_to(self.watch_restarts(), target.clone(), map)
-    }
-}
-
 /// Cancellation guard for a restart-count mailbox pump.
 ///
-/// Created by [`RuntimeHandle::watch_restarts_to`] or
-/// [`SupervisorHandleExt::watch_restarts_to`]. Dropping the guard cancels the
-/// pump. It also stops automatically when the watched supervisor can no longer
-/// restart a child or when the target actor permanently terminates.
+/// Created by [`RuntimeHandle::watch_restarts_to`]. Dropping the guard cancels
+/// the pump. It also stops automatically when the watched supervisor can no
+/// longer restart a child or when the target actor permanently terminates.
 #[must_use = "dropping the guard immediately cancels the restart watch"]
 pub struct RestartWatchRef {
     cancellation: CancellationToken,
@@ -595,7 +499,45 @@ impl Runtime {
         crate::RuntimeBuilder::new()
     }
 
-    /// Creates a runtime from a supervisor.
+    /// Creates an actor-aware runtime around an arbitrary supervisor.
+    ///
+    /// This composition boundary is useful when runtime-managed dynamic actors
+    /// must share a supervisor with non-actor children. The supplied supervisor
+    /// starts with no actor metadata; actors added through
+    /// [`RuntimeHandle::add_actor`] are tracked normally.
+    ///
+    /// ```no_run
+    /// use tokio_otp::{
+    ///     Actor, ActorContext, ActorResult, DynamicActorOptions, Runtime,
+    ///     prelude::Continue,
+    /// };
+    /// use tokio_supervisor::{ChildSpec, SupervisorBuilder};
+    ///
+    /// struct Worker;
+    ///
+    /// impl Actor for Worker {
+    ///     type Msg = ();
+    ///
+    ///     async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    ///         Ok(Continue)
+    ///     }
+    /// }
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let supervisor = SupervisorBuilder::new()
+    ///     .child(ChildSpec::new("maintenance", |ctx| async move {
+    ///         ctx.shutdown_token().cancelled().await;
+    ///         Ok(())
+    ///     }))
+    ///     .build()?;
+    /// let handle = Runtime::new(supervisor).spawn();
+    /// handle
+    ///     .add_actor("worker", || Worker, DynamicActorOptions::new())
+    ///     .await?;
+    /// handle.shutdown_and_wait().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(supervisor: Supervisor) -> Self {
         Self {
             supervisor,
@@ -632,6 +574,35 @@ impl Runtime {
     /// after converting to a raw supervisor. Keep the full runtime and use
     /// [`spawn`](Self::spawn) if you need actor-aware runtime behavior.
     ///
+    /// ```no_run
+    /// use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, Runtime};
+    /// use tokio_otp::prelude::Continue;
+    /// use tokio_supervisor::SupervisorBuilder;
+    ///
+    /// struct Worker;
+    ///
+    /// impl Actor for Worker {
+    ///     type Msg = ();
+    ///
+    ///     async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    ///         Ok(Continue)
+    ///     }
+    /// }
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut graph = GraphBuilder::new();
+    /// graph.actor("worker", || Worker);
+    /// let actor_subtree = Runtime::builder()
+    ///     .graph(graph.build()?)
+    ///     .build()?
+    ///     .into_supervisor();
+    /// let root = SupervisorBuilder::new()
+    ///     .supervisor("actors", actor_subtree)
+    ///     .build()?;
+    /// # let _ = root;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn into_supervisor(self) -> Supervisor {
         self.supervisor
     }
@@ -963,28 +934,48 @@ impl std::fmt::Debug for RuntimeHandle {
 /// senders wait forever for a rebind.
 struct TerminateBindingOnDrop {
     actor: RunnableActor,
-    armed: AtomicBool,
 }
 
 impl TerminateBindingOnDrop {
     fn new(actor: RunnableActor) -> Self {
-        Self {
-            actor,
-            armed: AtomicBool::new(true),
-        }
-    }
-
-    fn disarm(&self) {
-        self.armed.store(false, Ordering::Release);
+        Self { actor }
     }
 }
 
 impl Drop for TerminateBindingOnDrop {
     fn drop(&mut self) {
-        if self.armed.load(Ordering::Acquire) {
-            self.actor.terminate_binding();
-        }
+        self.actor.terminate_binding();
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ActorOverrides {
+    pub(crate) restart: Option<RestartPolicy>,
+    pub(crate) restart_intensity: Option<RestartIntensity>,
+    pub(crate) shutdown: Option<ShutdownPolicy>,
+}
+
+pub(crate) fn actor_children(
+    graph: &crate::Graph,
+    default_restart: RestartPolicy,
+    default_shutdown: ShutdownPolicy,
+    overrides: &HashMap<String, ActorOverrides>,
+) -> Vec<ChildSpec> {
+    graph
+        .actors()
+        .iter()
+        .cloned()
+        .map(|actor| {
+            let actor_overrides = overrides.get(actor.label()).copied().unwrap_or_default();
+            actor_child_spec(
+                actor,
+                actor_overrides.restart.unwrap_or(default_restart),
+                actor_overrides.shutdown.unwrap_or(default_shutdown),
+                actor_overrides.restart_intensity,
+                false,
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn actor_child_spec(
@@ -994,16 +985,6 @@ pub(crate) fn actor_child_spec(
     restart_intensity: Option<RestartIntensity>,
     remove_on_exit: bool,
 ) -> ChildSpec {
-    actor_child_spec_with_termination(actor, restart, shutdown, restart_intensity, remove_on_exit).0
-}
-
-fn actor_child_spec_with_termination(
-    actor: RunnableActor,
-    restart: RestartPolicy,
-    shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartIntensity>,
-    remove_on_exit: bool,
-) -> (ChildSpec, Arc<TerminateBindingOnDrop>) {
     let actor_id = actor.label().to_owned();
     let rebind = rebind_policy_for_restart(restart);
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
@@ -1028,7 +1009,7 @@ fn actor_child_spec_with_termination(
         child = child.restart_intensity(intensity);
     }
 
-    (child, guard)
+    child
 }
 
 fn rebind_policy_for_restart(restart: RestartPolicy) -> RebindPolicy {

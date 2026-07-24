@@ -331,7 +331,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // `total_restarts` does not aggregate across depth.
     let restart_watch = handle
         .subtree("venues")
-        .expect("venues supervisor")
+        .expect("venues runtime subtree")
         .watch_restarts_to(&health, |total| HealthMsg::RestartsObserved { total });
 
     Ok(App {
@@ -433,7 +433,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     let venues = app
         .handle
         .subtree("venues")
-        .expect("venues supervisor")
+        .expect("venues runtime subtree")
         .supervisor_handle();
     let restarted = venues.monitor_restart("venue-a-feed")?;
     app.venue_a_feed.send(FeedMsg::Crash).await?;
@@ -648,7 +648,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     let venues = app
         .handle
         .subtree("venues")
-        .expect("venues supervisor")
+        .expect("venues runtime subtree")
         .supervisor_handle();
     for (id, feed) in [
         ("venue-a-feed", &app.venue_a_feed),

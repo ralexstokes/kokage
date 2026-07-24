@@ -229,31 +229,6 @@ The expression is type-checked against the field actor's message type, so
 options that require `MessageSize` add that requirement only to the annotated
 actor message.
 
-Graph visualizers can opt in to a descriptive snapshot of that shape. Add
-`#[topology(metadata)]` to the topology and declare each source actor's
-outgoing edges with `#[topology(sends_to(...))]`:
-
-```rust,ignore
-#[derive(Topology)]
-#[topology(metadata)]
-struct Pipeline {
-    #[topology(sends_to(parser))]
-    frontend: Frontend,
-    #[topology(sends_to(frontend, sink))]
-    parser: Parser,
-    sink: Sink,
-}
-
-let metadata = Pipeline::topology_metadata();
-```
-
-The metadata contains field names, fully qualified actor and message type
-names, and source/target/message-type triples for the declared edges. Edge
-targets are checked against the topology fields at compile time. The wiring
-closure remains ordinary Rust that the derive cannot inspect, so the edge
-declarations are descriptive and do not change or validate runtime wiring.
-Enable the `serde` feature to serialize the metadata types.
-
 ## Dynamic and Advanced Builder Wiring
 
 Use `GraphBuilder` directly when actors are dynamic, generated in a loop, or
@@ -333,7 +308,6 @@ newer message replaces a request before it is handled, the caller receives
 | `send` | Waits for a bound mailbox and retries across expected restart windows; FIFO queues wait for capacity, while conflating mailboxes replace stale state. |
 | `try_send` | Returns immediately; FIFO queues report full capacity, while conflating mailboxes replace stale state. |
 | `call` | Sends a message carrying `Reply<T>` and awaits the reply until its required caller-owned timeout expires. |
-| `call_unbounded` | Sends a request without a local timeout; use only when another mechanism bounds the protocol lifetime. |
 
 Refs are bound to long-lived mailbox bindings, not one actor incarnation. A
 ref minted at wiring time keeps working across per-actor supervised

@@ -12,12 +12,11 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Reply, SendError,
-    SupervisedActors, prelude::Continue,
+    ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Reply, Runtime,
+    SendError, prelude::Continue,
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy, Strategy,
-    SupervisorBuilder,
 };
 
 fn oneshot_slot<T>(tx: oneshot::Sender<T>) -> Arc<Mutex<Option<oneshot::Sender<T>>>> {
@@ -100,12 +99,14 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let supervisor = SupervisedActors::new(graph)
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
         .restart(RestartPolicy::OnFailure)
-        .build_supervisor(SupervisorBuilder::new().strategy(Strategy::OneForOne))
-        .expect("supervisor builds");
+        .build()
+        .expect("runtime builds");
 
-    let handle = supervisor.spawn();
+    let handle = runtime.spawn();
 
     frontend_ref
         .send("first".to_owned())
@@ -180,16 +181,18 @@ async fn send_waits_during_permanent_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let supervisor = SupervisedActors::new(graph)
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
         .actor_restart(&worker_ref, RestartPolicy::Always)
         .actor_restart_intensity(
             &worker_ref,
             RestartIntensity::new(10, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
         )
-        .build_supervisor(SupervisorBuilder::new().strategy(Strategy::OneForOne))
-        .expect("supervisor builds");
-    let handle = supervisor.spawn();
+        .build()
+        .expect("runtime builds");
+    let handle = runtime.spawn();
 
     timeout(Duration::from_secs(1), first_exited_rx)
         .await
@@ -247,11 +250,13 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let supervisor = SupervisedActors::new(graph)
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
         .restart(RestartPolicy::OnFailure)
-        .build_supervisor(SupervisorBuilder::new().strategy(Strategy::OneForOne))
-        .expect("supervisor builds");
-    let handle = supervisor.spawn();
+        .build()
+        .expect("runtime builds");
+    let handle = runtime.spawn();
 
     timeout(Duration::from_secs(1), exited_rx)
         .await
@@ -334,16 +339,18 @@ async fn call_succeeds_across_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let supervisor = SupervisedActors::new(graph)
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
         .actor_restart(&rpc_ref, RestartPolicy::OnFailure)
         .actor_restart_intensity(
             &rpc_ref,
             RestartIntensity::new(10, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
         )
-        .build_supervisor(SupervisorBuilder::new().strategy(Strategy::OneForOne))
-        .expect("supervisor builds");
-    let handle = supervisor.spawn();
+        .build()
+        .expect("runtime builds");
+    let handle = runtime.spawn();
 
     rpc_ref
         .send(RpcMsg::FailOnce)
