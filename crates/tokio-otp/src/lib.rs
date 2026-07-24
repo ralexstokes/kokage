@@ -282,10 +282,7 @@ pub use actor::{
     SupervisorPathSegment, TimerRef, TryRecvError,
 };
 pub use builder::RuntimeBuilder;
-pub use runtime::{
-    AddSubtreeError, DynamicActorOptions, RestartWatchRef, Runtime, RuntimeHandle,
-    SupervisorHandleExt,
-};
+pub use runtime::{AddSubtreeError, DynamicActorOptions, RestartWatchRef, Runtime, RuntimeHandle};
 pub use supervised_actors::SupervisedActors;
 pub use tokio_supervisor::{
     AutoShutdown, BackoffPolicy, ChildContext, ChildMembershipView, ChildResult, ChildSnapshot,

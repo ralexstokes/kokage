@@ -127,7 +127,7 @@ use std::{
 
 use metrics_util::debugging::Snapshotter;
 use tokio::time::Instant;
-use tokio_otp::{SupervisorHandleExt as _, prelude::*};
+use tokio_otp::prelude::*;
 
 use control::Control;
 use health::Health;
@@ -329,8 +329,8 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // per-venue supervisors, watch each nested handle as well:
     // `total_restarts` does not aggregate across depth.
     let restart_watch = handle
-        .supervisor("venues")
-        .expect("venues supervisor")
+        .subtree("venues")
+        .expect("venues runtime subtree")
         .watch_restarts_to(&health, |total| HealthMsg::RestartsObserved { total });
 
     Ok(App {
@@ -429,7 +429,10 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         }
     });
     let before_b = generation(app, "venue-b-feed");
-    let venues = app.handle.supervisor("venues").expect("venues supervisor");
+    let venues = app
+        .handle
+        .subtree("venues")
+        .expect("venues runtime subtree");
     let restarted = venues.monitor_restart("venue-a-feed")?;
     app.venue_a_feed.send(FeedMsg::Crash).await?;
     tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
@@ -640,7 +643,10 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
 
 async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
-    let venues = app.handle.supervisor("venues").expect("venues supervisor");
+    let venues = app
+        .handle
+        .subtree("venues")
+        .expect("venues runtime subtree");
     for (id, feed) in [
         ("venue-a-feed", &app.venue_a_feed),
         ("venue-b-feed", &app.venue_b_feed),
