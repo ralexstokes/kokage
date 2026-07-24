@@ -1,5 +1,0 @@
-error: expected at least one target actor field
-  --> tests/ui/topology/metadata_empty_sends_to.rs:17:16
-   |
-17 |     #[topology(sends_to())]
-   |                ^^^^^^^^
