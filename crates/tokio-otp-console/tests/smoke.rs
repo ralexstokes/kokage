@@ -452,6 +452,7 @@ async fn runtime_convenience_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
+        .supervisor_handle()
         .add_child(ChildSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())

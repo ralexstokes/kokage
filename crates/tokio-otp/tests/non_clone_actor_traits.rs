@@ -115,6 +115,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
         (0, 1)
     );
     let restarted = handle
+        .supervisor_handle()
         .monitor_restart("handler")
         .expect("restart monitor exists");
     actor_ref
@@ -184,6 +185,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     actor_ref.send(false).await.expect("first message accepted");
     assert_eq!(observed_rx.recv().await, Some((0, 1)));
     let restarted = handle
+        .supervisor_handle()
         .monitor_restart("raw")
         .expect("restart monitor exists");
     actor_ref.send(true).await.expect("crash accepted");

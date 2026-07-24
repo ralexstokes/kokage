@@ -72,7 +72,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.supervisor_handle().subscribe();
     let mut snapshots = handle.subscribe_snapshots();
 
     worker.send(()).await.expect("worker accepts message");

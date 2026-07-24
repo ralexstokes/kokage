@@ -234,7 +234,7 @@ impl Console {
     /// snapshots and events and samples actor stats without adding a console
     /// dependency or feature to `tokio-otp`.
     pub fn for_runtime(handle: &RuntimeHandle) -> ConsoleBuilder {
-        let events = handle.clone();
+        let events = handle.supervisor_handle();
         let stats = handle.clone();
         Console::builder()
             .snapshots(handle.subscribe_snapshots())

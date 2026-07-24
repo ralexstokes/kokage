@@ -127,7 +127,7 @@ use std::{
 
 use metrics_util::debugging::Snapshotter;
 use tokio::time::Instant;
-use tokio_otp::{SupervisorHandleExt as _, prelude::*};
+use tokio_otp::prelude::*;
 
 use control::Control;
 use health::Health;
@@ -319,8 +319,9 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let background_stop = CancellationToken::new();
     let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));
     // The aggregate restart breaker is a safety mechanism, so it must not be
-    // fed from the lossy event broadcast (`handle.subscribe()`), which can
-    // drop `ChildRestarted` events under load. Instead it watches the venues
+    // fed from the lossy event broadcast
+    // (`handle.supervisor_handle().subscribe()`), which can drop
+    // `ChildRestarted` events under load. Instead it watches the venues
     // supervisor's cumulative `total_restarts` counter over the lossless
     // snapshot watch channel: conflated updates still arrive as one delta
     // covering every restart, so the breaker can never silently under-count.
@@ -329,7 +330,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // per-venue supervisors, watch each nested handle as well:
     // `total_restarts` does not aggregate across depth.
     let restart_watch = handle
-        .supervisor("venues")
+        .subtree("venues")
         .expect("venues supervisor")
         .watch_restarts_to(&health, |total| HealthMsg::RestartsObserved { total });
 
@@ -429,7 +430,11 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         }
     });
     let before_b = generation(app, "venue-b-feed");
-    let venues = app.handle.supervisor("venues").expect("venues supervisor");
+    let venues = app
+        .handle
+        .subtree("venues")
+        .expect("venues supervisor")
+        .supervisor_handle();
     let restarted = venues.monitor_restart("venue-a-feed")?;
     app.venue_a_feed.send(FeedMsg::Crash).await?;
     tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
@@ -640,7 +645,11 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
 
 async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
-    let venues = app.handle.supervisor("venues").expect("venues supervisor");
+    let venues = app
+        .handle
+        .subtree("venues")
+        .expect("venues supervisor")
+        .supervisor_handle();
     for (id, feed) in [
         ("venue-a-feed", &app.venue_a_feed),
         ("venue-b-feed", &app.venue_b_feed),
