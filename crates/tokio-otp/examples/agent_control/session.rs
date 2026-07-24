@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -16,9 +16,9 @@ use tokio_otp::{
 
 use crate::{
     messages::{
-        BudgetMsg, ChatId, EVICT_FLUSH, GuardMsg, IDLE_TIMEOUT, JournalEntry, JournalMsg,
-        OutboundMsg, PHASE_TIMEOUT, PendingInput, ProgressMsg, Proof, Role, RouterMsg, RunOutput,
-        SessionMsg, TYPING_PERIOD, TaskId, ToolHostMsg,
+        BudgetMsg, ChatId, GuardMsg, IDLE_TIMEOUT, JournalEntry, JournalMsg, OutboundMsg,
+        PHASE_TIMEOUT, PendingInput, ProgressMsg, Proof, Role, RouterMsg, RunOutput, SessionMsg,
+        TYPING_PERIOD, TaskId, ToolHostMsg,
     },
     model::ModelClient,
     run::AgentRunFactory,
@@ -37,6 +37,7 @@ struct ActiveRun {
 pub struct Session {
     chat: ChatId,
     generation: u64,
+    subtree_id: String,
     journal: ActorRef<JournalMsg>,
     budget: ActorRef<BudgetMsg>,
     tool_host: ActorRef<ToolHostMsg>,
@@ -44,7 +45,7 @@ pub struct Session {
     outbound: ActorRef<OutboundMsg>,
     progress: ActorRef<ProgressMsg>,
     router: ActorRef<RouterMsg>,
-    sessions: RuntimeHandle,
+    subtree: Arc<OnceLock<RuntimeHandle>>,
     gate: Arc<AtomicBool>,
     model: Arc<dyn ModelClient>,
     task_sequence: Arc<AtomicU64>,
@@ -60,6 +61,8 @@ pub struct Session {
 #[derive(Clone)]
 pub struct SessionFactory {
     pub chat: ChatId,
+    pub generation: u64,
+    pub subtree_id: String,
     pub journal: ActorRef<JournalMsg>,
     pub budget: ActorRef<BudgetMsg>,
     pub tool_host: ActorRef<ToolHostMsg>,
@@ -67,11 +70,10 @@ pub struct SessionFactory {
     pub outbound: ActorRef<OutboundMsg>,
     pub progress: ActorRef<ProgressMsg>,
     pub router: ActorRef<RouterMsg>,
-    pub sessions: RuntimeHandle,
+    pub subtree: Arc<OnceLock<RuntimeHandle>>,
     pub gate: Arc<AtomicBool>,
     pub model: Arc<dyn ModelClient>,
     pub task_sequence: Arc<AtomicU64>,
-    pub generation_sequence: Arc<AtomicU64>,
     pub proof: Proof,
 }
 
@@ -79,10 +81,10 @@ impl tokio_otp::ActorFactory for SessionFactory {
     type Actor = Session;
 
     fn build(&self) -> Self::Actor {
-        let generation = self.generation_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         Session {
             chat: self.chat,
-            generation,
+            generation: self.generation,
+            subtree_id: self.subtree_id.clone(),
             journal: self.journal.clone(),
             budget: self.budget.clone(),
             tool_host: self.tool_host.clone(),
@@ -90,7 +92,7 @@ impl tokio_otp::ActorFactory for SessionFactory {
             outbound: self.outbound.clone(),
             progress: self.progress.clone(),
             router: self.router.clone(),
-            sessions: self.sessions.clone(),
+            subtree: self.subtree.clone(),
             gate: self.gate.clone(),
             model: self.model.clone(),
             task_sequence: self.task_sequence.clone(),
@@ -149,9 +151,11 @@ impl Session {
             Role::Engineer => "engineer",
             Role::Reviewer => "reviewer",
         };
-        let id = format!("run:{}:{task}:{role_name}:{attempt}", self.chat);
+        let id = format!("run:{task}:{role_name}:{attempt}");
         let run_ref = self
-            .sessions
+            .subtree
+            .get()
+            .expect("session subtree handle bound before traffic")
             .add_actor_with_options(
                 id.clone(),
                 AgentRunFactory {
@@ -253,15 +257,6 @@ impl Actor for Session {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &ActorContext<Self::Msg>) -> Result<(), tokio_otp::BoxError> {
-        // Models a per-conversation teardown flush. The deterministic delay
-        // also holds the router's Evicting window open so phase 7's raced
-        // injection observably lands in the membership buffer instead of
-        // slipping in after Removed.
-        tokio::time::sleep(EVICT_FLUSH).await;
-        Ok(())
-    }
-
     fn drain_policy(&self) -> DrainPolicy {
         // A retiring session must drain, not discard: a message the router
         // forwarded before it processed our Evict would otherwise die with
@@ -292,12 +287,12 @@ impl Actor for Session {
             }
             SessionMsg::UserMessage { envelope, text } => {
                 if self.evict_requested {
-                    // This incarnation has already asked the router to remove
-                    // it; accepting new work here would lose it when removal
-                    // lands. Bounce the message back to the router: our Evict
-                    // was enqueued there before this bounce can be, so the
-                    // router is guaranteed to buffer it for the replacement
-                    // session rather than forward it back to us.
+                    // This incarnation has already asked the router to drop
+                    // its subtree; accepting new work here would lose it when
+                    // removal lands. Bounce the message back to the router:
+                    // our Evict was enqueued there before this bounce can be,
+                    // so the router routes it to a fresh replacement subtree
+                    // rather than forwarding it back to us.
                     self.router
                         .send(RouterMsg::UserMessage {
                             envelope,
@@ -454,7 +449,23 @@ impl Actor for Session {
                 }
             }
             SessionMsg::IdleSweep { generation } => {
-                if generation == self.idle_generation && self.active.is_none() {
+                if generation != self.idle_generation {
+                    return Ok(Continue);
+                }
+                if self.evict_requested {
+                    // Retirement is a request, not a handshake. If the
+                    // membership writer restarted and lost it, this
+                    // incarnation would otherwise idle unowned forever, so
+                    // re-send until teardown lands — idempotent, because the
+                    // router retires by subtree id.
+                    self.router
+                        .send(RouterMsg::Evict {
+                            chat: self.chat,
+                            subtree_id: self.subtree_id.clone(),
+                        })
+                        .await?;
+                    self.arm_idle(ctx);
+                } else if self.active.is_none() {
                     let task = self.task_sequence.load(Ordering::Relaxed);
                     let _ = self
                         .append(JournalEntry::Checkpoint {
@@ -466,10 +477,11 @@ impl Actor for Session {
                     self.router
                         .send(RouterMsg::Evict {
                             chat: self.chat,
-                            generation: self.generation,
+                            subtree_id: self.subtree_id.clone(),
                         })
                         .await?;
                     self.evict_requested = true;
+                    self.arm_idle(ctx);
                 }
             }
         }

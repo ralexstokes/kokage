@@ -7,7 +7,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{ActorRef, MessageSize, MonitorEvent, Reply, RuntimeHandle};
+use tokio_otp::{ActorRef, MessageSize, MonitorEvent, Reply};
 
 pub type ChatId = &'static str;
 pub type EnvelopeId = u64;
@@ -21,7 +21,6 @@ pub const PHASE_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MODEL_DEADLINE: Duration = Duration::from_millis(500);
 pub const TOOL_DEADLINE: Duration = Duration::from_millis(200);
 pub const IDLE_TIMEOUT: Duration = Duration::from_millis(350);
-pub const EVICT_FLUSH: Duration = Duration::from_millis(10);
 pub const TYPING_PERIOD: Duration = Duration::from_millis(20);
 pub const GUARD_WINDOW: Duration = Duration::from_secs(1);
 pub const GUARD_THRESHOLD: usize = 2;
@@ -236,23 +235,34 @@ pub enum ToolHostMsg {
 
 #[derive(Debug)]
 pub enum RouterMsg {
-    Bind {
-        sessions: RuntimeHandle,
-    },
     UserMessage {
         envelope: EnvelopeId,
         chat: ChatId,
         text: String,
     },
+    /// A session's request to retire the named incarnation. The subtree id
+    /// doubles as the incarnation identity, so the router honors it only
+    /// against the slot that minted it and sweeps anything else by name.
     Evict {
         chat: ChatId,
-        generation: u64,
+        subtree_id: String,
     },
-    Removed {
+    /// Completion of a pipelined `add_subtree` for the chat's `Mounting` slot.
+    Mounted {
         chat: ChatId,
+        ok: bool,
     },
-    RetryRemove {
+    /// Completion of a pipelined `remove_child` for the chat's `Removing`
+    /// slot.
+    Reaped {
         chat: ChatId,
+        subtree_id: String,
+        done: bool,
+    },
+    /// Completion of a slot-less removal (orphan or stale-duplicate sweep).
+    Swept {
+        subtree_id: String,
+        done: bool,
     },
     PauseChanged {
         paused: bool,
@@ -356,7 +366,6 @@ pub struct ProofState {
     pub session_generations: HashMap<ChatId, u64>,
     pub run_started: HashMap<ChatId, usize>,
     pub run_terminal_at: HashMap<ChatId, Instant>,
-    pub evict_buffered: usize,
 }
 
 pub type Proof = Arc<Mutex<ProofState>>;
