@@ -99,7 +99,7 @@ cycle and the actor is respawned.
 
 These defaults apply only to actors added with `add_actor`. Actors declared in
 the static graph remain registered after terminal exit, even when
-`SupervisedActors::actor_restart` gives them `RestartPolicy::Never`; static
+`RuntimeBuilder::actor_restart` gives them `RestartPolicy::Never`; static
 membership can be recreated from the graph when its supervisor restarts.
 
 `add_actor` returns an actor ref matching the factory's actor message type, and

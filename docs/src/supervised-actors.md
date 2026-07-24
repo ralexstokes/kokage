@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `Runtime::builder()` is the front door for the common case: it turns every
-graph actor into its own supervised child with uniform policies and packages
+graph actor into its own supervised child and packages
 the result into a `Runtime` with a supervisor and dynamic actor support.
 
 Nested actor graphs stay on that path too. Build each graph independently so
@@ -123,31 +123,26 @@ A worker gets a fresh mailbox on restart; anything queued behind the crashing
 actor is unbound, but it cannot recover messages already accepted by the
 failed run.
 
-When you need per-actor policies — say a tighter restart budget for the press
-alone — drop down to `SupervisedActors`, which the builder uses under the
-hood. Overrides are keyed by the actor's typed ref, so a typo'd name is
-unrepresentable:
+Per-actor policies — say a tighter restart budget for the press alone — stay
+on the same builder. Overrides are keyed by the actor's typed ref, so a typo'd
+name is unrepresentable:
 
 ```rust,ignore
-let runtime = SupervisedActors::new(graph)
+let runtime = Runtime::builder()
+    .graph(graph)
+    .strategy(Strategy::OneForOne)
     .restart(RestartPolicy::OnFailure)
     .actor_restart_intensity(&press_ref, RestartIntensity::new(5, Duration::from_secs(60)))
-    .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))?;
+    .build()?;
 ```
 
-`SupervisedActors::new(graph)` adapts the graph's runnable actors, then you
-choose the integration level:
-
-- `build_runtime(builder)` returns a `Runtime` with a supervisor and dynamic
-  actor support.
-- `build_supervisor(builder)` returns a plain `Supervisor`.
-- `build()` returns `Vec<ChildSpec>` for integrating actor children into a
-  larger supervisor manually.
+Use `RuntimeBuilder::child` to mix arbitrary non-actor `ChildSpec`s into the
+same supervisor. Use `RuntimeBuilder::subtree` for nested actor-aware or
+graph-less runtime builders.
 
 There are no string lookups anywhere on this path: every ref you need is
 minted at wiring time (or returned by `add_actor` for runtime-added actors)
 and travels by clone or by message.
 
 Use `Strategy::OneForAll` when a group of actor children should share fate,
-or configure them as a runtime subtree for a scoped restart boundary. Use a raw
-nested supervisor when the subtree contains arbitrary non-actor children.
+or configure them as a runtime subtree for a scoped restart boundary.

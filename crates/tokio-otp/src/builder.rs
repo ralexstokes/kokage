@@ -1,9 +1,12 @@
-use crate::{Graph, RunnableActorFactory};
+use std::collections::HashMap;
+
+use crate::{ActorRef, Graph, RunnableActorFactory};
 use tokio_supervisor::{
-    RestartIntensity, RestartPolicy, ShutdownPolicy, StartMode, Strategy, SupervisorBuilder,
+    ChildSpec, RestartIntensity, RestartPolicy, ShutdownPolicy, StartMode, Strategy,
+    SupervisorBuilder,
 };
 
-use crate::{runtime::Runtime, supervised_actors::SupervisedActors};
+use crate::runtime::{ActorOverrides, Runtime, actor_children};
 
 /// One-stop builder for the common supervised-actor setup.
 ///
@@ -14,8 +17,10 @@ use crate::{runtime::Runtime, supervised_actors::SupervisedActors};
 /// [`RuntimeHandle::add_actor`](crate::RuntimeHandle::add_actor). Created via
 /// [`Runtime::builder`].
 ///
-/// For per-actor policy overrides or arbitrary non-actor children, drop down
-/// to [`SupervisedActors`] with a [`SupervisorBuilder`].
+/// Per-actor policies can be overridden with [`actor_restart`](Self::actor_restart),
+/// [`actor_restart_intensity`](Self::actor_restart_intensity), and
+/// [`actor_shutdown`](Self::actor_shutdown). Arbitrary non-actor children can
+/// be mixed into the same supervisor with [`child`](Self::child).
 ///
 /// # Example
 ///
@@ -69,17 +74,19 @@ use crate::{runtime::Runtime, supervised_actors::SupervisedActors};
 pub struct RuntimeBuilder {
     graph: Option<Graph>,
     subtrees: Vec<(String, RuntimeBuilder)>,
+    children: Vec<ChildSpec>,
     strategy: Strategy,
     start_mode: StartMode,
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
     restart_intensity: Option<RestartIntensity>,
+    actor_overrides: HashMap<String, ActorOverrides>,
 }
 
 impl RuntimeBuilder {
     /// Creates a builder with default settings: [`OneForOne`](Strategy::OneForOne)
     /// strategy, [`OnFailure`](RestartPolicy::OnFailure) restart, default shutdown
-    /// policy, no graph, and no subtrees.
+    /// policy, no graph, no subtrees, and no non-actor children.
     pub fn new() -> Self {
         Self::default()
     }
@@ -103,6 +110,17 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn subtree(mut self, id: impl Into<String>, subtree: RuntimeBuilder) -> Self {
         self.subtrees.push((id.into(), subtree));
+        self
+    }
+
+    /// Adds an arbitrary non-actor child to the runtime's supervisor.
+    ///
+    /// Runtime subtrees are inserted first, followed by these children and
+    /// then the graph actors. Declaration order within each group is
+    /// preserved and determines sequential startup order.
+    #[must_use]
+    pub fn child(mut self, child: ChildSpec) -> Self {
+        self.children.push(child);
         self
     }
 
@@ -148,6 +166,50 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Overrides the restart policy for the actor identified by this typed ref.
+    ///
+    /// Graph-declared actors remain registered after a terminal exit, including
+    /// actors configured with [`RestartPolicy::Never`]. Automatic terminal
+    /// removal is scoped to actors added at runtime with
+    /// [`DynamicActorOptions`](crate::DynamicActorOptions).
+    #[must_use]
+    pub fn actor_restart<M>(mut self, actor: &ActorRef<M>, restart: RestartPolicy) -> Self {
+        self.actor_overrides
+            .entry(actor.id().to_owned())
+            .or_default()
+            .restart = Some(restart);
+        self
+    }
+
+    /// Overrides restart intensity for the actor identified by this typed ref.
+    #[must_use]
+    pub fn actor_restart_intensity<M>(
+        mut self,
+        actor: &ActorRef<M>,
+        intensity: RestartIntensity,
+    ) -> Self {
+        self.actor_overrides
+            .entry(actor.id().to_owned())
+            .or_default()
+            .restart_intensity = Some(intensity);
+        self
+    }
+
+    /// Overrides the outer supervisor shutdown policy for the actor identified
+    /// by this typed ref.
+    ///
+    /// The graph's
+    /// [`actor_shutdown_timeout`](crate::GraphBuilder::actor_shutdown_timeout)
+    /// still governs the inner actor task.
+    #[must_use]
+    pub fn actor_shutdown<M>(mut self, actor: &ActorRef<M>, shutdown: ShutdownPolicy) -> Self {
+        self.actor_overrides
+            .entry(actor.id().to_owned())
+            .or_default()
+            .shutdown = Some(shutdown);
+        self
+    }
+
     /// Validates the configuration and returns a ready-to-run [`Runtime`].
     ///
     /// Returns an error if the supervisor configuration is invalid.
@@ -166,12 +228,21 @@ impl RuntimeBuilder {
             subtrees.push((id, nested_actors));
         }
 
+        supervisor = self
+            .children
+            .into_iter()
+            .fold(supervisor, |builder, child| builder.child(child));
+
         let runtime = match self.graph {
             Some(graph) => {
-                let supervised = SupervisedActors::new(graph)
-                    .restart(self.restart)
-                    .shutdown(self.shutdown);
-                supervised.build_runtime(supervisor)
+                let actor_factory = graph.dynamic_factory();
+                let actors = graph.actors().to_vec();
+                supervisor =
+                    actor_children(&graph, self.restart, self.shutdown, &self.actor_overrides)
+                        .into_iter()
+                        .fold(supervisor, |builder, child| builder.child(child));
+                let supervisor = supervisor.build()?;
+                Ok(Runtime::with_actor_tree(supervisor, actor_factory, actors))
             }
             None => {
                 let supervisor = supervisor.build()?;
@@ -197,10 +268,12 @@ impl std::fmt::Debug for RuntimeBuilder {
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
             .field("restart_intensity", &self.restart_intensity)
+            .field("actor_overrides", &self.actor_overrides.len())
             .field(
                 "subtrees",
                 &self.subtrees.iter().map(|(id, _)| id).collect::<Vec<_>>(),
             )
+            .field("children", &self.children.len())
             .finish_non_exhaustive()
     }
 }

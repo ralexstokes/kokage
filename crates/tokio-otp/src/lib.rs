@@ -47,7 +47,6 @@
 //! |------|------|
 //! | [`Runtime`] / [`RuntimeBuilder`] | Owns a supervisor and actor factory — the common composition. |
 //! | [`RuntimeHandle`] | Control surface for a spawned runtime (shutdown, dynamic actors, observability). |
-//! | [`SupervisedActors`] | Adapts a graph into per-actor supervised children with configurable policies. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -60,15 +59,10 @@
 //! # Composition modes
 //!
 //! - **The integrated runtime** via [`Runtime::builder`]: per-actor
-//!   supervision with uniform policies, recursive actor-aware subtrees, and
-//!   runtime actor creation. Add nested builders with
-//!   [`RuntimeBuilder::subtree`], or omit [`RuntimeBuilder::graph`] to start
-//!   with no direct actors.
-//!
-//! - **Per-actor supervision** via [`SupervisedActors`]: each actor becomes its
-//!   own child in a supervisor, with individual restart and shutdown policies.
-//!   Use [`build_runtime`](SupervisedActors::build_runtime) for the integrated
-//!   [`Runtime`] or [`build`](SupervisedActors::build) for raw child specs.
+//!   supervision with per-actor policy overrides, recursive actor-aware
+//!   subtrees, arbitrary non-actor children, and runtime actor creation. Add
+//!   nested builders with [`RuntimeBuilder::subtree`], or omit
+//!   [`RuntimeBuilder::graph`] to start with no direct actors.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.
@@ -241,7 +235,6 @@
 mod actor;
 mod builder;
 mod runtime;
-mod supervised_actors;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -281,7 +274,6 @@ pub use actor::{
 };
 pub use builder::RuntimeBuilder;
 pub use runtime::{AddSubtreeError, DynamicActorOptions, RestartWatchRef, Runtime, RuntimeHandle};
-pub use supervised_actors::SupervisedActors;
 pub use tokio_supervisor::{
     AutoShutdown, BackoffPolicy, ChildContext, ChildMembershipView, ChildResult, ChildSnapshot,
     ChildSpec, ChildStateView, ControlError, EventPathSegment, ExitStatusView, RestartIntensity,

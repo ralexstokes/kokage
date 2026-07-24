@@ -216,8 +216,8 @@ impl GraphBuilder {
     /// timeout is aborted; when this happens during a requested shutdown it is
     /// reported as a clean shutdown with a `Cancelled` actor exit.
     ///
-    /// Under [`Runtime`](crate::Runtime) or [`SupervisedActors`](crate::SupervisedActors),
-    /// the actor is itself hosted by a supervisor child with an independent
+    /// Under [`Runtime`](crate::Runtime), the actor is itself hosted by a
+    /// supervisor child with an independent
     /// [`ShutdownPolicy`](crate::ShutdownPolicy) deadline. This timeout aborts
     /// the inner actor task; the supervisor policy can abort the outer child
     /// task. Set this timeout no longer than the supervisor grace period when

@@ -111,10 +111,9 @@ channel. Document this architecture in the proving example.
 
 ### One flagship composition path
 
-`Runtime::builder()` is the primary documented entry point. `SupervisedActors`,
-raw `Supervisor` composition, and hand-driven `RunnableActor` remain supported
-escape hatches, but are documented as advanced APIs rather than peer starting
-points.
+`Runtime::builder()` is the primary documented entry point. Raw `ChildSpec`
+composition and hand-driven `RunnableActor` remain supported escape hatches,
+but are documented as advanced APIs rather than peer starting points.
 
 ## Milestone 1: freeze the public API shape — complete
 
