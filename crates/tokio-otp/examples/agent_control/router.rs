@@ -4,32 +4,54 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicU64},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, ControlError, GraphBuilder, Runtime,
-    RuntimeHandle, StartMode, Strategy, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, ControlError, GraphBuilder, Runtime, RuntimeHandle,
+    StartMode, Strategy, prelude::Continue,
 };
 
 use crate::{
     messages::{
-        BudgetMsg, ChatId, GuardMsg, JournalMsg, OutboundMsg, PHASE_TIMEOUT, ProgressMsg, Proof,
-        RouterMsg, SessionMsg, ToolHostMsg,
+        BudgetMsg, ChatId, GuardMsg, JournalMsg, OutboundMsg, PHASE_TIMEOUT, PendingInput,
+        ProgressMsg, Proof, RouterMsg, SessionMsg, ToolHostMsg,
     },
     model::ModelClient,
     session::SessionFactory,
 };
 
-struct SessionEntry {
-    actor: ActorRef<SessionMsg>,
-    subtree_id: String,
+// The supervisor processes control commands serially and a cooperative
+// removal drains the departing subtree before the command completes, so an
+// awaited add_subtree — even for a distinct id — can queue behind a drain
+// whose progress needs this router to keep consuming bounced messages. The
+// router therefore never awaits the control plane: both transitions run as
+// pipelined steps, and the slot buffers traffic until the step's completion
+// message arrives.
+enum SessionSlot {
+    /// add_subtree is in flight; `evict` records a retirement request that
+    /// arrived before the mount completed.
+    Mounting {
+        actor: ActorRef<SessionMsg>,
+        subtree_id: String,
+        buffered: Vec<PendingInput>,
+        evict: bool,
+    },
+    Active {
+        actor: ActorRef<SessionMsg>,
+        subtree_id: String,
+    },
+    /// remove_child is in flight; raced messages wait here until `Reaped`
+    /// confirms the predecessor is gone, then ride into the replacement.
+    Removing { buffered: Vec<PendingInput> },
 }
 
 pub struct Router {
-    sessions_handle: Option<RuntimeHandle>,
-    sessions: HashMap<ChatId, SessionEntry>,
+    /// Filled by `main` after the runtime spawns; unlike router state, the
+    /// cell is owned by the factory closure and survives router restarts.
+    mount: Arc<OnceLock<RuntimeHandle>>,
+    sessions: HashMap<ChatId, SessionSlot>,
     journal: ActorRef<JournalMsg>,
     budget: ActorRef<BudgetMsg>,
     tool_host: ActorRef<ToolHostMsg>,
@@ -39,13 +61,18 @@ pub struct Router {
     gate: Arc<AtomicBool>,
     model: Arc<dyn ModelClient>,
     task_sequence: Arc<AtomicU64>,
-    session_epoch: u64,
+    /// Also factory-owned: the id allocator must survive router incarnations,
+    /// or a reborn router would re-mint `session:<chat>#1` while its
+    /// predecessor's subtree still exists.
+    session_epoch: Arc<AtomicU64>,
     proof: Proof,
 }
 
 impl Router {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        mount: Arc<OnceLock<RuntimeHandle>>,
+        session_epoch: Arc<AtomicU64>,
         journal: ActorRef<JournalMsg>,
         budget: ActorRef<BudgetMsg>,
         tool_host: ActorRef<ToolHostMsg>,
@@ -57,7 +84,7 @@ impl Router {
         proof: Proof,
     ) -> Self {
         Self {
-            sessions_handle: None,
+            mount,
             sessions: HashMap::new(),
             journal,
             budget,
@@ -68,31 +95,31 @@ impl Router {
             gate,
             model,
             task_sequence: Arc::new(AtomicU64::new(0)),
-            session_epoch: 0,
+            session_epoch,
             proof,
         }
     }
 
-    async fn add_session(
-        &mut self,
-        chat: ChatId,
-        ctx: &ActorContext<RouterMsg>,
-    ) -> Result<ActorRef<SessionMsg>, BoxError> {
-        let mount = self
-            .sessions_handle
-            .as_ref()
-            .expect("router must be bound before chat traffic")
-            .clone();
-        // Each conversation incarnation is a distinct subtree with an id no
-        // other incarnation ever uses. A respawn therefore never contends
-        // with a predecessor's still-draining removal, which is what let the
-        // generation-stamped eviction handshake be deleted.
-        self.session_epoch += 1;
-        let generation = self.session_epoch;
+    fn mount(&self) -> RuntimeHandle {
+        self.mount
+            .get()
+            .expect("sessions mount bound before chat traffic")
+            .clone()
+    }
+
+    /// Mints a fresh incarnation for `chat`: a `Mounting` slot routing into
+    /// the pre-built stable mailbox, and a pipelined `add_subtree`.
+    ///
+    /// Each incarnation gets a subtree id no other incarnation ever uses (the
+    /// allocator outlives this router), so a replacement never contends with
+    /// a predecessor whose removal is still draining, and an `Evict` naming
+    /// an id can never be misread as targeting a successor.
+    fn mint(&mut self, chat: ChatId, buffered: Vec<PendingInput>, ctx: &ActorContext<RouterMsg>) {
+        let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
         // The session spawns its run children into its own subtree, but that
-        // handle only exists once add_subtree returns; the cell is filled
-        // before any traffic is forwarded.
+        // handle only exists once the mount completes; the cell is filled by
+        // the step below, before any traffic is forwarded.
         let subtree_cell = Arc::new(OnceLock::new());
         let mut graph = GraphBuilder::new();
         let actor = graph.actor(
@@ -100,6 +127,7 @@ impl Router {
             SessionFactory {
                 chat,
                 generation,
+                subtree_id: subtree_id.clone(),
                 journal: self.journal.clone(),
                 budget: self.budget.clone(),
                 tool_host: self.tool_host.clone(),
@@ -114,41 +142,52 @@ impl Router {
                 proof: self.proof.clone(),
             },
         );
-        // OneForAll: a session panic tears down its transient runs with it;
-        // the session is reborn from this builder and rehydrates from the
-        // journal, while `Never` run children are skipped by the group
-        // respawn and cannot themselves recycle the session.
-        let subtree = mount
-            .add_subtree(
-                subtree_id.clone(),
-                Runtime::builder()
-                    .graph(graph.build()?)
-                    .strategy(Strategy::OneForAll)
-                    .start_mode(StartMode::Sequential),
-            )
-            .await?;
-        assert!(subtree_cell.set(subtree).is_ok());
-        self.sessions.insert(
-            chat,
-            SessionEntry {
-                actor: actor.clone(),
-                subtree_id,
+        let graph = graph.build().expect("session graph builds");
+        let mount = self.mount();
+        let step_id = subtree_id.clone();
+        ctx.step(
+            PHASE_TIMEOUT,
+            async move {
+                // OneForAll: a session panic tears its transient runs down
+                // with it; the session is reborn from this builder and
+                // rehydrates from the journal, while `Never` run children are
+                // skipped by the group respawn and cannot themselves recycle
+                // the session.
+                let subtree = mount
+                    .add_subtree(
+                        step_id,
+                        Runtime::builder()
+                            .graph(graph)
+                            .strategy(Strategy::OneForAll)
+                            .start_mode(StartMode::Sequential),
+                    )
+                    .await;
+                match subtree {
+                    Ok(subtree) => subtree_cell.set(subtree).is_ok(),
+                    Err(_) => false,
+                }
+            },
+            move |outcome| RouterMsg::Mounted {
+                chat,
+                ok: outcome.unwrap_or(false),
             },
         );
-        Ok(actor)
+        self.sessions.insert(
+            chat,
+            SessionSlot::Mounting {
+                actor,
+                subtree_id,
+                buffered,
+                evict: false,
+            },
+        );
     }
 
-    fn pipeline_remove(&self, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
-        let mount = self.sessions_handle.as_ref().expect("router bound").clone();
+    fn pipeline_remove(&self, chat: ChatId, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
+        let mount = self.mount();
         let remove_id = subtree_id.clone();
         ctx.step(
             PHASE_TIMEOUT,
-            // Removal is pipelined so an idle eviction never head-of-line
-            // blocks unrelated routing work (the same hazard documented for
-            // the trading example's order router). Nothing routes on its
-            // completion: the chat's map entry is already gone and the next
-            // message mints a fresh subtree id, so the retry below only
-            // guards against leaking a stuck subtree.
             async move { mount.remove_child(remove_id).await },
             move |outcome| {
                 let done = matches!(
@@ -157,9 +196,46 @@ impl Router {
                         | Ok(Err(ControlError::UnknownChildId(_)))
                         | Ok(Err(ControlError::ShutdownTimedOut(_)))
                 );
-                RouterMsg::Reaped { subtree_id, done }
+                RouterMsg::Reaped {
+                    chat,
+                    subtree_id,
+                    done,
+                }
             },
         );
+    }
+
+    /// Removes a subtree that no live slot routes to: an orphan minted by a
+    /// previous router incarnation, or a stale duplicate retirement request.
+    fn pipeline_sweep(&self, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
+        let mount = self.mount();
+        let remove_id = subtree_id.clone();
+        ctx.step(
+            PHASE_TIMEOUT,
+            async move { mount.remove_child(remove_id).await },
+            move |outcome| {
+                let done = matches!(
+                    outcome,
+                    Ok(Ok(()))
+                        | Ok(Err(ControlError::UnknownChildId(_)))
+                        | Ok(Err(ControlError::ShutdownTimedOut(_)))
+                        | Ok(Err(ControlError::ChildRemovalInProgress(_)))
+                );
+                RouterMsg::Swept { subtree_id, done }
+            },
+        );
+    }
+
+    async fn forward(
+        actor: &ActorRef<SessionMsg>,
+        input: PendingInput,
+    ) -> Result<(), tokio_otp::SendError> {
+        actor
+            .send(SessionMsg::UserMessage {
+                envelope: input.envelope,
+                text: input.text,
+            })
+            .await
     }
 }
 
@@ -168,46 +244,122 @@ impl Actor for Router {
 
     async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
         match message {
-            RouterMsg::Bind { sessions } => self.sessions_handle = Some(sessions),
             RouterMsg::UserMessage {
                 envelope,
                 chat,
                 text,
             } => {
-                let actor = match self.sessions.get(chat) {
-                    Some(entry) => entry.actor.clone(),
-                    None => self.add_session(chat, ctx).await?,
-                };
-                actor
-                    .send(SessionMsg::UserMessage { envelope, text })
-                    .await?;
-            }
-            RouterMsg::Evict { chat } => {
-                // No generation matching: an incarnation sends at most one
-                // Evict, and a successor entry for the chat can only be
-                // created after that Evict was consumed here, so this always
-                // targets the incarnation that sent it. A message the router
-                // forwarded before processing this arrives at the retiring
-                // session, which bounces it back; per-sender FIFO puts the
-                // bounce behind this Evict, so it lands in the None arm above
-                // and mints the replacement subtree.
-                if let Some(entry) = self.sessions.remove(chat) {
-                    self.pipeline_remove(entry.subtree_id, ctx);
+                let input = PendingInput { envelope, text };
+                match self.sessions.get_mut(chat) {
+                    Some(
+                        SessionSlot::Mounting { buffered, .. } | SessionSlot::Removing { buffered },
+                    ) => buffered.push(input),
+                    Some(SessionSlot::Active { actor, .. }) => {
+                        let actor = actor.clone();
+                        Self::forward(&actor, input).await?;
+                    }
+                    None => self.mint(chat, vec![input], ctx),
                 }
             }
-            RouterMsg::Reaped { subtree_id, done } => {
+            RouterMsg::Evict { chat, subtree_id } => {
+                // Retirement names the subtree it retires, so it can only be
+                // honored against the incarnation that sent it. Anything else
+                // — an orphan of a previous router incarnation re-requesting,
+                // or a duplicate from a reborn session — is retired by name
+                // without touching live routing state.
+                match self.sessions.get_mut(chat) {
+                    Some(SessionSlot::Active {
+                        subtree_id: live, ..
+                    }) if *live == subtree_id => {
+                        self.sessions.insert(
+                            chat,
+                            SessionSlot::Removing {
+                                buffered: Vec::new(),
+                            },
+                        );
+                        self.pipeline_remove(chat, subtree_id, ctx);
+                    }
+                    Some(SessionSlot::Mounting {
+                        subtree_id: live,
+                        evict,
+                        ..
+                    }) if *live == subtree_id => *evict = true,
+                    Some(SessionSlot::Removing { .. }) => {}
+                    _ => self.pipeline_sweep(subtree_id, ctx),
+                }
+            }
+            RouterMsg::Mounted { chat, ok } => {
+                if !ok {
+                    // The mount step failed or deadlined; restarting the
+                    // router is the example's recovery: buffered traffic is
+                    // lost with this incarnation, and any half-mounted
+                    // subtree retires itself through the Evict-by-id path.
+                    return Err("session subtree mount failed".into());
+                }
+                let Some(SessionSlot::Mounting {
+                    actor,
+                    subtree_id,
+                    buffered,
+                    evict,
+                }) = self.sessions.remove(chat)
+                else {
+                    // Single-writer discipline makes this unreachable; stay
+                    // inert rather than guess at membership.
+                    return Ok(Continue);
+                };
+                if evict {
+                    // Retirement was requested while the mount was in
+                    // flight; honor it now and let the buffer ride into the
+                    // next incarnation.
+                    self.sessions
+                        .insert(chat, SessionSlot::Removing { buffered });
+                    self.pipeline_remove(chat, subtree_id, ctx);
+                } else {
+                    self.sessions.insert(
+                        chat,
+                        SessionSlot::Active {
+                            actor: actor.clone(),
+                            subtree_id,
+                        },
+                    );
+                    for input in buffered {
+                        Self::forward(&actor, input).await?;
+                    }
+                }
+            }
+            RouterMsg::Reaped {
+                chat,
+                subtree_id,
+                done,
+            } => {
                 if !done {
-                    self.pipeline_remove(subtree_id, ctx);
+                    self.pipeline_remove(chat, subtree_id, ctx);
+                } else if let Some(SessionSlot::Removing { buffered }) = self.sessions.remove(chat)
+                    && !buffered.is_empty()
+                {
+                    self.mint(chat, buffered, ctx);
+                }
+            }
+            RouterMsg::Swept { subtree_id, done } => {
+                if !done {
+                    self.pipeline_sweep(subtree_id, ctx);
                 }
             }
             RouterMsg::PauseChanged { paused } => {
-                for entry in self.sessions.values() {
-                    let _ = entry.actor.send(SessionMsg::PauseChanged { paused }).await;
+                for slot in self.sessions.values() {
+                    if let SessionSlot::Mounting { actor, .. } | SessionSlot::Active { actor, .. } =
+                        slot
+                    {
+                        let _ = actor.send(SessionMsg::PauseChanged { paused }).await;
+                    }
                 }
             }
             RouterMsg::Stop { chat } => {
-                if let Some(entry) = self.sessions.get(chat) {
-                    entry.actor.send(SessionMsg::Stop).await?;
+                // Only a running incarnation has work to cancel; sending into
+                // a Mounting slot's mailbox would also overtake its buffered
+                // replay.
+                if let Some(SessionSlot::Active { actor, .. }) = self.sessions.get(chat) {
+                    actor.send(SessionMsg::Stop).await?;
                 }
             }
         }

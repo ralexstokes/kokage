@@ -21,7 +21,8 @@
 //! | `guard`     | recoverable breaker: closes the shared intake gate, probes |
 //! | `tool_host` | idempotent-by-key effect execution under `run_blocking`    |
 //! | `router`    | single writer of session membership; mounts one subtree    |
-//! |             | per conversation and retires it by removing the subtree    |
+//! |             | per conversation, never awaits the control plane, buffers  |
+//! |             | only while a mount or removal step is in flight            |
 //! | `session`   | per-chat orchestrator (static in its subtree's builder);   |
 //! |             | owns its transient run children                            |
 //! | `run`       | one role run: mailbox-driven state machine, never restarted|
@@ -82,9 +83,10 @@
 //!   add_subtree ─▶ on_start: mark ready ─▶ continue_with(Rehydrate): replay
 //!     ─▶ UserMessage: start planner run, suppress idle timer, heartbeat
 //!     ─▶ RunFinished: planner → engineer → reviewer → Reply, re-arm idle
-//!     ─▶ IdleSweep (current generation, no run): Checkpoint + Evicted,
-//!         then Evict to the router, which drops the whole subtree — a late
-//!         arrival is bounced back and re-routes to a replacement subtree
+//!     ─▶ IdleSweep (current generation, no run): Checkpoint + Evicted, then
+//!         Evict naming this subtree, re-sent each sweep until teardown lands
+//!         — the router buffers while it drops the subtree; a late arrival is
+//!         bounced back and rides the buffer into a replacement subtree
 //!     ─▶ removed; next message mounts a fresh epoch, replay restores context
 //!
 //! run:<task>:<role>:<attempt>   (transient child, restart = Never)
@@ -117,8 +119,8 @@ use std::{
     error::Error,
     future::Future,
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -196,6 +198,12 @@ async fn build_app() -> Result<App, AnyError> {
     let model_client: Arc<dyn ModelClient> = Arc::new(model.clone());
     let gate = Arc::new(AtomicBool::new(true));
     let proof = Proof::default();
+    // Router state dies with a router incarnation; the sessions mount handle
+    // and the subtree-id allocator must not, or a reborn router could not
+    // reach the mount and would re-mint ids that still exist. Both live in
+    // the factory closure's captures instead.
+    let sessions_mount = Arc::new(OnceLock::new());
+    let session_epoch = Arc::new(AtomicU64::new(0));
 
     // The gateway slots exist first, providing stable refs that the derived
     // core topology can capture. Once the derive has minted core refs, the
@@ -230,6 +238,8 @@ async fn build_app() -> Result<App, AnyError> {
         let router_tool_host = refs.tool_host.clone();
         let guard_model = model.clone();
         let guard_gate = gate.clone();
+        let router_mount = sessions_mount.clone();
+        let router_epoch = session_epoch.clone();
         let router_gate = gate.clone();
         let router_model = model_client.clone();
         let router_proof = proof.clone();
@@ -249,6 +259,8 @@ async fn build_app() -> Result<App, AnyError> {
             tool_host: ToolHost::default,
             router: move || {
                 Router::new(
+                    router_mount.clone(),
+                    router_epoch.clone(),
                     router_journal.clone(),
                     router_budget.clone(),
                     router_tool_host.clone(),
@@ -302,11 +314,7 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions = handle
         .subtree("sessions")
         .expect("dynamic sessions mount point");
-    router
-        .send(RouterMsg::Bind {
-            sessions: sessions.clone(),
-        })
-        .await?;
+    assert!(sessions_mount.set(sessions.clone()).is_ok());
 
     let restart_watch =
         gateway.watch_restarts_to(&guard, |total| GuardMsg::BridgeRestarts { total });
@@ -675,11 +683,11 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
 
     // Second eviction cycle, this time injecting the moment the journal
     // shows the next Evicted entry, while the session's Evict may still be
-    // in flight to the router. There is no protocol state to observe any
-    // more: whichever side wins, the message must be answered with replayed
-    // context — the router either forwards it to the retiring session, whose
-    // bounce re-routes it behind the Evict, or it finds no entry and mints
-    // the replacement subtree directly.
+    // in flight to the router. Whichever side wins, the message must be
+    // answered with replayed context: the router forwards it to the retiring
+    // session (whose bounce lands behind the Evict), buffers it while the
+    // removal step is in flight, or finds no slot and mints the replacement
+    // directly.
     let evicted_count = |report: &JournalReport| {
         report
             .entries

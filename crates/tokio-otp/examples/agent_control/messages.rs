@@ -7,7 +7,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{ActorRef, MessageSize, MonitorEvent, Reply, RuntimeHandle};
+use tokio_otp::{ActorRef, MessageSize, MonitorEvent, Reply};
 
 pub type ChatId = &'static str;
 pub type EnvelopeId = u64;
@@ -235,18 +235,32 @@ pub enum ToolHostMsg {
 
 #[derive(Debug)]
 pub enum RouterMsg {
-    Bind {
-        sessions: RuntimeHandle,
-    },
     UserMessage {
         envelope: EnvelopeId,
         chat: ChatId,
         text: String,
     },
+    /// A session's request to retire the named incarnation. The subtree id
+    /// doubles as the incarnation identity, so the router honors it only
+    /// against the slot that minted it and sweeps anything else by name.
     Evict {
         chat: ChatId,
+        subtree_id: String,
     },
+    /// Completion of a pipelined `add_subtree` for the chat's `Mounting` slot.
+    Mounted {
+        chat: ChatId,
+        ok: bool,
+    },
+    /// Completion of a pipelined `remove_child` for the chat's `Removing`
+    /// slot.
     Reaped {
+        chat: ChatId,
+        subtree_id: String,
+        done: bool,
+    },
+    /// Completion of a slot-less removal (orphan or stale-duplicate sweep).
+    Swept {
         subtree_id: String,
         done: bool,
     },
@@ -340,6 +354,7 @@ pub struct TurnRequest {
 
 #[derive(Clone, Debug)]
 pub struct PendingInput {
+    pub envelope: EnvelopeId,
     pub text: String,
 }
 

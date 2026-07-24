@@ -37,6 +37,7 @@ struct ActiveRun {
 pub struct Session {
     chat: ChatId,
     generation: u64,
+    subtree_id: String,
     journal: ActorRef<JournalMsg>,
     budget: ActorRef<BudgetMsg>,
     tool_host: ActorRef<ToolHostMsg>,
@@ -61,6 +62,7 @@ pub struct Session {
 pub struct SessionFactory {
     pub chat: ChatId,
     pub generation: u64,
+    pub subtree_id: String,
     pub journal: ActorRef<JournalMsg>,
     pub budget: ActorRef<BudgetMsg>,
     pub tool_host: ActorRef<ToolHostMsg>,
@@ -82,6 +84,7 @@ impl tokio_otp::ActorFactory for SessionFactory {
         Session {
             chat: self.chat,
             generation: self.generation,
+            subtree_id: self.subtree_id.clone(),
             journal: self.journal.clone(),
             budget: self.budget.clone(),
             tool_host: self.tool_host.clone(),
@@ -301,7 +304,7 @@ impl Actor for Session {
                 }
                 self.transcript_len += 1;
                 self.idle_generation += 1;
-                let input = PendingInput { text };
+                let input = PendingInput { envelope, text };
                 if self.active.is_some() || !self.gate.load(Ordering::Acquire) {
                     self.pending.push_back(input);
                     if !self.gate.load(Ordering::Acquire) {
@@ -446,7 +449,23 @@ impl Actor for Session {
                 }
             }
             SessionMsg::IdleSweep { generation } => {
-                if generation == self.idle_generation && self.active.is_none() {
+                if generation != self.idle_generation {
+                    return Ok(Continue);
+                }
+                if self.evict_requested {
+                    // Retirement is a request, not a handshake. If the
+                    // membership writer restarted and lost it, this
+                    // incarnation would otherwise idle unowned forever, so
+                    // re-send until teardown lands — idempotent, because the
+                    // router retires by subtree id.
+                    self.router
+                        .send(RouterMsg::Evict {
+                            chat: self.chat,
+                            subtree_id: self.subtree_id.clone(),
+                        })
+                        .await?;
+                    self.arm_idle(ctx);
+                } else if self.active.is_none() {
                     let task = self.task_sequence.load(Ordering::Relaxed);
                     let _ = self
                         .append(JournalEntry::Checkpoint {
@@ -456,9 +475,13 @@ impl Actor for Session {
                         .await?;
                     let _ = self.append(JournalEntry::Evicted).await?;
                     self.router
-                        .send(RouterMsg::Evict { chat: self.chat })
+                        .send(RouterMsg::Evict {
+                            chat: self.chat,
+                            subtree_id: self.subtree_id.clone(),
+                        })
                         .await?;
                     self.evict_requested = true;
+                    self.arm_idle(ctx);
                 }
             }
         }
