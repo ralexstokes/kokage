@@ -1,10 +1,6 @@
 use std::{
     collections::HashMap,
-    future::Future,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -313,102 +309,11 @@ impl DynamicActorOptions {
     }
 }
 
-mod sealed {
-    pub trait Sealed {}
-
-    impl Sealed for tokio_supervisor::SupervisorHandle {}
-}
-
-/// Actor-aware extensions for any supervisor handle, including handles for
-/// nested supervisors.
-///
-/// Import this trait to connect actor-aware behavior to a raw supervisor
-/// handle. It can add a [`RunnableActor`] minted by
-/// [`Graph::dynamic_factory`](crate::Graph::dynamic_factory) directly to a
-/// running supervisor subtree, or pump reliable restart counts into an actor
-/// mailbox with [`watch_restarts_to`](Self::watch_restarts_to).
-///
-/// This trait is sealed and cannot be implemented outside `tokio-otp`.
-pub trait SupervisorHandleExt: sealed::Sealed {
-    /// Adds a runnable actor as a supervised child.
-    ///
-    /// The actor's label becomes the child id. Its stable binding is rebound
-    /// according to `options.restart`, and is terminated when the supervisor
-    /// can no longer restart the child or the child is removed.
-    ///
-    /// Actors added through this extension are not tracked by
-    /// [`RuntimeHandle::actor_stats`] or external observers built on it, even
-    /// when this is the root handle returned by
-    /// [`RuntimeHandle::supervisor_handle`]. Use [`RuntimeHandle::add_actor`]
-    /// when runtime stats visibility matters.
-    ///
-    /// If adding fails, the actor's binding is left intact so the call can be
-    /// retried with the same actor; senders on its ref keep waiting until an
-    /// add succeeds.
-    fn add_actor(
-        &self,
-        actor: RunnableActor,
-        options: DynamicActorOptions,
-    ) -> impl Future<Output = Result<(), ControlError>> + Send;
-
-    /// Pumps this supervisor's cumulative restart count into `target`.
-    ///
-    /// This is the actor-mailbox form of [`SupervisorHandle::watch_restarts`].
-    /// Each observation is the cumulative number of restarts since this watch
-    /// was created. It is passed to `map` and delivered with the target's
-    /// ordinary mailbox policy. Cumulative values make latest-wins conflation
-    /// safe, and the latest value is sent again after a target restart so a
-    /// fresh incarnation can restore its state. Consumers should therefore
-    /// treat observations as idempotent totals, not additive deltas.
-    ///
-    /// The pump stops when the returned [`RestartWatchRef`] is dropped or
-    /// cancelled, when the watched supervisor reaches a terminal state, or
-    /// when the target actor permanently terminates. It follows the target
-    /// through ordinary actor restarts.
-    fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchRef
-    where
-        M: Send + 'static,
-        F: FnMut(u64) -> M + Send + 'static;
-}
-
-impl SupervisorHandleExt for SupervisorHandle {
-    fn add_actor(
-        &self,
-        actor: RunnableActor,
-        options: DynamicActorOptions,
-    ) -> impl Future<Output = Result<(), ControlError>> + Send {
-        let (child, termination) = actor_child_spec_with_termination(
-            actor,
-            options.restart,
-            options.shutdown,
-            options.restart_intensity,
-            options.resolved_remove_on_exit(),
-        );
-
-        async move {
-            let result = self.add_child(child).await.map(|_| ());
-            if result.is_err() {
-                termination.disarm();
-            }
-            result
-        }
-    }
-
-    fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchRef
-    where
-        M: Send + 'static,
-        F: FnMut(u64) -> M + Send + 'static,
-    {
-        spawn_restart_watch_to(self.watch_restarts(), target.clone(), map)
-    }
-}
-
 /// Cancellation guard for a restart-count mailbox pump.
 ///
-/// Created by [`RuntimeHandle::watch_restarts_to`] or
-/// [`SupervisorHandleExt::watch_restarts_to`]. Dropping the guard cancels the
-/// pump. It also stops automatically when the watched supervisor can no longer
-/// restart a child or when the target actor permanently terminates.
+/// Created by [`RuntimeHandle::watch_restarts_to`]. Dropping the guard cancels
+/// the pump. It also stops automatically when the watched supervisor can no
+/// longer restart a child or when the target actor permanently terminates.
 #[must_use = "dropping the guard immediately cancels the restart watch"]
 pub struct RestartWatchRef {
     cancellation: CancellationToken,
@@ -1023,27 +928,17 @@ impl std::fmt::Debug for RuntimeHandle {
 /// senders wait forever for a rebind.
 struct TerminateBindingOnDrop {
     actor: RunnableActor,
-    armed: AtomicBool,
 }
 
 impl TerminateBindingOnDrop {
     fn new(actor: RunnableActor) -> Self {
-        Self {
-            actor,
-            armed: AtomicBool::new(true),
-        }
-    }
-
-    fn disarm(&self) {
-        self.armed.store(false, Ordering::Release);
+        Self { actor }
     }
 }
 
 impl Drop for TerminateBindingOnDrop {
     fn drop(&mut self) {
-        if self.armed.load(Ordering::Acquire) {
-            self.actor.terminate_binding();
-        }
+        self.actor.terminate_binding();
     }
 }
 
@@ -1054,16 +949,6 @@ pub(crate) fn actor_child_spec(
     restart_intensity: Option<RestartIntensity>,
     remove_on_exit: bool,
 ) -> ChildSpec {
-    actor_child_spec_with_termination(actor, restart, shutdown, restart_intensity, remove_on_exit).0
-}
-
-fn actor_child_spec_with_termination(
-    actor: RunnableActor,
-    restart: RestartPolicy,
-    shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartIntensity>,
-    remove_on_exit: bool,
-) -> (ChildSpec, Arc<TerminateBindingOnDrop>) {
     let actor_id = actor.label().to_owned();
     let rebind = rebind_policy_for_restart(restart);
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
@@ -1088,7 +973,7 @@ fn actor_child_spec_with_termination(
         child = child.restart_intensity(intensity);
     }
 
-    (child, guard)
+    child
 }
 
 fn rebind_policy_for_restart(restart: RestartPolicy) -> RebindPolicy {

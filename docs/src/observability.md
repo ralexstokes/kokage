@@ -66,10 +66,8 @@ For control logic that reacts to restart activity — an aggregate restart
 breaker, for example — pump the reliable counts directly into its actor:
 
 ```rust,ignore
-use tokio_otp::SupervisorHandleExt as _;
-
 let restart_watch = handle
-    .supervisor("venues")
+    .subtree("venues")
     .unwrap()
     .watch_restarts_to(&breaker, |total| {
         HealthMsg::RestartsObserved { total }
@@ -94,7 +92,7 @@ even if delivery is currently waiting for mailbox capacity. An actor restart
 is not terminal, so the pump follows the stable ref into the next incarnation.
 
 Its scope is the watched supervisor's **direct children**: to cover a nested
-subtree, watch each nested supervisor's own handle (`handle.supervisor(id)`) —
+subtree, watch each nested runtime handle (`handle.subtree(id)`) —
 `total_restarts` does not aggregate across depth, whereas an event subscription
 forwards nested events (lossily). Call `watch_restarts()` directly when a
 non-actor consumer needs to await the counts itself.

@@ -7,9 +7,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ChildSpec, DynamicActorOptions,
-    MailboxMode, RestartPolicy, Runtime, RuntimeHandle, SupervisorBuilder, SupervisorHandleExt,
-    prelude::Continue,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder,
+    MailboxMode, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
 struct Sink {
@@ -206,9 +205,7 @@ async fn restart_watch_follows_target_restarts() {
 #[tokio::test]
 async fn restart_watch_stops_when_target_terminates() {
     let (handle, sink, _crasher, _observed) = runtime_with_sink().await;
-    let watch = handle
-        .supervisor_handle()
-        .watch_restarts_to(&sink, |count| count);
+    let watch = handle.watch_restarts_to(&sink, |count| count);
 
     handle.remove_child("sink").await.expect("sink removed");
     timeout(Duration::from_secs(1), async {
@@ -361,30 +358,15 @@ async fn watched_supervisor_termination_cancels_backpressured_delivery() {
         .await
         .expect("sink added");
 
-    let crash = Arc::new(Notify::new());
-    let nested = SupervisorBuilder::new()
-        .child(
-            ChildSpec::new("crasher", {
-                let crash = Arc::clone(&crash);
-                move |ctx| {
-                    let crash = Arc::clone(&crash);
-                    async move {
-                        tokio::select! {
-                            () = ctx.shutdown_token().cancelled() => Ok(()),
-                            () = crash.notified() => Err(io::Error::other("crash requested").into()),
-                        }
-                    }
-                }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
-        .build()
-        .expect("nested supervisor builds");
-    handle
-        .add_supervisor("watched", nested)
+    let mut nested_graph = GraphBuilder::new();
+    let nested_crasher = nested_graph.actor("crasher", || Crasher);
+    let nested = Runtime::builder()
+        .graph(nested_graph.build().expect("nested graph builds"))
+        .restart(RestartPolicy::OnFailure);
+    let watched = handle
+        .add_subtree("watched", nested)
         .await
-        .expect("nested supervisor added");
-    let watched = handle.supervisor("watched").expect("nested handle");
+        .expect("nested runtime added");
 
     sink.send(BlockingSinkMsg::Block)
         .await
@@ -401,7 +383,10 @@ async fn watched_supervisor_termination_cancels_backpressured_delivery() {
     let restarted = watched
         .monitor_restart("crasher")
         .expect("nested child monitored");
-    crash.notify_one();
+    nested_crasher
+        .send(())
+        .await
+        .expect("crash request delivered");
     timeout(Duration::from_secs(1), restarted)
         .await
         .expect("nested child restarted in time")

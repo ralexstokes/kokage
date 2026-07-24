@@ -106,9 +106,8 @@ let runtime = Runtime::builder()
 Subtrees are added before the containing graph's actors, so sequential startup
 waits for nested readiness first. `RuntimeHandle::actor_stats()` recursively
 includes both graphs. `handle.subtree("venues")` returns a scoped runtime handle
-that retains the venue graph's dynamic actor factory and stats; the lower-level
-`handle.supervisor("venues")` remains available when only supervisor control is
-needed.
+that retains the venue graph's dynamic actor factory, stats, and supervisor
+control methods.
 
 Actor children use `on_start` as their readiness boundary. Even with the
 default concurrent start mode, snapshots remain `Starting`, `ChildStarted`

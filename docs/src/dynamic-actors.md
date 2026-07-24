@@ -207,12 +207,11 @@ recursive stats, also compare `ActorStats::supervisor_path`; it distinguishes
 otherwise identical local ids and epochs in sibling or restarted subtrees.
 
 For a raw nested `Supervisor` that does not need actor-aware behavior, use
-`RuntimeHandle::add_supervisor`, `Graph::dynamic_factory`,
-`RuntimeHandle::supervisor`, and `SupervisorHandleExt` as the lower-level
-escape hatch. Actors added through that raw path are not part of runtime actor
-stats. Raw removals also bypass the runtime registry's immediate bookkeeping;
-the next `actor_stats()` sample reconciles tracked entries against the
-supervisor snapshot and prunes removed children.
+`RuntimeHandle::add_supervisor`, `RuntimeHandle::supervisor`, and the ordinary
+`tokio-supervisor` child APIs as the lower-level escape hatch. Raw children are
+not part of runtime actor stats. Raw removals also bypass the runtime registry's
+immediate bookkeeping; the next `actor_stats()` sample reconciles tracked
+entries against the supervisor snapshot and prunes removed children.
 
 ## Name-based discovery, when you want it
 
