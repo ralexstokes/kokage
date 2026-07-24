@@ -186,6 +186,19 @@ application. If the parent supervisor that received `add_subtree` restarts,
 the dynamic subtree itself is not recreated. Restart intensity remains per
 child, and shutdown remains concurrent under the parent's shared deadline.
 
+Both of those boundaries held up unchanged under the first realistic dynamic
+workload, the `agent_control` example's per-conversation subtrees. Per-child
+intensity means a storm of short-lived subtree crashes never trips an
+aggregate parent budget; the signal that wants to aggregate across children —
+run failures across every conversation — is application state, and the
+example's guard already owns it (`watch_restarts` plays the same role for
+supervisor-driven restarts). And the teardown ordering that mattered —
+checkpoint before removal, transient children before the parent that owns
+them — was either enforced by the application before it requested removal or
+fell out of reverse-declaration-order shutdown inside the subtree, so
+concurrent teardown across sibling subtrees needed no cross-sibling drain
+sequencing.
+
 If an id is removed and later reused, compare the snapshot's
 `membership_epoch` (also present in runtime-scoped `ActorStats`) as well as its
 `generation`: restarts keep an epoch and increment the generation, while a new

@@ -2,10 +2,11 @@
 //!
 //! The example is an assertion-driven acceptance script for dynamic actor
 //! lifecycles and the runtime surfaces not covered by `trading_engine`:
-//! dynamic add/remove on a subtree mount point, never-restarted transient
-//! children observed through `ctx.watch`, `continue_with` rehydration,
-//! `run_blocking` effects, a readiness-gated `RawActor` bridge, and a
-//! `#[derive(Topology)]` core graph with a real budget ↔ guard cycle.
+//! per-conversation subtrees added and removed at runtime via
+//! `RuntimeHandle::add_subtree`, never-restarted transient children observed
+//! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
+//! a readiness-gated `RawActor` bridge, and a `#[derive(Topology)]` core
+//! graph with a real budget ↔ guard cycle.
 //!
 //! # Modules
 //!
@@ -19,8 +20,10 @@
 //! | `budget`    | token-spend metering; reports `BudgetExceeded` to guard    |
 //! | `guard`     | recoverable breaker: closes the shared intake gate, probes |
 //! | `tool_host` | idempotent-by-key effect execution under `run_blocking`    |
-//! | `router`    | single writer of session membership; buffers during evict  |
-//! | `session`   | per-chat orchestrator (dynamic child); owns run children   |
+//! | `router`    | single writer of session membership; mounts one subtree    |
+//! |             | per conversation and retires it by removing the subtree    |
+//! | `session`   | per-chat orchestrator (static in its subtree's builder);   |
+//! |             | owns its transient run children                            |
 //! | `run`       | one role run: mailbox-driven state machine, never restarted|
 //! | `messages`  | shared ids, protocol enums, reports, timing constants      |
 //! | `telemetry` | application-owned latency aggregates for the final dump    |
@@ -36,9 +39,17 @@
 //! │             journal · budget · guard · tool_host · router
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
-//! └── sessions  empty subtree mount; all children managed at runtime
-//!     ├── session:<chat>             add_actor, default restart policy
-//!     └── run:<chat>:<task>:<role>   add_actor_with_options, restart = Never
+//! └── sessions  empty subtree mount; per-conversation subtrees at runtime
+//!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
+//!         │                        every incarnation's id unique, so respawn
+//!         │                        never races a predecessor's removal
+//!         ├── session              static in the builder; reborn with the
+//!         │                        subtree, rehydrates from the journal
+//!         └── run:<task>:<role>:<attempt>
+//!                                  add_actor_with_options, restart = Never;
+//!                                  a session panic tears its runs down with
+//!                                  it (OneForAll), while a Never run panic
+//!                                  is skipped by the group respawn
 //! ```
 //!
 //! # Data flow
@@ -67,16 +78,16 @@
 //! # Lifecycles
 //!
 //! ```text
-//! session:<chat>   (dynamic child, spawned on first message for the chat)
-//!   add_actor ─▶ on_start: mark ready ─▶ continue_with(Rehydrate): replay
+//! session:<chat>#<epoch>   (dynamic subtree, mounted on first message)
+//!   add_subtree ─▶ on_start: mark ready ─▶ continue_with(Rehydrate): replay
 //!     ─▶ UserMessage: start planner run, suppress idle timer, heartbeat
 //!     ─▶ RunFinished: planner → engineer → reviewer → Reply, re-arm idle
 //!     ─▶ IdleSweep (current generation, no run): Checkpoint + Evicted,
-//!         then Evict{generation} to the router and retire — late arrivals
-//!         are bounced back and land in the router's Evicting buffer
-//!     ─▶ removed; next message respawns the same id, replay restores context
+//!         then Evict to the router, which drops the whole subtree — a late
+//!         arrival is bounced back and re-routes to a replacement subtree
+//!     ─▶ removed; next message mounts a fresh epoch, replay restores context
 //!
-//! run:<chat>:<task>:<role>:<attempt>   (transient child, restart = Never)
+//! run:<task>:<role>:<attempt>   (transient child, restart = Never)
 //!   add_actor_with_options ─▶ continue_with(Step)
 //!     ─▶ model turn in a context-owned step (cancel token + deadline) ─▶ ModelResult
 //!     ─▶ tool loop: journal ToolIntent ─▶ Execute (bounded) ─▶ ToolResult,
@@ -333,7 +344,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     let replies_before = app.chat.replies(CHAT_A).len();
     let started = Instant::now();
     app.chat.inject_user_message(CHAT_A, "OK");
-    await_until(|| async { has_child(&app.sessions, "session:chat-a") }).await?;
+    await_until(|| async { has_session(&app.sessions, CHAT_A) }).await?;
     await_until(|| async { app.chat.replies(CHAT_A).len() > replies_before }).await?;
     latency.record("message.path", started.elapsed());
     let report = journal_report(&app.journal).await?;
@@ -367,7 +378,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
     println!(
-        "PHASE 1 OK — RuntimeHandle::add_actor + DynamicActorOptions; continue_with; interval_to"
+        "PHASE 1 OK — RuntimeHandle::add_subtree per conversation; continue_with; interval_to"
     );
     Ok(())
 }
@@ -624,7 +635,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
 
 async fn phase_7(app: &App) -> Result<(), AnyError> {
     if let Err(error) = await_until_with(Duration::from_secs(6), || async {
-        !has_child(&app.sessions, "session:chat-a")
+        !has_session(&app.sessions, CHAT_A)
     })
     .await
     {
@@ -662,12 +673,13 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
             .any(|entry| entry.chat == CHAT_A && matches!(entry.entry, JournalEntry::Evicted))
     );
 
-    // Second eviction cycle, this time racing the eviction window: inject the
-    // moment the journal shows the next Evicted entry, while the session's
-    // Evict is still in flight to the router. Whichever side wins the race,
-    // the message must be answered with replayed context — the router either
-    // buffers it under Evicting, or forwards it to the retiring session whose
-    // bounce lands in that same buffer behind the Evict.
+    // Second eviction cycle, this time injecting the moment the journal
+    // shows the next Evicted entry, while the session's Evict may still be
+    // in flight to the router. There is no protocol state to observe any
+    // more: whichever side wins, the message must be answered with replayed
+    // context — the router either forwards it to the retiring session, whose
+    // bounce re-routes it behind the Evict, or it finds no entry and mints
+    // the replacement subtree directly.
     let evicted_count = |report: &JournalReport| {
         report
             .entries
@@ -698,15 +710,9 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
             .last()
             .is_some_and(|reply| !reply.contains("prior-context=0"))
     );
-    // The session's teardown flush (EVICT_FLUSH in on_stop) holds Removed
-    // back long enough that the raced injection lands while the router still
-    // has the chat marked Evicting — the buffer-and-replay path itself, not
-    // just its outcome, is exercised.
-    assert!(proof.evict_buffered >= 1);
     println!(
-        "PHASE 7 OK — clear_state_timeout + remove_child/ID reuse + readiness-before-rehydrate \
-         + raced eviction handoff (buffered {} message(s))",
-        proof.evict_buffered
+        "PHASE 7 OK — clear_state_timeout + subtree removal/respawn + \
+         readiness-before-rehydrate + raced eviction absorbed without membership protocol"
     );
     Ok(())
 }
@@ -790,12 +796,13 @@ fn all_assigned_tasks_terminal(report: &JournalReport) -> bool {
     assigned.is_subset(&terminal)
 }
 
-fn has_child(handle: &RuntimeHandle, id: &str) -> bool {
+fn has_session(handle: &RuntimeHandle, chat: ChatId) -> bool {
+    let prefix = format!("session:{chat}#");
     handle
         .snapshot()
         .children
         .iter()
-        .any(|child| child.id == id)
+        .any(|child| child.id.starts_with(&prefix))
 }
 
 async fn paused(guard: &ActorRef<GuardMsg>) -> Result<bool, AnyError> {

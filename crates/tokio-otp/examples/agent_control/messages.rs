@@ -21,7 +21,6 @@ pub const PHASE_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MODEL_DEADLINE: Duration = Duration::from_millis(500);
 pub const TOOL_DEADLINE: Duration = Duration::from_millis(200);
 pub const IDLE_TIMEOUT: Duration = Duration::from_millis(350);
-pub const EVICT_FLUSH: Duration = Duration::from_millis(10);
 pub const TYPING_PERIOD: Duration = Duration::from_millis(20);
 pub const GUARD_WINDOW: Duration = Duration::from_secs(1);
 pub const GUARD_THRESHOLD: usize = 2;
@@ -246,13 +245,10 @@ pub enum RouterMsg {
     },
     Evict {
         chat: ChatId,
-        generation: u64,
     },
-    Removed {
-        chat: ChatId,
-    },
-    RetryRemove {
-        chat: ChatId,
+    Reaped {
+        subtree_id: String,
+        done: bool,
     },
     PauseChanged {
         paused: bool,
@@ -344,7 +340,6 @@ pub struct TurnRequest {
 
 #[derive(Clone, Debug)]
 pub struct PendingInput {
-    pub envelope: EnvelopeId,
     pub text: String,
 }
 
@@ -356,7 +351,6 @@ pub struct ProofState {
     pub session_generations: HashMap<ChatId, u64>,
     pub run_started: HashMap<ChatId, usize>,
     pub run_terminal_at: HashMap<ChatId, Instant>,
-    pub evict_buffered: usize,
 }
 
 pub type Proof = Arc<Mutex<ProofState>>;

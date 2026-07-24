@@ -3,38 +3,33 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64},
     },
 };
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ControlError, DynamicActorOptions, RuntimeHandle,
-    prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, BoxError, ControlError, GraphBuilder, Runtime,
+    RuntimeHandle, StartMode, Strategy, prelude::Continue,
 };
 
 use crate::{
     messages::{
-        BudgetMsg, ChatId, GuardMsg, JournalMsg, OutboundMsg, PHASE_TIMEOUT, PendingInput,
-        ProgressMsg, Proof, RouterMsg, SessionMsg, ToolHostMsg,
+        BudgetMsg, ChatId, GuardMsg, JournalMsg, OutboundMsg, PHASE_TIMEOUT, ProgressMsg, Proof,
+        RouterMsg, SessionMsg, ToolHostMsg,
     },
     model::ModelClient,
     session::SessionFactory,
 };
 
-enum SessionSlot {
-    Active {
-        actor: ActorRef<SessionMsg>,
-        generation: u64,
-    },
-    Evicting {
-        buffered: Vec<PendingInput>,
-    },
+struct SessionEntry {
+    actor: ActorRef<SessionMsg>,
+    subtree_id: String,
 }
 
 pub struct Router {
     sessions_handle: Option<RuntimeHandle>,
-    sessions: HashMap<ChatId, SessionSlot>,
+    sessions: HashMap<ChatId, SessionEntry>,
     journal: ActorRef<JournalMsg>,
     budget: ActorRef<BudgetMsg>,
     tool_host: ActorRef<ToolHostMsg>,
@@ -44,7 +39,7 @@ pub struct Router {
     gate: Arc<AtomicBool>,
     model: Arc<dyn ModelClient>,
     task_sequence: Arc<AtomicU64>,
-    generation_sequence: Arc<AtomicU64>,
+    session_epoch: u64,
     proof: Proof,
 }
 
@@ -73,7 +68,7 @@ impl Router {
             gate,
             model,
             task_sequence: Arc::new(AtomicU64::new(0)),
-            generation_sequence: Arc::new(AtomicU64::new(0)),
+            session_epoch: 0,
             proof,
         }
     }
@@ -82,69 +77,87 @@ impl Router {
         &mut self,
         chat: ChatId,
         ctx: &ActorContext<RouterMsg>,
-    ) -> Result<ActorRef<SessionMsg>, tokio_otp::ControlError> {
-        let sessions = self
+    ) -> Result<ActorRef<SessionMsg>, BoxError> {
+        let mount = self
             .sessions_handle
             .as_ref()
             .expect("router must be bound before chat traffic")
             .clone();
-        let actor = sessions
-            .add_actor(
-                format!("session:{chat}"),
-                SessionFactory {
-                    chat,
-                    journal: self.journal.clone(),
-                    budget: self.budget.clone(),
-                    tool_host: self.tool_host.clone(),
-                    guard: self.guard.clone(),
-                    outbound: self.outbound.clone(),
-                    progress: self.progress.clone(),
-                    router: ctx.myself(),
-                    sessions: sessions.clone(),
-                    gate: self.gate.clone(),
-                    model: self.model.clone(),
-                    task_sequence: self.task_sequence.clone(),
-                    generation_sequence: self.generation_sequence.clone(),
-                    proof: self.proof.clone(),
-                },
-                DynamicActorOptions::default(),
+        // Each conversation incarnation is a distinct subtree with an id no
+        // other incarnation ever uses. A respawn therefore never contends
+        // with a predecessor's still-draining removal, which is what let the
+        // generation-stamped eviction handshake be deleted.
+        self.session_epoch += 1;
+        let generation = self.session_epoch;
+        let subtree_id = format!("session:{chat}#{generation}");
+        // The session spawns its run children into its own subtree, but that
+        // handle only exists once add_subtree returns; the cell is filled
+        // before any traffic is forwarded.
+        let subtree_cell = Arc::new(OnceLock::new());
+        let mut graph = GraphBuilder::new();
+        let actor = graph.actor(
+            "session",
+            SessionFactory {
+                chat,
+                generation,
+                journal: self.journal.clone(),
+                budget: self.budget.clone(),
+                tool_host: self.tool_host.clone(),
+                guard: self.guard.clone(),
+                outbound: self.outbound.clone(),
+                progress: self.progress.clone(),
+                router: ctx.myself(),
+                subtree: subtree_cell.clone(),
+                gate: self.gate.clone(),
+                model: self.model.clone(),
+                task_sequence: self.task_sequence.clone(),
+                proof: self.proof.clone(),
+            },
+        );
+        // OneForAll: a session panic tears down its transient runs with it;
+        // the session is reborn from this builder and rehydrates from the
+        // journal, while `Never` run children are skipped by the group
+        // respawn and cannot themselves recycle the session.
+        let subtree = mount
+            .add_subtree(
+                subtree_id.clone(),
+                Runtime::builder()
+                    .graph(graph.build()?)
+                    .strategy(Strategy::OneForAll)
+                    .start_mode(StartMode::Sequential),
             )
             .await?;
-        let generation = self.generation_sequence.load(Ordering::Relaxed);
+        assert!(subtree_cell.set(subtree).is_ok());
         self.sessions.insert(
             chat,
-            SessionSlot::Active {
+            SessionEntry {
                 actor: actor.clone(),
-                generation,
+                subtree_id,
             },
         );
         Ok(actor)
     }
 
-    fn pipeline_remove(&self, chat: ChatId, ctx: &ActorContext<RouterMsg>) {
-        let sessions = self.sessions_handle.as_ref().expect("router bound").clone();
+    fn pipeline_remove(&self, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
+        let mount = self.sessions_handle.as_ref().expect("router bound").clone();
+        let remove_id = subtree_id.clone();
         ctx.step(
             PHASE_TIMEOUT,
-            async move {
-                // Removal is pipelined so an idle eviction never head-of-line
-                // blocks unrelated routing work (the same hazard documented for
-                // the trading example's order router).
-                sessions.remove_child(format!("session:{chat}")).await
-            },
+            // Removal is pipelined so an idle eviction never head-of-line
+            // blocks unrelated routing work (the same hazard documented for
+            // the trading example's order router). Nothing routes on its
+            // completion: the chat's map entry is already gone and the next
+            // message mints a fresh subtree id, so the retry below only
+            // guards against leaking a stuck subtree.
+            async move { mount.remove_child(remove_id).await },
             move |outcome| {
-                if matches!(
+                let done = matches!(
                     outcome,
                     Ok(Ok(()))
                         | Ok(Err(ControlError::UnknownChildId(_)))
                         | Ok(Err(ControlError::ShutdownTimedOut(_)))
-                ) {
-                    RouterMsg::Removed { chat }
-                } else {
-                    // A step deadline abandons only our wait. The supervisor
-                    // may still be removing this id, so reconcile before a
-                    // buffered message is allowed to re-add it.
-                    RouterMsg::RetryRemove { chat }
-                }
+                );
+                RouterMsg::Reaped { subtree_id, done }
             },
         );
     }
@@ -161,85 +174,40 @@ impl Actor for Router {
                 chat,
                 text,
             } => {
-                let input = PendingInput { envelope, text };
-                match self.sessions.get_mut(chat) {
-                    Some(SessionSlot::Active { actor, .. }) => {
-                        actor
-                            .send(SessionMsg::UserMessage {
-                                envelope: input.envelope,
-                                text: input.text,
-                            })
-                            .await?;
-                    }
-                    Some(SessionSlot::Evicting { buffered }) => {
-                        buffered.push(input);
-                        self.proof
-                            .lock()
-                            .expect("proof lock poisoned")
-                            .evict_buffered += 1;
-                    }
-                    None => {
-                        let actor = self.add_session(chat, ctx).await?;
-                        actor
-                            .send(SessionMsg::UserMessage {
-                                envelope: input.envelope,
-                                text: input.text,
-                            })
-                            .await?;
-                    }
-                }
-            }
-            RouterMsg::Evict { chat, generation } => {
-                let should_remove = matches!(
-                    self.sessions.get(chat),
-                    Some(SessionSlot::Active { generation: active, .. }) if *active == generation
-                );
-                if should_remove {
-                    self.sessions.insert(
-                        chat,
-                        SessionSlot::Evicting {
-                            buffered: Vec::new(),
-                        },
-                    );
-                    self.pipeline_remove(chat, ctx);
-                }
-            }
-            RouterMsg::Removed { chat } => {
-                let buffered = match self.sessions.remove(chat) {
-                    Some(SessionSlot::Evicting { buffered }) => buffered,
-                    Some(other) => {
-                        self.sessions.insert(chat, other);
-                        Vec::new()
-                    }
-                    None => Vec::new(),
+                let actor = match self.sessions.get(chat) {
+                    Some(entry) => entry.actor.clone(),
+                    None => self.add_session(chat, ctx).await?,
                 };
-                if !buffered.is_empty() {
-                    let actor = self.add_session(chat, ctx).await?;
-                    for input in buffered {
-                        actor
-                            .send(SessionMsg::UserMessage {
-                                envelope: input.envelope,
-                                text: input.text,
-                            })
-                            .await?;
-                    }
+                actor
+                    .send(SessionMsg::UserMessage { envelope, text })
+                    .await?;
+            }
+            RouterMsg::Evict { chat } => {
+                // No generation matching: an incarnation sends at most one
+                // Evict, and a successor entry for the chat can only be
+                // created after that Evict was consumed here, so this always
+                // targets the incarnation that sent it. A message the router
+                // forwarded before processing this arrives at the retiring
+                // session, which bounces it back; per-sender FIFO puts the
+                // bounce behind this Evict, so it lands in the None arm above
+                // and mints the replacement subtree.
+                if let Some(entry) = self.sessions.remove(chat) {
+                    self.pipeline_remove(entry.subtree_id, ctx);
                 }
             }
-            RouterMsg::RetryRemove { chat } => {
-                if matches!(self.sessions.get(chat), Some(SessionSlot::Evicting { .. })) {
-                    self.pipeline_remove(chat, ctx);
+            RouterMsg::Reaped { subtree_id, done } => {
+                if !done {
+                    self.pipeline_remove(subtree_id, ctx);
                 }
             }
             RouterMsg::PauseChanged { paused } => {
-                for slot in self.sessions.values() {
-                    if let SessionSlot::Active { actor, .. } = slot {
-                        let _ = actor.send(SessionMsg::PauseChanged { paused }).await;
-                    }
+                for entry in self.sessions.values() {
+                    let _ = entry.actor.send(SessionMsg::PauseChanged { paused }).await;
                 }
             }
             RouterMsg::Stop { chat } => {
-                if let Some(SessionSlot::Active { actor, .. }) = self.sessions.get(chat) {
-                    actor.send(SessionMsg::Stop).await?;
+                if let Some(entry) = self.sessions.get(chat) {
+                    entry.actor.send(SessionMsg::Stop).await?;
                 }
             }
         }

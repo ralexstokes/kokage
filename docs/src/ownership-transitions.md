@@ -11,57 +11,69 @@ For work that must survive dynamic removal, use an application-level handoff:
 
 ```text
                        one writer for membership
-sender ──message──▶ router ──Active(actor)──▶ session
-                       │                         │
-                       │ Evict                   │ late message
-                       ▼                         │ after Evict sent
-                    Evicting                     │
-                    [buffer] ◀────bounce─────────┘
-                       │
-             remove_child completes
-                       │ add same id, fresh ref
+sender ──message──▶ router ──(key → subtree, ref)──▶ session
+                       │                                │
+                       │ Evict                          │ late message
+                       │                                │ after Evict sent
+                       │ drop map entry, pipeline       │
+                       │ remove_child("key#7")          │
+                       ▼                                │
+                   no entry ◀──────bounce───────────────┘
+                       │ next message or bounce
                        ▼
-                 Active(replacement)
-                       │ replay buffer
+            add_subtree("key#8") — fresh id
+                       │ rehydrate from journal
                        ▼
-                    session
+                    session (replacement)
 ```
 
 The protocol has four parts:
 
 1. **Choose one membership writer.** A router owns the map from logical key to
-   `Active(ActorRef)` or `Evicting(buffer)`. No other task adds, removes, or
+   the live subtree id and session `ActorRef`. No other task adds, removes, or
    swaps a session, so membership state and traffic routing are serialized by
    one actor mailbox.
-2. **Switch ownership before removal.** When the retiring session sends
-   `Evict`, the router changes `Active` to `Evicting` before it pipelines
-   `remove_child`. New router traffic goes into the buffer rather than to the
-   retiring ref.
+2. **Give each incarnation its own subtree id.** The writer mints
+   `key#epoch` ids, so a replacement never contends with a predecessor whose
+   removal is still draining. That is what lets removal be pipelined without
+   any intermediate membership state: on `Evict` the router drops the map
+   entry and issues `remove_child`; nothing routes on the removal's
+   completion. It also removes the need to stamp `Evict` with a generation —
+   an incarnation sends at most one `Evict`, and its successor can only be
+   created after that `Evict` was consumed, so a stale `Evict` can never
+   target a fresh entry.
 3. **Bounce the race and drain.** After requesting eviction, the retiree sends
    any late arrival back to the router and uses `DrainPolicy::Drain`. FIFO
    mailboxes preserve sequential enqueue order from one sender, so the
    retiree's `Evict` reaches the router before its later bounce. The bounce
-   therefore lands in `Evicting` instead of being forwarded back in a loop.
-   Configure cooperative shutdown with enough grace for this drain to finish:
-   immediate abort or expiry of the grace period can skip remaining drain and
-   `on_stop` work.
-4. **Mint and replay.** After removal completes, the router calls `add_actor`
-   with the reusable id, stores the fresh `ActorRef`, and replays the buffered
-   messages in order. Old refs remain terminal and cannot address the new
-   membership.
+   therefore finds no membership entry and is routed to a fresh subtree
+   instead of being forwarded back in a loop. Configure cooperative shutdown
+   with enough grace for this drain to finish: immediate abort or expiry of
+   the grace period can skip remaining drain work.
+4. **Rehydrate instead of replaying mail.** The replacement subtree's static
+   session is reborn from its builder and rebuilds context from the journal.
+   No in-memory buffer of undelivered messages changes hands; the only
+   message that crosses incarnations is the bounced one, and it travels
+   through the writer like any other traffic. Old subtree handles and refs
+   remain terminal and cannot address the new membership.
 
-The runnable `agent_control` example implements this exact recipe. The router's
-`SessionSlot::Evicting` state and pipelined removal live in
+The runnable `agent_control` example implements this exact recipe. The
+router's epoch-minted `add_subtree` membership and pipelined removal live in
 `crates/tokio-otp/examples/agent_control/router.rs`; the retiree bounce and
-`DrainPolicy::Drain` live in `session.rs`; phase 7 in `main.rs` injects traffic
-inside the eviction window and proves it is replayed by a replacement session.
+`DrainPolicy::Drain` live in `session.rs`; phase 7 in `main.rs` injects
+traffic inside the eviction window and proves the replacement session answers
+it with replayed context. An earlier revision of the example negotiated the
+same transition over a reused child id — a shared generation counter stamped
+into `Evict`, an `Evicting(buffer)` membership state, and a
+removal-completed handshake before replaying the buffer. Unique per-incarnation
+subtree ids made all three unrepresentable rather than merely handled.
 
 ## Put durable ownership outside the mailbox
 
-The buffer closes the clean-removal race, but it is not durable. If the process
-dies, in-memory mail can still vanish. For end-to-end delivery, append at the
-transport boundary, acknowledge only after append, and redeliver unacknowledged
-envelopes. Consumers should deduplicate stable envelope or effect keys. The
+The bounce closes the clean-removal race, but it is not durable. If the
+process dies, in-memory mail can still vanish. For end-to-end delivery, append
+at the transport boundary, acknowledge only after append, and redeliver
+unacknowledged envelopes. Consumers should deduplicate stable envelope or effect keys. The
 `agent_control` chat simulator, journal, and tool host demonstrate those three
 pieces.
 
@@ -94,6 +106,5 @@ fast but stale.
 `remove_child` deliberately does not return undelivered `Vec<M>` values. The
 supervisor handle is untyped, such a return would require downcasting, and it
 would not cover crashes or already-executed effects. Delivery guarantees belong
-at the journal/acknowledgement boundary. A reusable `Evicting` buffer helper may
-be worthwhile once multiple applications establish the same shape, but keeping
-the protocol explicit preserves the ownership decisions for now.
+at the journal/acknowledgement boundary, and the per-incarnation-subtree shape
+above leaves no membership buffer to extract a helper from.
