@@ -1,5 +1,0 @@
-error: unknown topology actor field
-  --> tests/ui/topology/metadata_unknown_target.rs:17:25
-   |
-17 |     #[topology(sends_to(missing))]
-   |                         ^^^^^^^

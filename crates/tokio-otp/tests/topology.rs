@@ -4,7 +4,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, Graph,
     GraphBuildError, GraphBuilder, MailboxMode, MessageSize, RawActor, RebindPolicy, SendError,
-    Topology, TopologyEdge, TopologyMetadata, TopologyNode, prelude::Continue,
+    Topology, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -100,55 +100,10 @@ impl Actor for Sink {
 }
 
 #[derive(Topology)]
-#[topology(metadata)]
 struct Pipeline {
-    #[topology(sends_to(parser))]
     frontend: Frontend,
-    #[topology(sends_to(frontend, sink))]
     parser: Parser,
     sink: Sink,
-}
-
-#[test]
-fn derived_topology_describes_nodes_and_edges() {
-    let metadata = Pipeline::topology_metadata();
-
-    assert_eq!(
-        metadata,
-        TopologyMetadata::new(
-            vec![
-                TopologyNode::new(
-                    "frontend",
-                    std::any::type_name::<Frontend>(),
-                    std::any::type_name::<FrontendMsg>(),
-                ),
-                TopologyNode::new(
-                    "parser",
-                    std::any::type_name::<Parser>(),
-                    std::any::type_name::<ParserMsg>(),
-                ),
-                TopologyNode::new(
-                    "sink",
-                    std::any::type_name::<Sink>(),
-                    std::any::type_name::<SinkMsg>(),
-                ),
-            ],
-            vec![
-                TopologyEdge::new("frontend", "parser", std::any::type_name::<ParserMsg>(),),
-                TopologyEdge::new("parser", "frontend", std::any::type_name::<FrontendMsg>(),),
-                TopologyEdge::new("parser", "sink", std::any::type_name::<SinkMsg>()),
-            ],
-        )
-    );
-}
-
-#[cfg(feature = "serde")]
-#[test]
-fn topology_metadata_serializes() {
-    let value = serde_json::to_value(Pipeline::topology_metadata()).expect("serialize metadata");
-
-    assert_eq!(value["nodes"][0]["name"], "frontend");
-    assert_eq!(value["edges"][2]["target"], "sink");
 }
 
 #[tokio::test]

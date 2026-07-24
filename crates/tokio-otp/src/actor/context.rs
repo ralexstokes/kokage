@@ -294,32 +294,17 @@ impl<M> ActorRef<M> {
         timeout: Duration,
         message: impl FnOnce(Reply<T>) -> M,
     ) -> Result<T, CallError> {
-        tokio::time::timeout(timeout, self.call_unbounded(message))
-            .await
-            .map_err(|_| CallError::Timeout {
+        tokio::time::timeout(timeout, async {
+            let (sender, receiver) = oneshot::channel();
+            self.send(message(Reply { sender })).await?;
+            receiver.await.map_err(|_| CallError::ReplyDropped {
                 actor_id: self.actor_id.to_string(),
-            })?
-    }
-
-    /// Sends a request and waits without a timeout for the actor to answer.
-    ///
-    /// Prefer [`call`](Self::call), whose required timeout bounds mailbox
-    /// backpressure, restart windows, and reply latency. This escape hatch is
-    /// intended only for protocols whose lifetime is deliberately bounded by
-    /// some other mechanism.
-    ///
-    /// As with `call`, cancelling this future after delivery cannot retract
-    /// the request. The actor may still process it, and a late [`Reply`] is a
-    /// silent no-op.
-    pub async fn call_unbounded<T>(
-        &self,
-        message: impl FnOnce(Reply<T>) -> M,
-    ) -> Result<T, CallError> {
-        let (sender, receiver) = oneshot::channel();
-        self.send(message(Reply { sender })).await?;
-        receiver.await.map_err(|_| CallError::ReplyDropped {
-            actor_id: self.actor_id.to_string(),
+            })
         })
+        .await
+        .map_err(|_| CallError::Timeout {
+            actor_id: self.actor_id.to_string(),
+        })?
     }
 
     async fn wait_for_next_mailbox(

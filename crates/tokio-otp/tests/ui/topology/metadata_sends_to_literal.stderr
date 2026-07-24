@@ -1,5 +1,0 @@
-error: expected parentheses
-  --> tests/ui/topology/metadata_sends_to_literal.rs:17:25
-   |
-17 |     #[topology(sends_to = "park")]
-   |                         ^

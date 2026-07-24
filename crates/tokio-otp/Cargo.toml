@@ -12,11 +12,9 @@ categories = ["asynchronous", "concurrency"]
 default = ["derive"]
 derive = ["dep:tokio-otp-derive"]
 metrics = ["dep:metrics", "tokio-supervisor/metrics"]
-serde = ["dep:serde"]
 
 [dependencies]
 metrics = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-otp-derive = { workspace = true, optional = true }
