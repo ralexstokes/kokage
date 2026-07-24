@@ -166,12 +166,12 @@ impl RuntimeBuilder {
             subtrees.push((id, nested_actors));
         }
 
-        match self.graph {
+        let runtime = match self.graph {
             Some(graph) => {
                 let supervised = SupervisedActors::new(graph)
                     .restart(self.restart)
                     .shutdown(self.shutdown);
-                supervised.build_runtime_with_subtrees(supervisor, subtrees)
+                supervised.build_runtime(supervisor)
             }
             None => {
                 let supervisor = supervisor.build()?;
@@ -179,10 +179,13 @@ impl RuntimeBuilder {
                     supervisor,
                     RunnableActorFactory::new(),
                     Vec::new(),
-                    subtrees,
                 ))
             }
+        }?;
+        for (id, subtree) in subtrees {
+            runtime.actor_state().record_subtree(id, subtree, None);
         }
+        Ok(runtime)
     }
 }
 

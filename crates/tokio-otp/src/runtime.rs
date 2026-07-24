@@ -20,8 +20,6 @@ use tokio_supervisor::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub(crate) type ActorSubtrees = Vec<(String, Arc<ActorRuntimeState>)>;
-
 #[derive(Clone, Debug)]
 struct TrackedActor {
     actor: RunnableActor,
@@ -44,12 +42,8 @@ pub(crate) struct ActorRuntimeState {
 }
 
 impl ActorRuntimeState {
-    fn new(
-        actor_factory: RunnableActorFactory,
-        actors: Vec<RunnableActor>,
-        subtrees: ActorSubtrees,
-    ) -> Self {
-        let state = Self {
+    fn new(actor_factory: RunnableActorFactory, actors: Vec<RunnableActor>) -> Self {
+        Self {
             actor_factory,
             actors: Arc::new(Mutex::new(
                 actors
@@ -61,12 +55,8 @@ impl ActorRuntimeState {
                     })
                     .collect(),
             )),
-            subtrees: Arc::new(Mutex::new(Vec::with_capacity(subtrees.len()))),
-        };
-        for (id, subtree) in subtrees {
-            state.record_subtree(id, subtree, None);
+            subtrees: Arc::new(Mutex::new(Vec::new())),
         }
-        state
     }
 
     fn bind_initial_memberships(&self, supervisor: &SupervisorHandle) {
@@ -549,7 +539,6 @@ impl Runtime {
             actors: Arc::new(ActorRuntimeState::new(
                 RunnableActorFactory::new(),
                 Vec::new(),
-                Vec::new(),
             )),
         }
     }
@@ -558,12 +547,15 @@ impl Runtime {
         supervisor: Supervisor,
         actor_factory: RunnableActorFactory,
         actors: Vec<RunnableActor>,
-        subtrees: ActorSubtrees,
     ) -> Self {
         Self {
             supervisor,
-            actors: Arc::new(ActorRuntimeState::new(actor_factory, actors, subtrees)),
+            actors: Arc::new(ActorRuntimeState::new(actor_factory, actors)),
         }
+    }
+
+    pub(crate) fn actor_state(&self) -> &ActorRuntimeState {
+        &self.actors
     }
 
     pub(crate) fn into_parts(self) -> (Supervisor, Arc<ActorRuntimeState>) {
