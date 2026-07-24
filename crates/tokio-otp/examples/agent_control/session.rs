@@ -10,7 +10,7 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, CancellationToken, DrainPolicy,
+    Actor, ActorContext, ActorRef, ActorResult, CancellationToken, DrainPolicy,
     DynamicActorOptions, RestartPolicy, RuntimeHandle, TimerRef, prelude::Continue,
 };
 
@@ -156,7 +156,7 @@ impl Session {
             .subtree
             .get()
             .expect("session subtree handle bound before traffic")
-            .add_actor_with_options(
+            .add_actor(
                 id.clone(),
                 AgentRunFactory {
                     chat: self.chat,
@@ -172,7 +172,6 @@ impl Session {
                     session: ctx.myself(),
                     cancel: cancel.clone(),
                 },
-                ActorOptions::new(),
                 DynamicActorOptions::default().restart(RestartPolicy::Never),
             )
             .await?;

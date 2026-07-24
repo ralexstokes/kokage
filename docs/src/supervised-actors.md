@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.spawn();
 
     orders.send("business cards x100".into()).await?;
-    let restart = handle.monitor_restart("press")?;
+    let restart = handle.supervisor_handle().monitor_restart("press")?;
     orders.send("origami cranes x1000".into()).await?;
     restart.await?;
     orders.send("flyers x500".into()).await?;
@@ -106,8 +106,9 @@ let runtime = Runtime::builder()
 Subtrees are added before the containing graph's actors, so sequential startup
 waits for nested readiness first. `RuntimeHandle::actor_stats()` recursively
 includes both graphs. `handle.subtree("venues")` returns a scoped runtime handle
-that retains the venue graph's dynamic actor factory, stats, and supervisor
-control methods.
+that retains the venue graph's dynamic actor factory, stats, and actor-aware
+control methods. Its `supervisor_handle()` exposes lower-level supervisor
+control when needed.
 
 Actor children use `on_start` as their readiness boundary. Even with the
 default concurrent start mode, snapshots remain `Starting`, `ChildStarted`

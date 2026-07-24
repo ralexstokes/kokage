@@ -4,15 +4,14 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorOptions, ActorRef, ActorStats, RawActor, RebindPolicy, RunnableActor,
-    RunnableActorFactory, SupervisorPathSegment,
+    ActorFactory, ActorOptions, ActorRef, ActorStats, MailboxMode, MessageSize, RawActor,
+    RebindPolicy, RunnableActor, RunnableActorFactory, SupervisorPathSegment,
 };
 use thiserror::Error;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use tokio_supervisor::{
-    ChildSpec, ControlError, RestartIntensity, RestartMonitor, RestartMonitorError, RestartPolicy,
-    RestartWatch, ShutdownPolicy, Supervisor, SupervisorError, SupervisorEvent, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSpec,
+    ChildSpec, ControlError, RestartIntensity, RestartPolicy, RestartWatch, ShutdownPolicy,
+    Supervisor, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -236,32 +235,53 @@ impl ActorRuntimeState {
 }
 
 /// Options applied when adding a runtime actor to a supervised runtime.
-#[derive(Clone, Debug)]
+///
+/// These options configure both the actor's mailbox and its supervised-child
+/// lifecycle. The message type is inferred from the factory passed to
+/// [`RuntimeHandle::add_actor`].
+#[derive(Debug)]
 #[non_exhaustive]
-pub struct DynamicActorOptions {
+pub struct DynamicActorOptions<M = ()> {
     /// Restart policy for the supervised actor child.
     pub restart: RestartPolicy,
     /// Shutdown policy for the supervised actor child.
     pub shutdown: ShutdownPolicy,
     /// Optional restart intensity override for this actor child.
     pub restart_intensity: Option<RestartIntensity>,
+    mailbox_mode: MailboxMode<M>,
+    size_hint: Option<fn(&M) -> usize>,
     // `None` selects the policy-dependent default. Keeping the override
     // unresolved makes `restart(...).remove_on_exit(...)` order-independent.
     remove_on_exit: Option<bool>,
 }
 
-impl Default for DynamicActorOptions {
+impl<M> Clone for DynamicActorOptions<M> {
+    fn clone(&self) -> Self {
+        Self {
+            restart: self.restart,
+            shutdown: self.shutdown,
+            restart_intensity: self.restart_intensity,
+            mailbox_mode: self.mailbox_mode.clone(),
+            size_hint: self.size_hint,
+            remove_on_exit: self.remove_on_exit,
+        }
+    }
+}
+
+impl<M> Default for DynamicActorOptions<M> {
     fn default() -> Self {
         Self {
             restart: RestartPolicy::OnFailure,
             shutdown: ShutdownPolicy::default(),
             restart_intensity: None,
+            mailbox_mode: MailboxMode::Queue,
+            size_hint: None,
             remove_on_exit: None,
         }
     }
 }
 
-impl DynamicActorOptions {
+impl<M> DynamicActorOptions<M> {
     /// Creates options with restart-on-failure and the default shutdown policy.
     pub fn new() -> Self {
         Self::default()
@@ -288,6 +308,23 @@ impl DynamicActorOptions {
         self
     }
 
+    /// Selects the actor's mailbox storage policy.
+    #[must_use]
+    pub fn mailbox(mut self, mailbox_mode: MailboxMode<M>) -> Self {
+        self.mailbox_mode = mailbox_mode;
+        self
+    }
+
+    /// Enables accepted-message byte observation using `M`'s size hint.
+    #[must_use]
+    pub fn message_size(mut self) -> Self
+    where
+        M: MessageSize,
+    {
+        self.size_hint = Some(MessageSize::size_hint);
+        self
+    }
+
     /// Sets whether the actor child is removed after a terminal exit.
     ///
     /// Removal happens only when the restart policy declines a restart, never
@@ -303,10 +340,35 @@ impl DynamicActorOptions {
         self
     }
 
-    fn resolved_remove_on_exit(&self) -> bool {
-        self.remove_on_exit
-            .unwrap_or(matches!(self.restart, RestartPolicy::Never))
+    fn child_options(&self) -> DynamicChildOptions {
+        let remove_on_exit = self
+            .remove_on_exit
+            .unwrap_or(matches!(self.restart, RestartPolicy::Never));
+        DynamicChildOptions {
+            restart: self.restart,
+            shutdown: self.shutdown,
+            restart_intensity: self.restart_intensity,
+            remove_on_exit,
+        }
     }
+
+    fn into_parts(self) -> (ActorOptions<M>, DynamicChildOptions) {
+        let child_options = self.child_options();
+        (
+            ActorOptions {
+                mailbox_mode: self.mailbox_mode,
+                size_hint: self.size_hint,
+            },
+            child_options,
+        )
+    }
+}
+
+struct DynamicChildOptions {
+    restart: RestartPolicy,
+    shutdown: ShutdownPolicy,
+    restart_intensity: Option<RestartIntensity>,
+    remove_on_exit: bool,
 }
 
 /// Cancellation guard for a restart-count mailbox pump.
@@ -620,6 +682,10 @@ impl RuntimeHandle {
     }
 
     /// Returns a clone of the underlying supervisor handle.
+    ///
+    /// This is the explicit low-level escape hatch for raw supervisor
+    /// operations. Children and supervisors added through it are not tracked
+    /// by this runtime's actor registry and do not appear in [`actor_stats`](Self::actor_stats).
     pub fn supervisor_handle(&self) -> SupervisorHandle {
         self.supervisor.clone()
     }
@@ -632,24 +698,6 @@ impl RuntimeHandle {
     /// Requests a graceful shutdown and waits for the supervisor to stop.
     pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
-    }
-
-    /// Adds a new child to the supervisor at runtime.
-    pub async fn add_child(&self, child: ChildSpec) -> Result<(), ControlError> {
-        self.supervisor.add_child(child).await.map(|_| ())
-    }
-
-    /// Adds a raw nested supervisor at runtime.
-    ///
-    /// On success, returns the membership epoch assigned atomically with the
-    /// insertion. Use [`add_subtree`](Self::add_subtree) when the nested
-    /// supervisor should participate in runtime actor discovery and stats.
-    pub async fn add_supervisor(
-        &self,
-        id: impl Into<String>,
-        supervisor: impl Into<SupervisorSpec>,
-    ) -> Result<u64, ControlError> {
-        self.supervisor.add_supervisor(id, supervisor).await
     }
 
     /// Builds and adds an actor-aware runtime subtree dynamically.
@@ -698,16 +746,11 @@ impl RuntimeHandle {
         })
     }
 
-    /// Returns the stable handle for a direct nested supervisor.
-    pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
-        self.supervisor.supervisor(id)
-    }
-
     /// Returns the actor-aware handle for a direct runtime subtree.
     ///
-    /// Unlike [`supervisor`](Self::supervisor), this preserves the subtree's
-    /// actor factory and recursive stats. It returns `None` for supervisors
-    /// that were added through the raw supervisor APIs.
+    /// `None` means that this runtime has no registered subtree with `id`.
+    /// A raw supervisor added through [`supervisor_handle`](Self::supervisor_handle)
+    /// is intentionally outside this name-based runtime view.
     pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
         let supervisor = self.supervisor.supervisor(id)?;
         let membership_epoch = self
@@ -735,29 +778,12 @@ impl RuntimeHandle {
         &self,
         label: impl Into<String>,
         factory: F,
-        options: DynamicActorOptions,
+        options: DynamicActorOptions<<F::Actor as RawActor>::Msg>,
     ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
     where
         F: ActorFactory,
     {
-        let actor = self.actors.actor_factory.actor(label, factory);
-        self.add_constructed_actor(actor, options).await
-    }
-
-    /// Adds a supervised runtime actor from an incarnation factory with explicit
-    /// per-actor registration options and returns its stable typed ref.
-    ///
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub async fn add_actor_with_options<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-        actor_options: ActorOptions<<F::Actor as RawActor>::Msg>,
-        dynamic_options: DynamicActorOptions,
-    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
-    where
-        F: ActorFactory,
-    {
+        let (actor_options, dynamic_options) = options.into_parts();
         let actor = self
             .actors
             .actor_factory
@@ -768,7 +794,7 @@ impl RuntimeHandle {
     async fn add_constructed_actor<M>(
         &self,
         (actor, actor_ref): (RunnableActor, ActorRef<M>),
-        options: DynamicActorOptions,
+        options: DynamicChildOptions,
     ) -> Result<ActorRef<M>, ControlError> {
         let registration_path = self.current_supervisor_path();
         let child = actor_child_spec(
@@ -776,7 +802,7 @@ impl RuntimeHandle {
             options.restart,
             options.shutdown,
             options.restart_intensity,
-            options.resolved_remove_on_exit(),
+            options.remove_on_exit,
         );
         let membership_epoch = self.supervisor.add_child(child).await?;
         if let Some(registration_path) =
@@ -836,32 +862,12 @@ impl RuntimeHandle {
         self.supervisor.wait_started().await
     }
 
-    /// Delegates to [`SupervisorHandle::monitor_restart`].
-    pub fn monitor_restart(
-        &self,
-        id: impl Into<String>,
-    ) -> Result<RestartMonitor, RestartMonitorError> {
-        self.supervisor.monitor_restart(id)
-    }
-
-    /// Returns a new receiver for supervisor lifecycle events.
-    ///
-    /// Events are lossy observability, not durable control: see
-    /// [`SupervisorHandle::subscribe`] for the full contract. Control logic
-    /// such as restart breakers should use
-    /// [`watch_restarts`](Self::watch_restarts) or
-    /// [`subscribe_snapshots`](Self::subscribe_snapshots) instead.
-    pub fn subscribe(&self) -> broadcast::Receiver<SupervisorEvent> {
-        self.supervisor.subscribe()
-    }
-
     /// Delegates to [`SupervisorHandle::watch_restarts`]: reliable,
     /// snapshot-backed observation of restart activity, suitable for control
     /// logic such as aggregate restart breakers.
     ///
-    /// Covers the root supervisor's direct children only; watch a nested
-    /// supervisor via [`supervisor`](Self::supervisor) to observe its
-    /// subtree.
+    /// Covers the root supervisor's direct children only; call this method on
+    /// a [`subtree`](Self::subtree) handle to observe that subtree.
     pub fn watch_restarts(&self) -> RestartWatch {
         self.supervisor.watch_restarts()
     }

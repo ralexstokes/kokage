@@ -319,8 +319,9 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let background_stop = CancellationToken::new();
     let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));
     // The aggregate restart breaker is a safety mechanism, so it must not be
-    // fed from the lossy event broadcast (`handle.subscribe()`), which can
-    // drop `ChildRestarted` events under load. Instead it watches the venues
+    // fed from the lossy event broadcast
+    // (`handle.supervisor_handle().subscribe()`), which can drop
+    // `ChildRestarted` events under load. Instead it watches the venues
     // supervisor's cumulative `total_restarts` counter over the lossless
     // snapshot watch channel: conflated updates still arrive as one delta
     // covering every restart, so the breaker can never silently under-count.
@@ -432,7 +433,8 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     let venues = app
         .handle
         .subtree("venues")
-        .expect("venues runtime subtree");
+        .expect("venues runtime subtree")
+        .supervisor_handle();
     let restarted = venues.monitor_restart("venue-a-feed")?;
     app.venue_a_feed.send(FeedMsg::Crash).await?;
     tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
@@ -646,7 +648,8 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     let venues = app
         .handle
         .subtree("venues")
-        .expect("venues runtime subtree");
+        .expect("venues runtime subtree")
+        .supervisor_handle();
     for (id, feed) in [
         ("venue-a-feed", &app.venue_a_feed),
         ("venue-b-feed", &app.venue_b_feed),

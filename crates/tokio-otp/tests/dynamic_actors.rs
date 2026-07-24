@@ -14,10 +14,10 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, ChildMembershipView,
-    ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions, GraphBuilder,
-    MailboxMode, MessageSize, MonitorEvent, MonitorRef, RawActor, RestartPolicy, Runtime,
-    RuntimeHandle, SendError, ShutdownPolicy, Strategy, SupervisorBuilder,
+    Actor, ActorContext, ActorRef, ActorResult, BoxError, ChildMembershipView, ChildSpec,
+    ControlError, DownReason, DrainPolicy, DynamicActorOptions, GraphBuilder, MailboxMode,
+    MessageSize, MonitorEvent, MonitorRef, RawActor, RestartPolicy, Runtime, RuntimeHandle,
+    SendError, ShutdownPolicy, Strategy, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
 
@@ -942,11 +942,12 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .expect("graphless runtime builds")
         .spawn();
     let sink = handle
-        .add_actor_with_options(
+        .add_actor(
             "sink",
             Drain::<SizedMessage>::new,
-            ActorOptions::new().message_size(),
-            DynamicActorOptions::default(),
+            DynamicActorOptions::default()
+                .mailbox(MailboxMode::Conflate)
+                .message_size(),
         )
         .await
         .expect("sized actor added");
@@ -960,6 +961,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .find(|stats| stats.actor_id == "sink")
         .expect("dynamic actor stats available");
     assert_eq!(stats.message_bytes_accepted, Some(12));
+    assert_eq!(stats.mailbox_capacity, 1);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -987,7 +989,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
         .spawn();
     let release = Arc::new(Notify::new());
     let sink = handle
-        .add_actor_with_options(
+        .add_actor(
             "sink",
             {
                 let release = release.clone();
@@ -995,8 +997,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
                     release: release.clone(),
                 }
             },
-            ActorOptions::new().mailbox(MailboxMode::Conflate),
-            DynamicActorOptions::default(),
+            DynamicActorOptions::default().mailbox(MailboxMode::Conflate),
         )
         .await
         .expect("conflating actor added");

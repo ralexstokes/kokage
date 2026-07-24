@@ -9,11 +9,12 @@ The crates expose four views into a running system:
 
 ## Events And Snapshots
 
-`RuntimeHandle::subscribe()` returns supervisor lifecycle events. Use it for
-logging, tracing, and dashboards:
+`RuntimeHandle::supervisor_handle()` exposes the lower-level supervisor
+control surface. Subscribe there for lossy lifecycle events used by logging,
+tracing, and dashboards:
 
 ```rust,ignore
-let mut events = handle.subscribe();
+let mut events = handle.supervisor_handle().subscribe();
 tokio::spawn(async move {
     loop {
         match events.recv().await {
@@ -94,8 +95,9 @@ is not terminal, so the pump follows the stable ref into the next incarnation.
 Its scope is the watched supervisor's **direct children**: to cover a nested
 subtree, watch each nested runtime handle (`handle.subtree(id)`) —
 `total_restarts` does not aggregate across depth, whereas an event subscription
-forwards nested events (lossily). Call `watch_restarts()` directly when a
-non-actor consumer needs to await the counts itself.
+forwards nested events (lossily). For a raw supervisor, navigate explicitly
+through `handle.supervisor_handle().supervisor(id)`. Call `watch_restarts()`
+directly when a non-actor consumer needs to await the counts itself.
 Nested supervisors carry the counter across their own incarnations, so a watch
 on a restart-stable handle keeps working through restarts of the watched
 supervisor itself, and `next()` returns `None` once the supervisor can never
@@ -141,11 +143,13 @@ let uploads = graph.actor_with_options(
 );
 ```
 
-The same options value works with `GraphBuilder::slot_with_options`,
-`GraphBuilder::add_with_options`, `RunnableActorFactory::actor_with_options`,
-and `RuntimeHandle::add_actor_with_options`. Mailbox and size settings can be
-combined, for example with
-`ActorOptions::new().mailbox(MailboxMode::Conflate).message_size()`.
+The same `ActorOptions` value works with `GraphBuilder::slot_with_options`,
+`GraphBuilder::add_with_options`, and
+`RunnableActorFactory::actor_with_options`. Dynamic registration exposes the
+same settings directly on `DynamicActorOptions`, so mailbox and size settings
+can be combined with
+`DynamicActorOptions::new().mailbox(MailboxMode::Conflate).message_size()`
+and passed to `RuntimeHandle::add_actor`.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that

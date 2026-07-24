@@ -7,8 +7,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder,
-    MailboxMode, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder, MailboxMode,
+    RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
 struct Sink {
@@ -71,6 +71,7 @@ async fn runtime_with_sink() -> (
 
 async fn crash_once(handle: &RuntimeHandle, crasher: &ActorRef<()>) {
     let restarted = handle
+        .supervisor_handle()
         .monitor_restart("crasher")
         .expect("crasher is a direct child");
     crasher.send(()).await.expect("crash request delivered");
@@ -183,6 +184,7 @@ async fn restart_watch_follows_target_restarts() {
     let (handle, sink, _crasher, mut observed) = runtime_with_sink().await;
     let watch = handle.watch_restarts_to(&sink, |count| count);
     let restarted = handle
+        .supervisor_handle()
         .monitor_restart("sink")
         .expect("sink is a direct child");
 
@@ -227,7 +229,7 @@ async fn cumulative_totals_survive_conflating_target_mailbox() {
     let release = Arc::new(Notify::new());
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let sink = handle
-        .add_actor_with_options(
+        .add_actor(
             "sink",
             {
                 let entered = Arc::clone(&entered);
@@ -239,8 +241,7 @@ async fn cumulative_totals_survive_conflating_target_mailbox() {
                     crash_after_release: false,
                 }
             },
-            ActorOptions::new().mailbox(MailboxMode::Conflate),
-            DynamicActorOptions::default(),
+            DynamicActorOptions::default().mailbox(MailboxMode::Conflate),
         )
         .await
         .expect("sink added");
@@ -309,7 +310,10 @@ async fn latest_total_is_resent_after_target_restart() {
     let watch = handle.watch_restarts_to(&sink, BlockingSinkMsg::RestartTotal);
     crash_once(&handle, &crasher).await;
     wait_until(|| sink.stats().messages_accepted >= 2).await;
-    let restarted = handle.monitor_restart("sink").expect("sink is monitored");
+    let restarted = handle
+        .supervisor_handle()
+        .monitor_restart("sink")
+        .expect("sink is monitored");
     release.notify_one();
     timeout(Duration::from_secs(1), restarted)
         .await
@@ -381,6 +385,7 @@ async fn watched_supervisor_termination_cancels_backpressured_delivery() {
 
     let watch = watched.watch_restarts_to(&sink, BlockingSinkMsg::RestartTotal);
     let restarted = watched
+        .supervisor_handle()
         .monitor_restart("crasher")
         .expect("nested child monitored");
     nested_crasher

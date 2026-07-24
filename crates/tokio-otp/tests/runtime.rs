@@ -233,6 +233,7 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
     );
 
     handle
+        .supervisor_handle()
         .add_supervisor(
             "raw",
             SupervisorBuilder::new()
@@ -535,6 +536,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     );
 
     let restart = handle
+        .supervisor_handle()
         .monitor_restart("workers")
         .expect("subtree child is known");
     static_ref.send(()).await.expect("failure triggered");
@@ -599,6 +601,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     assert_eq!(root.actor_stats().len(), 2);
 
     let restart = root
+        .supervisor_handle()
         .monitor_restart("workers")
         .expect("subtree is monitored");
     static_ref.send(()).await.expect("failure triggered");
@@ -649,6 +652,7 @@ async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
     );
 
     let restart = root
+        .supervisor_handle()
         .monitor_restart("parent")
         .expect("parent subtree is monitored");
     fuse.send(()).await.expect("parent failure triggered");
@@ -817,7 +821,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         })
         .await
         .expect("runtime reported running");
-    let _events = control.subscribe();
+    let _events = control.supervisor_handle().subscribe();
     assert_eq!(control.snapshot().children.len(), 1);
 
     worker_ref
@@ -985,7 +989,7 @@ impl RawActor for FailOnMessage {
 }
 
 #[tokio::test]
-async fn runtime_handle_monitor_restart_delegates_to_supervisor() {
+async fn runtime_handle_exposes_restart_monitor_via_supervisor_handle() {
     let mut builder = GraphBuilder::new();
     let worker_ref = builder.actor("worker", || FailOnMessage);
     let graph = builder.build().expect("valid graph");
@@ -999,6 +1003,7 @@ async fn runtime_handle_monitor_restart_delegates_to_supervisor() {
     let handle = runtime.spawn();
 
     let restart = handle
+        .supervisor_handle()
         .monitor_restart("worker")
         .expect("worker child should be known");
     worker_ref.send(()).await.expect("message sent");
@@ -1124,6 +1129,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     );
 
     let restart = handle
+        .supervisor_handle()
         .monitor_restart("counter")
         .expect("counter child should be known");
     counter.send(CounterMsg::Crash).await.expect("crash sent");

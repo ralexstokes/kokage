@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .build()?;
     let handle = runtime.spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.supervisor_handle().subscribe();
     let mut snapshots = handle.subscribe_snapshots();
 
     let event_task = tokio::spawn(async move {
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     frontend.send("hello".to_owned()).await?;
-    let restart = handle.monitor_restart("worker")?;
+    let restart = handle.supervisor_handle().monitor_restart("worker")?;
     frontend.send("fail-worker".to_owned()).await?;
     restart.await?;
     frontend.send("after-restart".to_owned()).await?;

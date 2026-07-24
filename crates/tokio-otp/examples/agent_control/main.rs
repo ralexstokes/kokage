@@ -47,7 +47,7 @@
 //!         ├── session              static in the builder; reborn with the
 //!         │                        subtree, rehydrates from the journal
 //!         └── run:<task>:<role>:<attempt>
-//!                                  add_actor_with_options, restart = Never;
+//!                                  add_actor, restart = Never;
 //!                                  a session panic tears its runs down with
 //!                                  it (OneForAll), while a Never run panic
 //!                                  is skipped by the group respawn
@@ -90,7 +90,7 @@
 //!     ─▶ removed; next message mounts a fresh epoch, replay restores context
 //!
 //! run:<task>:<role>:<attempt>   (transient child, restart = Never)
-//!   add_actor_with_options ─▶ continue_with(Step)
+//!   add_actor ─▶ continue_with(Step)
 //!     ─▶ model turn in a context-owned step (cancel token + deadline) ─▶ ModelResult
 //!     ─▶ tool loop: journal ToolIntent ─▶ Execute (bounded) ─▶ ToolResult,
 //!         reconciling an unknown outcome through an idempotency-key Query
@@ -444,9 +444,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             .session_generations[CHAT_B],
         b_generation
     );
-    println!(
-        "PHASE 2 OK — add_actor_with_options(RestartPolicy::Never) + ctx.watch Down/Terminated"
-    );
+    println!("PHASE 2 OK — add_actor(RestartPolicy::Never) + ctx.watch Down/Terminated");
     Ok(())
 }
 
