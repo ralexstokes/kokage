@@ -1,5 +1,0 @@
-error: expected `metadata`
-  --> tests/ui/topology/metadata_unknown_option.rs:15:12
-   |
-15 | #[topology(bogus)]
-   |            ^^^^^

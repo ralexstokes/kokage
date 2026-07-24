@@ -1,5 +1,0 @@
-error: `sends_to` requires `#[topology(metadata)]` on the topology struct
-  --> tests/ui/topology/metadata_not_enabled.rs:16:16
-   |
-16 |     #[topology(sends_to(park))]
-   |                ^^^^^^^^

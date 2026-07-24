@@ -237,13 +237,11 @@
 //! |---------|---------|-------------|
 //! | `derive` | yes | Re-exports `#[derive(Topology)]`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
-//! | `serde` | no | Serialization for topology metadata. |
 
 mod actor;
 mod builder;
 mod runtime;
 mod supervised_actors;
-mod topology;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -297,4 +295,3 @@ pub use tokio_supervisor::{
     prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
 };
 pub use tokio_util::sync::CancellationToken;
-pub use topology::{TopologyEdge, TopologyMetadata, TopologyNode};

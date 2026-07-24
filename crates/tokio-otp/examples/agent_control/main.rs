@@ -142,16 +142,12 @@ use tool_host::ToolHost;
 type AnyError = Box<dyn Error + Send + Sync>;
 
 #[derive(Topology)]
-#[topology(metadata)]
 struct Core {
     #[topology(options = ActorOptions::new().message_size())]
     journal: Journal,
-    #[topology(sends_to(guard))]
     budget: Budget,
-    #[topology(sends_to(budget, router))]
     guard: Guard,
     tool_host: ToolHost,
-    #[topology(sends_to(journal, budget, guard, tool_host))]
     router: Router,
 }
 

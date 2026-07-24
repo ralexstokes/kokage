@@ -35,18 +35,14 @@ impl RawActor for SizedWorker {
 }
 
 #[derive(Topology)]
-#[topology(metadata)]
 struct OptionsGraph {
     #[topology(options = ActorOptions::new().mailbox(MailboxMode::Conflate))]
     mailbox_only: MailboxWorker,
     #[topology(options = ActorOptions::new().message_size())]
     message_size_only: SizedWorker,
-    #[topology(
-        sends_to(mailbox_only),
-        options = ActorOptions::new()
-            .mailbox(MailboxMode::Conflate)
-            .message_size()
-    )]
+    #[topology(options = ActorOptions::new()
+        .mailbox(MailboxMode::Conflate)
+        .message_size())]
     combined: SizedWorker,
 }
 
