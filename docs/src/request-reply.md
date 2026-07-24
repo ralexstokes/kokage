@@ -64,9 +64,6 @@ Choose one that covers the queueing delay your service is willing to tolerate:
   mailbox beats waiting. There is no fail-fast variant of `call`.
 - Use `call(timeout, ...)` when the caller can wait for capacity or a short
   restart window, but needs a firm end-to-end bound.
-- Use `call_unbounded(...)` only when another mechanism deliberately bounds
-  the protocol lifetime. Its conspicuous name makes the missing local timeout
-  easy to find in review.
 - Do not use `call` with a conflating mailbox. A newer value can replace the
   request, causing `CallError::ReplyDropped`.
 

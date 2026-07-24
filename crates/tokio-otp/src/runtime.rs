@@ -532,7 +532,45 @@ impl Runtime {
         crate::RuntimeBuilder::new()
     }
 
-    /// Creates a runtime from a supervisor.
+    /// Creates an actor-aware runtime around an arbitrary supervisor.
+    ///
+    /// This composition boundary is useful when runtime-managed dynamic actors
+    /// must share a supervisor with non-actor children. The supplied supervisor
+    /// starts with no actor metadata; actors added through
+    /// [`RuntimeHandle::add_actor`] are tracked normally.
+    ///
+    /// ```no_run
+    /// use tokio_otp::{
+    ///     Actor, ActorContext, ActorResult, DynamicActorOptions, Runtime,
+    ///     prelude::Continue,
+    /// };
+    /// use tokio_supervisor::{ChildSpec, SupervisorBuilder};
+    ///
+    /// struct Worker;
+    ///
+    /// impl Actor for Worker {
+    ///     type Msg = ();
+    ///
+    ///     async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    ///         Ok(Continue)
+    ///     }
+    /// }
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let supervisor = SupervisorBuilder::new()
+    ///     .child(ChildSpec::new("maintenance", |ctx| async move {
+    ///         ctx.shutdown_token().cancelled().await;
+    ///         Ok(())
+    ///     }))
+    ///     .build()?;
+    /// let handle = Runtime::new(supervisor).spawn();
+    /// handle
+    ///     .add_actor("worker", || Worker, DynamicActorOptions::new())
+    ///     .await?;
+    /// handle.shutdown_and_wait().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(supervisor: Supervisor) -> Self {
         Self {
             supervisor,
@@ -569,6 +607,35 @@ impl Runtime {
     /// after converting to a raw supervisor. Keep the full runtime and use
     /// [`spawn`](Self::spawn) if you need actor-aware runtime behavior.
     ///
+    /// ```no_run
+    /// use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, Runtime};
+    /// use tokio_otp::prelude::Continue;
+    /// use tokio_supervisor::SupervisorBuilder;
+    ///
+    /// struct Worker;
+    ///
+    /// impl Actor for Worker {
+    ///     type Msg = ();
+    ///
+    ///     async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    ///         Ok(Continue)
+    ///     }
+    /// }
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut graph = GraphBuilder::new();
+    /// graph.actor("worker", || Worker);
+    /// let actor_subtree = Runtime::builder()
+    ///     .graph(graph.build()?)
+    ///     .build()?
+    ///     .into_supervisor();
+    /// let root = SupervisorBuilder::new()
+    ///     .supervisor("actors", actor_subtree)
+    ///     .build()?;
+    /// # let _ = root;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn into_supervisor(self) -> Supervisor {
         self.supervisor
     }

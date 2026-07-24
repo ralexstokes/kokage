@@ -333,7 +333,6 @@ newer message replaces a request before it is handled, the caller receives
 | `send` | Waits for a bound mailbox and retries across expected restart windows; FIFO queues wait for capacity, while conflating mailboxes replace stale state. |
 | `try_send` | Returns immediately; FIFO queues report full capacity, while conflating mailboxes replace stale state. |
 | `call` | Sends a message carrying `Reply<T>` and awaits the reply until its required caller-owned timeout expires. |
-| `call_unbounded` | Sends a request without a local timeout; use only when another mechanism bounds the protocol lifetime. |
 
 Refs are bound to long-lived mailbox bindings, not one actor incarnation. A
 ref minted at wiring time keeps working across per-actor supervised
