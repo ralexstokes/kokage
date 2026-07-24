@@ -195,9 +195,7 @@ impl Graph {
         self.inner.actors.iter().map(RunnableActor::stats).collect()
     }
 
-    /// Returns a factory for constructing additional runnable actors that use
-    /// the same runtime configuration as this graph.
-    pub fn dynamic_factory(&self) -> RunnableActorFactory {
+    pub(crate) fn dynamic_factory(&self) -> RunnableActorFactory {
         RunnableActorFactory {
             observability: self.inner.observability.clone(),
             mailbox_capacity: self.inner.mailbox_capacity,

@@ -15,8 +15,7 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, SupervisorHandleExt,
-    prelude::Continue,
+    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -482,15 +481,12 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .remove_child("worker")
         .await
         .expect("tracked actor removed through raw handle");
-    let mut factory_graph = GraphBuilder::new();
-    factory_graph.actor("anchor", Drain::<()>::new);
-    let factory_graph = factory_graph.build().expect("factory graph builds");
-    let (replacement, _replacement_ref) = factory_graph
-        .dynamic_factory()
-        .actor("worker", Drain::<()>::new);
     handle
         .supervisor_handle()
-        .add_actor(replacement, DynamicActorOptions::default())
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
         .await
         .expect("untracked replacement added");
 
@@ -555,17 +551,14 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         Err(SendError::ActorTerminated { .. })
     ));
 
-    let mut factory_graph = GraphBuilder::new();
-    factory_graph.actor("anchor", Drain::<()>::new);
-    let factory_graph = factory_graph.build().expect("factory graph builds");
-    let (replacement, _replacement_ref) = factory_graph
-        .dynamic_factory()
-        .actor("dynamic-worker", Drain::<()>::new);
     subtree
         .supervisor_handle()
-        .add_actor(replacement, DynamicActorOptions::default())
+        .add_child(ChildSpec::new("dynamic-worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
         .await
-        .expect("same-id raw actor added in replacement subtree incarnation");
+        .expect("same-id raw child added in replacement subtree incarnation");
     assert!(
         handle
             .actor_stats()
@@ -1020,91 +1013,6 @@ async fn runtime_handle_monitor_restart_delegates_to_supervisor() {
         .shutdown_and_wait()
         .await
         .expect("runtime shut down cleanly");
-}
-
-#[tokio::test]
-async fn nested_supervisor_handle_adds_and_restarts_runnable_actor() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph_builder = GraphBuilder::new();
-    graph_builder.actor("factory-anchor", Drain::<()>::new);
-    let graph = graph_builder.build().expect("graph is valid");
-    let (actor, actor_ref) =
-        graph
-            .dynamic_factory()
-            .actor("subscription", move || FailAfterObserve {
-                observed: observed_tx.clone(),
-            });
-
-    let nested = SupervisorBuilder::new()
-        .build()
-        .expect("empty nested supervisor is valid");
-    let outer = SupervisorBuilder::new()
-        .supervisor("venue", nested)
-        .build()
-        .expect("outer supervisor is valid");
-    let handle = outer.spawn();
-    let venue = handle
-        .supervisor("venue")
-        .expect("nested supervisor handle is available");
-
-    let unavailable = venue
-        .add_actor(actor.clone(), DynamicActorOptions::default())
-        .await;
-    assert!(matches!(
-        unavailable,
-        Err(tokio_supervisor::ControlError::Unavailable)
-    ));
-
-    timeout(
-        Duration::from_secs(1),
-        handle.subscribe_snapshots().wait_for(|snapshot| {
-            snapshot
-                .child("venue")
-                .and_then(|child| child.supervisor.as_ref())
-                .is_some_and(|supervisor| supervisor.state == SupervisorStateView::Running)
-        }),
-    )
-    .await
-    .expect("nested supervisor started within timeout")
-    .expect("snapshot channel remains open");
-
-    venue
-        .add_actor(actor, DynamicActorOptions::default())
-        .await
-        .expect("actor added to nested supervisor");
-    let restart = venue
-        .monitor_restart("subscription")
-        .expect("actor child is known to nested supervisor");
-
-    actor_ref
-        .send("first".to_owned())
-        .await
-        .expect("first message sent");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("first"));
-    timeout(Duration::from_secs(1), restart.into_future())
-        .await
-        .expect("actor restarted within timeout")
-        .expect("restart monitor succeeded");
-
-    actor_ref
-        .send("second".to_owned())
-        .await
-        .expect("ref rebound after restart");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("second"));
-
-    venue
-        .remove_child("subscription")
-        .await
-        .expect("actor removed from nested supervisor");
-    assert!(matches!(
-        actor_ref.send("after removal".to_owned()).await,
-        Err(SendError::ActorTerminated { .. })
-    ));
-
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("outer supervisor shut down cleanly");
 }
 
 #[derive(Clone)]

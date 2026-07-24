@@ -1104,8 +1104,8 @@ mod runnable_actor {
     };
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
-        DrainPolicy, Graph, GraphBuilder, MessageSize, RawActor, RebindPolicy, RunnableActor,
-        RunnableActorFactory, SendError, prelude::Continue,
+        DrainPolicy, DynamicActorOptions, Graph, GraphBuilder, MessageSize, RawActor, RebindPolicy,
+        RunnableActor, RunnableActorFactory, Runtime, SendError, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1393,12 +1393,21 @@ mod runnable_actor {
         builder.actor_shutdown_timeout(Duration::from_millis(100));
         builder.actor("anchor", Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
-        let (worker, _worker_ref) = graph.dynamic_factory().actor("worker", || NeverStops);
-
-        worker
-            .run_until(async {}, RebindPolicy::Never)
+        let handle = Runtime::builder()
+            .graph(graph)
+            .build()
+            .expect("runtime builds")
+            .spawn();
+        handle
+            .add_actor("worker", || NeverStops, DynamicActorOptions::default())
             .await
-            .expect("factory actor uses inherited shutdown timeout");
+            .expect("dynamic actor added");
+        handle.wait_started().await.expect("dynamic actor started");
+        handle
+            .remove_child("worker")
+            .await
+            .expect("dynamic actor uses inherited shutdown timeout");
+        handle.shutdown_and_wait().await.expect("clean shutdown");
     }
 
     async fn wait_for_stale_mailbox(actor_ref: &ActorRef<String>) {
