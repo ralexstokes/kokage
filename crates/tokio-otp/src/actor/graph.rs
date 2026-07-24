@@ -6,17 +6,15 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    task::{Context, Poll},
     time::Duration,
 };
 
 use thiserror::Error;
 use tokio::{
     sync::oneshot,
-    task::JoinHandle,
     time::{Instant as TokioInstant, sleep_until},
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::Instrument;
 
 use crate::actor::{
@@ -302,7 +300,7 @@ impl RunnableActor {
         let mut shutdown = std::pin::pin!(shutdown);
         let actor_span = self.inner.observability.actor_span(&actor_id);
         let (ready_tx, mut ready_rx) = oneshot::channel();
-        let mut actor_task = AbortOnDrop::new(tokio::spawn(
+        let mut actor_task = AbortOnDropHandle::new(tokio::spawn(
             self.inner
                 .runner
                 .start(RunnerStart {
@@ -314,7 +312,7 @@ impl RunnableActor {
                 })
                 .instrument(actor_span),
         ));
-        let _cancel_actor_on_drop = CancelOnDrop::new(actor_shutdown.clone());
+        let _cancel_actor_on_drop = actor_shutdown.clone().drop_guard();
 
         self.inner.observability.emit_actor_started(&actor_id);
 
@@ -592,64 +590,6 @@ impl ActiveActorRun {
 impl Drop for ActiveActorRun {
     fn drop(&mut self) {
         self.inner.running.store(false, Ordering::Release);
-    }
-}
-
-struct AbortOnDrop<T> {
-    handle: Option<JoinHandle<T>>,
-}
-
-impl<T> AbortOnDrop<T> {
-    fn new(handle: JoinHandle<T>) -> Self {
-        Self {
-            handle: Some(handle),
-        }
-    }
-
-    fn abort(&self) {
-        if let Some(handle) = &self.handle {
-            handle.abort();
-        }
-    }
-}
-
-impl<T> Future for AbortOnDrop<T> {
-    type Output = Result<T, tokio::task::JoinError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let handle = self
-            .handle
-            .as_mut()
-            .expect("join handle is present until joined");
-        match Pin::new(handle).poll(cx) {
-            Poll::Ready(result) => {
-                self.handle = None;
-                Poll::Ready(result)
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl<T> Drop for AbortOnDrop<T> {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
-
-struct CancelOnDrop {
-    token: CancellationToken,
-}
-
-impl CancelOnDrop {
-    fn new(token: CancellationToken) -> Self {
-        Self { token }
-    }
-}
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.token.cancel();
     }
 }
 
