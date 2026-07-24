@@ -980,6 +980,36 @@ impl Drop for TerminateBindingOnDrop {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ActorOverrides {
+    pub(crate) restart: Option<RestartPolicy>,
+    pub(crate) restart_intensity: Option<RestartIntensity>,
+    pub(crate) shutdown: Option<ShutdownPolicy>,
+}
+
+pub(crate) fn actor_children(
+    graph: &crate::Graph,
+    default_restart: RestartPolicy,
+    default_shutdown: ShutdownPolicy,
+    overrides: &HashMap<String, ActorOverrides>,
+) -> Vec<ChildSpec> {
+    graph
+        .actors()
+        .iter()
+        .cloned()
+        .map(|actor| {
+            let actor_overrides = overrides.get(actor.label()).copied().unwrap_or_default();
+            actor_child_spec(
+                actor,
+                actor_overrides.restart.unwrap_or(default_restart),
+                actor_overrides.shutdown.unwrap_or(default_shutdown),
+                actor_overrides.restart_intensity,
+                false,
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     restart: RestartPolicy,

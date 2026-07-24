@@ -15,12 +15,12 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, SupervisedActors,
-    SupervisorHandleExt, prelude::Continue,
+    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, SupervisorHandleExt,
+    prelude::Continue,
 };
 use tokio_supervisor::{
-    ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
-    Strategy, SupervisorBuilder, SupervisorError, SupervisorStateView,
+    ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
+    ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -85,8 +85,10 @@ where
     let actor_ref = builder.actor("worker", factory);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
 
     (runtime, actor_ref)
@@ -892,14 +894,65 @@ async fn runtime_builder_wires_graph_into_supervised_runtime() {
 }
 
 #[tokio::test]
+async fn runtime_builder_mixes_actor_and_non_actor_children() {
+    let mut builder = GraphBuilder::new();
+    builder.actor("actor", Drain::<()>::new);
+    let graph = builder.build().expect("valid graph");
+    let sidecar_started = Arc::new(Notify::new());
+
+    let sidecar = ChildSpec::new("sidecar", {
+        let sidecar_started = sidecar_started.clone();
+        move |ctx| {
+            let sidecar_started = sidecar_started.clone();
+            async move {
+                sidecar_started.notify_one();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    });
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .child(sidecar)
+        .build()
+        .expect("runtime builds");
+    let handle = runtime.spawn();
+
+    timeout(Duration::from_secs(1), sidecar_started.notified())
+        .await
+        .expect("sidecar started");
+    timeout(
+        Duration::from_secs(1),
+        handle.subscribe_snapshots().wait_for(|snapshot| {
+            snapshot
+                .child("actor")
+                .is_some_and(|child| child.state == ChildStateView::Running)
+                && snapshot
+                    .child("sidecar")
+                    .is_some_and(|child| child.state == ChildStateView::Running)
+        }),
+    )
+    .await
+    .expect("actor and sidecar reported running")
+    .expect("snapshot channel stays open");
+
+    handle
+        .shutdown_and_wait()
+        .await
+        .expect("runtime shut down cleanly");
+}
+
+#[tokio::test]
 async fn snapshot_wait_reports_all_children_running_after_spawn() {
     let mut builder = GraphBuilder::new();
     builder.actor("one", Drain::<()>::new);
     builder.actor("two", Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -1235,9 +1288,10 @@ async fn actor_deadline_can_complete_before_strict_supervisor_deadline() {
             started: started.clone(),
         }
     });
-    let runtime = SupervisedActors::new(builder.build().expect("valid graph"))
+    let runtime = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
         .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_secs(1)))
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -1261,11 +1315,12 @@ async fn strict_supervisor_deadline_can_abort_before_actor_deadline() {
             started: started.clone(),
         }
     });
-    let runtime = SupervisedActors::new(builder.build().expect("valid graph"))
+    let runtime = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
         .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
             20,
         )))
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -1289,11 +1344,12 @@ async fn aborting_supervisor_deadline_can_complete_before_actor_deadline() {
             started: started.clone(),
         }
     });
-    let runtime = SupervisedActors::new(builder.build().expect("valid graph"))
+    let runtime = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
         .shutdown(ShutdownPolicy::cooperative_then_abort(
             Duration::from_millis(20),
         ))
-        .build_runtime(SupervisorBuilder::new())
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 

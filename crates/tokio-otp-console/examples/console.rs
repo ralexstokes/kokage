@@ -26,13 +26,10 @@ use std::{error::Error, io, time::Duration};
 use tokio::time::sleep;
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, BoxError, DynamicActorOptions, GraphBuilder,
-    SupervisedActors, prelude::Continue,
+    Runtime, RuntimeBuilder, prelude::Continue,
 };
 use tokio_otp_console::Console;
-use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, Strategy, Supervisor,
-    SupervisorBuilder,
-};
+use tokio_supervisor::{BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, Strategy};
 
 fn example_error(message: &'static str) -> BoxError {
     Box::new(io::Error::other(message))
@@ -80,7 +77,7 @@ impl Actor for Burst {
 
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
-fn pipeline_supervisor() -> Result<Supervisor, Box<dyn Error>> {
+fn pipeline_runtime() -> RuntimeBuilder {
     let source = ChildSpec::new("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
@@ -100,18 +97,16 @@ fn pipeline_supervisor() -> Result<Supervisor, Box<dyn Error>> {
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(2))),
     );
 
-    let supervisor = SupervisorBuilder::new()
+    Runtime::builder()
         .strategy(Strategy::OneForAll)
         .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
         .child(source)
         .child(transform)
-        .build()?;
-    Ok(supervisor)
 }
 
 /// A OneForOne group demonstrating the other restart policies, with a further
 /// nested supervisor one level deeper.
-fn telemetry_supervisor() -> Result<Supervisor, Box<dyn Error>> {
+fn telemetry_runtime() -> RuntimeBuilder {
     // `Always` restarts even after a clean exit, so this child completes and
     // comes back every 7 seconds.
     let heartbeat = ChildSpec::new("heartbeat", |ctx| async move {
@@ -135,16 +130,14 @@ fn telemetry_supervisor() -> Result<Supervisor, Box<dyn Error>> {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let exporters = SupervisorBuilder::new().child(exporter).build()?;
+    let exporters = Runtime::builder().child(exporter);
 
-    let supervisor = SupervisorBuilder::new()
+    Runtime::builder()
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
         .child(heartbeat)
         .child(migration)
-        .supervisor("exporters", exporters)
-        .build()?;
-    Ok(supervisor)
+        .subtree("exporters", exporters)
 }
 
 #[tokio::main]
@@ -158,19 +151,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     builder.define(worker_slot, || Worker);
     let graph = builder.build()?;
 
-    let root = SupervisorBuilder::new()
+    let runtime = Runtime::builder()
+        .graph(graph)
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
-        .supervisor("pipeline", pipeline_supervisor()?)
-        .supervisor("telemetry", telemetry_supervisor()?);
-
-    let runtime = SupervisedActors::new(graph)
+        .subtree("pipeline", pipeline_runtime())
+        .subtree("telemetry", telemetry_runtime())
         .actor_restart_intensity(
             &worker_ref,
             RestartIntensity::new(60, Duration::from_secs(60))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(1500))),
         )
-        .build_runtime(root)?;
+        .build()?;
     let handle = runtime.spawn();
 
     let console = match Console::for_runtime(&handle)

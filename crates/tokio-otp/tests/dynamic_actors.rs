@@ -17,13 +17,15 @@ use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, ChildMembershipView,
     ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions, GraphBuilder,
     MailboxMode, MessageSize, MonitorEvent, MonitorRef, RawActor, RestartPolicy, Runtime,
-    RuntimeHandle, SendError, ShutdownPolicy, Strategy, SupervisedActors, SupervisorBuilder,
+    RuntimeHandle, SendError, ShutdownPolicy, Strategy, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
 
 fn build_runtime(graph: tokio_otp::Graph) -> Runtime {
-    SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds")
 }
 

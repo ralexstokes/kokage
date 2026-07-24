@@ -15,7 +15,7 @@ use tokio_otp::{
     ActorContext, ActorFactory, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Runtime,
     prelude::Continue,
 };
-use tokio_supervisor::{Strategy, SupervisorBuilder};
+use tokio_supervisor::Strategy;
 
 fn build_runtime<F>(factory: F) -> (Runtime, ActorRef<<F::Actor as RawActor>::Msg>)
 where
@@ -24,8 +24,10 @@ where
     let mut builder = GraphBuilder::new();
     let actor_ref = builder.actor("timer", factory);
     let graph = builder.build().expect("valid graph");
-    let runtime = tokio_otp::SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
     (runtime, actor_ref)
 }
@@ -503,8 +505,10 @@ async fn interval_waits_for_mailbox_capacity_and_skips_missed_ticks() {
         }
     });
     let graph = builder.build().expect("valid graph");
-    let runtime = tokio_otp::SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
 
@@ -579,8 +583,10 @@ where
     });
     let scheduler_ref = builder.actor("scheduler", scheduler(sink_ref));
     let graph = builder.build().expect("valid graph");
-    let runtime = tokio_otp::SupervisedActors::new(graph)
-        .build_runtime(SupervisorBuilder::new().strategy(Strategy::OneForOne))
+    let runtime = Runtime::builder()
+        .graph(graph)
+        .strategy(Strategy::OneForOne)
+        .build()
         .expect("runtime builds");
     (runtime, scheduler_ref, observed_rx)
 }
