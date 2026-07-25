@@ -470,7 +470,28 @@ impl SupervisorRuntime {
                 let _ = self.shutdown_all().await;
                 Err(error)
             }
-            Err(ExitReason::Failure(error)) => Err(error),
+            Err(ExitReason::Failure(error)) => {
+                // An ordinary supervisor failure preserves the historical
+                // nested lifecycle contract: nested wrapper tasks are dropped,
+                // but their runtimes receive shutdown and finish detached. A
+                // hard abort of *this* runtime bypasses this branch, leaving
+                // the default cascade flag armed recursively.
+                self.detach_nested_children_for_failure();
+                Err(error)
+            }
+        }
+    }
+
+    fn detach_nested_children_for_failure(&self) {
+        for (_, child) in self.children.iter() {
+            if child.runtime.state.is_active()
+                && matches!(child.runtime.definition.kind, ChildKind::Supervisor(_))
+            {
+                child
+                    .runtime
+                    .nested_abort_cascades
+                    .store(false, std::sync::atomic::Ordering::Release);
+            }
         }
     }
 
@@ -922,6 +943,13 @@ impl SupervisorRuntime {
             }
             .into());
         }
+        if child.is_significant() {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddChild,
+                kind: self.meta.kind,
+            }
+            .into());
+        }
 
         Arc::make_mut(&mut child.inner)
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
@@ -935,26 +963,6 @@ impl SupervisorRuntime {
                 .validate()
                 .map_err(|err| map_build_error_to_control(child.id(), err))?;
         }
-        if child.is_significant() && matches!(child.restart_policy(), RestartPolicy::Always) {
-            return Err(ControlError::InvalidConfig(
-                "significant children cannot use RestartPolicy::Always",
-            )
-            .into());
-        }
-        if child.is_significant() && self.meta.kind == ScopeKind::Dynamic {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::AddChild,
-                kind: self.meta.kind,
-            }
-            .into());
-        }
-        if child.is_significant() && matches!(self.meta.auto_shutdown, AutoShutdown::Never) {
-            return Err(ControlError::InvalidConfig(
-                "significant children require automatic shutdown",
-            )
-            .into());
-        }
-
         let id = child.id().to_owned();
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
@@ -997,6 +1005,13 @@ impl SupervisorRuntime {
             }
             .into());
         }
+        if supervisor.significant {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddSupervisor,
+                kind: self.meta.kind,
+            }
+            .into());
+        }
         supervisor.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
@@ -1005,25 +1020,6 @@ impl SupervisorRuntime {
             intensity
                 .validate()
                 .map_err(|error| map_build_error_to_control(&id, error))?;
-        }
-        if supervisor.significant && matches!(supervisor.restart, RestartPolicy::Always) {
-            return Err(ControlError::InvalidConfig(
-                "significant children cannot use RestartPolicy::Always",
-            )
-            .into());
-        }
-        if supervisor.significant && self.meta.kind == ScopeKind::Dynamic {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::AddSupervisor,
-                kind: self.meta.kind,
-            }
-            .into());
-        }
-        if supervisor.significant && matches!(self.meta.auto_shutdown, AutoShutdown::Never) {
-            return Err(ControlError::InvalidConfig(
-                "significant children require automatic shutdown",
-            )
-            .into());
         }
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
@@ -1224,8 +1220,13 @@ impl SupervisorRuntime {
     }
 
     pub(crate) fn abort_child(&mut self, key: ChildKey) {
-        self.children[key].runtime.completion.mark_cancelled();
-        if let Some(abort_handle) = self.children[key].runtime.abort_handle.as_ref() {
+        let child = &self.children[key].runtime;
+        child.completion.mark_cancelled();
+        child.nested_abort_cascades.store(
+            !matches!(child.definition.shutdown_policy.mode, ShutdownMode::Abort),
+            std::sync::atomic::Ordering::Release,
+        );
+        if let Some(abort_handle) = child.abort_handle.as_ref() {
             abort_handle.abort();
         }
     }

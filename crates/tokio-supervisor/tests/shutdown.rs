@@ -702,6 +702,62 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
 }
 
 #[tokio::test]
+async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
+    let leaf_live = common::LiveFlag::new();
+    let leaf = ChildSpec::new("leaf", {
+        let leaf_live = leaf_live.clone();
+        move |ctx| {
+            let guard = leaf_live.guard();
+            async move {
+                let _guard = guard;
+                ctx.shutdown_token().cancelled().await;
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+        }
+    })
+    .shutdown(ShutdownPolicy::cooperative_then_abort(Duration::from_secs(
+        5,
+    )));
+    let inner = SupervisorBuilder::new()
+        .child(leaf)
+        .build()
+        .expect("inner supervisor builds");
+    let middle = SupervisorBuilder::new()
+        .supervisor(
+            "inner",
+            tokio_supervisor::SupervisorSpec::new(inner).shutdown(
+                ShutdownPolicy::cooperative_then_abort(Duration::from_secs(5)),
+            ),
+        )
+        .build()
+        .expect("middle supervisor builds");
+    let handle = SupervisorBuilder::new()
+        .supervisor(
+            "middle",
+            tokio_supervisor::SupervisorSpec::new(middle)
+                .shutdown(ShutdownPolicy::cooperative_then_abort(common::SHORT_GRACE)),
+        )
+        .build()
+        .expect("root supervisor builds")
+        .spawn();
+    handle.wait_started().await.expect("nested tree starts");
+    assert!(leaf_live.is_live());
+
+    timeout(common::EVENT_TIMEOUT, handle.shutdown_and_wait())
+        .await
+        .expect("parent grace bounds recursive nested shutdown")
+        .expect("parent fallback abort is a clean shutdown");
+    timeout(common::EVENT_TIMEOUT, async {
+        while leaf_live.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("hard cascade reaches the deeply nested leaf");
+}
+
+#[tokio::test]
 async fn ordered_shutdown_graces_sum_while_dynamic_shutdown_keeps_one_shared_deadline() {
     const GRACE: Duration = Duration::from_millis(40);
     let stubborn = |id: &'static str| {

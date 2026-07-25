@@ -395,6 +395,13 @@ fn abort_matching_children(
             && predicate(key, child)
             && let Some(abort_handle) = child.runtime.abort_handle.as_ref()
         {
+            child.runtime.nested_abort_cascades.store(
+                !matches!(
+                    child.runtime.definition.shutdown_policy.mode,
+                    ShutdownMode::Abort
+                ),
+                std::sync::atomic::Ordering::Release,
+            );
             abort_handle.abort();
         }
     }

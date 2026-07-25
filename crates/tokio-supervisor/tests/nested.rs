@@ -614,7 +614,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
 }
 
 #[tokio::test]
-async fn aborting_nested_child_still_gracefully_stops_its_subtree() {
+async fn explicit_wrapper_abort_signals_nested_shutdown_instead_of_cascading_hard() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let nested = SupervisorBuilder::new()

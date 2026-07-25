@@ -480,8 +480,8 @@ Big shapes that neither application covers, roughly in priority order:
    semantics: `AutoShutdown::AnySignificant`/`AllSignificant`, the
    clean-exit-is-not-restarted half of `RestartPolicy::OnFailure` (the
    default policy), `Strategy::OneForAll` fate-sharing in a real pipeline,
-   concurrent startup (the historical default — both applications start
-   `Sequential`), and finishing via `handle.wait()` rather than
+   ordered-startup failure and rollback (both applications cover successful
+   sequential startup only), and finishing via `handle.wait()` rather than
    `shutdown_and_wait()`.
 2. **Supervision without actors.** `tokio-supervisor` is independently
    usable, but both applications go through `Runtime` + actors everywhere.

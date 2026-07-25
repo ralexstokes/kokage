@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use crate::{
     child::{ChildKind, ChildReadiness},
@@ -25,6 +25,7 @@ struct SpawnPlan {
     snapshot_state: Option<NestedSnapshotState>,
     nested_channels: Option<Arc<StableSupervisorChannels>>,
     completion: CompletionFlag,
+    nested_abort_cascades: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SupervisorRuntime {
@@ -42,6 +43,7 @@ impl SupervisorRuntime {
             snapshot_state,
             nested_channels,
             completion,
+            nested_abort_cascades,
         } = {
             let entry = self.children.get_mut(key).ok_or_else(|| {
                 SupervisorError::Internal(format!("missing child slot for key {key}"))
@@ -70,6 +72,8 @@ impl SupervisorRuntime {
             child.next_restart_deadline = None;
             let completion = CompletionFlag::pending();
             child.completion = completion.clone();
+            child.nested_abort_cascades.store(true, Ordering::Release);
+            let nested_abort_cascades = Arc::clone(&child.nested_abort_cascades);
             entry.nested_snapshot = None;
             let snapshot_state = if matches!(&child.definition.kind, ChildKind::Supervisor(_)) {
                 let state = NestedSnapshotState::default();
@@ -110,6 +114,7 @@ impl SupervisorRuntime {
                 snapshot_state,
                 nested_channels,
                 completion,
+                nested_abort_cascades,
             }
         };
         let child_path_segments = self.child_path(key);
@@ -188,6 +193,7 @@ impl SupervisorRuntime {
                                 channels,
                                 child_path_segments,
                                 child_revivable,
+                                nested_abort_cascades,
                             )
                             .await
                     }

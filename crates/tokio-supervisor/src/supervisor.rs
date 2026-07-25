@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
@@ -49,14 +55,6 @@ pub(crate) struct SupervisorConfig {
     pub(crate) event_channel_capacity: usize,
 }
 
-struct AbortTaskOnDrop(tokio::task::AbortHandle);
-
-impl Drop for AbortTaskOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 /// Explicit connection from one nested supervisor incarnation to its parent.
 #[derive(Clone)]
 pub(crate) struct ParentLink {
@@ -64,6 +62,31 @@ pub(crate) struct ParentLink {
     pub(crate) snapshot_cell: SnapshotCell,
     pub(crate) id: String,
     pub(crate) generation: u64,
+}
+
+struct NestedTaskOnDrop {
+    abort_handle: tokio::task::AbortHandle,
+    shutdown_tx: watch::Sender<bool>,
+    cascade: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl NestedTaskOnDrop {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NestedTaskOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let _ = self.shutdown_tx.send(true);
+        if self.cascade.load(Ordering::Acquire) {
+            self.abort_handle.abort();
+        }
+    }
 }
 
 impl ParentLink {
@@ -80,6 +103,21 @@ impl ParentLink {
 impl Supervisor {
     pub(crate) fn new(config: SupervisorConfig) -> Self {
         Self { config }
+    }
+
+    /// Returns this supervisor's immutable scope kind.
+    pub fn kind(&self) -> ScopeKind {
+        self.config.kind
+    }
+
+    /// Returns the restart policy inherited by runtime-added children.
+    pub fn default_restart_policy(&self) -> RestartPolicy {
+        self.config.default_restart
+    }
+
+    /// Returns the shutdown policy inherited by runtime-added children.
+    pub fn default_shutdown_policy(&self) -> ShutdownPolicy {
+        self.config.default_shutdown
     }
 
     /// Spawns the supervisor as a background Tokio task and returns a handle
@@ -145,6 +183,7 @@ impl Supervisor {
         channels: Arc<StableSupervisorChannels>,
         path: Vec<String>,
         revivable: bool,
+        abort_cascades: Arc<AtomicBool>,
     ) -> ChildResult {
         let generation = ctx.generation();
         let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) =
@@ -224,12 +263,21 @@ impl Supervisor {
             let _ = task_done_tx.send(Some(result.clone()));
             result
         });
-        // The nested runtime is spawned separately so its stable handle can
-        // observe completion. Keep that task owned by this child future: if
-        // an ancestor exhausts the child's grace and aborts the wrapper, the
-        // nested runtime (and therefore its descendants) must not detach.
-        let _abort_task_on_drop = AbortTaskOnDrop(join_handle.abort_handle());
-
+        // Hard cascade is armed by default: aborting an ancestor runtime drops
+        // its JoinSet, each nested wrapper aborts its owned runtime, and the
+        // cascade continues recursively. Explicit `ShutdownMode::Abort` opts
+        // that wrapper incarnation into the older wrapper-only contract: the
+        // shutdown signal is sent, but the nested runtime drains detached. An
+        // ordinary supervisor failure makes the same explicit opt-out before
+        // its JoinSet is dropped. The paired tests are
+        // `explicit_wrapper_abort_signals_nested_shutdown_instead_of_cascading_hard`
+        // and `parent_child_grace_bounds_a_slow_nested_ordered_teardown`.
+        let mut nested_task_on_drop = NestedTaskOnDrop {
+            abort_handle: join_handle.abort_handle(),
+            shutdown_tx: shutdown_tx.clone(),
+            cascade: abort_cascades,
+            armed: true,
+        };
         tokio::pin!(join_handle);
         let mut shutdown_requested = false;
 
@@ -249,6 +297,7 @@ impl Supervisor {
                 }
             }
         };
+        nested_task_on_drop.disarm();
 
         drop(binding);
         result.map_err(|error| Box::new(error) as crate::BoxError)
