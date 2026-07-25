@@ -228,33 +228,38 @@ impl StableSupervisorChannels {
         }
     }
 
-    fn binding(&self) -> Option<IncarnationBinding> {
-        self.binding
-            .lock()
-            .expect("stable control slot poisoned")
-            .clone()
-    }
-
-    fn initial_binding(&self) -> Option<IncarnationBinding> {
+    fn current_binding(&self) -> Option<IncarnationBinding> {
+        let binding = self.binding.lock().expect("stable control slot poisoned");
+        if binding.is_some() {
+            return binding.clone();
+        }
         self.initial_incarnation
             .lock()
             .expect("initial incarnation slot poisoned")
             .as_ref()
-            .map(|initial| IncarnationBinding {
-                generation: 0,
-                shutdown_tx: initial.shutdown_tx.clone(),
-                control: ControlEndpoint {
-                    command_tx: initial.command_tx.clone(),
-                },
-                done_rx: initial.done_rx.clone(),
-            })
+            .map(initial_binding)
     }
 
-    pub(crate) fn take_initial_incarnation(&self) -> Option<InitialIncarnationChannels> {
-        self.initial_incarnation
+    pub(crate) fn take_initial_incarnation(
+        &self,
+        generation: u64,
+    ) -> Option<InitialIncarnationChannels> {
+        if generation != 0 {
+            return None;
+        }
+
+        // Publish the sender-side binding while extracting the sole receiver
+        // bundle. Taking both locks in the same order as `current_binding`
+        // prevents a stable handle from observing an unavailable gap between
+        // the pre-spawn channels and `bind`.
+        let mut binding = self.binding.lock().expect("stable control slot poisoned");
+        let mut initial = self
+            .initial_incarnation
             .lock()
-            .expect("initial incarnation slot poisoned")
-            .take()
+            .expect("initial incarnation slot poisoned");
+        let channels = initial.take()?;
+        *binding = Some(initial_binding(&channels));
+        Some(channels)
     }
 
     pub(crate) fn events(&self) -> broadcast::Sender<SupervisorEvent> {
@@ -332,6 +337,17 @@ impl StableSupervisorChannels {
 
     pub(crate) fn attached_children(&self) -> AttachedChildrenState {
         Arc::clone(&self.attached_children)
+    }
+}
+
+fn initial_binding(initial: &InitialIncarnationChannels) -> IncarnationBinding {
+    IncarnationBinding {
+        generation: 0,
+        shutdown_tx: initial.shutdown_tx.clone(),
+        control: ControlEndpoint {
+            command_tx: initial.command_tx.clone(),
+        },
+        done_rx: initial.done_rx.clone(),
     }
 }
 
@@ -429,6 +445,31 @@ mod tests {
                 .expect("stable snapshot channel remains open"),
             "an unchanged first binding must not wake snapshot subscribers"
         );
+    }
+
+    #[test]
+    fn initial_channel_handoff_keeps_the_stable_control_binding_available() {
+        let channels = StableSupervisorChannels::new(
+            SupervisorSnapshot::new(
+                SupervisorStateView::Running,
+                Strategy::OneForOne,
+                Vec::new(),
+            ),
+            8,
+            8,
+            empty_nested_channels(),
+            Vec::new(),
+            true,
+        );
+        let handle = channels.handle();
+
+        let _initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+
+        handle
+            .control_endpoint()
+            .expect("handoff retains a stable control binding");
     }
 }
 
@@ -567,7 +608,7 @@ impl SupervisorHandle {
                 let _ = root.shutdown_tx.send(true);
             }
             HandleKind::Stable(stable) => {
-                if let Some(binding) = stable.binding().or_else(|| stable.initial_binding()) {
+                if let Some(binding) = stable.current_binding() {
                     let _ = binding.shutdown_tx.send(true);
                 }
             }
@@ -710,14 +751,11 @@ impl SupervisorHandle {
                 (root.done_rx.clone(), join)
             }
             HandleKind::Stable(stable) => {
-                let binding = stable
-                    .binding()
-                    .or_else(|| stable.initial_binding())
-                    .ok_or_else(|| {
-                        SupervisorError::Internal(
-                            "nested supervisor incarnation is unavailable".to_owned(),
-                        )
-                    })?;
+                let binding = stable.current_binding().ok_or_else(|| {
+                    SupervisorError::Internal(
+                        "nested supervisor incarnation is unavailable".to_owned(),
+                    )
+                })?;
                 (binding.done_rx, None)
             }
         };
@@ -937,8 +975,7 @@ impl SupervisorHandle {
         match &self.kind {
             HandleKind::Root(root) => Ok(root.control_endpoint()),
             HandleKind::Stable(stable) => stable
-                .binding()
-                .or_else(|| stable.initial_binding())
+                .current_binding()
                 .map(|binding| binding.control)
                 .ok_or(ControlError::Unavailable),
         }
