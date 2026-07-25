@@ -47,10 +47,12 @@ enum SessionSlot {
     Removing { buffered: Vec<PendingInput> },
 }
 
+#[derive(tokio_otp::ActorFactory)]
 pub struct Router {
     /// Filled by `main` after the runtime spawns; unlike router state, the
-    /// cell is owned by the factory closure and survives router restarts.
+    /// cell is owned by `RouterFactory` and survives router restarts.
     mount: Arc<OnceLock<RuntimeHandle>>,
+    #[factory(default)]
     sessions: HashMap<ChatId, SessionSlot>,
     journal: ActorRef<JournalMsg>,
     budget: ActorRef<BudgetMsg>,
@@ -60,6 +62,7 @@ pub struct Router {
     progress: ActorRef<ProgressMsg>,
     gate: Arc<AtomicBool>,
     model: Arc<dyn ModelClient>,
+    #[factory(default)]
     task_sequence: Arc<AtomicU64>,
     /// Also factory-owned: the id allocator must survive router incarnations,
     /// or a reborn router would re-mint `session:<chat>#1` while its
@@ -69,37 +72,6 @@ pub struct Router {
 }
 
 impl Router {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        mount: Arc<OnceLock<RuntimeHandle>>,
-        session_epoch: Arc<AtomicU64>,
-        journal: ActorRef<JournalMsg>,
-        budget: ActorRef<BudgetMsg>,
-        tool_host: ActorRef<ToolHostMsg>,
-        guard: ActorRef<GuardMsg>,
-        outbound: ActorRef<OutboundMsg>,
-        progress: ActorRef<ProgressMsg>,
-        gate: Arc<AtomicBool>,
-        model: Arc<dyn ModelClient>,
-        proof: Proof,
-    ) -> Self {
-        Self {
-            mount,
-            sessions: HashMap::new(),
-            journal,
-            budget,
-            tool_host,
-            guard,
-            outbound,
-            progress,
-            gate,
-            model,
-            task_sequence: Arc::new(AtomicU64::new(0)),
-            session_epoch,
-            proof,
-        }
-    }
-
     fn mount(&self) -> RuntimeHandle {
         self.mount
             .get()

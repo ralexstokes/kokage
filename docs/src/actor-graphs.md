@@ -162,32 +162,31 @@ let ledger = ledger_ref.clone();
 builder.actor("gateway", move || Gateway::new(ledger.clone()));
 ```
 
-Larger wiring can give that durable configuration a named spec type. Its
-`build` method becomes the single intentional clone-per-incarnation site:
+Larger wiring can derive a named factory directly from the actor. Unmarked
+fields become durable factory configuration and are cloned into every
+incarnation. Fields marked `#[factory(default)]` are omitted from the factory
+and reset to their `Default` value on every build:
 
 ```rust,ignore
-use tokio_otp::ActorFactory;
-
-struct GatewaySpec {
+#[derive(tokio_otp::ActorFactory)]
+struct Gateway {
     ledger: ActorRef<LedgerMsg>,
     exchange: Exchange,
+    #[factory(default)]
+    pending: Vec<Order>,
 }
 
-impl ActorFactory for GatewaySpec {
-    type Actor = Gateway;
-
-    fn build(&self) -> Gateway {
-        Gateway::new(self.ledger.clone(), self.exchange.clone())
-    }
-}
-
-builder.actor("gateway", GatewaySpec { ledger, exchange });
+builder.actor("gateway", GatewayFactory { ledger, exchange });
 ```
 
 Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
 beginning of `RawActor::run`, where failure already participates in supervision
-and readiness. Durable state that should survive restarts belongs behind a
-shared handle, in a database, or in another actor.
+and readiness. Durable state that should survive restarts belongs in an
+unmarked factory field (usually behind a shared handle), in a database, or in
+another actor. This is the same lifetime rule as closure factories: the
+factory value or closure captures outlive incarnations, while the actor
+returned by `build` does not. Hand-write `ActorFactory` when local state needs
+custom synchronous construction rather than `Default`.
 
 ## Struct Topologies
 

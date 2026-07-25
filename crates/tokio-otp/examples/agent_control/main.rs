@@ -135,7 +135,7 @@ use guard::Guard;
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
-use router::Router;
+use router::{Router, RouterFactory};
 use telemetry::LatencyRecorder;
 use tool_host::ToolHost;
 
@@ -196,8 +196,8 @@ async fn build_app() -> Result<App, AnyError> {
     let proof = Proof::default();
     // Router state dies with a router incarnation; the sessions mount handle
     // and the subtree-id allocator must not, or a reborn router could not
-    // reach the mount and would re-mint ids that still exist. Both live in
-    // the factory closure's captures instead.
+    // reach the mount and would re-mint ids that still exist. Both are durable
+    // RouterFactory fields instead.
     let sessions_mount = Arc::new(OnceLock::new());
     let session_epoch = Arc::new(AtomicU64::new(0));
 
@@ -236,30 +236,18 @@ async fn build_app() -> Result<App, AnyError> {
             }
         },
         tool_host: ToolHost::default,
-        router: {
-            let refs = refs.clone();
-            let mount = sessions_mount.clone();
-            let epoch = session_epoch.clone();
-            let gate = gate.clone();
-            let model = model_client.clone();
-            let proof = proof.clone();
-            let outbound = outbound.clone();
-            let progress = progress.clone();
-            move || {
-                Router::new(
-                    mount.clone(),
-                    epoch.clone(),
-                    refs.journal.clone(),
-                    refs.budget.clone(),
-                    refs.tool_host.clone(),
-                    refs.guard.clone(),
-                    outbound.clone(),
-                    progress.clone(),
-                    gate.clone(),
-                    model.clone(),
-                    proof.clone(),
-                )
-            }
+        router: RouterFactory {
+            mount: sessions_mount.clone(),
+            journal: refs.journal.clone(),
+            budget: refs.budget.clone(),
+            tool_host: refs.tool_host.clone(),
+            guard: refs.guard.clone(),
+            outbound: outbound.clone(),
+            progress: progress.clone(),
+            gate: gate.clone(),
+            model: model_client.clone(),
+            session_epoch: session_epoch.clone(),
+            proof: proof.clone(),
         },
     })?;
     let CoreRefs {

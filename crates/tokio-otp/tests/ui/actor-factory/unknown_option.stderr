@@ -1,0 +1,5 @@
+error: expected `default`
+ --> tests/ui/actor-factory/unknown_option.rs:3:15
+  |
+3 |     #[factory(reset)]
+  |               ^^^^^

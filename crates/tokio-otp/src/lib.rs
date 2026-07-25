@@ -100,11 +100,12 @@
 //!
 //! # Static topologies
 //!
-//! For cyclic actor graphs, derive [`Topology`] on a named-field struct whose
-//! fields are the actors. The wiring closure receives typed refs for every
-//! field before any actor is constructed; see the [`Topology`] docs for the
-//! full contract, and mind the bounded-mailbox cycle hazard documented on
-//! [`GraphBuilder`].
+//! Use `#[derive(ActorFactory)]` on named-field actors to generate reusable
+//! factory structs without repeating configuration fields or clone code. For cyclic
+//! actor graphs, derive [`Topology`] on a named-field struct whose fields are
+//! the actors. The wiring closure receives typed refs for every field before
+//! any actor is constructed; see the [`Topology`] docs for the full contract,
+//! and mind the bounded-mailbox cycle hazard documented on [`GraphBuilder`].
 //!
 //! # Hand-driving actors
 //!
@@ -229,7 +230,7 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | yes | Re-exports `#[derive(Topology)]`. |
+//! | `derive` | yes | Re-exports `#[derive(ActorFactory)]` and `#[derive(Topology)]`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
 
 mod actor;
@@ -265,7 +266,7 @@ pub mod prelude {
 }
 
 #[cfg(feature = "derive")]
-pub use tokio_otp_derive::Topology;
+pub use tokio_otp_derive::{ActorFactory, Topology};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,

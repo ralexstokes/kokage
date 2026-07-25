@@ -1,0 +1,5 @@
+error: ActorFactory cannot be derived for generic structs
+ --> tests/ui/actor-factory/generic_struct.rs:2:14
+  |
+2 | struct Worker<T> {
+  |              ^^^
