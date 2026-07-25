@@ -22,11 +22,21 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug)]
 pub(crate) struct ActorRuntimeState {
     actor_factory: RunnableActorFactory,
+    default_restart: RestartPolicy,
+    default_shutdown: ShutdownPolicy,
 }
 
 impl ActorRuntimeState {
-    pub(crate) fn new(actor_factory: RunnableActorFactory) -> Self {
-        Self { actor_factory }
+    pub(crate) fn new(
+        actor_factory: RunnableActorFactory,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) -> Self {
+        Self {
+            actor_factory,
+            default_restart,
+            default_shutdown,
+        }
     }
 }
 
@@ -71,9 +81,11 @@ impl RuntimeAttachment {
 #[non_exhaustive]
 pub struct DynamicActorOptions<M = ()> {
     /// Restart policy for the supervised actor child.
-    pub restart: RestartPolicy,
+    restart: RestartPolicy,
+    restart_is_default: bool,
     /// Shutdown policy for the supervised actor child.
-    pub shutdown: ShutdownPolicy,
+    shutdown: ShutdownPolicy,
+    shutdown_is_default: bool,
     /// Optional restart intensity override for this actor child.
     pub restart_intensity: Option<RestartIntensity>,
     mailbox_mode: MailboxMode<M>,
@@ -87,7 +99,9 @@ impl<M> Clone for DynamicActorOptions<M> {
     fn clone(&self) -> Self {
         Self {
             restart: self.restart,
+            restart_is_default: self.restart_is_default,
             shutdown: self.shutdown,
+            shutdown_is_default: self.shutdown_is_default,
             restart_intensity: self.restart_intensity,
             mailbox_mode: self.mailbox_mode.clone(),
             size_hint: self.size_hint,
@@ -100,7 +114,9 @@ impl<M> Default for DynamicActorOptions<M> {
     fn default() -> Self {
         Self {
             restart: RestartPolicy::OnFailure,
+            restart_is_default: true,
             shutdown: ShutdownPolicy::default(),
+            shutdown_is_default: true,
             restart_intensity: None,
             mailbox_mode: MailboxMode::Queue,
             size_hint: None,
@@ -119,6 +135,7 @@ impl<M> DynamicActorOptions<M> {
     #[must_use]
     pub fn restart(mut self, restart: RestartPolicy) -> Self {
         self.restart = restart;
+        self.restart_is_default = false;
         self
     }
 
@@ -126,6 +143,7 @@ impl<M> DynamicActorOptions<M> {
     #[must_use]
     pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
         self.shutdown = shutdown;
+        self.shutdown_is_default = false;
         self
     }
 
@@ -168,20 +186,38 @@ impl<M> DynamicActorOptions<M> {
         self
     }
 
-    fn child_options(&self) -> DynamicChildOptions {
+    fn child_options(
+        &self,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) -> DynamicChildOptions {
+        let restart = if self.restart_is_default {
+            default_restart
+        } else {
+            self.restart
+        };
+        let shutdown = if self.shutdown_is_default {
+            default_shutdown
+        } else {
+            self.shutdown
+        };
         let remove_on_exit = self
             .remove_on_exit
-            .unwrap_or(matches!(self.restart, RestartPolicy::Never));
+            .unwrap_or(matches!(restart, RestartPolicy::Never));
         DynamicChildOptions {
-            restart: self.restart,
-            shutdown: self.shutdown,
+            restart,
+            shutdown,
             restart_intensity: self.restart_intensity,
             remove_on_exit,
         }
     }
 
-    fn into_parts(self) -> (ActorOptions<M>, DynamicChildOptions) {
-        let child_options = self.child_options();
+    fn into_parts(
+        self,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) -> (ActorOptions<M>, DynamicChildOptions) {
+        let child_options = self.child_options(default_restart, default_shutdown);
         (
             ActorOptions {
                 mailbox_mode: self.mailbox_mode,
@@ -404,6 +440,11 @@ impl Runtime {
         crate::RuntimeBuilder::new()
     }
 
+    /// Starts building a graph-less runtime with dynamic membership.
+    pub fn dynamic() -> crate::DynamicRuntimeBuilder {
+        crate::DynamicRuntimeBuilder::new()
+    }
+
     /// Creates an actor-aware runtime around an arbitrary supervisor.
     ///
     /// This composition boundary is useful when runtime-managed dynamic actors
@@ -446,7 +487,11 @@ impl Runtime {
     pub fn new(supervisor: Supervisor) -> Self {
         Self {
             supervisor,
-            actors: Arc::new(ActorRuntimeState::new(RunnableActorFactory::new())),
+            actors: Arc::new(ActorRuntimeState::new(
+                RunnableActorFactory::new(),
+                RestartPolicy::default(),
+                ShutdownPolicy::default(),
+            )),
         }
     }
 
@@ -573,23 +618,19 @@ impl RuntimeHandle {
     /// supervisor restarts, the dynamically added subtree is not recreated.
     ///
     /// Restart intensity remains tracked per child across this boundary.
-    /// Shutdown keeps the existing concurrent teardown behavior under the
-    /// parent's shared deadline.
-    ///
-    /// Success means the subtree membership, attachment, and stable control
-    /// channels were inserted and startup was scheduled. Under sequential
-    /// startup the subtree may still be queued behind an earlier readiness
-    /// gate; the returned handle is usable immediately and its control commands
-    /// wait in the subtree's own channel until that loop starts. Use
-    /// [`SupervisorHandle::wait_started`] through
+    /// This operation is supported only when this handle targets a dynamic
+    /// scope; ordered scopes return
+    /// [`ControlError::UnsupportedByScopeKind`]. Dynamic additions start
+    /// immediately and dynamic siblings stop concurrently under one shared
+    /// maximum-grace deadline. Use [`SupervisorHandle::wait_started`] through
     /// [`supervisor_handle`](Self::supervisor_handle) when readiness is needed.
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        builder: crate::RuntimeBuilder,
+        builder: impl Into<crate::SupervisionTree>,
     ) -> Result<RuntimeHandle, AddSubtreeError> {
         let id = id.into();
-        let (nested_supervisor, nested_actors) = builder.build()?.into_parts();
+        let (nested_supervisor, nested_actors) = builder.into().build()?.into_parts();
         let membership_epoch = self
             .supervisor
             .add_supervisor(
@@ -644,11 +685,12 @@ impl RuntimeHandle {
     ///
     /// The actor's label is also its direct supervisor child id, so it can be
     /// removed later with [`remove_child`](Self::remove_child). See
-    /// [`ActorFactory`] for the incarnation lifecycle contract. Success means
-    /// the membership was inserted and startup was scheduled; under sequential
-    /// startup the actor may still be queued. The returned stable ref can be
-    /// used immediately, while [`SupervisorHandle::wait_started`] retains the
-    /// stronger readiness contract.
+    /// [`ActorFactory`] for the incarnation lifecycle contract. This operation
+    /// is supported only for dynamic scopes; ordered scopes return
+    /// [`ControlError::UnsupportedByScopeKind`]. Success means membership was
+    /// inserted and immediate startup was scheduled. The returned stable ref
+    /// can be used immediately, while [`SupervisorHandle::wait_started`]
+    /// retains the stronger readiness contract.
     pub async fn add_actor<F>(
         &self,
         label: impl Into<String>,
@@ -658,7 +700,8 @@ impl RuntimeHandle {
     where
         F: ActorFactory,
     {
-        let (actor_options, dynamic_options) = options.into_parts();
+        let (actor_options, dynamic_options) =
+            options.into_parts(self.actors.default_restart, self.actors.default_shutdown);
         let actor = self
             .actors
             .actor_factory
@@ -878,31 +921,6 @@ pub(crate) struct ActorOverrides {
     pub(crate) shutdown: Option<ShutdownPolicy>,
 }
 
-pub(crate) fn actor_children(
-    graph: &crate::Graph,
-    owner: &Arc<ActorRuntimeState>,
-    default_restart: RestartPolicy,
-    default_shutdown: ShutdownPolicy,
-    overrides: &HashMap<String, ActorOverrides>,
-) -> Vec<ChildSpec> {
-    graph
-        .actors()
-        .iter()
-        .cloned()
-        .map(|actor| {
-            let actor_overrides = overrides.get(actor.label()).copied().unwrap_or_default();
-            actor_child_spec(
-                actor,
-                owner,
-                actor_overrides.restart.unwrap_or(default_restart),
-                actor_overrides.shutdown.unwrap_or(default_shutdown),
-                actor_overrides.restart_intensity,
-                false,
-            )
-        })
-        .collect()
-}
-
 pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     owner: &Arc<ActorRuntimeState>,
@@ -951,7 +969,7 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 mod tests {
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
-        let root = crate::Runtime::builder()
+        let root = crate::Runtime::dynamic()
             .build()
             .expect("runtime builds")
             .spawn();

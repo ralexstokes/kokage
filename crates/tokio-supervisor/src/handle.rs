@@ -583,6 +583,20 @@ impl Drop for StableBindingGuard {
             && let Some(binding) = binding.current.take()
         {
             let _ = binding.shutdown_tx.send(true);
+            // A revivable stable identity can remain observable between
+            // incarnations. Invalidate the old incarnation's attachments now
+            // so an ancestor rebinding cannot traverse stale descendants
+            // before this supervisor binds and publishes its replacement
+            // membership view.
+            *self
+                .channels
+                .attached_children
+                .lock()
+                .expect("attached child view poisoned") = AttachedChildrenView {
+                generation: None,
+                terminal: false,
+                children: Vec::new(),
+            };
         }
     }
 }
@@ -723,9 +737,9 @@ impl SupervisorHandle {
     /// atomically with insertion, so it identifies the membership created by
     /// this specific call even if the same child id is later removed and
     /// reused. Success means the membership was inserted and its start was
-    /// scheduled; under [`StartMode::Sequential`](crate::StartMode::Sequential)
-    /// the child may still be queued behind an earlier readiness gate. Use
-    /// [`wait_started`](Self::wait_started) when readiness is required.
+    /// scheduled. This operation is supported only by dynamic supervisors,
+    /// which spawn it immediately. Use [`wait_started`](Self::wait_started)
+    /// when readiness is required.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
         self.control_endpoint()?.add_child(child).await
     }
@@ -735,8 +749,8 @@ impl SupervisorHandle {
     ///
     /// On success, returns the membership epoch assigned atomically with the
     /// insertion. The nested handle and attachment are registered at insertion,
-    /// even when [`StartMode::Sequential`](crate::StartMode::Sequential) leaves
-    /// the child queued; use [`wait_started`](Self::wait_started) to await
+    /// before the child is spawned. This operation is supported only by
+    /// dynamic supervisors; use [`wait_started`](Self::wait_started) to await
     /// readiness.
     pub async fn add_supervisor(
         &self,

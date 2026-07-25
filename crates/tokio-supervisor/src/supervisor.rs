@@ -4,7 +4,6 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
-    StartMode,
     child::{ChildDefinition, ChildKind, ChildResult},
     context::ChildContext,
     error::SupervisorError,
@@ -16,9 +15,10 @@ use crate::{
     },
     lifecycle::LifecycleHub,
     observability::{format_path, strategy_label, supervisor_name_for_path},
-    restart::RestartIntensity,
+    restart::{RestartIntensity, RestartPolicy},
     runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
-    shutdown::AutoShutdown,
+    scope::ScopeKind,
+    shutdown::{AutoShutdown, ShutdownPolicy},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotCell, SupervisorSnapshot,
         SupervisorStateView,
@@ -38,13 +38,23 @@ pub struct Supervisor {
 
 #[derive(Clone)]
 pub(crate) struct SupervisorConfig {
+    pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) start_mode: StartMode,
     pub(crate) restart_intensity: RestartIntensity,
+    pub(crate) default_restart: RestartPolicy,
+    pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) auto_shutdown: AutoShutdown,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,
     pub(crate) event_channel_capacity: usize,
+}
+
+struct AbortTaskOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortTaskOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Explicit connection from one nested supervisor incarnation to its parent.
@@ -214,6 +224,11 @@ impl Supervisor {
             let _ = task_done_tx.send(Some(result.clone()));
             result
         });
+        // The nested runtime is spawned separately so its stable handle can
+        // observe completion. Keep that task owned by this child future: if
+        // an ancestor exhausts the child's grace and aborts the wrapper, the
+        // nested runtime (and therefore its descendants) must not detach.
+        let _abort_task_on_drop = AbortTaskOnDrop(join_handle.abort_handle());
 
         tokio::pin!(join_handle);
         let mut shutdown_requested = false;
@@ -324,6 +339,7 @@ fn prepare_nested_channels(config: &SupervisorConfig) -> NestedChannels {
 pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot {
     SupervisorSnapshot {
         state: SupervisorStateView::Running,
+        kind: config.kind,
         strategy: config.strategy,
         total_restarts: 0,
         lifecycle_seq: 0,

@@ -52,10 +52,9 @@ The protocol has five parts:
    that operation, and consume bounces until its completion arrives. The
    supervisor loop continues dispatching unrelated commands during the drain,
    so an awaited `add_subtree` for fresh `key#8` resolves as soon as the new
-   membership is inserted. A separate `Mounting` buffer is no longer required
-   merely to avoid control-loop serialization. Under sequential startup the
-   subtree can still be queued, but its returned handle is usable and its own
-   control channel buffers work until the subtree loop starts.
+   membership is inserted and immediate startup is scheduled. A separate
+   `Mounting` buffer is no longer required merely to avoid control-loop
+   serialization.
 5. **Bounce the race and drain.** After requesting eviction, the retiree
    sends any late arrival back to the router and uses `DrainPolicy::Drain`.
    FIFO mailboxes preserve sequential enqueue order from one sender, so the

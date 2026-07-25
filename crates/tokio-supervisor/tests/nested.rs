@@ -8,9 +8,9 @@ use std::{
 
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ChildStateView, ControlError, EventPathSegment, ExitStatusView,
-    RestartIntensity, RestartPolicy, ShutdownPolicy, SupervisorBuilder, SupervisorEvent,
-    SupervisorSpec, SupervisorStateView,
+    BackoffPolicy, ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder,
+    EventPathSegment, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
+    SupervisorBuilder, SupervisorEvent, SupervisorSpec, SupervisorStateView,
 };
 
 mod common;
@@ -169,11 +169,7 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
         .build()
         .expect("valid nested supervisor");
 
-    let outer = SupervisorBuilder::new()
-        .child(ChildSpec::new("anchor", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let outer = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid outer supervisor");
 
@@ -246,23 +242,19 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
     let (dynamic_tx, mut dynamic_rx) = mpsc::unbounded_channel();
     let dynamic_cancellations = Arc::new(AtomicUsize::new(0));
 
-    let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("seed", move |ctx| {
-            let seed_tx = seed_tx.clone();
-            async move {
-                seed_tx.send(()).expect("test receiver dropped");
-                ctx.shutdown_token().cancelled().await;
-                Ok(())
-            }
-        }))
+    let seed = ChildSpec::new("seed", move |ctx| {
+        let seed_tx = seed_tx.clone();
+        async move {
+            seed_tx.send(()).expect("test receiver dropped");
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    });
+    let nested = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid nested supervisor");
 
-    let outer = SupervisorBuilder::new()
-        .child(ChildSpec::new("anchor", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let outer = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid outer supervisor");
 
@@ -292,12 +284,15 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
         }
     }
 
-    common::recv_event(&mut seed_rx).await;
-
     let dynamic_cancellations_for_child = dynamic_cancellations.clone();
     let nested_handle = handle
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
+    nested_handle
+        .add_child(seed)
+        .await
+        .expect("seed child inside nested supervisor should be accepted");
+    common::recv_event(&mut seed_rx).await;
     nested_handle
         .add_child(ChildSpec::new("dynamic", move |ctx| {
             let dynamic_tx = dynamic_tx.clone();
@@ -491,11 +486,7 @@ async fn removing_nested_supervisor_unregisters_its_control_endpoint() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("anchor", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -616,13 +607,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
         }
     }
 
-    nested_handle
-        .add_child(ChildSpec::new("after-restart", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .await
-        .expect("stable control handle should bind to the new incarnation");
+    assert_eq!(nested_handle.snapshot().state, SupervisorStateView::Running);
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -646,14 +631,17 @@ async fn aborting_nested_child_still_gracefully_stops_its_subtree() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).shutdown(ShutdownPolicy::abort()),
-        )
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    handle
+        .add_supervisor(
+            "nested",
+            SupervisorSpec::new(nested).shutdown(ShutdownPolicy::abort()),
+        )
+        .await
+        .expect("nested child should be accepted");
     common::recv_event(&mut started_rx).await;
 
     handle
@@ -739,13 +727,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
 
     // Once the new incarnation binds, the same stable handle works again.
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
-    nested_handle
-        .add_child(ChildSpec::new("late", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .await
-        .expect("stable control handle should bind to the new incarnation");
+    assert_eq!(nested_handle.snapshot().state, SupervisorStateView::Running);
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -820,18 +802,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     }
     common::recv_event(&mut starts_rx).await;
 
-    grand_handle
-        .add_child(ChildSpec::new("after-restart", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .await
-        .expect("grandchild control should bind to the new incarnation");
-    grand_handle
-        .subscribe_snapshots()
-        .wait_for(|snapshot| snapshot.child("after-restart").is_some())
-        .await
-        .expect("grandchild snapshot watch should track the new incarnation");
+    assert_eq!(grand_handle.snapshot().state, SupervisorStateView::Running);
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");

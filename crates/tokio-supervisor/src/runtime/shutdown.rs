@@ -13,6 +13,7 @@ use crate::{
             ChildEntry, ChildKey, ClassifiedExit, DrainReason, MembershipState, SupervisorState,
         },
     },
+    scope::ScopeKind,
     shutdown::ShutdownMode,
 };
 
@@ -54,10 +55,15 @@ impl SupervisorRuntime {
 
         async {
             self.state = SupervisorState::Stopping;
-            self.cancel_running_children(DrainScope::All);
             self.send_event(SupervisorEvent::SupervisorStopping);
-            self.drain_children(DrainReason::Shutdown, DrainScope::All)
-                .await?;
+            if self.meta.kind == ScopeKind::Ordered {
+                self.drain_children_ordered(DrainReason::Shutdown, DrainScope::All)
+                    .await?;
+            } else {
+                self.cancel_running_children(DrainScope::All);
+                self.drain_children(DrainReason::Shutdown, DrainScope::All)
+                    .await?;
+            }
             self.finish();
             Ok(())
         }
@@ -68,9 +74,14 @@ impl SupervisorRuntime {
     pub(crate) async fn drain_for_group_restart(
         &mut self,
     ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
-        self.cancel_running_children(DrainScope::All);
-        self.drain_children(DrainReason::GroupRestart, DrainScope::All)
-            .await
+        if self.meta.kind == ScopeKind::Ordered {
+            self.drain_children_ordered(DrainReason::GroupRestart, DrainScope::All)
+                .await
+        } else {
+            self.cancel_running_children(DrainScope::All);
+            self.drain_children(DrainReason::GroupRestart, DrainScope::All)
+                .await
+        }
     }
 
     pub(crate) async fn drain_for_rest_for_one_restart(
@@ -78,9 +89,14 @@ impl SupervisorRuntime {
         keys: &[ChildKey],
     ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
         let keys: HashSet<_> = keys.iter().copied().collect();
-        self.cancel_running_children(DrainScope::Subset(&keys));
-        self.drain_children(DrainReason::RestForOneRestart, DrainScope::Subset(&keys))
-            .await
+        if self.meta.kind == ScopeKind::Ordered {
+            self.drain_children_ordered(DrainReason::RestForOneRestart, DrainScope::Subset(&keys))
+                .await
+        } else {
+            self.cancel_running_children(DrainScope::Subset(&keys));
+            self.drain_children(DrainReason::RestForOneRestart, DrainScope::Subset(&keys))
+                .await
+        }
     }
 
     fn cancel_running_children(&mut self, scope: DrainScope<'_>) {
@@ -107,6 +123,118 @@ impl SupervisorRuntime {
         }
         if matches!(scope, DrainScope::All) {
             self.group_token.cancel();
+        }
+    }
+
+    /// Drains one ordered child at a time, in reverse declaration order.
+    /// Each cooperative child receives its own complete grace window. The
+    /// next child is not cancelled until the current task has joined (after an
+    /// abort when necessary), so later dependents are fully gone before their
+    /// dependencies begin teardown.
+    async fn drain_children_ordered(
+        &mut self,
+        reason: DrainReason,
+        scope: DrainScope<'_>,
+    ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
+        if matches!(reason, DrainReason::Shutdown) {
+            self.command_rx.close();
+        }
+        let started_at = StdInstant::now();
+        let keys: Vec<_> = self
+            .child_order
+            .iter()
+            .rev()
+            .copied()
+            .filter(|&key| scope.contains(key))
+            .collect();
+        let mut deferred = Vec::new();
+        let mut timed_out = Vec::new();
+
+        for key in keys {
+            let Some(child) = self.children.get(key) else {
+                continue;
+            };
+            if child.membership == MembershipState::Removed || !child.runtime.state.is_active() {
+                continue;
+            }
+
+            let id = child.id.clone();
+            let policy = child.runtime.definition.shutdown_policy;
+            self.children[key].runtime.state = RuntimeChildState::Stopping;
+            match policy.mode {
+                ShutdownMode::Abort => self.abort_child(key),
+                ShutdownMode::CooperativeStrict | ShutdownMode::CooperativeThenAbort => {
+                    self.cancel_child(key)
+                }
+            }
+
+            let expired = if matches!(policy.mode, ShutdownMode::Abort) {
+                false
+            } else {
+                self.wait_for_ordered_child(
+                    key,
+                    Some(Instant::now() + policy.grace),
+                    scope,
+                    &mut deferred,
+                )
+                .await?
+            };
+
+            if expired {
+                if matches!(reason, DrainReason::Shutdown) {
+                    self.meta
+                        .observability
+                        .record_shutdown_timeout("shutdown", Some(&id));
+                }
+                if matches!(policy.mode, ShutdownMode::CooperativeStrict) {
+                    timed_out.push(id);
+                }
+                self.abort_child(key);
+            }
+
+            // Abort-mode children and expired cooperative children still own
+            // the cursor until their join is consumed.
+            self.wait_for_ordered_child(key, None, scope, &mut deferred)
+                .await?;
+        }
+
+        self.record_drain_duration(reason, started_at);
+        if timed_out.is_empty() {
+            Ok(deferred)
+        } else {
+            Err(SupervisorError::ShutdownTimedOut(timed_out.join(", ")))
+        }
+    }
+
+    /// Returns `true` when `deadline` expires while `key` is still active.
+    async fn wait_for_ordered_child(
+        &mut self,
+        key: ChildKey,
+        deadline: Option<Instant>,
+        scope: DrainScope<'_>,
+        deferred: &mut Vec<ClassifiedExit>,
+    ) -> Result<bool, SupervisorError> {
+        loop {
+            if !self.children.get(key).is_some_and(|child| {
+                child.membership != MembershipState::Removed && child.runtime.state.is_active()
+            }) {
+                return Ok(false);
+            }
+
+            if let Some(deadline) = deadline {
+                tokio::select! {
+                    joined = self.join_set.join_next_with_id() => {
+                        let Some(joined) = joined else { return Ok(false); };
+                        self.handle_join_for_scope(joined, scope, Some(key), deferred)?;
+                    }
+                    _ = sleep_until(deadline) => return Ok(true),
+                }
+            } else {
+                let Some(joined) = self.join_set.join_next_with_id().await else {
+                    return Ok(false);
+                };
+                self.handle_join_for_scope(joined, scope, Some(key), deferred)?;
+            }
         }
     }
 
@@ -160,7 +288,7 @@ impl SupervisorRuntime {
                 tokio::select! {
                     maybe = self.join_set.join_next_with_id() => {
                         let Some(joined) = maybe else { break; };
-                        self.handle_join_for_scope(joined, scope, &mut deferred)?;
+                        self.handle_join_for_scope(joined, scope, None, &mut deferred)?;
                     }
                     _ = sleep_until(deadline) => break,
                 }
@@ -212,7 +340,7 @@ impl SupervisorRuntime {
             match tokio::time::timeout(std::time::Duration::ZERO, self.join_set.join_next_with_id())
                 .await
             {
-                Ok(Some(joined)) => self.handle_join_for_scope(joined, scope, deferred)?,
+                Ok(Some(joined)) => self.handle_join_for_scope(joined, scope, None, deferred)?,
                 Ok(None) | Err(_) => return Ok(()),
             }
         }
@@ -225,6 +353,7 @@ impl SupervisorRuntime {
             tokio::task::JoinError,
         >,
         scope: DrainScope<'_>,
+        ordered_cursor: Option<ChildKey>,
         deferred: &mut Vec<ClassifiedExit>,
     ) -> Result<(), SupervisorError> {
         let Some(classified) = self.consume_joined_child(joined)? else {
@@ -240,7 +369,8 @@ impl SupervisorRuntime {
         }
         let naturally_completed = matches!(classified.status, super::exit::ExitStatus::Completed)
             && self.children[classified.key].runtime.completion.is_clean();
-        if !scope.contains(classified.key) || naturally_completed {
+        let non_cursor_ordered_exit = ordered_cursor.is_some_and(|cursor| cursor != classified.key);
+        if !scope.contains(classified.key) || naturally_completed || non_cursor_ordered_exit {
             deferred.push(classified);
         }
         Ok(())

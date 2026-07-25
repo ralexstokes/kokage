@@ -109,8 +109,7 @@ let runtime = Runtime::builder()
         "venues",
         Runtime::builder()
             .graph(venue_graph)
-            .strategy(Strategy::OneForOne)
-            .start_mode(StartMode::Sequential),
+            .strategy(Strategy::OneForOne),
     )
     .build()?;
 ```
@@ -122,11 +121,10 @@ that retains the venue graph's dynamic actor factory, stats, and actor-aware
 control methods. Its `supervisor_handle()` exposes lower-level supervisor
 control when needed.
 
-Actor children use `on_start` as their readiness boundary. Even with the
-default concurrent start mode, snapshots remain `Starting`, `ChildStarted`
-events and lifecycle `Started` transitions are delayed until `on_start`
-succeeds. Select `StartMode::Sequential` to additionally prevent the next
-actor from spawning until that boundary is crossed. Code outside the tree can
+Actor children use `on_start` as their readiness boundary. Ordered runtimes do
+not spawn the next declared actor until that boundary is crossed; snapshots
+remain `Starting`, and `ChildStarted` events and lifecycle `Started`
+transitions are delayed until `on_start` succeeds. Code outside the tree can
 await `RuntimeHandle::wait_started`; readiness is latched for a completed
 generation and resets on restart.
 

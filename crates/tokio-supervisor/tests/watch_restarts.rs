@@ -4,8 +4,8 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, RestartIntensity, RestartPolicy, Strategy, SupervisorBuilder,
-    SupervisorSpec,
+    ChildSpec, ChildStateView, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, Strategy,
+    SupervisorBuilder, SupervisorSpec,
 };
 
 mod common;
@@ -97,15 +97,21 @@ async fn watch_restarts_ends_after_supervisor_stops() {
 async fn total_restarts_survives_child_removal() {
     let trigger_failure = Arc::new(Notify::new());
     let child = fail_on_generations("flaky", trigger_failure.clone(), 2);
-    let handle = SupervisorBuilder::new()
-        .child(child)
-        .child(ChildSpec::new("steady", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle
+        .add_child(child)
+        .await
+        .expect("flaky child should be accepted");
+    handle
+        .add_child(ChildSpec::new("steady", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("steady child should be accepted");
 
     let mut snapshots = handle.subscribe_snapshots();
     for generation in 1..=2 {
@@ -275,11 +281,14 @@ async fn nested_counter_is_monotonic_across_incarnations() {
 
 #[tokio::test]
 async fn watch_restarts_ends_when_nested_child_is_removed() {
-    let handle = SupervisorBuilder::new()
-        .supervisor("nested", idle_supervisor())
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle
+        .add_supervisor("nested", idle_supervisor())
+        .await
+        .expect("nested supervisor added");
 
     let nested_handle = handle.supervisor("nested").expect("nested supervisor");
     let mut restarts = nested_handle.watch_restarts();
@@ -438,60 +447,9 @@ async fn watch_survives_ancestor_reincarnation() {
 #[tokio::test]
 async fn orphaned_dynamic_child_watch_ends_after_ancestor_reincarnation() {
     let crash_middle = Arc::new(Notify::new());
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(bomb_supervisor(&crash_middle))
-                .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
-        )
+    let middle = DynamicSupervisorBuilder::new()
         .build()
-        .expect("valid supervisor")
-        .spawn();
-
-    timeout(common::EVENT_TIMEOUT, handle.wait_started())
-        .await
-        .expect("startup should not time out")
-        .expect("startup should succeed");
-    let middle_handle = handle.supervisor("middle").expect("middle supervisor");
-    middle_handle
-        .add_supervisor("dyn", idle_supervisor())
-        .await
-        .expect("dynamic add should succeed");
-    let dyn_handle = middle_handle.supervisor("dyn").expect("dynamic supervisor");
-    let mut restarts = dyn_handle.watch_restarts();
-
-    // The middle supervisor's replacement incarnation is rebuilt from static
-    // configuration, so the dynamically added child is never spawned again:
-    // its watch must terminate rather than hang.
-    crash_middle.notify_one();
-    let observed = timeout(common::EVENT_TIMEOUT, restarts.next())
-        .await
-        .expect("restart watch should resolve after the orphaning restart");
-    assert_eq!(observed, None);
-
-    shutdown(handle).await;
-}
-
-#[tokio::test]
-async fn removed_static_child_is_recreated_with_a_fresh_identity() {
-    let crash_middle = Arc::new(Notify::new());
-    let crash_for_middle = crash_middle.clone();
-    let middle = SupervisorBuilder::new()
-        .supervisor("leaf", idle_supervisor())
-        .child(
-            ChildSpec::new("bomb", move |_ctx| {
-                let crash_middle = crash_for_middle.clone();
-                async move {
-                    crash_middle.notified().await;
-                    Err(common::test_error("middle boom"))
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
-        )
-        .build()
-        .expect("valid middle supervisor");
+        .expect("valid dynamic supervisor");
     let handle = SupervisorBuilder::new()
         .supervisor(
             "middle",
@@ -508,35 +466,25 @@ async fn removed_static_child_is_recreated_with_a_fresh_identity() {
         .expect("startup should not time out")
         .expect("startup should succeed");
     let middle_handle = handle.supervisor("middle").expect("middle supervisor");
-    let old_leaf_handle = middle_handle.supervisor("leaf").expect("leaf supervisor");
-    let mut old_restarts = old_leaf_handle.watch_restarts();
-
-    // Removal ends the stable identity for good.
     middle_handle
-        .remove_child("leaf")
+        .add_child(failing_child("bomb", &crash_middle, "middle boom"))
         .await
-        .expect("removal should succeed");
-    let observed = timeout(common::EVENT_TIMEOUT, old_restarts.next())
+        .expect("dynamic bomb should be added");
+    middle_handle
+        .add_supervisor("dyn", idle_supervisor())
         .await
-        .expect("restart watch should resolve after removal");
-    assert_eq!(observed, None);
+        .expect("dynamic add should succeed");
+    let dyn_handle = middle_handle.supervisor("dyn").expect("dynamic supervisor");
+    let mut restarts = dyn_handle.watch_restarts();
 
-    // The middle supervisor's replacement incarnation recreates the leaf
-    // from static configuration under a fresh stable identity.
+    // The middle supervisor's replacement incarnation is rebuilt from static
+    // configuration, so the dynamically added child is never spawned again:
+    // its watch must terminate rather than hang.
     crash_middle.notify_one();
-    let mut middle_snapshots = middle_handle.subscribe_snapshots();
-    wait_for_snapshot(&mut middle_snapshots, |snapshot| {
-        snapshot
-            .descendant(["leaf", "worker"])
-            .is_some_and(|worker| worker.state == ChildStateView::Running)
-    })
-    .await;
-
-    let new_leaf_handle = middle_handle.supervisor("leaf").expect("recreated leaf");
-    let mut new_restarts = new_leaf_handle.watch_restarts();
-    timeout(common::QUIET_TIMEOUT, new_restarts.next())
+    let observed = timeout(common::EVENT_TIMEOUT, restarts.next())
         .await
-        .expect_err("fresh identity should be alive with no restarts yet");
+        .expect("restart watch should resolve after the orphaning restart");
+    assert_eq!(observed, None);
 
     shutdown(handle).await;
 }
@@ -676,161 +624,6 @@ async fn group_restart_revives_cleanly_exited_supervisor_child() {
 }
 
 #[tokio::test]
-async fn dynamic_supervisor_under_static_task_id_is_orphaned_on_reincarnation() {
-    let crash_middle = Arc::new(Notify::new());
-    let crash_for_middle = crash_middle.clone();
-    let middle = SupervisorBuilder::new()
-        .child(ChildSpec::new("slot", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .child(
-            ChildSpec::new("bomb", move |_ctx| {
-                let crash_middle = crash_for_middle.clone();
-                async move {
-                    crash_middle.notified().await;
-                    Err(common::test_error("middle boom"))
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
-        )
-        .build()
-        .expect("valid middle supervisor");
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(middle)
-                .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
-        )
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-
-    timeout(common::EVENT_TIMEOUT, handle.wait_started())
-        .await
-        .expect("startup should not time out")
-        .expect("startup should succeed");
-    let middle_handle = handle.supervisor("middle").expect("middle supervisor");
-
-    // Free the id, then occupy it with a dynamically added supervisor.
-    middle_handle
-        .remove_child("slot")
-        .await
-        .expect("removal should succeed");
-    middle_handle
-        .add_supervisor("slot", idle_supervisor())
-        .await
-        .expect("dynamic add should succeed");
-    let dyn_handle = middle_handle
-        .supervisor("slot")
-        .expect("dynamic supervisor");
-    let mut restarts = dyn_handle.watch_restarts();
-
-    // The replacement middle incarnation restores the *static task* "slot".
-    // The dynamic supervisor sharing the id is a different identity and must
-    // be orphaned, not confused with the task.
-    crash_middle.notify_one();
-    let observed = timeout(common::EVENT_TIMEOUT, restarts.next())
-        .await
-        .expect("restart watch should resolve after the orphaning restart");
-    assert_eq!(observed, None);
-    let mut middle_snapshots = middle_handle.subscribe_snapshots();
-    wait_for_snapshot(&mut middle_snapshots, |snapshot| {
-        snapshot.child("slot").is_some_and(|child| {
-            child.state == ChildStateView::Running && child.supervisor.is_none()
-        })
-    })
-    .await;
-    assert!(middle_handle.supervisor("slot").is_none());
-
-    shutdown(handle).await;
-}
-
-#[tokio::test]
-async fn dynamic_supervisor_under_static_supervisor_id_is_displaced_on_reincarnation() {
-    let crash_middle = Arc::new(Notify::new());
-    let crash_for_middle = crash_middle.clone();
-    let middle = SupervisorBuilder::new()
-        .supervisor("slot", idle_supervisor())
-        .child(
-            ChildSpec::new("bomb", move |_ctx| {
-                let crash_middle = crash_for_middle.clone();
-                async move {
-                    crash_middle.notified().await;
-                    Err(common::test_error("middle boom"))
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
-        )
-        .build()
-        .expect("valid middle supervisor");
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(middle)
-                .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
-        )
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-
-    timeout(common::EVENT_TIMEOUT, handle.wait_started())
-        .await
-        .expect("startup should not time out")
-        .expect("startup should succeed");
-    let middle_handle = handle.supervisor("middle").expect("middle supervisor");
-
-    middle_handle
-        .remove_child("slot")
-        .await
-        .expect("removal should succeed");
-    middle_handle
-        .add_supervisor("slot", idle_supervisor())
-        .await
-        .expect("dynamic add should succeed");
-    let dyn_handle = middle_handle
-        .supervisor("slot")
-        .expect("dynamic supervisor");
-    let mut dyn_restarts = dyn_handle.watch_restarts();
-
-    // The replacement middle incarnation recreates the *static supervisor*
-    // "slot" under a fresh identity; the dynamic occupant's identity is
-    // displaced and closed rather than silently reused for the static child.
-    crash_middle.notify_one();
-    let observed = timeout(common::EVENT_TIMEOUT, dyn_restarts.next())
-        .await
-        .expect("displaced watch should resolve after the reincarnation");
-    assert_eq!(observed, None);
-
-    // Wait for evidence of the *replacement* incarnation: only it carries
-    // the seeded restart counter alongside a running bomb and slot worker
-    // (the pre-crash snapshot also showed a running "slot"/"worker" — the
-    // dynamic occupant's — so those alone cannot discriminate).
-    let mut middle_snapshots = middle_handle.subscribe_snapshots();
-    wait_for_snapshot(&mut middle_snapshots, |snapshot| {
-        snapshot.total_restarts == 1
-            && snapshot
-                .child("bomb")
-                .is_some_and(|bomb| bomb.state == ChildStateView::Running)
-            && snapshot
-                .descendant(["slot", "worker"])
-                .is_some_and(|worker| worker.state == ChildStateView::Running)
-    })
-    .await;
-    let fresh_handle = middle_handle.supervisor("slot").expect("fresh identity");
-    let mut fresh_restarts = fresh_handle.watch_restarts();
-    timeout(common::QUIET_TIMEOUT, fresh_restarts.next())
-        .await
-        .expect_err("fresh identity should be alive with no restarts yet");
-
-    shutdown(handle).await;
-}
-
-#[tokio::test]
 async fn dynamic_never_supervisor_breaks_the_revival_chain() {
     let crash_leaf = Arc::new(Notify::new());
     let crash_for_leaf = crash_leaf.clone();
@@ -855,10 +648,13 @@ async fn dynamic_never_supervisor_breaks_the_revival_chain() {
         )
         .build()
         .expect("valid dynamic supervisor");
+    let middle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid dynamic supervisor");
     let handle = SupervisorBuilder::new()
         .supervisor(
             "middle",
-            SupervisorSpec::new(idle_supervisor()).restart(RestartPolicy::OnFailure),
+            SupervisorSpec::new(middle).restart(RestartPolicy::OnFailure),
         )
         .build()
         .expect("valid supervisor")
@@ -1005,13 +801,6 @@ fn middle_supervisor(
         .child(failing_child("bomb", crash_middle, "middle boom"))
         .build()
         .expect("valid middle supervisor")
-}
-
-fn bomb_supervisor(crash_middle: &Arc<Notify>) -> tokio_supervisor::Supervisor {
-    SupervisorBuilder::new()
-        .child(failing_child("bomb", crash_middle, "middle boom"))
-        .build()
-        .expect("valid bomb supervisor")
 }
 
 fn idle_supervisor() -> tokio_supervisor::Supervisor {

@@ -78,8 +78,9 @@ impl SupervisorSnapshotReceiverExt for watch::Receiver<crate::SupervisorSnapshot
 pub use crate::{
     AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, BoxError, ChildContext,
     ChildMembershipView, ChildResult, ChildSnapshot, ChildSpec, ChildStateView, ControlError,
-    EventPathSegment, ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, StartMode, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSpec, SupervisorStateView, SupervisorToken,
+    DynamicSupervisorBuilder, EventPathSegment, ExitStatusView, LifecycleEvent, LifecycleEventKind,
+    LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy,
+    Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder, SupervisorError,
+    SupervisorEvent, SupervisorHandle, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
+    SupervisorToken,
 };

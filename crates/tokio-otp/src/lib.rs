@@ -236,6 +236,7 @@
 mod actor;
 mod builder;
 mod runtime;
+mod supervision;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -251,17 +252,18 @@ pub mod prelude {
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
         BoxError, CallError, CancellationHandle, CancellationToken, Down, DownReason, DrainPolicy,
-        Flow,
+        DynamicRuntimeBuilder, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, MailboxMode, MessageSize, MonitorEvent, RawActor,
         Reply, RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StepDeadline,
-        StepHandle,
+        StepHandle, SupervisionTree,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildMembershipView,
-        ChildSnapshot, ChildStateView, ExitStatusView, LifecycleEvent, LifecycleEventKind,
-        LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, StartMode,
-        Strategy, SupervisorEvent, SupervisorSnapshot, SupervisorStateView,
+        ChildSnapshot, ChildStateView, ControlOperation, ExitStatusView, LifecycleEvent,
+        LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind,
+        ShutdownMode, ShutdownPolicy, Strategy, SupervisorEvent, SupervisorSnapshot,
+        SupervisorStateView,
         prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
     };
 }
@@ -276,21 +278,26 @@ pub use actor::{
     Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline, StepHandle,
     SupervisorPathSegment, TryRecvError,
 };
-pub use builder::RuntimeBuilder;
+pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 #[allow(deprecated)]
 pub use runtime::RestartWatchGuard;
 pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
+};
+pub use supervision::{
+    ActorChild, ChildOutline, SupervisionChild, SupervisionOutline, SupervisionScope,
+    SupervisionTree,
 };
 #[allow(deprecated)]
 pub use tokio_supervisor::RestartWatch;
 pub use tokio_supervisor::{
     AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildContext,
     ChildMembershipView, ChildResult, ChildSnapshot, ChildSpec, ChildStateView, ControlError,
-    EventPathSegment, ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, StartMode, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSpec, SupervisorStateView, SupervisorToken,
+    ControlOperation, DynamicSupervisorBuilder, EventPathSegment, ExitStatusView, LifecycleEvent,
+    LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
+    ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder, SupervisorError,
+    SupervisorEvent, SupervisorHandle, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
+    SupervisorToken,
     prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
 };
 pub use tokio_util::sync::CancellationToken;

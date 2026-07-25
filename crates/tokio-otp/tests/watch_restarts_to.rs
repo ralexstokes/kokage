@@ -46,7 +46,7 @@ async fn runtime_with_sink() -> (
     ActorRef<()>,
     mpsc::UnboundedReceiver<u64>,
 ) {
-    let runtime = Runtime::builder().build().expect("runtime builds");
+    let runtime = Runtime::dynamic().build().expect("runtime builds");
     let handle = runtime.spawn();
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink = handle
@@ -245,7 +245,7 @@ async fn restart_watch_stops_when_target_terminates() {
 
 #[tokio::test]
 async fn cumulative_totals_survive_conflating_target_mailbox() {
-    let runtime = Runtime::builder().build().expect("runtime builds");
+    let runtime = Runtime::dynamic().build().expect("runtime builds");
     let handle = runtime.spawn();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -297,7 +297,7 @@ async fn cumulative_totals_survive_conflating_target_mailbox() {
 
 #[tokio::test]
 async fn latest_total_is_resent_after_target_restart() {
-    let runtime = Runtime::builder().build().expect("runtime builds");
+    let runtime = Runtime::dynamic().build().expect("runtime builds");
     let handle = runtime.spawn();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -360,7 +360,7 @@ async fn latest_total_is_resent_after_target_restart() {
 
 #[tokio::test]
 async fn watched_supervisor_termination_cancels_backpressured_delivery() {
-    let runtime = Runtime::builder().build().expect("runtime builds");
+    let runtime = Runtime::dynamic().build().expect("runtime builds");
     let handle = runtime.spawn();
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());

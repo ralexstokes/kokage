@@ -3,15 +3,17 @@ use std::{collections::HashSet, sync::Arc};
 use crate::{
     child::{ChildDefinition, ChildSpec, SupervisorSpec},
     error::SupervisorBuildError,
-    restart::RestartIntensity,
-    shutdown::AutoShutdown,
+    restart::{RestartIntensity, RestartPolicy},
+    shutdown::{AutoShutdown, ShutdownPolicy},
     strategy::Strategy,
     supervisor::{Supervisor, SupervisorConfig},
 };
 
 /// Builder for constructing a [`Supervisor`] with validated configuration.
 ///
-/// A supervisor may be built with zero children and populated dynamically.
+/// An ordered supervisor may be built with zero declared children, but its
+/// membership remains immutable. Use [`DynamicSupervisorBuilder`] for a scope
+/// populated at runtime.
 ///
 /// # Example
 ///
@@ -29,7 +31,6 @@ use crate::{
 /// ```
 pub struct SupervisorBuilder {
     strategy: Strategy,
-    start_mode: StartMode,
     restart_intensity: RestartIntensity,
     auto_shutdown: AutoShutdown,
     children: Vec<Arc<ChildDefinition>>,
@@ -37,21 +38,30 @@ pub struct SupervisorBuilder {
     event_channel_capacity: usize,
 }
 
-/// How a supervisor starts a set of children.
+/// Builder for a dynamic supervisor whose membership is written at runtime.
+///
+/// Dynamic supervisors start empty, use [`Strategy::OneForOne`], and start
+/// and stop children concurrently. Children can be added and removed through
+/// the resulting supervisor's handle.
+pub struct DynamicSupervisorBuilder {
+    restart_intensity: RestartIntensity,
+    default_restart: RestartPolicy,
+    default_shutdown: ShutdownPolicy,
+    control_channel_capacity: usize,
+    event_channel_capacity: usize,
+}
+
+/// The immutable membership and ordering model of a supervisor scope.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub enum StartMode {
-    /// Spawn every child without waiting for readiness. This is the default.
+pub enum ScopeKind {
+    /// A declared sequence with readiness-gated startup and reverse-order
+    /// teardown. Runtime membership operations are unsupported.
     #[default]
-    Concurrent,
-    /// Start children in declaration order, waiting for each child to report
-    /// readiness before spawning the next. Children added while a sequence is
-    /// in progress are inserted immediately and queued behind its existing
-    /// members; the add operation does not wait for readiness. Shutdown and
-    /// control commands remain responsive while the sequence is gated. There
-    /// is no built-in readiness timeout; children that use explicit readiness
-    /// should arrange their own initialization timeout.
-    Sequential,
+    Ordered,
+    /// A runtime-written membership set with concurrent startup and teardown.
+    Dynamic,
 }
 
 const DEFAULT_CONTROL_CHANNEL_CAPACITY: usize = 64;
@@ -69,7 +79,6 @@ impl SupervisorBuilder {
     pub fn new() -> Self {
         Self {
             strategy: Strategy::default(),
-            start_mode: StartMode::default(),
             restart_intensity: RestartIntensity::default(),
             auto_shutdown: AutoShutdown::default(),
             children: Vec::new(),
@@ -82,13 +91,6 @@ impl SupervisorBuilder {
     #[must_use]
     pub fn strategy(mut self, strategy: Strategy) -> Self {
         self.strategy = strategy;
-        self
-    }
-
-    /// Sets how children are started initially and during group restarts.
-    #[must_use]
-    pub fn start_mode(mut self, start_mode: StartMode) -> Self {
-        self.start_mode = start_mode;
         self
     }
 
@@ -200,11 +202,98 @@ impl SupervisorBuilder {
         }
 
         Ok(Supervisor::new(SupervisorConfig {
+            kind: ScopeKind::Ordered,
             strategy: self.strategy,
-            start_mode: self.start_mode,
             restart_intensity: self.restart_intensity,
+            default_restart: RestartPolicy::default(),
+            default_shutdown: ShutdownPolicy::default(),
             auto_shutdown: self.auto_shutdown,
             children: self.children,
+            control_channel_capacity: self.control_channel_capacity,
+            event_channel_capacity: self.event_channel_capacity,
+        }))
+    }
+}
+
+impl Default for DynamicSupervisorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DynamicSupervisorBuilder {
+    /// Creates an empty dynamic supervisor with the default restart intensity
+    /// and channel capacities.
+    pub fn new() -> Self {
+        Self {
+            restart_intensity: RestartIntensity::default(),
+            default_restart: RestartPolicy::default(),
+            default_shutdown: ShutdownPolicy::default(),
+            control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
+            event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
+        }
+    }
+
+    /// Sets the default restart intensity for dynamically added children that
+    /// do not carry a per-child override.
+    #[must_use]
+    pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
+        self.restart_intensity = intensity;
+        self
+    }
+
+    /// Sets the restart policy inherited by dynamically added task and
+    /// supervisor specs that do not carry an explicit override.
+    #[must_use]
+    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+        self.default_restart = restart;
+        self
+    }
+
+    /// Sets the shutdown policy inherited by dynamically added task and
+    /// supervisor specs that do not carry an explicit override.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+        self.default_shutdown = shutdown;
+        self
+    }
+
+    /// Sets the bounded capacity of the internal control channel.
+    #[must_use]
+    pub fn control_channel_capacity(mut self, capacity: usize) -> Self {
+        self.control_channel_capacity = capacity;
+        self
+    }
+
+    /// Sets the bounded capacity of the event broadcast channel.
+    #[must_use]
+    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.event_channel_capacity = capacity;
+        self
+    }
+
+    /// Validates the configuration and returns an empty dynamic supervisor.
+    pub fn build(self) -> Result<Supervisor, SupervisorBuildError> {
+        self.restart_intensity.validate()?;
+        if self.control_channel_capacity == 0 {
+            return Err(SupervisorBuildError::InvalidConfig(
+                "control channel capacity must be non-zero",
+            ));
+        }
+        if self.event_channel_capacity == 0 {
+            return Err(SupervisorBuildError::InvalidConfig(
+                "event channel capacity must be non-zero",
+            ));
+        }
+
+        Ok(Supervisor::new(SupervisorConfig {
+            kind: ScopeKind::Dynamic,
+            strategy: Strategy::OneForOne,
+            restart_intensity: self.restart_intensity,
+            default_restart: self.default_restart,
+            default_shutdown: self.default_shutdown,
+            auto_shutdown: AutoShutdown::Never,
+            children: Vec::new(),
             control_channel_capacity: self.control_channel_capacity,
             event_channel_capacity: self.event_channel_capacity,
         }))

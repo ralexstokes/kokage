@@ -15,19 +15,11 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, BoxError, CancellationHandle, ChildMembershipView,
-    ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions, GraphBuilder,
-    MailboxMode, MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle,
-    SendError, ShutdownPolicy, Strategy, SupervisorBuilder,
+    ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy, DynamicActorOptions,
+    GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime,
+    RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
-
-fn build_runtime(graph: tokio_otp::Graph) -> Runtime {
-    Runtime::builder()
-        .graph(graph)
-        .strategy(Strategy::OneForOne)
-        .build()
-        .expect("runtime builds")
-}
 
 struct Drain<M>(PhantomData<fn(M)>);
 
@@ -235,7 +227,7 @@ impl RawActor for Forwarder {
 #[tokio::test]
 async fn graphless_runtime_adds_removes_and_readds_actors() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -325,7 +317,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
     const MESSAGES_PER_SENDER: u32 = 64;
 
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -437,7 +429,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release_handler = Arc::new(Notify::new());
     let release_on_stop = Arc::new(Notify::new());
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -546,7 +538,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release_handler = Arc::new(Notify::new());
     let release_on_stop = Arc::new(Notify::new());
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -626,9 +618,17 @@ async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
     let watcher = graph.actor("watcher", move || Watcher {
         observed: observed_tx.clone(),
     });
-    let handle = build_runtime(graph.build().expect("valid graph")).spawn();
+    let handle = Runtime::builder()
+        .graph(graph.build().expect("valid graph"))
+        .subtree("dynamic", Runtime::dynamic())
+        .build()
+        .expect("mixed scope runtime builds")
+        .spawn();
+    let dynamic = handle
+        .subtree("dynamic")
+        .expect("dynamic subtree is available");
     let starts = Arc::new(AtomicUsize::new(0));
-    let target = handle
+    let target = dynamic
         .add_actor(
             "temporary",
             {
@@ -662,13 +662,13 @@ async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
         MonitorEvent::Terminated { ref actor_id, .. } if actor_id == "temporary"
     ));
     assert_eq!(starts.load(Ordering::SeqCst), 1);
-    wait_for_child(&handle, "temporary", false).await;
+    wait_for_child(&dynamic, "temporary", false).await;
     assert!(matches!(
         target.send(()).await,
         Err(SendError::ActorTerminated { actor_id, .. }) if actor_id == "temporary"
     ));
 
-    handle
+    dynamic
         .add_actor("temporary", Drain::<()>::new, DynamicActorOptions::new())
         .await
         .expect("auto-removed actor id is reusable");
@@ -677,7 +677,7 @@ async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
 
 #[tokio::test]
 async fn clean_stop_follows_each_restart_policy() {
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -760,8 +760,60 @@ async fn clean_stop_follows_each_restart_policy() {
 }
 
 #[tokio::test]
+async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
+    let handle = Runtime::dynamic()
+        .restart(RestartPolicy::Always)
+        .shutdown(ShutdownPolicy::abort())
+        .build()
+        .expect("dynamic runtime builds")
+        .spawn();
+    let inherited_starts = Arc::new(AtomicUsize::new(0));
+    let inherited = handle
+        .add_actor(
+            "inherited",
+            {
+                let starts = Arc::clone(&inherited_starts);
+                move || CleanStop {
+                    starts: Arc::clone(&starts),
+                }
+            },
+            DynamicActorOptions::default(),
+        )
+        .await
+        .expect("inherited actor added");
+    let explicit_starts = Arc::new(AtomicUsize::new(0));
+    let explicit = handle
+        .add_actor(
+            "explicit",
+            {
+                let starts = Arc::clone(&explicit_starts);
+                move || CleanStop {
+                    starts: Arc::clone(&starts),
+                }
+            },
+            DynamicActorOptions::default().restart(RestartPolicy::Never),
+        )
+        .await
+        .expect("explicit actor added");
+
+    inherited.send(()).await.expect("inherited actor stops");
+    explicit.send(()).await.expect("explicit actor stops");
+    timeout(Duration::from_secs(1), async {
+        while inherited_starts.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("builder default restarts the cleanly stopped actor");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(explicit_starts.load(Ordering::SeqCst), 1);
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
 async fn never_actor_auto_removes_after_failure() {
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -792,7 +844,7 @@ async fn never_actor_auto_removes_after_failure() {
 
 #[tokio::test]
 async fn remove_on_exit_defaults_and_overrides_follow_the_final_restart_policy() {
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -895,7 +947,7 @@ async fn remove_on_exit_defaults_and_overrides_follow_the_final_restart_policy()
 
 #[tokio::test]
 async fn remove_on_exit_does_not_remove_an_actor_that_restarts() {
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -941,7 +993,7 @@ async fn remove_on_exit_does_not_remove_an_actor_that_restarts() {
 
 #[tokio::test]
 async fn runtime_added_actor_can_observe_message_sizes() {
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -987,7 +1039,7 @@ impl RawActor for GatedDrain {
 
 #[tokio::test]
 async fn runtime_added_actor_uses_non_default_mailbox_options() {
-    let handle = Runtime::builder()
+    let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1023,9 +1075,17 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
     let forwarder = builder.actor("forwarder", || Forwarder);
-    let handle = build_runtime(builder.build().expect("valid graph")).spawn();
+    let handle = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
+        .subtree("dynamic", Runtime::dynamic())
+        .build()
+        .expect("mixed scope runtime builds")
+        .spawn();
+    let dynamic = handle
+        .subtree("dynamic")
+        .expect("dynamic subtree is available");
 
-    let sink = handle
+    let sink = dynamic
         .add_actor(
             "sink",
             move || Observe {
@@ -1071,9 +1131,17 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let sink = builder.actor("sink", move || Observe {
         observed: observed_tx.clone(),
     });
-    let handle = build_runtime(builder.build().expect("valid graph")).spawn();
+    let handle = Runtime::builder()
+        .graph(builder.build().expect("valid graph"))
+        .subtree("dynamic", Runtime::dynamic())
+        .build()
+        .expect("mixed scope runtime builds")
+        .spawn();
+    let dynamic_scope = handle
+        .subtree("dynamic")
+        .expect("dynamic subtree is available");
 
-    let dynamic = handle
+    let dynamic = dynamic_scope
         .add_actor(
             "dynamic",
             move || ForwardTo {
@@ -1106,7 +1174,7 @@ impl RawActor for PendingActor {
 
 #[tokio::test]
 async fn timed_out_removal_terminates_the_typed_ref() {
-    let handle = Runtime::builder().build().expect("runtime builds").spawn();
+    let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
     let actor_ref = handle
         .add_actor(
             "dynamic",
@@ -1142,7 +1210,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 }
 
 #[tokio::test]
-async fn runtime_new_supports_runtime_added_actors() {
+async fn runtime_new_preserves_the_supervisors_ordered_scope_kind() {
     let supervisor = SupervisorBuilder::new()
         .child(ChildSpec::new("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -1152,11 +1220,17 @@ async fn runtime_new_supports_runtime_added_actors() {
         .expect("valid supervisor");
     let handle = Runtime::new(supervisor).spawn();
 
-    let actor_ref = handle
+    let error = handle
         .add_actor("dynamic", Drain::<()>::new, DynamicActorOptions::default())
         .await
-        .expect("all runtimes support actor creation");
-    assert_eq!(actor_ref.id(), "dynamic");
+        .expect_err("ordered runtimes reject runtime membership changes");
+    assert_eq!(
+        error,
+        ControlError::UnsupportedByScopeKind {
+            operation: ControlOperation::AddChild,
+            kind: ScopeKind::Ordered,
+        }
+    );
 
     timeout(Duration::from_secs(1), handle.shutdown_and_wait())
         .await

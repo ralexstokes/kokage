@@ -14,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::{
-    builder::StartMode,
     child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment, SupervisorSpec},
     context::ChildReady,
     error::{ControlError, SupervisorError},
@@ -26,7 +25,8 @@ use crate::{
     lifecycle::{LifecycleEventDraft, LifecycleEventKind, LifecycleHub},
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
-    shutdown::{AutoShutdown, ShutdownMode},
+    scope::{ControlOperation, ScopeKind},
+    shutdown::{AutoShutdown, ShutdownMode, ShutdownPolicy},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, NestedSnapshotNotification,
         NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
@@ -292,9 +292,11 @@ pub(crate) fn reconcile_stable_identities(
 /// Read-only configuration and identity, fixed at construction time.
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
-    pub(crate) start_mode: StartMode,
+    pub(crate) kind: ScopeKind,
     pub(crate) auto_shutdown: AutoShutdown,
     pub(crate) default_restart_intensity: RestartIntensity,
+    pub(crate) default_restart: RestartPolicy,
+    pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
     pub(crate) parent_link: Option<ParentLink>,
@@ -372,7 +374,7 @@ impl SupervisorRuntime {
         revivable: bool,
     ) -> Self {
         let default_restart_intensity = config.restart_intensity;
-        let start_mode = config.start_mode;
+        let kind = config.kind;
         let observability = SupervisorObservability::new(path_prefix.clone(), config.strategy);
         let mut children = Slab::with_capacity(config.children.len());
         let mut children_by_id = HashMap::with_capacity(config.children.len());
@@ -418,9 +420,11 @@ impl SupervisorRuntime {
         Self {
             meta: RuntimeMeta {
                 strategy: config.strategy,
-                start_mode,
+                kind,
                 auto_shutdown: config.auto_shutdown,
                 default_restart_intensity,
+                default_restart: config.default_restart,
+                default_shutdown: config.default_shutdown,
                 path_prefix,
                 observability,
                 parent_link,
@@ -638,7 +642,7 @@ impl SupervisorRuntime {
                 instance: entry.instance,
                 emit_restart_event: emit_restart_events,
             };
-            if self.meta.start_mode == StartMode::Concurrent {
+            if self.meta.kind == ScopeKind::Dynamic {
                 self.spawn_start_item(item)?;
             } else {
                 let entry = &mut self.children[key];
@@ -652,7 +656,7 @@ impl SupervisorRuntime {
             }
         }
 
-        if self.meta.start_mode == StartMode::Sequential {
+        if self.meta.kind == ScopeKind::Ordered {
             self.publish_snapshot();
             self.advance_start_sequence()?;
         }
@@ -674,7 +678,7 @@ impl SupervisorRuntime {
         }
         let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
         let (old_generation, new_generation) = self.spawn_child(item.key)?;
-        if self.meta.start_mode == StartMode::Sequential && readiness_gated {
+        if self.meta.kind == ScopeKind::Ordered && readiness_gated {
             let restart_event = if item.emit_restart_event {
                 old_generation.map(|old_generation| (old_generation, new_generation))
             } else {
@@ -907,10 +911,20 @@ impl SupervisorRuntime {
         }
     }
 
-    fn add_child(&mut self, child: crate::child::ChildSpec) -> CommandResult<u64> {
+    fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
+        if self.meta.kind == ScopeKind::Ordered {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddChild,
+                kind: self.meta.kind,
+            }
+            .into());
+        }
+
+        Arc::make_mut(&mut child.inner)
+            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
 
         if child.id().is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
@@ -925,6 +939,13 @@ impl SupervisorRuntime {
             return Err(ControlError::InvalidConfig(
                 "significant children cannot use RestartPolicy::Always",
             )
+            .into());
+        }
+        if child.is_significant() && self.meta.kind == ScopeKind::Dynamic {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddChild,
+                kind: self.meta.kind,
+            }
             .into());
         }
         if child.is_significant() && matches!(self.meta.auto_shutdown, AutoShutdown::Never) {
@@ -965,10 +986,18 @@ impl SupervisorRuntime {
         Ok(membership_epoch)
     }
 
-    fn add_supervisor(&mut self, id: String, supervisor: SupervisorSpec) -> CommandResult<u64> {
+    fn add_supervisor(&mut self, id: String, mut supervisor: SupervisorSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
+        if self.meta.kind == ScopeKind::Ordered {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddSupervisor,
+                kind: self.meta.kind,
+            }
+            .into());
+        }
+        supervisor.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
         }
@@ -981,6 +1010,13 @@ impl SupervisorRuntime {
             return Err(ControlError::InvalidConfig(
                 "significant children cannot use RestartPolicy::Always",
             )
+            .into());
+        }
+        if supervisor.significant && self.meta.kind == ScopeKind::Dynamic {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddSupervisor,
+                kind: self.meta.kind,
+            }
             .into());
         }
         if supervisor.significant && matches!(self.meta.auto_shutdown, AutoShutdown::Never) {
@@ -1090,6 +1126,13 @@ impl SupervisorRuntime {
             let _ = reply.send(Err(ControlError::SupervisorStopping));
             return Ok(());
         }
+        if self.meta.kind == ScopeKind::Ordered {
+            let _ = reply.send(Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::RemoveChild,
+                kind: self.meta.kind,
+            }));
+            return Ok(());
+        }
 
         let Some(&key) = self.children_by_id.get(&id) else {
             let _ = reply.send(Err(ControlError::UnknownChildId(id)));
@@ -1173,14 +1216,14 @@ impl SupervisorRuntime {
         cleared_gate
     }
 
-    fn cancel_child(&mut self, key: ChildKey) {
+    pub(crate) fn cancel_child(&mut self, key: ChildKey) {
         self.children[key].runtime.completion.mark_cancelled();
         if let Some(token) = self.children[key].runtime.active_token.as_ref() {
             token.cancel();
         }
     }
 
-    fn abort_child(&mut self, key: ChildKey) {
+    pub(crate) fn abort_child(&mut self, key: ChildKey) {
         self.children[key].runtime.completion.mark_cancelled();
         if let Some(abort_handle) = self.children[key].runtime.abort_handle.as_ref() {
             abort_handle.abort();
@@ -1849,6 +1892,7 @@ impl SupervisorRuntime {
                 SupervisorState::Stopping => SupervisorStateView::Stopping,
                 SupervisorState::Stopped => SupervisorStateView::Stopped,
             },
+            kind: self.meta.kind,
             strategy: self.meta.strategy,
             total_restarts: self.total_restarts,
             lifecycle_seq: self.lifecycle.seq(),
