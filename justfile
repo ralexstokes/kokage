@@ -8,27 +8,27 @@ fmt:
     cargo +nightly fmt --all --check
 
 lint:
-    cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+    cargo +nightly clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 check:
-    cargo check --workspace --all-targets --all-features
+    cargo check --locked --workspace --all-targets --all-features
 
 build:
-    cargo build --workspace --all-targets --all-features
+    cargo build --locked --workspace --all-targets --all-features
 
 test:
-    cargo test --workspace --all-targets --all-features
-    cargo test --workspace --doc --all-features
+    cargo test --locked --workspace --all-targets --all-features
+    cargo test --locked --workspace --doc --all-features
 
 doc-check:
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
 smoke:
-    cargo run -p tokio-otp --example trading_engine --features metrics
-    cargo run -p tokio-otp --example agent_control --features metrics
-    cargo run -p tokio-otp --example supervised_actors
-    cargo run -p tokio-otp --example ref_rebind
-    cargo run -p tokio-otp --example drain_policy
+    cargo run --locked -p tokio-otp --example trading_engine --features metrics
+    cargo run --locked -p tokio-otp --example agent_control --features metrics
+    cargo run --locked -p tokio-otp --example supervised_actors
+    cargo run --locked -p tokio-otp --example ref_rebind
+    cargo run --locked -p tokio-otp --example drain_policy
 
 nixfmt-check:
     nixfmt --check flake.nix nix/crane-checks.nix
@@ -36,7 +36,7 @@ nixfmt-check:
 # Fast local CI mirror — reuses the local cargo cache and incremental builds.
 ci: fmt lint build test smoke doc-check nixfmt-check build-book
 
-# Exactly what GitHub Actions runs; use before pushing or when touching nix files.
+# Full clean Nix CI lane; use before pushing or when touching Nix files.
 ci-nix:
     nix flake check --no-update-lock-file
 

@@ -102,8 +102,8 @@ The Nix flake provides both local tooling and CI:
 
 ```sh
 nix develop
-just ci      # fast local mirror of CI (fmt, clippy, build, tests, book)
-just ci-nix  # exactly what GitHub Actions runs; must pass before pushing
+just ci      # pull-request fast lane (fmt, clippy, build, tests, book)
+just ci-nix  # full clean Nix lane used on main and for Nix-related changes
 ```
 
 ## License
