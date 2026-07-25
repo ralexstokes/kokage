@@ -274,9 +274,25 @@ impl RunnableActor {
 
     /// Runs this actor with a fresh mailbox until shutdown resolves.
     ///
-    /// `restart` declares whether another incarnation is expected after this
-    /// run. A hand-written host must call [`terminate_binding`](Self::terminate_binding)
-    /// when it gives up after a policy that left the binding waiting to rebind.
+    /// `restart` controls the binding disposition after the run:
+    ///
+    /// - A clean exit leaves the binding rebindable only for
+    ///   [`Always`](RestartPolicy::Always).
+    /// - Failure, panic, or unexpected task cancellation leaves it rebindable
+    ///   for [`Always`](RestartPolicy::Always) and
+    ///   [`OnFailure`](RestartPolicy::OnFailure).
+    /// - Requested shutdown terminates the binding for every policy.
+    /// - Dropping the `run_until` future aborts the incarnation and leaves the
+    ///   binding rebindable for `Always` and `OnFailure`; `Never` terminates it.
+    ///
+    /// [`RestartPolicy::default()`] is `OnFailure`, so
+    /// `run_until(shutdown, Default::default())` leaves a failed run rebindable.
+    /// Callers migrating code that expected a default policy to terminate
+    /// after every exit must pass [`RestartPolicy::Never`] explicitly.
+    ///
+    /// A hand-written host must call
+    /// [`terminate_binding`](Self::terminate_binding) when it gives up after a
+    /// policy that left the binding waiting to rebind.
     pub async fn run_until<F>(
         &self,
         shutdown: F,
@@ -474,6 +490,57 @@ fn run_disposition(
             } else {
                 RunDisposition::ExpectRebind
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_disposition_matches_documented_restart_semantics() {
+        assert_eq!(
+            run_disposition(RestartPolicy::Always, false, ActorExitStatus::Stopped),
+            RunDisposition::ExpectRebind
+        );
+        for policy in [RestartPolicy::OnFailure, RestartPolicy::Never] {
+            assert_eq!(
+                run_disposition(policy, false, ActorExitStatus::Stopped),
+                RunDisposition::Terminate
+            );
+        }
+
+        for status in [
+            ActorExitStatus::Failed,
+            ActorExitStatus::Panicked,
+            ActorExitStatus::Cancelled,
+        ] {
+            for policy in [RestartPolicy::Always, RestartPolicy::OnFailure] {
+                assert_eq!(
+                    run_disposition(policy, false, status),
+                    RunDisposition::ExpectRebind
+                );
+            }
+            assert_eq!(
+                run_disposition(RestartPolicy::Never, false, status),
+                RunDisposition::Terminate
+            );
+        }
+
+        for policy in [
+            RestartPolicy::Always,
+            RestartPolicy::OnFailure,
+            RestartPolicy::Never,
+        ] {
+            assert_eq!(
+                run_disposition(policy, false, ActorExitStatus::Shutdown),
+                RunDisposition::Terminate
+            );
+            assert_eq!(
+                run_disposition(policy, true, ActorExitStatus::Failed),
+                RunDisposition::Terminate
+            );
         }
     }
 }

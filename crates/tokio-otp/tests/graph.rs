@@ -1576,6 +1576,75 @@ mod runnable_actor {
     }
 
     #[tokio::test]
+    async fn restart_policy_default_is_on_failure_for_run_until() {
+        assert_eq!(RestartPolicy::default(), RestartPolicy::OnFailure);
+
+        let mut builder = GraphBuilder::new();
+        let worker_ref = builder.actor("worker", || FailsOnMessage);
+        let graph = builder.build().expect("valid graph");
+        let worker = single_actor(&graph, "worker");
+        let task =
+            tokio::spawn(
+                async move { worker.run_until(pending::<()>(), Default::default()).await },
+            );
+
+        worker_ref.send(()).await.expect("send accepted");
+        let result = timeout(Duration::from_secs(1), task)
+            .await
+            .expect("run exits in time")
+            .expect("actor task joined");
+        assert!(matches!(result, Err(ActorRunError::Failed { .. })));
+        assert!(matches!(
+            worker_ref.try_send(()),
+            Err(SendError::ActorNotRunning { actor_id, .. }) if actor_id == "worker"
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropped_run_follows_restart_policy() {
+        for (policy, expect_terminated) in [
+            (RestartPolicy::Always, false),
+            (RestartPolicy::OnFailure, false),
+            (RestartPolicy::Never, true),
+        ] {
+            let mut builder = GraphBuilder::new();
+            let worker_ref = builder.actor("worker", Drain::<()>::new);
+            let graph = builder.build().expect("valid graph");
+            let worker = single_actor(&graph, "worker");
+            let task = tokio::spawn(async move { worker.run_until(pending::<()>(), policy).await });
+
+            worker_ref.send(()).await.expect("run bound its mailbox");
+            task.abort();
+            assert!(
+                task.await
+                    .expect_err("aborted run task is cancelled")
+                    .is_cancelled()
+            );
+
+            let disposition = timeout(Duration::from_secs(1), async {
+                loop {
+                    match worker_ref.try_send(()) {
+                        Err(error @ SendError::ActorNotRunning { .. })
+                        | Err(error @ SendError::ActorTerminated { .. }) => break error,
+                        Ok(())
+                        | Err(SendError::MailboxFull { .. })
+                        | Err(SendError::MailboxClosed { .. }) => tokio::task::yield_now().await,
+                        Err(error) => panic!("unexpected send error after dropped run: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("binding reached its dropped-run disposition");
+
+            if expect_terminated {
+                assert!(matches!(disposition, SendError::ActorTerminated { .. }));
+            } else {
+                assert!(matches!(disposition, SendError::ActorNotRunning { .. }));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn restart_policy_is_per_run_not_sticky() {
         let mut builder = GraphBuilder::new();
         let worker_ref = builder.actor("worker", || FailsOnMessage);
