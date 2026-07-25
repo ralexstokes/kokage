@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
     child::{ChildDefinition, ChildSpec, SupervisorSpec},
@@ -32,7 +32,7 @@ pub struct SupervisorBuilder {
     start_mode: StartMode,
     restart_intensity: RestartIntensity,
     auto_shutdown: AutoShutdown,
-    children: Vec<ChildDefinition>,
+    children: Vec<Arc<ChildDefinition>>,
     control_channel_capacity: usize,
     event_channel_capacity: usize,
 }
@@ -111,7 +111,7 @@ impl SupervisorBuilder {
     /// sequential startup and group-restart order.
     #[must_use]
     pub fn child(mut self, child: ChildSpec) -> Self {
-        self.children.push(child.into_definition());
+        self.children.push(child.inner);
         self
     }
 
@@ -126,8 +126,10 @@ impl SupervisorBuilder {
         id: impl Into<String>,
         supervisor: impl Into<SupervisorSpec>,
     ) -> Self {
-        self.children
-            .push(ChildDefinition::supervisor(id.into(), supervisor.into()));
+        self.children.push(Arc::new(ChildDefinition::supervisor(
+            id.into(),
+            supervisor.into(),
+        )));
         self
     }
 
