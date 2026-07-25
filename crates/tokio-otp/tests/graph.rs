@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError, DrainPolicy,
-    Graph, GraphBuildError, GraphBuilder, RawActor, RebindPolicy, Reply, RunnableActor, SendError,
+    Graph, GraphBuildError, GraphBuilder, RawActor, Reply, RestartPolicy, RunnableActor, SendError,
     TryRecvError, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
@@ -66,9 +66,11 @@ fn start_graph(
         .cloned()
         .map(|actor| {
             let stop = stop.clone();
-            tokio::spawn(
-                async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await },
-            )
+            tokio::spawn(async move {
+                actor
+                    .run_until(stop.cancelled(), RestartPolicy::Never)
+                    .await
+            })
         })
         .collect::<Vec<_>>();
     let task = tokio::spawn(async move {
@@ -435,7 +437,7 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let graph = builder.build().expect("valid graph");
 
     let result = runnable(&graph, "worker")
-        .run_until(pending::<()>(), RebindPolicy::Never)
+        .run_until(pending::<()>(), RestartPolicy::Never)
         .await;
     assert!(matches!(
         result,
@@ -469,8 +471,11 @@ async fn handler_error_fails_the_actor_run() {
     let graph = builder.build().expect("valid graph");
 
     let worker = runnable(&graph, "worker");
-    let task =
-        tokio::spawn(async move { worker.run_until(pending::<()>(), RebindPolicy::Never).await });
+    let task = tokio::spawn(async move {
+        worker
+            .run_until(pending::<()>(), RestartPolicy::Never)
+            .await
+    });
     actor.send(()).await.expect("message sent");
 
     let result = timeout(Duration::from_secs(1), task)
@@ -561,8 +566,11 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
     });
     let graph = builder.build().expect("valid graph");
     let worker = runnable(&graph, "worker");
-    let task =
-        tokio::spawn(async move { worker.run_until(pending::<()>(), RebindPolicy::Never).await });
+    let task = tokio::spawn(async move {
+        worker
+            .run_until(pending::<()>(), RestartPolicy::Never)
+            .await
+    });
 
     actor.send(GateMsg::Stop).await.expect("stop sent");
     recv(&mut started_rx, "handler entered stop").await;
@@ -600,8 +608,11 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     });
     let graph = builder.build().expect("valid graph");
     let worker = runnable(&graph, "worker");
-    let task =
-        tokio::spawn(async move { worker.run_until(pending::<()>(), RebindPolicy::Never).await });
+    let task = tokio::spawn(async move {
+        worker
+            .run_until(pending::<()>(), RestartPolicy::Never)
+            .await
+    });
 
     actor.send(GateMsg::Stop).await.expect("stop sent");
     recv(&mut started_rx, "handler entered stop").await;
@@ -977,7 +988,7 @@ async fn actor_error_fails_its_run() {
     let graph = builder.build().expect("valid graph");
 
     let result = runnable(&graph, "bad")
-        .run_until(pending::<()>(), RebindPolicy::Never)
+        .run_until(pending::<()>(), RestartPolicy::Never)
         .await;
     assert!(matches!(
         result,
@@ -1003,7 +1014,7 @@ async fn early_clean_exit_is_a_clean_actor_run() {
     let graph = builder.build().expect("valid graph");
 
     runnable(&graph, "quitter")
-        .run_until(pending::<()>(), RebindPolicy::Never)
+        .run_until(pending::<()>(), RestartPolicy::Never)
         .await
         .expect("clean early exit is ordinary completion");
 }
@@ -1104,8 +1115,8 @@ mod runnable_actor {
     };
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
-        DrainPolicy, DynamicActorOptions, Graph, GraphBuilder, MessageSize, RawActor, RebindPolicy,
-        RunnableActor, RunnableActorFactory, Runtime, SendError, prelude::Continue,
+        DrainPolicy, DynamicActorOptions, Graph, GraphBuilder, MessageSize, RawActor,
+        RestartPolicy, RunnableActor, RunnableActorFactory, Runtime, SendError, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1235,17 +1246,17 @@ mod runnable_actor {
     fn start_actor(
         actor: RunnableActor,
     ) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
-        start_actor_with_policy(actor, RebindPolicy::Never)
+        start_actor_with_policy(actor, RestartPolicy::Never)
     }
 
     fn start_actor_with_policy(
         actor: RunnableActor,
-        rebind: RebindPolicy,
+        restart: RestartPolicy,
     ) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
         let stop = CancellationToken::new();
         let task = tokio::spawn({
             let stop = stop.clone();
-            async move { actor.run_until(stop.cancelled(), rebind).await }
+            async move { actor.run_until(stop.cancelled(), restart).await }
         });
         (stop, task)
     }
@@ -1372,7 +1383,7 @@ mod runnable_actor {
         let worker = single_actor(&graph, "worker");
 
         worker
-            .run_until(async {}, RebindPolicy::Never)
+            .run_until(async {}, RestartPolicy::Never)
             .await
             .expect("timeout abort is a clean requested shutdown");
     }
@@ -1386,7 +1397,7 @@ mod runnable_actor {
         let worker = single_actor(&graph, "worker");
 
         worker
-            .run_until(async {}, RebindPolicy::Never)
+            .run_until(async {}, RestartPolicy::Never)
             .await
             .expect("cooperative shutdown completes cleanly");
     }
@@ -1484,7 +1495,7 @@ mod runnable_actor {
 
         let worker = single_actor(&graph, "worker");
         let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), RebindPolicy::Always);
+            start_actor_with_policy(worker.clone(), RestartPolicy::Always);
 
         timeout(Duration::from_secs(1), entered_rx.recv())
             .await
@@ -1512,7 +1523,7 @@ mod runnable_actor {
             .expect("first actor task joined")
             .expect("first actor run completed cleanly");
 
-        let (second_stop, second_task) = start_actor_with_policy(worker, RebindPolicy::Always);
+        let (second_stop, second_task) = start_actor_with_policy(worker, RestartPolicy::Always);
         assert_eq!(
             timeout(Duration::from_secs(1), observed_rx.recv())
                 .await
@@ -1542,7 +1553,7 @@ mod runnable_actor {
 
         assert!(matches!(
             worker
-                .run_until(pending::<()>(), RebindPolicy::Never)
+                .run_until(pending::<()>(), RestartPolicy::Never)
                 .await,
             Err(ActorRunError::AlreadyRunning { actor_id , .. }) if actor_id == "worker"
         ));
@@ -1565,7 +1576,7 @@ mod runnable_actor {
     }
 
     #[tokio::test]
-    async fn rebind_policy_is_per_run_not_sticky() {
+    async fn restart_policy_is_per_run_not_sticky() {
         let mut builder = GraphBuilder::new();
         let worker_ref = builder.actor("worker", || FailsOnMessage);
         let graph = builder.build().expect("valid graph");
@@ -1573,7 +1584,7 @@ mod runnable_actor {
 
         // First run declares OnFailure: the failed exit leaves the binding
         // waiting to rebind.
-        let (_stop, task) = start_actor_with_policy(worker.clone(), RebindPolicy::OnFailure);
+        let (_stop, task) = start_actor_with_policy(worker.clone(), RestartPolicy::OnFailure);
         worker_ref.send(()).await.expect("send accepted");
         let result = timeout(Duration::from_secs(1), task)
             .await
@@ -1588,7 +1599,7 @@ mod runnable_actor {
         // A second run of the same actor declares Never: the same failed exit
         // now terminates the binding — this run's argument wins over any state
         // left behind by the first run.
-        let (_stop, task) = start_actor_with_policy(worker, RebindPolicy::Never);
+        let (_stop, task) = start_actor_with_policy(worker, RestartPolicy::Never);
         worker_ref
             .send(())
             .await
@@ -1665,7 +1676,7 @@ mod runnable_actor {
 
         let (frontend_stop, frontend_task) = start_actor(frontend);
         let (_first_worker_stop, first_worker_task) =
-            start_actor_with_policy(worker.clone(), RebindPolicy::OnFailure);
+            start_actor_with_policy(worker.clone(), RestartPolicy::OnFailure);
 
         frontend_ref.send(Work("first")).await.expect("first send");
         assert_eq!(
@@ -1695,7 +1706,7 @@ mod runnable_actor {
         );
 
         let (second_worker_stop, second_worker_task) =
-            start_actor_with_policy(worker, RebindPolicy::OnFailure);
+            start_actor_with_policy(worker, RestartPolicy::OnFailure);
         assert_eq!(
             timeout(Duration::from_secs(1), observed_rx.recv())
                 .await
@@ -1748,7 +1759,7 @@ mod runnable_actor {
         // Each run ends by clean early exit (not requested shutdown), so the
         // `Always` policy leaves the binding unbound and rebindable.
         let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), RebindPolicy::Always);
+            start_actor_with_policy(worker.clone(), RestartPolicy::Always);
         worker_ref
             .send("first".to_owned())
             .await
@@ -1763,7 +1774,7 @@ mod runnable_actor {
 
         // The same ref rides into the next incarnation without re-minting.
         let (_second_stop, second_task) =
-            start_actor_with_policy(worker.clone(), RebindPolicy::Always);
+            start_actor_with_policy(worker.clone(), RestartPolicy::Always);
         worker_ref
             .send("second".to_owned())
             .await
@@ -1839,7 +1850,7 @@ mod runnable_actor {
         // Run 1: a poison message plus two messages queued behind it, all
         // accepted by the first incarnation's mailbox before it reads any.
         let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), RebindPolicy::OnFailure);
+            start_actor_with_policy(worker.clone(), RestartPolicy::OnFailure);
         started_rx.recv().await.expect("first incarnation started");
         worker_ref.send(0).await.expect("poison accepted");
         worker_ref
@@ -1863,7 +1874,7 @@ mod runnable_actor {
 
         // Run 2 binds a fresh mailbox: the accepted-but-unread messages died
         // with the first incarnation.
-        let (second_stop, second_task) = start_actor_with_policy(worker, RebindPolicy::OnFailure);
+        let (second_stop, second_task) = start_actor_with_policy(worker, RestartPolicy::OnFailure);
         started_rx.recv().await.expect("second incarnation started");
         release.notify_one();
         worker_ref

@@ -14,7 +14,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorResult, ActorRunError, Graph, GraphBuilder, RawActor, RebindPolicy,
+    ActorContext, ActorResult, ActorRunError, Graph, GraphBuilder, RawActor, RestartPolicy,
     prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
@@ -36,7 +36,11 @@ fn start_graph(graph: &Graph) -> (CancellationToken, JoinHandle<Result<(), Actor
     let actor = graph.actors().first().expect("actor exists").clone();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     (stop, task)
 }
@@ -278,7 +282,7 @@ async fn blocking_panic_propagates_as_actor_panic() {
     let actor = graph.actors()[0].clone();
     let result = timeout(
         Duration::from_secs(1),
-        tokio::spawn(async move { actor.run_until(pending::<()>(), RebindPolicy::Never).await }),
+        tokio::spawn(async move { actor.run_until(pending::<()>(), RestartPolicy::Never).await }),
     )
     .await
     .expect("actor panic observed")

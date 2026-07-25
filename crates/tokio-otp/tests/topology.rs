@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, Graph,
-    GraphBuildError, GraphBuilder, MailboxMode, MessageSize, RawActor, RebindPolicy, SendError,
+    GraphBuildError, GraphBuilder, MailboxMode, MessageSize, RawActor, RestartPolicy, SendError,
     Topology, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
@@ -21,9 +21,11 @@ fn start_graph(
         .cloned()
         .map(|actor| {
             let stop = stop.clone();
-            tokio::spawn(
-                async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await },
-            )
+            tokio::spawn(async move {
+                actor
+                    .run_until(stop.cancelled(), RestartPolicy::Never)
+                    .await
+            })
         })
         .collect();
     (stop, tasks)
