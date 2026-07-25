@@ -159,7 +159,6 @@ impl Supervisor {
                 },
             );
         let events_tx = channels.events();
-        let snapshots_tx = channels.snapshots();
         let nested_channels = channels.nested_channels();
         let attached_children = channels.attached_children();
         let startup_ctx = ctx.clone();
@@ -174,14 +173,20 @@ impl Supervisor {
 
         // Rebind before the runtime task can publish so observers never see
         // the previous incarnation's final snapshot through the new binding.
-        let binding = channels.bind(
+        let Some((binding, snapshots_tx)) = channels.bind(
             generation,
             shutdown_tx.clone(),
             command_tx,
             done_rx,
             initial_snapshot,
             initial_attached_children,
-        );
+        ) else {
+            // Reconciliation may have installed fresh descendant identities
+            // after this supervisor identity was terminalized. Cascade once
+            // more so none of those pre-spawn channels remain live.
+            channels.terminal();
+            return Ok(());
+        };
 
         let join_handle = tokio::spawn(async move {
             let result = self

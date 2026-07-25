@@ -122,8 +122,13 @@ struct SnapshotSlot {
     rx: watch::Receiver<SupervisorSnapshot>,
 }
 
+struct StableBindingState {
+    current: Option<IncarnationBinding>,
+    terminal: bool,
+}
+
 pub(crate) struct StableSupervisorChannels {
-    binding: Mutex<Option<IncarnationBinding>>,
+    binding: Mutex<StableBindingState>,
     initial_incarnation: Mutex<Option<InitialIncarnationChannels>>,
     events_tx: broadcast::Sender<SupervisorEvent>,
     snapshots: Mutex<SnapshotSlot>,
@@ -152,7 +157,10 @@ impl StableSupervisorChannels {
         let (command_tx, command_rx) = mpsc::channel(control_capacity);
         let (done_tx, done_rx) = watch::channel(None);
         Arc::new(Self {
-            binding: Mutex::new(None),
+            binding: Mutex::new(StableBindingState {
+                current: None,
+                terminal: false,
+            }),
             initial_incarnation: Mutex::new(Some(InitialIncarnationChannels {
                 shutdown_tx,
                 shutdown_rx,
@@ -184,10 +192,9 @@ impl StableSupervisorChannels {
 
     /// Binds a new incarnation and resets its incarnation-local snapshot.
     ///
-    /// # Panics
-    ///
-    /// Panics if these stable channels have already been marked terminal;
-    /// rebinding a terminal supervisor identity is an internal lifecycle bug.
+    /// Returns `None` if these stable channels were marked terminal before the
+    /// incarnation could bind. This can race with a parent incarnation ending
+    /// while a nested supervisor is starting; the terminal judgment wins.
     pub(crate) fn bind(
         self: &Arc<Self>,
         generation: u64,
@@ -196,7 +203,16 @@ impl StableSupervisorChannels {
         done_rx: DoneReceiver,
         mut initial_snapshot: SupervisorSnapshot,
         initial_attached_children: Vec<AttachedChildState>,
-    ) -> StableBindingGuard {
+    ) -> Option<(StableBindingGuard, watch::Sender<SupervisorSnapshot>)> {
+        let mut binding = self.binding.lock().expect("stable control slot poisoned");
+        if binding.terminal {
+            return None;
+        }
+
+        // Keep terminalization excluded through snapshot/attachment reset and
+        // publication of the new control binding. The returned snapshot sender
+        // is acquired inside the same lifecycle boundary, so `run_as_child`
+        // never has to reopen the terminalization race after binding.
         let snapshots = self.snapshots();
         // The children belong to the new incarnation, but the aggregate
         // restart counter belongs to the stable supervisor identity.
@@ -216,22 +232,28 @@ impl StableSupervisorChannels {
             terminal: false,
             children: initial_attached_children,
         };
-        *self.binding.lock().expect("stable control slot poisoned") = Some(IncarnationBinding {
+        binding.current = Some(IncarnationBinding {
             generation,
             shutdown_tx,
             control: ControlEndpoint { command_tx },
             done_rx,
         });
-        StableBindingGuard {
-            channels: Arc::clone(self),
-            generation,
-        }
+        Some((
+            StableBindingGuard {
+                channels: Arc::clone(self),
+                generation,
+            },
+            snapshots,
+        ))
     }
 
     fn current_binding(&self) -> Option<IncarnationBinding> {
         let binding = self.binding.lock().expect("stable control slot poisoned");
-        if binding.is_some() {
-            return binding.clone();
+        if binding.terminal {
+            return None;
+        }
+        if binding.current.is_some() {
+            return binding.current.clone();
         }
         self.initial_incarnation
             .lock()
@@ -253,12 +275,15 @@ impl StableSupervisorChannels {
         // prevents a stable handle from observing an unavailable gap between
         // the pre-spawn channels and `bind`.
         let mut binding = self.binding.lock().expect("stable control slot poisoned");
+        if binding.terminal {
+            return None;
+        }
         let mut initial = self
             .initial_incarnation
             .lock()
             .expect("initial incarnation slot poisoned");
         let channels = initial.take()?;
-        *binding = Some(initial_binding(&channels));
+        binding.current = Some(initial_binding(&channels));
         Some(channels)
     }
 
@@ -299,6 +324,14 @@ impl StableSupervisorChannels {
     /// recreation mints a fresh one), or an orphaned dynamic child that no
     /// incarnation will spawn again.
     pub(crate) fn terminal(&self) {
+        let active = {
+            let mut binding = self.binding.lock().expect("stable control slot poisoned");
+            binding.terminal = true;
+            binding.current.take()
+        };
+        if let Some(active) = active {
+            let _ = active.shutdown_tx.send(true);
+        }
         self.initial_incarnation
             .lock()
             .expect("initial incarnation slot poisoned")
@@ -394,14 +427,16 @@ mod tests {
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (_done_tx, done_rx) = watch::channel(None);
 
-        let _binding = channels.bind(
-            2,
-            shutdown_tx,
-            command_tx,
-            done_rx,
-            initial_snapshot,
-            Vec::new(),
-        );
+        let (_binding, _snapshots) = channels
+            .bind(
+                2,
+                shutdown_tx,
+                command_tx,
+                done_rx,
+                initial_snapshot,
+                Vec::new(),
+            )
+            .expect("live stable channels bind");
 
         assert_eq!(handle.snapshot(), expected_snapshot);
     }
@@ -430,14 +465,16 @@ mod tests {
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (_done_tx, done_rx) = watch::channel(None);
 
-        let _binding = channels.bind(
-            0,
-            shutdown_tx,
-            command_tx,
-            done_rx,
-            initial_snapshot,
-            Vec::new(),
-        );
+        let (_binding, _bound_snapshots) = channels
+            .bind(
+                0,
+                shutdown_tx,
+                command_tx,
+                done_rx,
+                initial_snapshot,
+                Vec::new(),
+            )
+            .expect("live stable channels bind");
 
         assert!(
             !snapshots
@@ -471,6 +508,48 @@ mod tests {
             .control_endpoint()
             .expect("handoff retains a stable control binding");
     }
+
+    #[test]
+    fn terminalization_during_initial_handoff_rejects_binding_without_panicking() {
+        let initial_snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels = StableSupervisorChannels::new(
+            initial_snapshot.clone(),
+            8,
+            8,
+            empty_nested_channels(),
+            Vec::new(),
+            false,
+        );
+        let handle = channels.handle();
+        let initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+
+        channels.terminal();
+
+        assert!(
+            channels
+                .bind(
+                    0,
+                    initial.shutdown_tx,
+                    initial.command_tx,
+                    initial.done_rx,
+                    initial_snapshot,
+                    Vec::new(),
+                )
+                .is_none(),
+            "a terminal identity must not be rebound"
+        );
+        assert!(matches!(
+            handle.control_endpoint(),
+            Err(ControlError::Unavailable)
+        ));
+        assert_eq!(handle.snapshot().state, SupervisorStateView::Running);
+    }
 }
 
 pub(crate) struct StableBindingGuard {
@@ -486,9 +565,10 @@ impl Drop for StableBindingGuard {
             .lock()
             .expect("stable control slot poisoned");
         if binding
+            .current
             .as_ref()
             .is_some_and(|binding| binding.generation == self.generation)
-            && let Some(binding) = binding.take()
+            && let Some(binding) = binding.current.take()
         {
             let _ = binding.shutdown_tx.send(true);
         }
