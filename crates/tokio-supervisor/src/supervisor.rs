@@ -130,14 +130,40 @@ impl Supervisor {
         path: Vec<String>,
         revivable: bool,
     ) -> ChildResult {
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (command_tx, command_rx) = mpsc::channel(self.config.control_channel_capacity);
-        let (done_tx, done_rx) = watch::channel(None);
+        let generation = ctx.generation();
+        let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) = channels
+            .take_initial_incarnation()
+            .filter(|_| generation == 0)
+            .map_or_else(
+                || {
+                    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+                    let (command_tx, command_rx) =
+                        mpsc::channel(self.config.control_channel_capacity);
+                    let (done_tx, done_rx) = watch::channel(None);
+                    (
+                        shutdown_tx,
+                        shutdown_rx,
+                        command_tx,
+                        command_rx,
+                        done_tx,
+                        done_rx,
+                    )
+                },
+                |initial| {
+                    (
+                        initial.shutdown_tx,
+                        initial.shutdown_rx,
+                        initial.command_tx,
+                        initial.command_rx,
+                        initial.done_tx,
+                        initial.done_rx,
+                    )
+                },
+            );
         let events_tx = channels.events();
         let snapshots_tx = channels.snapshots();
         let nested_channels = channels.nested_channels();
         let attached_children = channels.attached_children();
-        let generation = ctx.generation();
         let startup_ctx = ctx.clone();
         let task_done_tx = done_tx.clone();
         let initial_snapshot = initial_snapshot(&self.config);
@@ -252,6 +278,7 @@ impl Supervisor {
         let attached_children = initial_attached_children(&self.config, &nested_channels);
         StableSupervisorChannels::new(
             initial_snapshot(&self.config),
+            self.config.control_channel_capacity,
             self.config.event_channel_capacity,
             nested_channels,
             attached_children,

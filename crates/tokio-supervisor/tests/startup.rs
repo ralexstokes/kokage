@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, watch};
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, StartMode, Strategy,
     SupervisorBuilder, SupervisorSpec,
@@ -195,7 +195,7 @@ async fn one_for_all_restart_preserves_sequential_readiness_order() {
 }
 
 #[tokio::test]
-async fn startup_failure_leaves_later_sequential_children_unstarted() {
+async fn startup_failure_is_skipped_before_later_sequential_children_start() {
     let later_started = Arc::new(Notify::new());
     let failed = ChildSpec::new("failed", |_| async {
         Err(std::io::Error::other("init failed").into())
@@ -223,11 +223,9 @@ async fn startup_failure_leaves_later_sequential_children_unstarted() {
         .build()
         .unwrap()
         .spawn();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), later_started.notified())
-            .await
-            .is_err()
-    );
+    tokio::time::timeout(Duration::from_secs(1), later_started.notified())
+        .await
+        .expect("a terminal startup failure should be skipped");
     assert!(matches!(
         handle.wait_started().await,
         Err(tokio_supervisor::SupervisorError::StartupAborted(_))
@@ -301,7 +299,7 @@ async fn wait_started_accepts_an_immediate_child_that_already_completed() {
 }
 
 #[tokio::test]
-async fn dynamic_gated_child_waits_for_readiness_in_sequential_mode() {
+async fn dynamic_gated_child_add_resolves_before_readiness_in_sequential_mode() {
     let release = Arc::new(Notify::new());
     let handle = SupervisorBuilder::new()
         .start_mode(StartMode::Sequential)
@@ -325,11 +323,280 @@ async fn dynamic_gated_child_waits_for_readiness_in_sequential_mode() {
         let handle = handle.clone();
         async move { handle.add_child(child).await }
     });
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(!add.is_finished());
+    let membership_epoch = tokio::time::timeout(Duration::from_secs(1), add)
+        .await
+        .expect("add should resolve on insertion")
+        .expect("add task should join")
+        .expect("dynamic child should be inserted");
+    let child = handle
+        .snapshot()
+        .child("dynamic")
+        .expect("inserted child should be visible")
+        .clone();
+    assert_eq!(child.membership_epoch, membership_epoch);
+    assert!(!child.started);
+    assert_eq!(child.state, tokio_supervisor::ChildStateView::Starting);
+
+    let mut wait_started = Box::pin(handle.wait_started());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut wait_started)
+            .await
+            .is_err(),
+        "wait_started should retain the stronger readiness contract"
+    );
     release.notify_one();
-    add.await.unwrap().unwrap();
+    wait_started.await.unwrap();
+    handle.shutdown_and_wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn readiness_gated_child_can_await_add_before_marking_ready() {
+    let (handle_tx, handle_rx) = watch::channel::<Option<tokio_supervisor::SupervisorHandle>>(None);
+    let added_started = Arc::new(Notify::new());
+    let first = ChildSpec::new("first", {
+        let handle_rx = handle_rx.clone();
+        let added_started = Arc::clone(&added_started);
+        move |ctx| {
+            let mut handle_rx = handle_rx.clone();
+            let added_started = Arc::clone(&added_started);
+            async move {
+                let handle = {
+                    let ready = handle_rx
+                        .wait_for(Option::is_some)
+                        .await
+                        .expect("test handle sender remains open");
+                    ready.as_ref().expect("handle was installed").clone()
+                };
+                handle
+                    .add_child(ChildSpec::new("added-from-start", move |ctx| {
+                        let added_started = Arc::clone(&added_started);
+                        async move {
+                            added_started.notify_one();
+                            ctx.shutdown_token().cancelled().await;
+                            Ok(())
+                        }
+                    }))
+                    .await
+                    .expect("add should resolve on insertion");
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .wait_for_ready();
+    let handle = SupervisorBuilder::new()
+        .start_mode(StartMode::Sequential)
+        .child(first)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle_tx
+        .send(Some(handle.clone()))
+        .expect("startup child retains the receiver");
+
+    tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
+        .await
+        .expect("startup should not deadlock on the control command")
+        .expect("all children should report started");
+    tokio::time::timeout(Duration::from_secs(1), added_started.notified())
+        .await
+        .expect("the queued child should start after its predecessor is ready");
+    handle.shutdown_and_wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_mid_sequence_is_visible_before_it_spawns_and_starts_in_order() {
+    let release_first = Arc::new(Notify::new());
+    let late_started = Arc::new(Notify::new());
+    let release_late = Arc::new(Notify::new());
+    let first = ChildSpec::new("first", {
+        let release_first = Arc::clone(&release_first);
+        move |ctx| {
+            let release_first = Arc::clone(&release_first);
+            async move {
+                release_first.notified().await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .wait_for_ready();
+    let handle = SupervisorBuilder::new()
+        .start_mode(StartMode::Sequential)
+        .child(first)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    let epoch = handle
+        .add_child(
+            ChildSpec::new("late", {
+                let late_started = Arc::clone(&late_started);
+                let release_late = Arc::clone(&release_late);
+                move |ctx| {
+                    let late_started = Arc::clone(&late_started);
+                    let release_late = Arc::clone(&release_late);
+                    async move {
+                        late_started.notify_one();
+                        release_late.notified().await;
+                        ctx.mark_ready();
+                        ctx.shutdown_token().cancelled().await;
+                        Ok(())
+                    }
+                }
+            })
+            .wait_for_ready(),
+        )
+        .await
+        .expect("add should resolve while first is gated");
+    let snapshot = handle.snapshot();
+    let late = snapshot.child("late").expect("queued child is visible");
+    assert_eq!(late.membership_epoch, epoch);
+    assert_eq!(late.state, tokio_supervisor::ChildStateView::Starting);
+    assert!(!late.started);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), late_started.notified())
+            .await
+            .is_err(),
+        "late child must stay queued behind the first gate"
+    );
+
+    release_first.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), late_started.notified())
+        .await
+        .expect("late child should start once first is ready");
+    let mut wait_started = Box::pin(handle.wait_started());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut wait_started)
+            .await
+            .is_err()
+    );
+    release_late.notify_one();
+    wait_started.await.unwrap();
+    handle.shutdown_and_wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn removing_a_start_queued_child_never_spawns_it() {
+    let release_first = Arc::new(Notify::new());
+    let queued_started = Arc::new(Notify::new());
+    let first = ChildSpec::new("first", {
+        let release_first = Arc::clone(&release_first);
+        move |ctx| {
+            let release_first = Arc::clone(&release_first);
+            async move {
+                release_first.notified().await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .wait_for_ready();
+    let handle = SupervisorBuilder::new()
+        .start_mode(StartMode::Sequential)
+        .child(first)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle
+        .add_child(ChildSpec::new("queued", {
+            let queued_started = Arc::clone(&queued_started);
+            move |ctx| {
+                let queued_started = Arc::clone(&queued_started);
+                async move {
+                    queued_started.notify_one();
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            }
+        }))
+        .await
+        .expect("queued membership should be inserted");
+
+    handle
+        .remove_child("queued")
+        .await
+        .expect("queued child removal should be immediate");
+    release_first.notify_one();
     handle.wait_started().await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), queued_started.notified())
+            .await
+            .is_err(),
+        "removed queued child must never spawn"
+    );
+    handle.shutdown_and_wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn queued_nested_supervisor_accepts_control_before_its_loop_starts() {
+    let release_first = Arc::new(Notify::new());
+    let nested_child_started = Arc::new(Notify::new());
+    let first = ChildSpec::new("first", {
+        let release_first = Arc::clone(&release_first);
+        move |ctx| {
+            let release_first = Arc::clone(&release_first);
+            async move {
+                release_first.notified().await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .wait_for_ready();
+    let handle = SupervisorBuilder::new()
+        .start_mode(StartMode::Sequential)
+        .child(first)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle
+        .add_supervisor(
+            "queued-nested",
+            SupervisorBuilder::new().build().expect("empty supervisor"),
+        )
+        .await
+        .expect("queued nested membership should be inserted");
+    let nested = handle
+        .supervisor("queued-nested")
+        .expect("stable nested handle is registered at insertion");
+    let add_task = tokio::spawn({
+        let nested = nested.clone();
+        let nested_child_started = Arc::clone(&nested_child_started);
+        async move {
+            nested
+                .add_child(ChildSpec::new("nested-child", move |ctx| {
+                    let nested_child_started = Arc::clone(&nested_child_started);
+                    async move {
+                        nested_child_started.notify_one();
+                        ctx.shutdown_token().cancelled().await;
+                        Ok(())
+                    }
+                }))
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        !add_task.is_finished(),
+        "control should queue until the nested loop starts"
+    );
+
+    release_first.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), add_task)
+        .await
+        .expect("queued control should dispatch after nested startup")
+        .expect("add task should join")
+        .expect("nested child should be inserted");
+    tokio::time::timeout(Duration::from_secs(1), nested_child_started.notified())
+        .await
+        .expect("nested child should start");
+    assert!(nested.snapshot().child("nested-child").is_some());
+
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -811,13 +1078,11 @@ async fn fatal_error_during_dynamic_start_stops_the_supervisor() {
     });
     dynamic_started.notified().await;
     trigger_failure.notify_one();
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(1), add)
-            .await
-            .unwrap()
-            .unwrap(),
-        Err(tokio_supervisor::ControlError::SupervisorStopping)
-    ));
+    tokio::time::timeout(Duration::from_secs(1), add)
+        .await
+        .expect("add should already have resolved on insertion")
+        .expect("add task should join")
+        .expect("dynamic child should have been inserted");
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), handle.wait())
             .await

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use tokio::{
     sync::{Notify, mpsc},
@@ -626,7 +626,7 @@ async fn removing_the_last_active_child_leaves_an_idle_supervisor() {
 }
 
 #[tokio::test]
-async fn concurrent_removal_requests_are_serialized() {
+async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
@@ -664,12 +664,18 @@ async fn concurrent_removal_requests_are_serialized() {
     common::recv_event(&mut cancelled_rx).await;
 
     let second_remove_handle = handle.clone();
-    let mut second_remove_task =
+    let second_remove_task =
         tokio::spawn(async move { second_remove_handle.remove_child("removable").await });
 
-    timeout(common::QUIET_TIMEOUT, &mut second_remove_task)
+    let err = timeout(common::QUIET_TIMEOUT, second_remove_task)
         .await
-        .expect_err("second removal should remain queued while the first is pending");
+        .expect("second removal should be dispatched while the first is pending")
+        .expect("second remove task should join")
+        .expect_err("same-id removal should fail while removal is pending");
+    assert_eq!(
+        err,
+        ControlError::ChildRemovalInProgress("removable".to_owned())
+    );
 
     release.notify_one();
     remove_task
@@ -677,18 +683,12 @@ async fn concurrent_removal_requests_are_serialized() {
         .expect("remove task should join")
         .expect("first removal should succeed");
 
-    let err = second_remove_task
-        .await
-        .expect("second remove task should join")
-        .expect_err("second removal should observe the completed first removal");
-    assert_eq!(err, ControlError::UnknownChildId("removable".to_owned()));
-
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
 #[tokio::test]
-async fn removal_returns_supervisor_stopping_when_shutdown_intervenes() {
+async fn shutdown_absorbs_and_completes_a_pending_removal() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let fast_shutdown =
@@ -729,13 +729,171 @@ async fn removal_returns_supervisor_stopping_when_shutdown_intervenes() {
     common::recv_event(&mut cancelled_rx).await;
     handle.shutdown();
 
-    let err = remove_task
+    remove_task
         .await
         .expect("remove task should join")
-        .expect_err("removal should abort once supervisor shutdown begins");
-    assert_eq!(err, ControlError::SupervisorStopping);
+        .expect("shutdown should finalize the pending removal");
 
     handle.wait().await.expect("shutdown should succeed");
+}
+
+#[tokio::test]
+async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (bounce_tx, mut bounce_rx) = mpsc::channel(1);
+    let supervisor = SupervisorBuilder::new()
+        .child(
+            ChildSpec::new("retiring", move |ctx| {
+                let started_tx = started_tx.clone();
+                let bounce_tx = bounce_tx.clone();
+                async move {
+                    started_tx.send(()).expect("test receiver dropped");
+                    ctx.shutdown_token().cancelled().await;
+                    for _ in 0..3 {
+                        bounce_tx.send(()).await.expect("writer mailbox dropped");
+                    }
+                    Ok(())
+                }
+            })
+            .shutdown(ShutdownPolicy::new(
+                Duration::from_secs(1),
+                ShutdownMode::CooperativeStrict,
+            )),
+        )
+        .build()
+        .expect("valid supervisor");
+    let handle = supervisor.spawn();
+    common::recv_event(&mut started_rx).await;
+
+    let remove_handle = handle.clone();
+    let remove_task = tokio::spawn(async move { remove_handle.remove_child("retiring").await });
+    bounce_rx.recv().await.expect("first bounced message");
+
+    let same_id_error = handle
+        .add_child(ChildSpec::new("retiring", |_| async { Ok(()) }))
+        .await
+        .expect_err("same-id add must not queue behind removal");
+    assert_eq!(
+        same_id_error,
+        ControlError::ChildRemovalInProgress("retiring".to_owned())
+    );
+
+    timeout(
+        common::QUIET_TIMEOUT,
+        handle.add_supervisor(
+            "replacement",
+            SupervisorBuilder::new().build().expect("empty supervisor"),
+        ),
+    )
+    .await
+    .expect("distinct-id add should not queue behind the drain")
+    .expect("replacement should be inserted");
+
+    bounce_rx.recv().await.expect("second bounced message");
+    bounce_rx.recv().await.expect("third bounced message");
+    timeout(common::QUIET_TIMEOUT, remove_task)
+        .await
+        .expect("removal should finish before its grace expires")
+        .expect("remove task should join")
+        .expect("cooperative removal should succeed");
+
+    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn distinct_removals_drain_independently() {
+    let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
+    let release_first = Arc::new(Notify::new());
+    let release_second = Arc::new(Notify::new());
+    let make_child = |id: &'static str, release: Arc<Notify>| {
+        let cancelled_tx = cancelled_tx.clone();
+        ChildSpec::new(id, move |ctx| {
+            let cancelled_tx = cancelled_tx.clone();
+            let release = Arc::clone(&release);
+            async move {
+                ctx.shutdown_token().cancelled().await;
+                cancelled_tx.send(id).expect("test receiver dropped");
+                release.notified().await;
+                Ok(())
+            }
+        })
+    };
+    let handle = SupervisorBuilder::new()
+        .child(make_child("first", Arc::clone(&release_first)))
+        .child(make_child("second", Arc::clone(&release_second)))
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle.wait_started().await.expect("children start");
+
+    let first_remove = tokio::spawn({
+        let handle = handle.clone();
+        async move { handle.remove_child("first").await }
+    });
+    let second_remove = tokio::spawn({
+        let handle = handle.clone();
+        async move { handle.remove_child("second").await }
+    });
+    let mut cancelled = vec![
+        timeout(common::QUIET_TIMEOUT, cancelled_rx.recv())
+            .await
+            .expect("first cancellation should be dispatched")
+            .expect("cancellation sender remains open"),
+        timeout(common::QUIET_TIMEOUT, cancelled_rx.recv())
+            .await
+            .expect("second cancellation should be dispatched")
+            .expect("cancellation sender remains open"),
+    ];
+    cancelled.sort_unstable();
+    assert_eq!(cancelled, vec!["first", "second"]);
+
+    release_second.notify_one();
+    timeout(common::QUIET_TIMEOUT, second_remove)
+        .await
+        .expect("second removal should not wait for first")
+        .expect("second remove task should join")
+        .expect("second removal succeeds");
+    assert!(!first_remove.is_finished());
+    release_first.notify_one();
+    first_remove
+        .await
+        .expect("first remove task should join")
+        .expect("first removal succeeds");
+
+    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn cooperative_then_abort_removal_replies_after_the_abort_join() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let handle = SupervisorBuilder::new()
+        .child(
+            ChildSpec::new("stubborn", move |ctx| {
+                let started_tx = started_tx.clone();
+                async move {
+                    started_tx.send(()).expect("test receiver dropped");
+                    ctx.shutdown_token().cancelled().await;
+                    std::future::pending::<()>().await;
+                    Ok(())
+                }
+            })
+            .shutdown(ShutdownPolicy::new(
+                common::SHORT_GRACE,
+                ShutdownMode::CooperativeThenAbort,
+            )),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    common::recv_event(&mut started_rx).await;
+
+    timeout(Duration::from_secs(1), handle.remove_child("stubborn"))
+        .await
+        .expect("remove should finish after aborting the child")
+        .expect("then-abort removal reports success");
+    assert!(handle.snapshot().child("stubborn").is_none());
+
+    handle.shutdown_and_wait().await.expect("shutdown succeeds");
 }
 
 #[tokio::test]

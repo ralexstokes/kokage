@@ -487,6 +487,14 @@ impl RuntimeHandle {
     /// Restart intensity remains tracked per child across this boundary.
     /// Shutdown keeps the existing concurrent teardown behavior under the
     /// parent's shared deadline.
+    ///
+    /// Success means the subtree membership, attachment, and stable control
+    /// channels were inserted and startup was scheduled. Under sequential
+    /// startup the subtree may still be queued behind an earlier readiness
+    /// gate; the returned handle is usable immediately and its control commands
+    /// wait in the subtree's own channel until that loop starts. Use
+    /// [`SupervisorHandle::wait_started`] through
+    /// [`supervisor_handle`](Self::supervisor_handle) when readiness is needed.
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
@@ -548,7 +556,11 @@ impl RuntimeHandle {
     ///
     /// The actor's label is also its direct supervisor child id, so it can be
     /// removed later with [`remove_child`](Self::remove_child). See
-    /// [`ActorFactory`] for the incarnation lifecycle contract.
+    /// [`ActorFactory`] for the incarnation lifecycle contract. Success means
+    /// the membership was inserted and startup was scheduled; under sequential
+    /// startup the actor may still be queued. The returned stable ref can be
+    /// used immediately, while [`SupervisorHandle::wait_started`] retains the
+    /// stronger readiness contract.
     pub async fn add_actor<F>(
         &self,
         label: impl Into<String>,
