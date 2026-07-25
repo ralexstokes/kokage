@@ -34,6 +34,7 @@ struct ActiveRun {
     retry_after_termination: bool,
 }
 
+#[derive(tokio_otp::ActorFactory)]
 pub struct Session {
     chat: ChatId,
     generation: u64,
@@ -50,61 +51,18 @@ pub struct Session {
     model: Arc<dyn ModelClient>,
     task_sequence: Arc<AtomicU64>,
     proof: Proof,
+    #[factory(default)]
     transcript_len: usize,
+    #[factory(default)]
     pending: VecDeque<PendingInput>,
+    #[factory(default)]
     active: Option<ActiveRun>,
+    #[factory(default)]
     heartbeat: Option<CancellationHandle>,
+    #[factory(default)]
     idle_generation: u64,
+    #[factory(default)]
     evict_requested: bool,
-}
-
-#[derive(Clone)]
-pub struct SessionFactory {
-    pub chat: ChatId,
-    pub generation: u64,
-    pub subtree_id: String,
-    pub journal: ActorRef<JournalMsg>,
-    pub budget: ActorRef<BudgetMsg>,
-    pub tool_host: ActorRef<ToolHostMsg>,
-    pub guard: ActorRef<GuardMsg>,
-    pub outbound: ActorRef<OutboundMsg>,
-    pub progress: ActorRef<ProgressMsg>,
-    pub router: ActorRef<RouterMsg>,
-    pub subtree: Arc<OnceLock<RuntimeHandle>>,
-    pub gate: Arc<AtomicBool>,
-    pub model: Arc<dyn ModelClient>,
-    pub task_sequence: Arc<AtomicU64>,
-    pub proof: Proof,
-}
-
-impl tokio_otp::ActorFactory for SessionFactory {
-    type Actor = Session;
-
-    fn build(&self) -> Self::Actor {
-        Session {
-            chat: self.chat,
-            generation: self.generation,
-            subtree_id: self.subtree_id.clone(),
-            journal: self.journal.clone(),
-            budget: self.budget.clone(),
-            tool_host: self.tool_host.clone(),
-            guard: self.guard.clone(),
-            outbound: self.outbound.clone(),
-            progress: self.progress.clone(),
-            router: self.router.clone(),
-            subtree: self.subtree.clone(),
-            gate: self.gate.clone(),
-            model: self.model.clone(),
-            task_sequence: self.task_sequence.clone(),
-            proof: self.proof.clone(),
-            transcript_len: 0,
-            pending: VecDeque::new(),
-            active: None,
-            heartbeat: None,
-            idle_generation: 0,
-            evict_requested: false,
-        }
-    }
 }
 
 impl Session {

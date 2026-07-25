@@ -1,0 +1,5 @@
+error: ActorFactory can only be derived for structs with named fields
+ --> tests/ui/actor-factory/tuple_struct.rs:2:14
+  |
+2 | struct Worker(usize);
+  |              ^^^^^^^

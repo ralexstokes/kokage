@@ -16,6 +16,7 @@ use crate::{
     model::ModelClient,
 };
 
+#[derive(tokio_otp::ActorFactory)]
 pub struct AgentRun {
     chat: ChatId,
     task: TaskId,
@@ -29,47 +30,10 @@ pub struct AgentRun {
     progress: ActorRef<ProgressMsg>,
     session: ActorRef<SessionMsg>,
     cancel: CancellationToken,
+    #[factory(default)]
     turn: u64,
+    #[factory(default)]
     tools: Vec<ToolCall>,
-}
-
-#[derive(Clone)]
-pub struct AgentRunFactory {
-    pub chat: ChatId,
-    pub task: TaskId,
-    pub role: Role,
-    pub attempt: u64,
-    pub user_text: String,
-    pub model: Arc<dyn ModelClient>,
-    pub journal: ActorRef<JournalMsg>,
-    pub budget: ActorRef<BudgetMsg>,
-    pub tool_host: ActorRef<ToolHostMsg>,
-    pub progress: ActorRef<ProgressMsg>,
-    pub session: ActorRef<SessionMsg>,
-    pub cancel: CancellationToken,
-}
-
-impl tokio_otp::ActorFactory for AgentRunFactory {
-    type Actor = AgentRun;
-
-    fn build(&self) -> Self::Actor {
-        AgentRun {
-            chat: self.chat,
-            task: self.task,
-            role: self.role,
-            attempt: self.attempt,
-            user_text: self.user_text.clone(),
-            model: self.model.clone(),
-            journal: self.journal.clone(),
-            budget: self.budget.clone(),
-            tool_host: self.tool_host.clone(),
-            progress: self.progress.clone(),
-            session: self.session.clone(),
-            cancel: self.cancel.clone(),
-            turn: 0,
-            tools: Vec::new(),
-        }
-    }
 }
 
 impl AgentRun {

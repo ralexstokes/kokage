@@ -1,0 +1,5 @@
+error: duplicate `default` option
+ --> tests/ui/actor-factory/duplicate_default.rs:3:24
+  |
+3 |     #[factory(default, default)]
+  |                        ^^^^^^^

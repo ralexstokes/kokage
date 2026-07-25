@@ -166,32 +166,12 @@ impl ExchangeSim {
     }
 }
 
-#[derive(Clone)]
+#[derive(tokio_otp::ActorFactory)]
 pub struct VenueFeed {
     pub venue: VenueId,
     pub exchange: ExchangeSim,
     pub reconciler: ActorRef<ReconcilerMsg>,
     pub latency: LatencyRecorder,
-}
-
-pub struct VenueFeedSpec {
-    pub venue: VenueId,
-    pub exchange: ExchangeSim,
-    pub reconciler: ActorRef<ReconcilerMsg>,
-    pub latency: LatencyRecorder,
-}
-
-impl ActorFactory for VenueFeedSpec {
-    type Actor = VenueFeed;
-
-    fn build(&self) -> Self::Actor {
-        VenueFeed {
-            venue: self.venue,
-            exchange: self.exchange.clone(),
-            reconciler: self.reconciler.clone(),
-            latency: self.latency.clone(),
-        }
-    }
 }
 
 impl Actor for VenueFeed {
@@ -224,56 +204,22 @@ impl Actor for VenueFeed {
     }
 }
 
-#[derive(Clone)]
+#[derive(tokio_otp::ActorFactory)]
 pub struct VenueGateway {
     venue: VenueId,
     exchange: ExchangeSim,
     ledger: ActorRef<LedgerMsg>,
     latency: LatencyRecorder,
+    #[factory(default)]
     stalled_replies: Arc<Mutex<Vec<Reply<PlaceOutcome>>>>,
 }
 
 impl VenueGateway {
-    pub fn new(
-        venue: VenueId,
-        exchange: ExchangeSim,
-        ledger: ActorRef<LedgerMsg>,
-        latency: LatencyRecorder,
-    ) -> Self {
-        Self {
-            venue,
-            exchange,
-            ledger,
-            latency,
-            stalled_replies: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
     fn stall(&self, reply: Reply<PlaceOutcome>) {
         self.stalled_replies
             .lock()
             .expect("stalled reply lock poisoned")
             .push(reply);
-    }
-}
-
-pub struct VenueGatewaySpec {
-    pub venue: VenueId,
-    pub exchange: ExchangeSim,
-    pub ledger: ActorRef<LedgerMsg>,
-    pub latency: LatencyRecorder,
-}
-
-impl ActorFactory for VenueGatewaySpec {
-    type Actor = VenueGateway;
-
-    fn build(&self) -> Self::Actor {
-        VenueGateway::new(
-            self.venue,
-            self.exchange.clone(),
-            self.ledger.clone(),
-            self.latency.clone(),
-        )
     }
 }
 

@@ -135,7 +135,7 @@ use guard::Guard;
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
-use router::Router;
+use router::{Router, RouterFactory};
 use telemetry::LatencyRecorder;
 use tool_host::ToolHost;
 
@@ -196,8 +196,8 @@ async fn build_app() -> Result<App, AnyError> {
     let proof = Proof::default();
     // Router state dies with a router incarnation; the sessions mount handle
     // and the subtree-id allocator must not, or a reborn router could not
-    // reach the mount and would re-mint ids that still exist. Both live in
-    // the factory closure's captures instead.
+    // reach the mount and would re-mint ids that still exist. Both are durable
+    // RouterFactory fields instead.
     let sessions_mount = Arc::new(OnceLock::new());
     let session_epoch = Arc::new(AtomicU64::new(0));
 
@@ -228,19 +228,8 @@ async fn build_app() -> Result<App, AnyError> {
         let budget_guard = refs.guard.clone();
         let guard_budget = refs.budget.clone();
         let guard_router = refs.router.clone();
-        let router_journal = refs.journal.clone();
-        let router_budget = refs.budget.clone();
-        let router_guard = refs.guard.clone();
-        let router_tool_host = refs.tool_host.clone();
         let guard_model = model.clone();
         let guard_gate = gate.clone();
-        let router_mount = sessions_mount.clone();
-        let router_epoch = session_epoch.clone();
-        let router_gate = gate.clone();
-        let router_model = model_client.clone();
-        let router_proof = proof.clone();
-        let router_outbound = outbound.clone();
-        let router_progress = progress.clone();
         CoreFactories {
             journal: Journal::default,
             budget: move || Budget::new(budget_guard.clone()),
@@ -253,20 +242,18 @@ async fn build_app() -> Result<App, AnyError> {
                 )
             },
             tool_host: ToolHost::default,
-            router: move || {
-                Router::new(
-                    router_mount.clone(),
-                    router_epoch.clone(),
-                    router_journal.clone(),
-                    router_budget.clone(),
-                    router_tool_host.clone(),
-                    router_guard.clone(),
-                    router_outbound.clone(),
-                    router_progress.clone(),
-                    router_gate.clone(),
-                    router_model.clone(),
-                    router_proof.clone(),
-                )
+            router: RouterFactory {
+                mount: sessions_mount.clone(),
+                journal: refs.journal.clone(),
+                budget: refs.budget.clone(),
+                tool_host: refs.tool_host.clone(),
+                guard: refs.guard.clone(),
+                outbound: outbound.clone(),
+                progress: progress.clone(),
+                gate: gate.clone(),
+                model: model_client.clone(),
+                session_epoch: session_epoch.clone(),
+                proof: proof.clone(),
             },
         }
     })?;

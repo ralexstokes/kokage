@@ -136,7 +136,7 @@ use messages::*;
 use reconciler::Reconciler;
 use router::OrderRouter;
 use telemetry::LatencyRecorder;
-use venue::{ExchangeSim, VenueFeed, VenueFeedSpec, VenueGateway, VenueGatewaySpec};
+use venue::{ExchangeSim, VenueFeedFactory, VenueGatewayFactory};
 
 const VENUE_A: VenueId = "venue-a";
 const VENUE_B: VenueId = "venue-b";
@@ -214,7 +214,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     venues.mailbox_capacity(16);
     let venue_a_feed = venues.actor_with_options(
         "venue-a-feed",
-        VenueFeedSpec {
+        VenueFeedFactory {
             venue: VENUE_A,
             exchange: venue_a.clone(),
             reconciler: reconciler.clone(),
@@ -226,7 +226,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     );
     let venue_a_gateway = venues.actor(
         "venue-a-gateway",
-        VenueGatewaySpec {
+        VenueGatewayFactory {
             venue: VENUE_A,
             exchange: venue_a.clone(),
             ledger: ledger.clone(),
@@ -235,27 +235,25 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     );
     let venue_b_feed = venues.actor_with_options(
         "venue-b-feed",
-        {
-            let exchange = venue_b.clone();
-            let reconciler = reconciler.clone();
-            let latency = latency.clone();
-            move || VenueFeed {
-                venue: VENUE_B,
-                exchange: exchange.clone(),
-                reconciler: reconciler.clone(),
-                latency: latency.clone(),
-            }
+        VenueFeedFactory {
+            venue: VENUE_B,
+            exchange: venue_b.clone(),
+            reconciler: reconciler.clone(),
+            latency: latency.clone(),
         },
         ActorOptions::new()
             .mailbox(MailboxMode::conflate_by_key(feed_message_key))
             .message_size(),
     );
-    let venue_b_gateway = venues.actor("venue-b-gateway", {
-        let exchange = venue_b.clone();
-        let ledger = ledger.clone();
-        let latency = latency.clone();
-        move || VenueGateway::new(VENUE_B, exchange.clone(), ledger.clone(), latency.clone())
-    });
+    let venue_b_gateway = venues.actor(
+        "venue-b-gateway",
+        VenueGatewayFactory {
+            venue: VENUE_B,
+            exchange: venue_b.clone(),
+            ledger: ledger.clone(),
+            latency: latency.clone(),
+        },
+    );
 
     let feed_refs = HashMap::from([
         (VENUE_A, venue_a_feed.clone()),
