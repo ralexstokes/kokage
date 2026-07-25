@@ -117,32 +117,34 @@ async fn derived_topology_runs_cyclic_pipeline() {
     let (acks_tx, mut acks_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let mut frontend = None;
-    let graph = Pipeline::graph(|refs| {
-        frontend = Some(refs.frontend.clone());
-        let parser = refs.parser.clone();
-        let frontend_ref = refs.frontend.clone();
-        let sink = refs.sink.clone();
-        PipelineFactories {
-            frontend: move || Frontend {
-                parser: parser.clone(),
+    let (graph, refs) = Pipeline::graph_with_refs(|refs| PipelineFactories {
+        frontend: {
+            let refs = refs.clone();
+            move || Frontend {
+                parser: refs.parser.clone(),
                 acks: acks_tx.clone(),
-            },
-            parser: move || Parser {
-                frontend: frontend_ref.clone(),
-                sink: sink.clone(),
-            },
-            sink: move || Sink {
-                out: out_tx.clone(),
-            },
-        }
+            }
+        },
+        parser: {
+            let refs = refs.clone();
+            move || Parser {
+                frontend: refs.frontend.clone(),
+                sink: refs.sink.clone(),
+            }
+        },
+        sink: move || Sink {
+            out: out_tx.clone(),
+        },
     })
     .expect("valid graph");
 
-    let frontend = frontend.expect("topology closure captured frontend ref");
+    let cloned_refs = refs.clone();
+    assert_eq!(refs.frontend.id(), "frontend");
+    assert_eq!(cloned_refs.parser.id(), "parser");
+    assert_eq!(refs.sink.id(), "sink");
     let (stop, tasks) = start_graph(&graph);
 
-    frontend
+    refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))
         .await
         .expect("send feed");
@@ -277,51 +279,43 @@ struct OptionsGraph {
 
 #[tokio::test]
 async fn derived_topology_applies_per_actor_options() {
-    let mut refs = None;
-    let graph = OptionsGraph::graph(|actor_refs| {
-        refs = Some((
-            actor_refs.mailbox_only.clone(),
-            actor_refs.message_size_only.clone(),
-            actor_refs.combined.clone(),
-            actor_refs.defaults.clone(),
-        ));
-        OptionsGraphFactories {
-            mailbox_only: || OptionsActor,
-            message_size_only: || OptionsActor,
-            combined: || OptionsActor,
-            defaults: || OptionsActor,
-        }
+    let (graph, refs) = OptionsGraph::graph_with_refs(|_| OptionsGraphFactories {
+        mailbox_only: || OptionsActor,
+        message_size_only: || OptionsActor,
+        combined: || OptionsActor,
+        defaults: || OptionsActor,
     })
     .expect("options graph builds");
-    let (mailbox_only, message_size_only, combined, defaults) =
-        refs.expect("wiring closure captured refs");
     let (stop, tasks) = start_graph(&graph);
     tokio::task::yield_now().await;
 
-    mailbox_only
+    refs.mailbox_only
         .try_send(SizedMessage(vec![0; 2]))
         .expect("conflating mailbox accepts first message");
-    mailbox_only
+    refs.mailbox_only
         .try_send(SizedMessage(vec![0; 3]))
         .expect("conflating mailbox replaces unread message");
-    message_size_only
+    refs.message_size_only
         .try_send(SizedMessage(vec![0; 5]))
         .expect("sized queue accepts message");
-    combined
+    refs.combined
         .try_send(SizedMessage(vec![0; 7]))
         .expect("combined mailbox accepts first message");
-    combined
+    refs.combined
         .try_send(SizedMessage(vec![0; 11]))
         .expect("combined mailbox replaces unread message");
 
-    assert_eq!(mailbox_only.stats().messages_conflated, 1);
-    assert_eq!(mailbox_only.stats().message_bytes_accepted, None);
-    assert_eq!(message_size_only.stats().messages_conflated, 0);
-    assert_eq!(message_size_only.stats().message_bytes_accepted, Some(5));
-    assert_eq!(combined.stats().messages_conflated, 1);
-    assert_eq!(combined.stats().message_bytes_accepted, Some(18));
-    assert_eq!(defaults.stats().messages_conflated, 0);
-    assert_eq!(defaults.stats().message_bytes_accepted, None);
+    assert_eq!(refs.mailbox_only.stats().messages_conflated, 1);
+    assert_eq!(refs.mailbox_only.stats().message_bytes_accepted, None);
+    assert_eq!(refs.message_size_only.stats().messages_conflated, 0);
+    assert_eq!(
+        refs.message_size_only.stats().message_bytes_accepted,
+        Some(5)
+    );
+    assert_eq!(refs.combined.stats().messages_conflated, 1);
+    assert_eq!(refs.combined.stats().message_bytes_accepted, Some(18));
+    assert_eq!(refs.defaults.stats().messages_conflated, 0);
+    assert_eq!(refs.defaults.stats().message_bytes_accepted, None);
 
     stop_graph(stop, tasks).await;
 }

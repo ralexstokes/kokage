@@ -216,61 +216,59 @@ async fn build_app() -> Result<App, AnyError> {
     );
     let (inbound_slot, _inbound) = gateway_graph.slot::<InboundMsg>("inbound");
 
-    let mut core_refs = None;
-    let core_graph = Core::graph(|refs| {
-        core_refs = Some((
-            refs.journal.clone(),
-            refs.budget.clone(),
-            refs.guard.clone(),
-            refs.tool_host.clone(),
-            refs.router.clone(),
-        ));
-        let budget_guard = refs.guard.clone();
-        let guard_budget = refs.budget.clone();
-        let guard_router = refs.router.clone();
-        let router_journal = refs.journal.clone();
-        let router_budget = refs.budget.clone();
-        let router_guard = refs.guard.clone();
-        let router_tool_host = refs.tool_host.clone();
-        let guard_model = model.clone();
-        let guard_gate = gate.clone();
-        let router_mount = sessions_mount.clone();
-        let router_epoch = session_epoch.clone();
-        let router_gate = gate.clone();
-        let router_model = model_client.clone();
-        let router_proof = proof.clone();
-        let router_outbound = outbound.clone();
-        let router_progress = progress.clone();
-        CoreFactories {
-            journal: Journal::default,
-            budget: move || Budget::new(budget_guard.clone()),
-            guard: move || {
+    let (core_graph, refs) = Core::graph_with_refs(|refs| CoreFactories {
+        journal: Journal::default,
+        budget: {
+            let refs = refs.clone();
+            move || Budget::new(refs.guard.clone())
+        },
+        guard: {
+            let refs = refs.clone();
+            let model = model.clone();
+            let gate = gate.clone();
+            move || {
                 Guard::new(
-                    guard_budget.clone(),
-                    guard_router.clone(),
-                    guard_model.clone(),
-                    guard_gate.clone(),
+                    refs.budget.clone(),
+                    refs.router.clone(),
+                    model.clone(),
+                    gate.clone(),
                 )
-            },
-            tool_host: ToolHost::default,
-            router: move || {
+            }
+        },
+        tool_host: ToolHost::default,
+        router: {
+            let refs = refs.clone();
+            let mount = sessions_mount.clone();
+            let epoch = session_epoch.clone();
+            let gate = gate.clone();
+            let model = model_client.clone();
+            let proof = proof.clone();
+            let outbound = outbound.clone();
+            let progress = progress.clone();
+            move || {
                 Router::new(
-                    router_mount.clone(),
-                    router_epoch.clone(),
-                    router_journal.clone(),
-                    router_budget.clone(),
-                    router_tool_host.clone(),
-                    router_guard.clone(),
-                    router_outbound.clone(),
-                    router_progress.clone(),
-                    router_gate.clone(),
-                    router_model.clone(),
-                    router_proof.clone(),
+                    mount.clone(),
+                    epoch.clone(),
+                    refs.journal.clone(),
+                    refs.budget.clone(),
+                    refs.tool_host.clone(),
+                    refs.guard.clone(),
+                    outbound.clone(),
+                    progress.clone(),
+                    gate.clone(),
+                    model.clone(),
+                    proof.clone(),
                 )
-            },
-        }
+            }
+        },
     })?;
-    let (journal, budget, guard, tool_host, router) = core_refs.expect("core refs captured");
+    let CoreRefs {
+        journal,
+        budget,
+        guard,
+        tool_host,
+        router,
+    } = refs;
 
     gateway_graph.define(outbound_slot, {
         let chat = chat.clone();
