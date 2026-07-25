@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use tokio::{task::AbortHandle, time::Instant};
@@ -59,6 +59,7 @@ pub(crate) struct ChildRuntime {
     pub(crate) state: RuntimeChildState,
     pub(crate) active_token: Option<CancellationToken>,
     pub(crate) abort_handle: Option<AbortHandle>,
+    pub(crate) nested_abort_cascades: Arc<AtomicBool>,
     pub(crate) has_started: bool,
     pub(crate) has_reported_ready: bool,
     pub(crate) startup_aborted: bool,
@@ -96,6 +97,7 @@ impl ChildRuntime {
             state: RuntimeChildState::Stopped,
             active_token: None,
             abort_handle: None,
+            nested_abort_cascades: Arc::new(AtomicBool::new(true)),
             has_started: false,
             has_reported_ready: false,
             startup_aborted: false,

@@ -208,6 +208,7 @@ async fn significant_nested_supervisor_triggers_parent_auto_shutdown() {
 #[tokio::test]
 async fn dynamic_significant_children_are_rejected_by_scope_kind() {
     let handle = DynamicSupervisorBuilder::new()
+        .restart(RestartPolicy::Always)
         .build()
         .expect("valid dynamic supervisor")
         .spawn();

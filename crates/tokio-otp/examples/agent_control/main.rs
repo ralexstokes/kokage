@@ -279,7 +279,7 @@ async fn build_app() -> Result<App, AnyError> {
     let core_runtime = Runtime::builder()
         .graph(core_graph)
         .strategy(Strategy::OneForOne);
-    let sessions_runtime = Runtime::builder().strategy(Strategy::OneForOne);
+    let sessions_runtime = Runtime::dynamic();
     let runtime = Runtime::builder()
         .strategy(Strategy::OneForOne)
         .subtree("gateway", gateway_runtime)

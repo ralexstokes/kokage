@@ -431,8 +431,9 @@ impl Runtime {
     ///
     /// Provide a graph to run every graph actor as its own supervised child,
     /// compose nested graphs with
-    /// [`RuntimeBuilder::subtree`](crate::RuntimeBuilder::subtree), or build
-    /// without one and add actors at runtime.
+    /// [`RuntimeBuilder::subtree`](crate::RuntimeBuilder::subtree), or build an
+    /// empty ordered scope for static composition. Use [`Runtime::dynamic`]
+    /// when actors or subtrees will be added at runtime.
     ///
     /// See [`RuntimeBuilder`](crate::RuntimeBuilder) for an example.
     pub fn builder() -> crate::RuntimeBuilder {
@@ -446,17 +447,17 @@ impl Runtime {
 
     /// Creates an actor-aware runtime around an arbitrary supervisor.
     ///
-    /// This composition boundary is useful when runtime-managed dynamic actors
-    /// must share a supervisor with non-actor children. The supplied supervisor
-    /// starts with no actor metadata; actors added through
-    /// [`RuntimeHandle::add_actor`] are tracked normally.
+    /// The supplied supervisor keeps its immutable scope kind and starts with
+    /// no actor metadata. Actors added through [`RuntimeHandle::add_actor`] are
+    /// tracked normally when it is a dynamic supervisor; an ordered supervisor
+    /// remains observation-only through this actor-aware wrapper.
     ///
     /// ```no_run
     /// use tokio_otp::{
     ///     Actor, ActorContext, ActorResult, DynamicActorOptions, Runtime,
     ///     prelude::Continue,
     /// };
-    /// use tokio_supervisor::{ChildSpec, SupervisorBuilder};
+    /// use tokio_supervisor::DynamicSupervisorBuilder;
     ///
     /// struct Worker;
     ///
@@ -469,12 +470,7 @@ impl Runtime {
     /// }
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let supervisor = SupervisorBuilder::new()
-    ///     .child(ChildSpec::new("maintenance", |ctx| async move {
-    ///         ctx.shutdown_token().cancelled().await;
-    ///         Ok(())
-    ///     }))
-    ///     .build()?;
+    /// let supervisor = DynamicSupervisorBuilder::new().build()?;
     /// let handle = Runtime::new(supervisor).spawn();
     /// handle
     ///     .add_actor("worker", || Worker, DynamicActorOptions::new())
@@ -484,12 +480,14 @@ impl Runtime {
     /// # }
     /// ```
     pub fn new(supervisor: Supervisor) -> Self {
+        let default_restart = supervisor.default_restart_policy();
+        let default_shutdown = supervisor.default_shutdown_policy();
         Self {
             supervisor,
             actors: Arc::new(ActorRuntimeState::new(
                 RunnableActorFactory::new(),
-                RestartPolicy::default(),
-                ShutdownPolicy::default(),
+                default_restart,
+                default_shutdown,
             )),
         }
     }

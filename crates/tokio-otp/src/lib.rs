@@ -46,7 +46,7 @@
 //! | Type | Role |
 //! |------|------|
 //! | [`Runtime`] / [`RuntimeBuilder`] | Owns a supervisor and actor factory — the common composition. |
-//! | [`RuntimeHandle`] | Control surface for a spawned runtime (shutdown, dynamic actors, observability). |
+//! | [`RuntimeHandle`] | Control surface for shutdown and observability; dynamic-scope handles also mutate membership. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -58,11 +58,12 @@
 //!
 //! # Composition modes
 //!
-//! - **The integrated runtime** via [`Runtime::builder`]: per-actor
-//!   supervision with per-actor policy overrides, recursive actor-aware
-//!   subtrees, arbitrary non-actor children, and runtime actor creation. Add
-//!   nested builders with [`RuntimeBuilder::subtree`], or omit
-//!   [`RuntimeBuilder::graph`] to start with no direct actors.
+//! - **Ordered actor trees** via [`Runtime::builder`]: per-actor supervision
+//!   with per-actor policy overrides, recursive actor-aware subtrees, and
+//!   arbitrary statically declared non-actor children. Add nested scopes with
+//!   [`RuntimeBuilder::subtree`].
+//! - **Dynamic actor membership** via [`Runtime::dynamic`]: an initially empty
+//!   `OneForOne` scope that accepts actors and subtrees at runtime.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.

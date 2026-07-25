@@ -9,11 +9,12 @@ use crate::runtime::{ActorOverrides, Runtime};
 ///
 /// Wires an actor [`Graph`] into a [`Runtime`] where every actor runs as its
 /// own supervised child. Nested scopes added with [`subtree`](Self::subtree)
-/// preserve the same actor-aware runtime behavior recursively. It can also
-/// Ordered scopes have static contents; use [`DynamicRuntimeBuilder`] for a
-/// graph-less runtime that grows through
-/// [`RuntimeHandle::add_actor`](crate::RuntimeHandle::add_actor). Created via
-/// [`Runtime::builder`].
+/// preserve the same actor-aware runtime behavior recursively. These ordered
+/// scopes have static membership. Use [`DynamicRuntimeBuilder`] for a
+/// graph-less runtime whose membership grows through
+/// [`RuntimeHandle::add_actor`](crate::RuntimeHandle::add_actor). Create the
+/// two builders with [`Runtime::builder`] and [`Runtime::dynamic`],
+/// respectively.
 ///
 /// Per-actor policies can be overridden with [`actor_restart`](Self::actor_restart),
 /// [`actor_restart_intensity`](Self::actor_restart_intensity), and

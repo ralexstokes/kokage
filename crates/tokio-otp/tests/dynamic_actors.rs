@@ -16,8 +16,8 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, BoxError, CancellationHandle, ChildMembershipView,
     ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy, DynamicActorOptions,
-    GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime,
-    RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, SupervisorBuilder,
+    DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor,
+    RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
 
@@ -807,6 +807,56 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     .expect("builder default restarts the cleanly stopped actor");
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(explicit_starts.load(Ordering::SeqCst), 1);
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn runtime_new_inherits_the_supplied_dynamic_supervisors_defaults() {
+    let supervisor = DynamicSupervisorBuilder::new()
+        .restart(RestartPolicy::Always)
+        .shutdown(ShutdownPolicy::abort())
+        .build()
+        .expect("dynamic supervisor builds");
+    let handle = Runtime::new(supervisor).spawn();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let actor = handle
+        .add_actor(
+            "inherited-restart",
+            {
+                let starts = Arc::clone(&starts);
+                move || CleanStop {
+                    starts: Arc::clone(&starts),
+                }
+            },
+            DynamicActorOptions::default(),
+        )
+        .await
+        .expect("actor added");
+    actor.send(()).await.expect("actor stops cleanly");
+    timeout(Duration::from_secs(1), async {
+        while starts.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("supplied supervisor restart default is inherited");
+
+    handle
+        .add_actor(
+            "inherited-shutdown",
+            || PendingActor,
+            DynamicActorOptions::default(),
+        )
+        .await
+        .expect("pending actor added");
+    timeout(
+        Duration::from_millis(100),
+        handle.remove_child("inherited-shutdown"),
+    )
+    .await
+    .expect("supplied abort default makes removal immediate")
+    .expect("pending actor removed");
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
