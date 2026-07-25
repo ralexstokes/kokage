@@ -27,7 +27,7 @@ Status as of 2026-07-23:
 | --- | --- | --- |
 | 1. Freeze the public API shape | Complete | Public extensibility, bounded calls, console decoupling, codec removal, and dependency-boundary work are implemented and tested. Actor construction has since become factory-first (`ActorFactory`), removing the `Clone`-based restart model from the public contract. |
 | 2. Trading-engine proof | Complete | The deterministic trading-engine example covers the required failure, reconciliation, control, observability, and shutdown behavior and is smoke-run by CI. It has since been hardened: pipelined router calls avoid head-of-line blocking, order keys are restart-stable, and the restart breaker consumes reliable counters. |
-| 3. Written contract | In progress | Core safety rustdoc, book coverage, and behavioral tests have landed, now including factory restarts, persistent-watch semantics, reliable restart counting versus lossy events, and handler head-of-line blocking. Cross-surface alignment, the compatibility policy, API stability labels, and `CHANGELOG.md` remain. |
+| 3. Written contract | In progress | Core safety rustdoc, book coverage, and behavioral tests have landed, now including factory restarts, persistent-watch semantics, reliable lifecycle observation versus lossy events, and handler head-of-line blocking. Cross-surface alignment, the compatibility policy, API stability labels, and `CHANGELOG.md` remain. |
 | 4. Publication readiness | Not started | Release metadata, MSRV verification, package-content checks, and publication rehearsal remain. |
 
 Since the 2026-07-12 snapshot, using the trading engine as the proving
@@ -40,10 +40,10 @@ hidden in example scaffolding, per the Milestone 2 rule:
 - **Persistent watches.** The incarnation-scoped monitor was replaced with a
   persistent `ctx.watch` that spans incarnations, emitting `Up`/`Down` events
   with bounded per-watch buffering and an explicit `Overflowed` signal.
-- **Cumulative restart counters and `RestartWatch`.** `watch_restarts` on
-  runtime and supervisor handles provides a reliable (non-lossy) count of
-  restarts across a subtree — the supported primitive for application-owned
-  correlated-failure detection.
+- **Reliable supervisor lifecycle streams.** `watch_lifecycle` on runtime and
+  supervisor handles provides ordered child transitions with cumulative
+  restart counters — the supported primitive for application-owned
+  correlated-failure detection. The older `RestartWatch` view is deprecated.
 - **Recursive runtime subtrees.** `RuntimeBuilder::subtree` composes nested
   runtime graphs with reconciled recursive actor stats. Static subtrees and
   runtime-added `RuntimeHandle::add_subtree` memberships now share the same
@@ -87,10 +87,10 @@ This differs from Erlang/OTP's aggregate supervisor restart budget.
 For v0.1, preserve the implemented behavior and document the divergence
 precisely. Do not add an aggregate budget before release. An aggregate
 supervisor budget can be added later without changing the per-child policy.
-The runtime now ships `watch_restarts` cumulative counters as the supported
-detection primitive: they let an application observe correlated restarts
-across a subtree reliably, but they are detection, not a budget, and do not
-change this decision.
+The runtime now ships lifecycle event envelopes with cumulative counters as
+the supported detection primitive: they let an application observe correlated
+restarts across a subtree reliably, but they are detection, not a budget, and
+do not change this decision.
 
 ### Shutdown remains concurrent
 
@@ -250,8 +250,8 @@ Since completion the example has been hardened as the proving application:
   are documented in the request/reply book chapter;
 - order keys are restart-stable so pipelined calls correlate correctly across
   router restarts, with same-incarnation ordering documented;
-- the aggregate restart breaker consumes the runtime's `watch_restarts`
-  cumulative counter instead of lossy restart events; and
+- the aggregate restart breaker consumes the runtime's lifecycle stream
+  counter envelope instead of lossy restart events; and
 - the module carries explanatory architecture documentation.
 
 Add one self-contained integration example or book chapter using fake venues.
@@ -272,7 +272,7 @@ The example should contain:
 - isolated venue failure and restart, including a forced panic;
 - a separate urgent-control path for kill-switch or emergency cancellation;
 - an application-owned aggregate restart breaker: a health actor fed by a
-  `watch_restarts` counter watch over the venue subtree that trips venue
+  lifecycle watch over the venue subtree that trips venue
   failover or the kill switch when restarts in a sliding window exceed a
   threshold, since per-child restart intensity cannot detect correlated
   failures on its own;
@@ -310,7 +310,7 @@ integration tests.
 **Status: in progress.** The sources of truth are established below, and the
 book and rustdoc already cover the bounded-call contract, startup/readiness,
 significant children, message-size metrics, and stable versus experimental
-crate split. The correlated-failure blind spot and its `watch_restarts`
+crate split. The correlated-failure blind spot and its lifecycle-counter
 remedy are now covered in the book's observability chapter and in rustdoc. A
 full README/rustdoc/book alignment pass is still required, including that
 blind spot and staged-shutdown guidance on every promised surface.
@@ -334,8 +334,8 @@ The three maintained documentation surfaces must agree on:
   concrete blind spot rather than a scope note: a shared-cause failure that
   crash-loops many children can stay under every per-child budget and never
   escalate, so applications own correlated-failure detection until an
-  aggregate budget exists — via the `watch_restarts` cumulative counters, not
-  the lossy event stream (the book's observability chapter now draws this
+  aggregate budget exists — via lifecycle events' cumulative counters, not
+  the lossy event broadcast (the book's observability chapter now draws this
   distinction);
 - concurrent sibling shutdown and staged-shutdown guidance;
 - the bounded-call contract; and
@@ -450,7 +450,7 @@ The following are useful possible follow-ups, not release blockers:
 - distributed or remote actors and cross-node references;
 - durable mailboxes, exactly-once delivery, or a built-in order journal;
 - a built-in process registry or process groups;
-- aggregate supervisor-wide restart budgets (the `watch_restarts` detection
+- aggregate supervisor-wide restart budgets (the lifecycle-stream detection
   primitive exists, but enforcement remains application-owned);
 - explicit terminate-while-retaining-spec or `restart_child` controls;
 - reverse-order sequential shutdown;
@@ -495,7 +495,7 @@ Big shapes that neither application covers, roughly in priority order:
 3. **Restart backoff as a load-bearing design.** `BackoffPolicy::Fixed` /
    `Exponential` / `JitteredExponential` appear only in unit examples. A
    flaky-external-dependency scenario should pin how backoff, the restart
-   intensity window, and `RestartWatch` counters interact.
+   intensity window, and lifecycle counter envelopes interact.
 4. **Overload where conflation does not apply.** Both applications absorb
    overload with keyed conflation, which only works for replaceable state.
    Bounded FIFO mailboxes under sustained pressure — `try_send` +
@@ -535,7 +535,7 @@ application or materially strengthen the runtime:
 - FIFO, latest-wins, and keyed-conflating mailboxes;
 - restart-stable typed actor references;
 - topology derivation and metadata;
-- restart monitoring, cumulative restart counters, and `RestartWatch`;
+- snapshot state, ordered supervisor lifecycle streams, and cumulative restart counters;
 - snapshots, events, tracing, actor stats, and message-size metrics; and
 - raw/advanced composition escape hatches.
 

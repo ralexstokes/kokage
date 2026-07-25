@@ -11,9 +11,32 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, RawActor, Reply, RestartPolicy,
-    Runtime, prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LifecycleEventKind,
+    LifecycleWatch, RawActor, Reply, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
+
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+    let child = handle
+        .snapshot()
+        .child(id)
+        .expect("child exists")
+        .generation;
+    (handle.watch_lifecycle(), child)
+}
+
+async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
+    loop {
+        let event = lifecycle.next().await.expect("runtime remains live");
+        if event.child_id == id
+            && matches!(
+                event.kind,
+                LifecycleEventKind::Started { generation } if generation > baseline
+            )
+        {
+            return;
+        }
+    }
+}
 
 struct HandlerWithNonCloneState {
     _state: Mutex<()>,
@@ -140,18 +163,17 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
             .expect("first incarnation replies"),
         (0, 1)
     );
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("handler")
-        .expect("restart monitor exists");
+    let (lifecycle, baseline) = restart_observer(&handle, "handler");
     actor_ref
         .send(ProbeMsg::Crash)
         .await
         .expect("crash accepted");
-    tokio::time::timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("restart observed")
-        .expect("restart succeeds");
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "handler", baseline),
+    )
+    .await
+    .expect("restart observed");
     assert_eq!(
         actor_ref
             .call(Duration::from_secs(1), ProbeMsg::Increment)
@@ -210,15 +232,14 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
 
     actor_ref.send(false).await.expect("first message accepted");
     assert_eq!(observed_rx.recv().await, Some((0, 1)));
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("raw")
-        .expect("restart monitor exists");
+    let (lifecycle, baseline) = restart_observer(&handle, "raw");
     actor_ref.send(true).await.expect("crash accepted");
-    tokio::time::timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("restart observed")
-        .expect("restart succeeds");
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "raw", baseline),
+    )
+    .await
+    .expect("restart observed");
     actor_ref
         .send(false)
         .await

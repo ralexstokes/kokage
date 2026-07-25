@@ -197,8 +197,8 @@ workload, the `agent_control` example's per-conversation subtrees. Per-child
 intensity means a storm of short-lived subtree crashes never trips an
 aggregate parent budget; the signal that wants to aggregate across children —
 run failures across every conversation — is application state, and the
-example's guard already owns it (`watch_restarts` plays the same role for
-supervisor-driven restarts). And the teardown ordering that mattered —
+example's guard already owns it (the lifecycle pump's cumulative counters play
+the same role for supervisor-driven restarts). And the teardown ordering that mattered —
 checkpoint before removal, transient children before the parent that owns
 them — was either enforced by the application before it requested removal or
 fell out of reverse-declaration-order shutdown inside the subtree, so

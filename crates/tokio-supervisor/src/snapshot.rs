@@ -44,12 +44,22 @@ pub struct SupervisorSnapshot {
     /// intermediate values but never lags), deltas of this counter are a
     /// reliable way to observe restart activity — unlike counting
     /// [`SupervisorEvent`](crate::SupervisorEvent)s from the lossy broadcast
-    /// channel. See [`SupervisorHandle::watch_restarts`](crate::SupervisorHandle::watch_restarts).
+    /// channel. Lifecycle events carry this same counter at emission.
     ///
     /// The counter only covers direct children. Restarts inside a nested
     /// supervisor are visible on that nested snapshot's own `total_restarts`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub total_restarts: u64,
+    /// Sequence of the last lifecycle event emitted when this snapshot was
+    /// published.
+    ///
+    /// For a gap-free state-plus-stream view, create a lifecycle watch first,
+    /// then read a snapshot, then discard watched events whose `seq` is less
+    /// than or equal to this value. A pre-spawn snapshot projects statically
+    /// configured children before their first `Added` transition; reducers
+    /// should apply `Added` as an idempotent membership upsert.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub lifecycle_seq: u64,
     /// Ordered list of child snapshots, matching the supervisor's child order.
     pub children: Vec<ChildSnapshot>,
 }
@@ -108,6 +118,7 @@ impl SupervisorSnapshot {
             state,
             strategy,
             total_restarts: 0,
+            lifecycle_seq: 0,
             children,
         }
     }
@@ -116,6 +127,13 @@ impl SupervisorSnapshot {
     #[must_use]
     pub fn total_restarts(mut self, total_restarts: u64) -> Self {
         self.total_restarts = total_restarts;
+        self
+    }
+
+    /// Sets the sequence of the last emitted lifecycle event.
+    #[must_use]
+    pub fn lifecycle_seq(mut self, lifecycle_seq: u64) -> Self {
+        self.lifecycle_seq = lifecycle_seq;
         self
     }
 
