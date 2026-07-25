@@ -10,12 +10,13 @@ use crate::{
     error::SupervisorError,
     event::{EventSink, SupervisorEvent},
     handle::{
-        NestedChannels, StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
-        SupervisorHandleInit, empty_nested_channels,
+        AttachedChildState, AttachedChildrenState, NestedChannels, StableSupervisorChannels,
+        SupervisorCommand, SupervisorHandle, SupervisorHandleInit, attached_children_state,
+        empty_nested_channels,
     },
     observability::{format_path, strategy_label, supervisor_name_for_path},
     restart::RestartIntensity,
-    runtime::SupervisorRuntime,
+    runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
     shutdown::AutoShutdown,
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotCell, SupervisorSnapshot,
@@ -74,6 +75,10 @@ impl Supervisor {
     /// for control and observation.
     pub fn spawn(self) -> SupervisorHandle {
         let nested_channels = prepare_nested_channels(&self.config);
+        let attached_children = attached_children_state(
+            None,
+            initial_attached_children(&self.config, &nested_channels),
+        );
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::channel(self.config.control_channel_capacity);
         let (done_tx, done_rx) = watch::channel(None);
@@ -83,6 +88,7 @@ impl Supervisor {
         let task_events_tx = events_tx.clone();
         let task_snapshots_tx = snapshots_tx.clone();
         let task_nested_channels = nested_channels.clone();
+        let task_attached_children = Arc::clone(&attached_children);
 
         let join_handle = tokio::spawn(async move {
             let result = self
@@ -90,6 +96,7 @@ impl Supervisor {
                     shutdown_rx,
                     task_events_tx,
                     task_snapshots_tx,
+                    task_attached_children,
                     command_rx,
                     task_nested_channels,
                     Vec::new(),
@@ -110,6 +117,7 @@ impl Supervisor {
             done_rx,
             events_tx,
             snapshots_rx,
+            attached_children,
             join_handle,
         })
     }
@@ -128,10 +136,17 @@ impl Supervisor {
         let events_tx = channels.events();
         let snapshots_tx = channels.snapshots();
         let nested_channels = channels.nested_channels();
+        let attached_children = channels.attached_children();
         let generation = ctx.generation();
         let startup_ctx = ctx.clone();
         let task_done_tx = done_tx.clone();
         let initial_snapshot = initial_snapshot(&self.config);
+        // Reconcile retained stable identities before exposing the new
+        // incarnation's initial attachment view. This prevents a displaced
+        // dynamic same-id supervisor from leaking into the static view during
+        // the interval before the runtime publishes its first snapshot.
+        reconcile_stable_identities(&self.config.children, &nested_channels);
+        let initial_attached_children = initial_attached_children(&self.config, &nested_channels);
 
         // Rebind before the runtime task can publish so observers never see
         // the previous incarnation's final snapshot through the new binding.
@@ -141,6 +156,7 @@ impl Supervisor {
             command_tx,
             done_rx,
             initial_snapshot,
+            initial_attached_children,
         );
 
         let join_handle = tokio::spawn(async move {
@@ -149,6 +165,7 @@ impl Supervisor {
                     shutdown_rx,
                     events_tx,
                     snapshots_tx,
+                    attached_children,
                     command_rx,
                     nested_channels,
                     path,
@@ -191,6 +208,7 @@ impl Supervisor {
         shutdown_rx: watch::Receiver<bool>,
         events_tx: broadcast::Sender<SupervisorEvent>,
         snapshots_tx: watch::Sender<SupervisorSnapshot>,
+        attached_children: AttachedChildrenState,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         nested_channels: NestedChannels,
         path: Vec<String>,
@@ -206,6 +224,7 @@ impl Supervisor {
             shutdown_rx,
             events_tx,
             snapshots_tx,
+            attached_children,
             command_rx,
             nested_channels,
             path,
@@ -230,10 +249,12 @@ impl Supervisor {
         statically_configured: bool,
     ) -> Arc<StableSupervisorChannels> {
         let nested_channels = prepare_nested_channels(&self.config);
+        let attached_children = initial_attached_children(&self.config, &nested_channels);
         StableSupervisorChannels::new(
             initial_snapshot(&self.config),
             self.config.event_channel_capacity,
             nested_channels,
+            attached_children,
             statically_configured,
         )
     }
@@ -284,4 +305,27 @@ pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot 
             })
             .collect(),
     }
+}
+
+fn initial_attached_children(
+    config: &SupervisorConfig,
+    nested_channels: &NestedChannels,
+) -> Vec<AttachedChildState> {
+    let nested_channels = nested_channels.lock().expect("nested channel map poisoned");
+    config
+        .children
+        .iter()
+        .enumerate()
+        .map(|(membership_epoch, child)| AttachedChildState {
+            identity: crate::AttachedChildIdentity {
+                id: child.id.clone(),
+                membership_epoch: membership_epoch as u64,
+                generation: 0,
+            },
+            attachment: child.attachment.clone(),
+            supervisor: nested_channels
+                .get(&child.id)
+                .map(StableSupervisorChannels::handle),
+        })
+        .collect()
 }

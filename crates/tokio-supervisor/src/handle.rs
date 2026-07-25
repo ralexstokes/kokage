@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     collections::HashMap,
     sync::{Arc, Mutex},
 };
@@ -9,7 +10,8 @@ use tokio::{
 };
 
 use crate::{
-    child::{ChildSpec, SupervisorSpec},
+    attachment::{AttachedChild, AttachedChildIdentity},
+    child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
     error::{ControlError, RestartMonitorError, SupervisorError},
     event::SupervisorEvent,
     monitor::{RestartMonitor, RestartWatch},
@@ -71,6 +73,34 @@ struct IncarnationBinding {
 }
 
 pub(crate) type NestedChannels = Arc<Mutex<HashMap<String, Arc<StableSupervisorChannels>>>>;
+pub(crate) type AttachedChildrenState = Arc<Mutex<AttachedChildrenView>>;
+
+#[derive(Clone)]
+pub(crate) struct AttachedChildrenView {
+    /// `None` identifies the root supervisor. Nested views are bound to the
+    /// generation of the supervisor child incarnation that owns them.
+    pub(crate) generation: Option<u64>,
+    pub(crate) terminal: bool,
+    pub(crate) children: Vec<AttachedChildState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AttachedChildState {
+    pub(crate) identity: AttachedChildIdentity,
+    pub(crate) attachment: Option<OpaqueAttachment>,
+    pub(crate) supervisor: Option<SupervisorHandle>,
+}
+
+pub(crate) fn attached_children_state(
+    generation: Option<u64>,
+    children: Vec<AttachedChildState>,
+) -> AttachedChildrenState {
+    Arc::new(Mutex::new(AttachedChildrenView {
+        generation,
+        terminal: false,
+        children,
+    }))
+}
 
 /// Stable snapshot channel for a nested supervisor.
 ///
@@ -87,6 +117,7 @@ pub(crate) struct StableSupervisorChannels {
     binding: Mutex<Option<IncarnationBinding>>,
     events_tx: broadcast::Sender<SupervisorEvent>,
     snapshots: Mutex<SnapshotSlot>,
+    attached_children: AttachedChildrenState,
     nested_channels: NestedChannels,
     /// Whether these channels belong to a statically configured child (part
     /// of the parent's `SupervisorConfig`) as opposed to a dynamically added
@@ -101,6 +132,7 @@ impl StableSupervisorChannels {
         initial_snapshot: SupervisorSnapshot,
         event_capacity: usize,
         nested_channels: NestedChannels,
+        attached_children: Vec<AttachedChildState>,
         statically_configured: bool,
     ) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(event_capacity);
@@ -112,6 +144,7 @@ impl StableSupervisorChannels {
                 tx: Some(snapshots_tx),
                 rx: snapshots_rx,
             }),
+            attached_children: attached_children_state(Some(0), attached_children),
             nested_channels,
             statically_configured,
         })
@@ -140,6 +173,7 @@ impl StableSupervisorChannels {
         command_tx: mpsc::Sender<SupervisorCommand>,
         done_rx: DoneReceiver,
         mut initial_snapshot: SupervisorSnapshot,
+        initial_attached_children: Vec<AttachedChildState>,
     ) -> StableBindingGuard {
         let snapshots = self.snapshots();
         // The children belong to the new incarnation, but the aggregate
@@ -152,6 +186,14 @@ impl StableSupervisorChannels {
             *current = initial_snapshot;
             true
         });
+        *self
+            .attached_children
+            .lock()
+            .expect("attached child view poisoned") = AttachedChildrenView {
+            generation: Some(generation),
+            terminal: false,
+            children: initial_attached_children,
+        };
         *self.binding.lock().expect("stable control slot poisoned") = Some(IncarnationBinding {
             generation,
             shutdown_tx,
@@ -208,6 +250,14 @@ impl StableSupervisorChannels {
     /// recreation mints a fresh one), or an orphaned dynamic child that no
     /// incarnation will spawn again.
     pub(crate) fn terminal(&self) {
+        {
+            let mut attached_children = self
+                .attached_children
+                .lock()
+                .expect("attached child view poisoned");
+            attached_children.terminal = true;
+            attached_children.children.clear();
+        }
         let tx = self
             .snapshots
             .lock()
@@ -230,6 +280,10 @@ impl StableSupervisorChannels {
 
     pub(crate) fn nested_channels(&self) -> NestedChannels {
         Arc::clone(&self.nested_channels)
+    }
+
+    pub(crate) fn attached_children(&self) -> AttachedChildrenState {
+        Arc::clone(&self.attached_children)
     }
 }
 
@@ -263,14 +317,26 @@ mod tests {
             )],
         );
         let expected_snapshot = initial_snapshot.clone().total_restarts(7);
-        let channels =
-            StableSupervisorChannels::new(stale_snapshot, 8, empty_nested_channels(), true);
+        let channels = StableSupervisorChannels::new(
+            stale_snapshot,
+            8,
+            empty_nested_channels(),
+            Vec::new(),
+            true,
+        );
         let handle = channels.handle();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (_done_tx, done_rx) = watch::channel(None);
 
-        let _binding = channels.bind(2, shutdown_tx, command_tx, done_rx, initial_snapshot);
+        let _binding = channels.bind(
+            2,
+            shutdown_tx,
+            command_tx,
+            done_rx,
+            initial_snapshot,
+            Vec::new(),
+        );
 
         assert_eq!(handle.snapshot(), expected_snapshot);
     }
@@ -290,6 +356,7 @@ mod tests {
             initial_snapshot.clone(),
             8,
             empty_nested_channels(),
+            Vec::new(),
             true,
         );
         let snapshots = channels.snapshots_rx();
@@ -297,7 +364,14 @@ mod tests {
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (_done_tx, done_rx) = watch::channel(None);
 
-        let _binding = channels.bind(0, shutdown_tx, command_tx, done_rx, initial_snapshot);
+        let _binding = channels.bind(
+            0,
+            shutdown_tx,
+            command_tx,
+            done_rx,
+            initial_snapshot,
+            Vec::new(),
+        );
 
         assert!(
             !snapshots
@@ -337,6 +411,7 @@ struct RootHandle {
     done_rx: DoneReceiver,
     events_tx: broadcast::Sender<SupervisorEvent>,
     snapshots_rx: watch::Receiver<SupervisorSnapshot>,
+    attached_children: AttachedChildrenState,
     nested_channels: NestedChannels,
     join_state: Arc<Mutex<Option<(SupervisorJoinHandle, DoneSender)>>>,
 }
@@ -383,6 +458,7 @@ pub(crate) struct SupervisorHandleInit {
     pub(crate) done_rx: DoneReceiver,
     pub(crate) events_tx: broadcast::Sender<SupervisorEvent>,
     pub(crate) snapshots_rx: watch::Receiver<SupervisorSnapshot>,
+    pub(crate) attached_children: AttachedChildrenState,
     pub(crate) join_handle: SupervisorJoinHandle,
 }
 
@@ -421,6 +497,7 @@ impl SupervisorHandle {
                 done_rx: init.done_rx,
                 events_tx: init.events_tx,
                 snapshots_rx: init.snapshots_rx,
+                attached_children: init.attached_children,
                 nested_channels: init.nested_channels,
                 join_state: Arc::new(Mutex::new(Some((init.join_handle, init.done_tx)))),
             }),
@@ -495,6 +572,66 @@ impl SupervisorHandle {
             .expect("nested channel map poisoned")
             .get(id)
             .map(StableSupervisorChannels::handle)
+    }
+
+    /// Returns typed process-local attachments from this supervision tree.
+    ///
+    /// Direct children are returned before descendants. Every result includes
+    /// the membership identity path captured from the same supervisor-owned
+    /// entry as the attachment. Values with other concrete types are skipped.
+    /// Attachments are not part of [`SupervisorSnapshot`] and are never
+    /// serialized by the `serde` feature.
+    pub fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        let mut attached = Vec::new();
+        self.collect_attached_children(None, &mut Vec::new(), &mut attached);
+        attached
+    }
+
+    fn collect_attached_children<T>(
+        &self,
+        expected_generation: Option<u64>,
+        parent_path: &mut Vec<AttachedChildIdentity>,
+        attached: &mut Vec<AttachedChild<T>>,
+    ) where
+        T: Any + Send + Sync,
+    {
+        let view = self
+            .attached_children_state()
+            .lock()
+            .expect("attached child view poisoned")
+            .clone();
+        if view.terminal
+            || expected_generation.is_some_and(|generation| view.generation != Some(generation))
+        {
+            return;
+        }
+        let children = view.children;
+
+        for child in &children {
+            let Some(value) = child
+                .attachment
+                .as_ref()
+                .and_then(|value| Arc::clone(value).downcast::<T>().ok())
+            else {
+                continue;
+            };
+            let mut path = parent_path.clone();
+            path.push(child.identity.clone());
+            attached.push(AttachedChild::new(path, value, child.supervisor.clone()));
+        }
+
+        for child in children {
+            let Some(supervisor) = child.supervisor else {
+                continue;
+            };
+            let generation = child.identity.generation;
+            parent_path.push(child.identity);
+            supervisor.collect_attached_children(Some(generation), parent_path, attached);
+            parent_path.pop();
+        }
     }
 
     /// Waits for the supervisor to stop.
@@ -765,6 +902,13 @@ impl SupervisorHandle {
         match &self.kind {
             HandleKind::Root(root) => Arc::clone(&root.nested_channels),
             HandleKind::Stable(stable) => stable.nested_channels(),
+        }
+    }
+
+    fn attached_children_state(&self) -> AttachedChildrenState {
+        match &self.kind {
+            HandleKind::Root(root) => Arc::clone(&root.attached_children),
+            HandleKind::Stable(stable) => stable.attached_children(),
         }
     }
 }

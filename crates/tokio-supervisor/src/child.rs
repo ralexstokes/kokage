@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     context::ChildContext,
@@ -21,6 +21,7 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub type ChildResult = Result<(), BoxError>;
 
 pub(crate) type ChildFuture = Pin<Box<dyn Future<Output = ChildResult> + Send + 'static>>;
+pub(crate) type OpaqueAttachment = Arc<dyn Any + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) struct ChildDefinition {
@@ -31,6 +32,7 @@ pub(crate) struct ChildDefinition {
     pub(crate) shutdown_policy: ShutdownPolicy,
     pub(crate) significant: bool,
     pub(crate) readiness: ChildReadiness,
+    pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) kind: ChildKind,
 }
 
@@ -75,6 +77,7 @@ pub struct SupervisorSpec {
     pub(crate) restart_intensity: Option<RestartIntensity>,
     pub(crate) shutdown_policy: ShutdownPolicy,
     pub(crate) significant: bool,
+    pub(crate) attachment: Option<OpaqueAttachment>,
 }
 
 impl SupervisorSpec {
@@ -86,6 +89,7 @@ impl SupervisorSpec {
             restart_intensity: None,
             shutdown_policy: ShutdownPolicy::default(),
             significant: false,
+            attachment: None,
         }
     }
 
@@ -118,6 +122,20 @@ impl SupervisorSpec {
     #[must_use]
     pub fn significant(mut self) -> Self {
         self.significant = true;
+        self
+    }
+
+    /// Attaches process-local metadata to this supervised child.
+    ///
+    /// The value can be read through
+    /// [`SupervisorHandle::attached_children`](crate::SupervisorHandle::attached_children)
+    /// and is deliberately excluded from serializable snapshots.
+    #[must_use]
+    pub fn attachment<T>(mut self, attachment: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.attachment = Some(Arc::new(attachment));
         self
     }
 }
@@ -182,6 +200,7 @@ impl ChildSpec {
                 shutdown_policy: ShutdownPolicy::default(),
                 significant: false,
                 readiness: ChildReadiness::Immediate,
+                attachment: None,
                 kind: ChildKind::Task(make_child_factory(f)),
             }),
         }
@@ -247,6 +266,19 @@ impl ChildSpec {
         self.map_inner(|inner| inner.significant = true)
     }
 
+    /// Attaches process-local metadata to this supervised child.
+    ///
+    /// The value can be read through
+    /// [`SupervisorHandle::attached_children`](crate::SupervisorHandle::attached_children)
+    /// and is deliberately excluded from serializable snapshots.
+    #[must_use]
+    pub fn attachment<T>(self, attachment: T) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        self.map_inner(|inner| inner.attachment = Some(Arc::new(attachment)))
+    }
+
     /// Requires the child to call [`ChildContext::mark_ready`](crate::ChildContext::mark_ready)
     /// before it is considered started.
     ///
@@ -298,6 +330,7 @@ impl ChildDefinition {
             shutdown_policy: spec.shutdown_policy,
             significant: spec.significant,
             readiness: ChildReadiness::Explicit,
+            attachment: spec.attachment,
             kind: ChildKind::Supervisor(spec.supervisor),
         }
     }

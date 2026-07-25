@@ -1,12 +1,14 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{ActorRef, Graph, RunnableActorFactory};
 use tokio_supervisor::{
     ChildSpec, RestartIntensity, RestartPolicy, ShutdownPolicy, StartMode, Strategy,
-    SupervisorBuilder,
+    SupervisorBuilder, SupervisorSpec,
 };
 
-use crate::runtime::{ActorOverrides, Runtime, actor_children};
+use crate::runtime::{
+    ActorOverrides, ActorRuntimeState, Runtime, RuntimeAttachment, actor_children,
+};
 
 /// One-stop builder for the common supervised-actor setup.
 ///
@@ -221,11 +223,19 @@ impl RuntimeBuilder {
             supervisor = supervisor.restart_intensity(intensity);
         }
 
-        let mut subtrees = Vec::with_capacity(self.subtrees.len());
+        let actor_factory = self
+            .graph
+            .as_ref()
+            .map_or_else(RunnableActorFactory::new, Graph::dynamic_factory);
+        let actors = Arc::new(ActorRuntimeState::new(actor_factory));
+
         for (id, subtree) in self.subtrees {
             let (nested_supervisor, nested_actors) = subtree.build()?.into_parts();
-            supervisor = supervisor.supervisor(id.clone(), nested_supervisor);
-            subtrees.push((id, nested_actors));
+            supervisor = supervisor.supervisor(
+                id,
+                SupervisorSpec::new(nested_supervisor)
+                    .attachment(RuntimeAttachment::subtree(&actors, nested_actors)),
+            );
         }
 
         supervisor = self
@@ -233,30 +243,18 @@ impl RuntimeBuilder {
             .into_iter()
             .fold(supervisor, |builder, child| builder.child(child));
 
-        let runtime = match self.graph {
-            Some(graph) => {
-                let actor_factory = graph.dynamic_factory();
-                let actors = graph.actors().to_vec();
-                supervisor =
-                    actor_children(&graph, self.restart, self.shutdown, &self.actor_overrides)
-                        .into_iter()
-                        .fold(supervisor, |builder, child| builder.child(child));
-                let supervisor = supervisor.build()?;
-                Ok(Runtime::with_actor_tree(supervisor, actor_factory, actors))
-            }
-            None => {
-                let supervisor = supervisor.build()?;
-                Ok(Runtime::with_actor_tree(
-                    supervisor,
-                    RunnableActorFactory::new(),
-                    Vec::new(),
-                ))
-            }
-        }?;
-        for (id, subtree) in subtrees {
-            runtime.actor_state().record_subtree(id, subtree, None);
+        if let Some(graph) = self.graph {
+            supervisor = actor_children(
+                &graph,
+                &actors,
+                self.restart,
+                self.shutdown,
+                &self.actor_overrides,
+            )
+            .into_iter()
+            .fold(supervisor, |builder, child| builder.child(child));
         }
-        Ok(runtime)
+        Ok(Runtime::with_actor_tree(supervisor.build()?, actors))
     }
 }
 
