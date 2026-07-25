@@ -49,7 +49,8 @@ pub struct ActorStats {
     ///
     /// This can be lower than [`messages_accepted`](Self::messages_accepted):
     /// accepted messages may be conflated before the actor receives them or
-    /// discarded when an incarnation stops.
+    /// discarded when an incarnation stops, and a queued state timeout is
+    /// suppressed if its slot is replaced or cleared before receipt.
     pub messages_received: u64,
     /// Messages accepted into the mailbox by `send` or `try_send`.
     ///
