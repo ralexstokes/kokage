@@ -593,9 +593,6 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
                     .send(FeedMsg::Tick(snapshot(VENUE_B, "ETH-USD", seq, now)))
                     .await;
                 seq += 1;
-                // Conflating sends may complete without yielding, so give the
-                // actors and urgent control work a chance to run on one core.
-                tokio::task::yield_now().await;
             }
         }
     });

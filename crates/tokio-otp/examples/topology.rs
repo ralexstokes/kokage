@@ -81,30 +81,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (acked_tx, mut acked_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let mut frontend = None;
-    let graph = Pipeline::graph(|refs| {
-        frontend = Some(refs.frontend.clone());
-        let parser = refs.parser.clone();
-        let frontend_ref = refs.frontend.clone();
-        let sink = refs.sink.clone();
-        PipelineFactories {
-            frontend: move || Frontend {
-                parser: parser.clone(),
+    let (graph, refs) = Pipeline::graph_with_refs(|refs| PipelineFactories {
+        frontend: {
+            let refs = refs.clone();
+            move || Frontend {
+                parser: refs.parser.clone(),
                 acked: acked_tx.clone(),
-            },
-            parser: move || Parser {
-                frontend: frontend_ref.clone(),
-                sink: sink.clone(),
-            },
-            sink: move || Sink {
-                out: out_tx.clone(),
-            },
-        }
+            }
+        },
+        parser: {
+            let refs = refs.clone();
+            move || Parser {
+                frontend: refs.frontend.clone(),
+                sink: refs.sink.clone(),
+            }
+        },
+        sink: move || Sink {
+            out: out_tx.clone(),
+        },
     })?;
-    let frontend = frontend.expect("topology closure captured frontend ref");
     let handle = support::ActorTasks::start(&graph);
 
-    frontend.send(FrontendMsg::Feed("hello".to_owned())).await?;
+    refs.frontend
+        .send(FrontendMsg::Feed("hello".to_owned()))
+        .await?;
     println!(
         "sink observed {}",
         out_rx.recv().await.expect("sink output")

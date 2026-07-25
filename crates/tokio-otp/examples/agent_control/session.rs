@@ -60,8 +60,6 @@ pub struct Session {
     #[factory(default)]
     heartbeat: Option<CancellationHandle>,
     #[factory(default)]
-    idle_generation: u64,
-    #[factory(default)]
     evict_requested: bool,
 }
 
@@ -78,13 +76,7 @@ impl Session {
     }
 
     fn arm_idle(&mut self, ctx: &mut ActorContext<SessionMsg>) {
-        self.idle_generation += 1;
-        ctx.state_timeout(
-            SessionMsg::IdleSweep {
-                generation: self.idle_generation,
-            },
-            IDLE_TIMEOUT,
-        );
+        ctx.state_timeout(SessionMsg::IdleSweep, IDLE_TIMEOUT);
     }
 
     async fn start_run(
@@ -264,7 +256,7 @@ impl Actor for Session {
                     return Ok(Continue);
                 }
                 self.transcript_len += 1;
-                self.idle_generation += 1;
+                ctx.clear_state_timeout();
                 let input = PendingInput { envelope, text };
                 if self.active.is_some() || !self.gate.load(Ordering::Acquire) {
                     self.pending.push_back(input);
@@ -409,10 +401,7 @@ impl Actor for Session {
                         .await?;
                 }
             }
-            SessionMsg::IdleSweep { generation } => {
-                if generation != self.idle_generation {
-                    return Ok(Continue);
-                }
+            SessionMsg::IdleSweep => {
                 if self.evict_requested {
                     // Retirement is a request, not a handshake. If the
                     // membership writer restarted and lost it, this

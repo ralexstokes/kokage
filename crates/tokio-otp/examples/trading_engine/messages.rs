@@ -87,7 +87,7 @@ pub enum OrderStatus {
 pub enum ReconcilerMsg {
     Market(MarketSnapshot),
     Feed { venue: VenueId, event: MonitorEvent },
-    StaleSweep { generation: u64 },
+    StaleSweep,
     Status { reply: Reply<ReconcilerStatus> },
 }
 

@@ -18,15 +18,15 @@ a normal exit to watches and supervision. `RestartPolicy::Always` restarts it;
 `OnFailure` and `Never` do not.
 
 The usual static graph is a struct whose fields are the actors. Deriving
-`Topology` gives that struct a `graph` method; its wiring closure receives a
-refs struct with one typed `ActorRef` per field, so cycles and forward
-references do not require string lookup. Refs you need outside the graph are
-captured from the same closure:
+`Topology` gives that struct a `graph_with_refs` method; its wiring closure
+receives a cloneable refs struct with one typed `ActorRef` per field, so cycles
+and forward references do not require string lookup. The method returns the
+same refs bundle with the graph for use as application entry points:
 
 ```rust,no_run
 use tokio_otp::prelude::Continue;
 use std::time::Duration;
-use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, GraphBuilder, Reply, Runtime, Topology};
+use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, Reply, Runtime, Topology};
 
 struct Order(String);
 struct Parcel(String);
@@ -97,32 +97,32 @@ struct PrintShop {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut builder = GraphBuilder::new();
-    builder.name("print-shop");
-
-    let mut entry_points = None;
-    let graph = PrintShop::graph_with(builder, |refs| {
-        entry_points = Some((refs.front_desk.clone(), refs.shipping.clone()));
-        let press = refs.press.clone();
-        let shipping = refs.shipping.clone();
+    let (graph, refs) = PrintShop::graph_with_refs(|refs| {
         PrintShopFactories {
-            front_desk: move || FrontDesk {
-                press: press.clone(),
+            front_desk: {
+                let refs = refs.clone();
+                move || FrontDesk {
+                    press: refs.press.clone(),
+                }
             },
-            press: move || Press {
-                shipping: shipping.clone(),
+            press: {
+                let refs = refs.clone();
+                move || Press {
+                    shipping: refs.shipping.clone(),
+                }
             },
             shipping: Shipping::default,
         }
     })?;
-    let (orders, shipping) = entry_points.expect("wiring closure ran");
 
     let handle = Runtime::builder().graph(graph).build()?.spawn();
 
-    orders.send(Order("business cards x100".into())).await?;
-    orders.send(Order("flyers x500".into())).await?;
+    refs.front_desk
+        .send(Order("business cards x100".into()))
+        .await?;
+    refs.front_desk.send(Order("flyers x500".into())).await?;
 
-    let shipped = shipping
+    let shipped = refs.shipping
         .call(Duration::from_secs(1), ShippingMsg::Total)
         .await?;
     println!("shipped {shipped} jobs");
@@ -193,9 +193,10 @@ custom synchronous construction rather than `Default`.
 `#[derive(Topology)]` supports named-field structs whose fields implement
 `RawActor`. Field names become actor labels verbatim, so supervisor child
 ids, tracing fields, and stats stay human-readable without participating in
-type checking or message routing. The generated `graph_with` accepts a
-preconfigured `GraphBuilder` for graph name, mailbox capacity, and shutdown
-timeouts; the generated `graph` uses `GraphBuilder::new()`.
+type checking or message routing. The generated `graph_with_refs` returns both
+the graph and its cloneable typed refs. The generated `graph` preserves the
+graph-only API, and `graph_with` accepts a preconfigured `GraphBuilder` for
+graph name, mailbox capacity, and shutdown timeouts.
 
 The derive keeps topology shape in the type system:
 
@@ -284,10 +285,11 @@ oldest unread key when full. Both `send` and `try_send` replace stale state
 without waiting for capacity. `ActorStats::messages_conflated` counts replaced
 or evicted unread messages.
 
-Because a conflating `send` never waits for capacity, awaiting it may complete
-without yielding to the Tokio scheduler. A tight producer loop must call
-`tokio::task::yield_now()` or rate-limit explicitly so other tasks can run,
-especially on a single-thread runtime.
+Because a conflating `send` never waits for capacity, it consumes Tokio's
+cooperative task budget internally. Tight loops of awaited sends therefore
+yield periodically to other tasks without an explicit `yield_now`; producers
+should still rate-limit when the application requires an actual throughput
+bound.
 
 Keyed sends scan at most `mailbox_capacity` unread keys and may evaluate the
 extractor for every comparison. Keep the extractor cheap and prefer numeric

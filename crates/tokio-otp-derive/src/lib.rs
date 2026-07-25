@@ -198,6 +198,8 @@ fn parse_factory_attributes(
 ///   field;
 /// * `Pipeline::graph(wire)`, which builds the graph with a default
 ///   `GraphBuilder`;
+/// * `Pipeline::graph_with_refs(wire)`, which also returns the generated
+///   `PipelineRefs` bundle for use as application entry points;
 /// * `Pipeline::graph_with(builder, wire)`, which accepts a preconfigured
 ///   `GraphBuilder` — graph name, mailbox capacity, shutdown timeouts, and
 ///   any extra actors registered by hand.
@@ -254,22 +256,25 @@ fn parse_factory_attributes(
 /// }
 ///
 /// # fn main() -> Result<(), tokio_otp::GraphBuildError> {
-/// let graph = Pipeline::graph(|refs| {
-///     let parser = refs.parser.clone();
-///     let frontend = refs.frontend.clone();
-///     let sink = refs.sink.clone();
+/// let (graph, refs) = Pipeline::graph_with_refs(|refs| {
 ///     PipelineFactories {
-///         frontend: move || Frontend {
-///             parser: parser.clone(),
+///         frontend: {
+///             let refs = refs.clone();
+///             move || Frontend {
+///                 parser: refs.parser.clone(),
+///             }
 ///         },
-///         parser: move || Parser {
-///             frontend: frontend.clone(),
-///             sink: sink.clone(),
+///         parser: {
+///             let refs = refs.clone();
+///             move || Parser {
+///                 frontend: refs.frontend.clone(),
+///                 sink: refs.sink.clone(),
+///             }
 ///         },
 ///         sink: || Sink,
 ///     }
 /// })?;
-/// # let _ = graph;
+/// # let _ = (graph, refs.frontend);
 /// # Ok(())
 /// # }
 /// ```
@@ -291,8 +296,8 @@ fn parse_factory_attributes(
 ///
 /// # Visibility
 ///
-/// The refs struct and the generated `graph` / `graph_with` methods inherit
-/// the topology struct's visibility; each refs field inherits the
+/// The refs struct and the generated `graph` / `graph_with_refs` /
+/// `graph_with` methods inherit the topology struct's visibility; each refs field inherits the
 /// corresponding topology field's visibility. A `pub` topology with `pub`
 /// fields can therefore be wired from another module or crate.
 ///
@@ -316,10 +321,10 @@ fn parse_factory_attributes(
 ///
 /// # Errors
 ///
-/// `graph` and `graph_with` return `GraphBuildError` for the runtime
-/// configuration checks that remain, such as passing `graph_with` a builder
-/// that already has an actor registered under the same id as a topology
-/// field.
+/// `graph`, `graph_with_refs`, and `graph_with` return `GraphBuildError` for
+/// the runtime configuration checks that remain, such as passing `graph_with`
+/// a builder that already has an actor registered under the same id as a
+/// topology field.
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
@@ -465,6 +470,16 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             )*
         }
 
+        impl ::core::clone::Clone for #refs {
+            fn clone(&self) -> Self {
+                Self {
+                    #(
+                        #field_idents: self.#field_idents.clone(),
+                    )*
+                }
+            }
+        }
+
         #vis struct #factories<#(#factory_params),*> {
             #(
                 #[allow(dead_code)]
@@ -481,7 +496,41 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                     #factory_params: ::tokio_otp::ActorFactory<Actor = #field_types>,
                 )*
             {
-                Self::graph_with(::tokio_otp::GraphBuilder::new(), wire)
+                Self::graph_with_refs(wire).map(|(graph, _refs)| graph)
+            }
+
+            #vis fn graph_with_refs<#(#factory_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#factory_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Graph, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(
+                    #factory_params: ::tokio_otp::ActorFactory<Actor = #field_types>,
+                )*
+            {
+                let mut builder = ::tokio_otp::GraphBuilder::new();
+                // The topology struct is never constructed; its fields only name actor types.
+                // Destructuring it here marks the user's fields as read so they do not trigger
+                // `dead_code` warnings on every derive.
+                let _mark_topology_fields_used = |value: Self| {
+                    let Self { #(#field_idents),* } = value;
+                    let _ = (#(#field_idents),*);
+                };
+                #(#slot_calls)*
+
+                let refs = #refs {
+                    #(#field_idents,)*
+                };
+                let factories = wire(&refs);
+
+                #(
+                    builder.define(#slot_idents, factories.#field_idents);
+                )*
+
+                let graph = builder.build()?;
+                Ok((graph, refs))
             }
 
             #vis fn graph_with<#(#factory_params),*>(

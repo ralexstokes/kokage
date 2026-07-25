@@ -83,7 +83,7 @@
 //!   add_subtree ─▶ on_start: mark ready ─▶ continue_with(Rehydrate): replay
 //!     ─▶ UserMessage: start planner run, suppress idle timer, heartbeat
 //!     ─▶ RunFinished: planner → engineer → reviewer → Reply, re-arm idle
-//!     ─▶ IdleSweep (current generation, no run): Checkpoint + Evicted, then
+//!     ─▶ IdleSweep (current state timeout, no run): Checkpoint + Evicted, then
 //!         Evict naming this subtree, re-sent each sweep until teardown lands
 //!         — the router buffers while it drops the subtree; a late arrival is
 //!         bounced back and rides the buffer into a replacement subtree
@@ -216,48 +216,47 @@ async fn build_app() -> Result<App, AnyError> {
     );
     let (inbound_slot, _inbound) = gateway_graph.slot::<InboundMsg>("inbound");
 
-    let mut core_refs = None;
-    let core_graph = Core::graph(|refs| {
-        core_refs = Some((
-            refs.journal.clone(),
-            refs.budget.clone(),
-            refs.guard.clone(),
-            refs.tool_host.clone(),
-            refs.router.clone(),
-        ));
-        let budget_guard = refs.guard.clone();
-        let guard_budget = refs.budget.clone();
-        let guard_router = refs.router.clone();
-        let guard_model = model.clone();
-        let guard_gate = gate.clone();
-        CoreFactories {
-            journal: Journal::default,
-            budget: move || Budget::new(budget_guard.clone()),
-            guard: move || {
+    let (core_graph, refs) = Core::graph_with_refs(|refs| CoreFactories {
+        journal: Journal::default,
+        budget: {
+            let refs = refs.clone();
+            move || Budget::new(refs.guard.clone())
+        },
+        guard: {
+            let refs = refs.clone();
+            let model = model.clone();
+            let gate = gate.clone();
+            move || {
                 Guard::new(
-                    guard_budget.clone(),
-                    guard_router.clone(),
-                    guard_model.clone(),
-                    guard_gate.clone(),
+                    refs.budget.clone(),
+                    refs.router.clone(),
+                    model.clone(),
+                    gate.clone(),
                 )
-            },
-            tool_host: ToolHost::default,
-            router: RouterFactory {
-                mount: sessions_mount.clone(),
-                journal: refs.journal.clone(),
-                budget: refs.budget.clone(),
-                tool_host: refs.tool_host.clone(),
-                guard: refs.guard.clone(),
-                outbound: outbound.clone(),
-                progress: progress.clone(),
-                gate: gate.clone(),
-                model: model_client.clone(),
-                session_epoch: session_epoch.clone(),
-                proof: proof.clone(),
-            },
-        }
+            }
+        },
+        tool_host: ToolHost::default,
+        router: RouterFactory {
+            mount: sessions_mount.clone(),
+            journal: refs.journal.clone(),
+            budget: refs.budget.clone(),
+            tool_host: refs.tool_host.clone(),
+            guard: refs.guard.clone(),
+            outbound: outbound.clone(),
+            progress: progress.clone(),
+            gate: gate.clone(),
+            model: model_client.clone(),
+            session_epoch: session_epoch.clone(),
+            proof: proof.clone(),
+        },
     })?;
-    let (journal, budget, guard, tool_host, router) = core_refs.expect("core refs captured");
+    let CoreRefs {
+        journal,
+        budget,
+        guard,
+        tool_host,
+        router,
+    } = refs;
 
     gateway_graph.define(outbound_slot, {
         let chat = chat.clone();
