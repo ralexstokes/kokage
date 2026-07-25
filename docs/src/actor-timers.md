@@ -140,11 +140,9 @@ it. Entering another timed state and calling `state_timeout` automatically
 cancels the previous timeout. Call `clear_state_timeout` when entering a state
 without a timeout.
 
-Timeout messages that were already accepted by the mailbox cannot be
-retracted. Each timeout message must therefore identify the state it was set
-for, either with a distinct variant as above or with a state or generation
-tag, and the handler must reject tags that do not match its current state.
-Replacing or clearing a state timeout cancels its token even if it already
-fired, so a retained handle will then report `is_cancelled() == true`. State
-timeouts are also cleared with all other timers when the actor stops or
-restarts.
+Replacing or clearing a state timeout suppresses its message even if the timer
+already fired and the message is waiting in the mailbox. The framework stamps
+the delivery with the slot's cancellation token and discards it before the
+actor receives it when that slot is no longer current. A retained handle will
+report `is_cancelled() == true` after replacement or clearing. State timeouts
+are also cleared with all other timers when the actor stops or restarts.

@@ -33,7 +33,6 @@ pub struct Reconciler {
     sessions: Vec<(VenueId, ExchangeSim)>,
     venues: HashMap<VenueId, VenueState>,
     down_reasons: HashMap<VenueId, Vec<DownReason>>,
-    sweep_generation: u64,
 }
 
 impl Reconciler {
@@ -51,7 +50,6 @@ impl Reconciler {
             sessions,
             venues,
             down_reasons: HashMap::new(),
-            sweep_generation: 0,
         }
     }
 
@@ -76,12 +74,9 @@ impl Reconciler {
             .filter(|state| state.health == VenueHealth::Fresh)
             .filter_map(|state| state.last_seen.map(|seen| seen + STALE_AFTER))
             .min();
-        self.sweep_generation = self.sweep_generation.wrapping_add(1);
         if let Some(deadline) = earliest {
             ctx.state_timeout(
-                ReconcilerMsg::StaleSweep {
-                    generation: self.sweep_generation,
-                },
+                ReconcilerMsg::StaleSweep,
                 deadline.saturating_duration_since(now),
             );
         } else {
@@ -155,10 +150,7 @@ impl Actor for Reconciler {
                 }
                 self.rearm(ctx);
             }
-            ReconcilerMsg::StaleSweep { generation } => {
-                if generation != self.sweep_generation {
-                    return Ok(Continue);
-                }
+            ReconcilerMsg::StaleSweep => {
                 let now = Instant::now();
                 let stale = self
                     .venues

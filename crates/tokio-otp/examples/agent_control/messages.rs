@@ -302,9 +302,7 @@ pub enum SessionMsg {
         paused: bool,
     },
     Stop,
-    IdleSweep {
-        generation: u64,
-    },
+    IdleSweep,
 }
 
 #[derive(Clone, Debug)]

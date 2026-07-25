@@ -103,6 +103,62 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     task.await.expect("actor task joins").expect("actor stops");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (received_tx, _received_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let mut builder = GraphBuilder::new();
+    let actor_ref = builder.actor_with_options(
+        "ticks",
+        {
+            let release = release.clone();
+            move || GatedCollector {
+                started: started_tx.clone(),
+                release: release.clone(),
+                received: received_tx.clone(),
+            }
+        },
+        ActorOptions::new().mailbox(MailboxMode::Conflate),
+    );
+    let graph = builder.build().expect("valid graph");
+    let actor = graph.actors()[0].clone();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn({
+        let stop = stop.clone();
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
+    });
+    started_rx.recv().await.expect("actor started");
+
+    let peer_ran = Arc::new(AtomicBool::new(false));
+    let peer = tokio::spawn({
+        let peer_ran = peer_ran.clone();
+        async move { peer_ran.store(true, Ordering::Release) }
+    });
+    for tick in 0..1_024 {
+        actor_ref
+            .send(tick)
+            .await
+            .expect("conflating send succeeds");
+        if peer_ran.load(Ordering::Acquire) {
+            break;
+        }
+    }
+
+    assert!(
+        peer_ran.load(Ordering::Acquire),
+        "a hot conflating producer must yield to a ready peer"
+    );
+    peer.await.expect("peer task joins");
+    release.notify_one();
+    stop.cancel();
+    task.await.expect("actor task joins").expect("actor stops");
+}
+
 struct SizedSnapshot(Vec<u8>);
 
 impl MessageSize for SizedSnapshot {

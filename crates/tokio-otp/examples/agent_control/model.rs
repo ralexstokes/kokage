@@ -65,9 +65,6 @@ impl ModelClient for ScriptedModel {
                         .await
                         .map_err(|_| ModelError::Cancelled)?;
                     delta += 1;
-                    // Awaited conflating sends can complete synchronously; an
-                    // explicit yield keeps a current-thread scheduler fair.
-                    tokio::task::yield_now().await;
                 }
             }
 

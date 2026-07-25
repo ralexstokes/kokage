@@ -83,7 +83,7 @@
 //!   add_subtree ─▶ on_start: mark ready ─▶ continue_with(Rehydrate): replay
 //!     ─▶ UserMessage: start planner run, suppress idle timer, heartbeat
 //!     ─▶ RunFinished: planner → engineer → reviewer → Reply, re-arm idle
-//!     ─▶ IdleSweep (current generation, no run): Checkpoint + Evicted, then
+//!     ─▶ IdleSweep (current state timeout, no run): Checkpoint + Evicted, then
 //!         Evict naming this subtree, re-sent each sweep until teardown lands
 //!         — the router buffers while it drops the subtree; a late arrival is
 //!         bounced back and rides the buffer into a replacement subtree

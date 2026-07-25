@@ -190,6 +190,70 @@ async fn new_state_timeout_cancels_previous_timeout() {
 }
 
 #[derive(Clone)]
+struct QueuedStateTimeoutReplacement {
+    started: mpsc::UnboundedSender<()>,
+    release: Arc<Notify>,
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl RawActor for QueuedStateTimeoutReplacement {
+    type Msg = &'static str;
+
+    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+        ctx.state_timeout("old", Duration::from_millis(20));
+        self.started.send(()).expect("test receives start signal");
+        self.release.notified().await;
+
+        while let Some(message) = ctx.recv().await {
+            self.observed.send(message).expect("observer alive");
+            if message == "replace" {
+                ctx.state_timeout("new", Duration::from_millis(40));
+            }
+        }
+        Ok(Continue)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn replacing_state_timeout_filters_already_queued_message() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let (runtime, actor_ref) = build_runtime({
+        let release = release.clone();
+        move || QueuedStateTimeoutReplacement {
+            started: started_tx.clone(),
+            release: release.clone(),
+            observed: observed_tx.clone(),
+        }
+    });
+    let handle = runtime.spawn();
+    started_rx.recv().await.expect("actor started");
+
+    actor_ref.send("replace").await.expect("replacement queued");
+    advance(Duration::from_millis(20)).await;
+    for _ in 0..10 {
+        if actor_ref.stats().messages_accepted >= 2 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(actor_ref.stats().messages_accepted, 2);
+    release.notify_one();
+
+    assert_eq!(observed_rx.recv().await, Some("replace"));
+    assert_eq!(
+        timeout(Duration::from_secs(1), observed_rx.recv())
+            .await
+            .expect("replacement timeout fired"),
+        Some("new")
+    );
+    assert!(observed_rx.try_recv().is_err(), "stale timeout was handled");
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[derive(Clone)]
 struct ClearedStateTimeout {
     observed: mpsc::UnboundedSender<&'static str>,
 }
