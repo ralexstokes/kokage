@@ -1049,6 +1049,75 @@ async fn remove_child_preempts_zero_delay_restart() {
     handle.wait().await.expect("shutdown should succeed");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn queued_command_batch_preempts_zero_delay_restart() {
+    let handle = SupervisorBuilder::new()
+        .restart_intensity(tokio_supervisor::RestartIntensity::new(
+            8,
+            std::time::Duration::from_secs(1),
+        ))
+        .child(
+            ChildSpec::new("removable", |_ctx| async move {
+                Err(common::test_error("restart immediately"))
+            })
+            .restart(RestartPolicy::OnFailure),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut events = handle.subscribe();
+
+    loop {
+        match common::recv_supervisor_event(&mut events).await {
+            SupervisorEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
+                assert!(delay.is_zero(), "test requires zero-delay restart");
+                break;
+            }
+            SupervisorEvent::RestartIntensityExceeded => {
+                panic!("commands lost to zero-delay restarts");
+            }
+            _ => {}
+        }
+    }
+
+    let replacement = ChildSpec::new("replacement", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    });
+    let (add_result, remove_result) = tokio::join!(
+        biased;
+        handle.add_child(replacement),
+        handle.remove_child("removable"),
+    );
+    add_result.expect("first queued command should add the replacement");
+    remove_result.expect("second queued command should cancel the pending restart");
+
+    let interleaved_restart = timeout(common::QUIET_TIMEOUT, async {
+        loop {
+            match events.recv().await {
+                Ok(SupervisorEvent::ChildRestarted { id, .. }) if id == "removable" => {
+                    return true;
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    panic!("lagged while checking command ordering: skipped {skipped}");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+            }
+        }
+    })
+    .await;
+    assert!(
+        !matches!(interleaved_restart, Ok(true)),
+        "restart interleaved before the full queued command batch"
+    );
+
+    assert!(handle.snapshot().child("removable").is_none());
+    assert!(handle.snapshot().child("replacement").is_some());
+
+    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+}
+
 #[tokio::test]
 async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     let (removable_tx, mut removable_rx) = mpsc::unbounded_channel();

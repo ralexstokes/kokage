@@ -519,21 +519,22 @@ impl SupervisorRuntime {
                 Wake::Deadline => {
                     // Preserve the existing zero-backoff contract: let tasks
                     // woken by `ChildRestartScheduled` enqueue control work,
-                    // then give that work priority over an already-due restart.
+                    // then give the whole queued batch priority over an
+                    // already-due restart.
                     tokio::task::yield_now().await;
-                    match self.command_rx.try_recv() {
-                        Ok(command) => {
-                            self.handle_command(command)?;
-                            self.handle_deadlines().await?;
-                        }
-                        Err(mpsc::error::TryRecvError::Disconnected) => {
-                            self.commands_open = false;
-                            self.handle_deadlines().await?;
-                        }
-                        Err(mpsc::error::TryRecvError::Empty) => {
-                            self.handle_deadlines().await?;
+                    loop {
+                        match self.command_rx.try_recv() {
+                            Ok(command) => self.handle_command(command)?,
+                            Err(mpsc::error::TryRecvError::Disconnected) => {
+                                // `try_recv` reports disconnection only after
+                                // every buffered command has been consumed.
+                                self.commands_open = false;
+                                break;
+                            }
+                            Err(mpsc::error::TryRecvError::Empty) => break,
                         }
                     }
+                    self.handle_deadlines().await?;
                 }
             }
         }
@@ -1574,6 +1575,10 @@ impl SupervisorRuntime {
             .and_then(|sequence| sequence.gate.as_mut())
             .filter(|gate| gate.key == key && gate.instance == instance)
         {
+            // This restart supersedes the gated generation before it became
+            // ready. Its deferred group-restart event must not survive to be
+            // observed after the newer restart transition.
+            gate.restart_event = None;
             gate.generation = new_generation;
         }
         if let Some(old_generation) = old_generation {
@@ -1924,7 +1929,7 @@ fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::{
-        Supervisor, SupervisorBuilder,
+        ChildSpec, Supervisor, SupervisorBuilder,
         handle::{attached_children_state, empty_nested_channels},
         supervisor::initial_snapshot,
     };
@@ -1980,6 +1985,97 @@ mod tests {
         assert!(matches!(
             runtime.next_wake(WakeOptions::main_loop(None)).await,
             Wake::Ready(Some(ChildReady { key: 1, .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn gate_restart_discards_the_failed_generations_deferred_event() {
+        let supervisor = SupervisorBuilder::new()
+            .start_mode(StartMode::Sequential)
+            .child(
+                ChildSpec::new("gated", |ctx| async move {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                })
+                .wait_for_ready(),
+            )
+            .build()
+            .expect("valid supervisor config");
+        let config = supervisor.config;
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, mut events_rx) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (_command_tx, command_rx) = mpsc::channel(control_capacity);
+        let mut runtime = SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+        );
+        let key = runtime.child_order[0];
+        let instance = runtime.children[key].instance;
+        {
+            let child = &mut runtime.children[key].runtime;
+            child.has_started = true;
+            child.generation = 1;
+            child.state = RuntimeChildState::Stopped;
+            child.next_restart_deadline = Some(Instant::now());
+        }
+        runtime.start_sequence = Some(StartSequence {
+            queue: VecDeque::new(),
+            gate: Some(StartGate {
+                key,
+                instance,
+                generation: 1,
+                restart_event: Some((0, 1)),
+            }),
+        });
+
+        assert!(runtime.restart_one(key).is_ok());
+        let gate = runtime
+            .start_sequence
+            .as_ref()
+            .and_then(|sequence| sequence.gate.as_ref())
+            .expect("replacement generation remains readiness-gated");
+        assert_eq!(gate.generation, 2);
+        assert!(
+            gate.restart_event.is_none(),
+            "the failed generation's deferred restart event must be consumed"
+        );
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(SupervisorEvent::ChildRestarted {
+                old_generation: 1,
+                new_generation: 2,
+                ..
+            })
+        ));
+
+        assert!(
+            runtime
+                .handle_child_ready(ChildReady {
+                    key,
+                    instance,
+                    generation: 2,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(SupervisorEvent::ChildStarted { generation: 2, .. })
+        ));
+        assert!(matches!(
+            events_rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
         ));
     }
 
