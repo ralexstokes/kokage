@@ -939,19 +939,21 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`tokio::task::spawn_blocking`] directly, and send the outcome back as a
     /// message. The mailbox then acts as the completion mechanism; see the
     /// [`blocking_lifecycle` example](https://github.com/ralexstokes/tokio-otp/blob/main/crates/tokio-otp/examples/blocking_lifecycle.rs).
-    pub async fn run_blocking<F, R>(&self, f: F) -> R
+    pub fn run_blocking<F, R>(&self, f: F) -> impl Future<Output = R> + Send + 'static
     where
         F: FnOnce(&CancellationToken) -> R + Send + 'static,
         R: Send + 'static,
     {
         let cancellation = self.shutdown.child_token();
-        let _cancel_on_drop = cancellation.clone().drop_guard();
-        let joined = tokio::task::spawn_blocking(move || f(&cancellation)).await;
+        async move {
+            let _cancel_on_drop = cancellation.clone().drop_guard();
+            let joined = tokio::task::spawn_blocking(move || f(&cancellation)).await;
 
-        match joined {
-            Ok(result) => result,
-            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-            Err(error) => panic!("blocking task was cancelled: {error}"),
+            match joined {
+                Ok(result) => result,
+                Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+                Err(error) => panic!("blocking task was cancelled: {error}"),
+            }
         }
     }
 }
