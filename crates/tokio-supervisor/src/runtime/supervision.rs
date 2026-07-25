@@ -251,7 +251,7 @@ impl SupervisorRuntime {
             let key = children.insert(ChildEntry::new(
                 id.clone(),
                 formatted_path,
-                Arc::new(spec),
+                spec,
                 child_nested_channels,
                 default_restart_intensity,
                 next_child_instance,
@@ -629,7 +629,7 @@ impl SupervisorRuntime {
         }
 
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
-        let definition = Arc::new(child.into_definition());
+        let definition = child.inner;
         let membership_epoch = self.next_child_instance;
         let key = self.children.insert(ChildEntry::new(
             id.clone(),

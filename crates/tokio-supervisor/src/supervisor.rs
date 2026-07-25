@@ -40,7 +40,7 @@ pub(crate) struct SupervisorConfig {
     pub(crate) start_mode: StartMode,
     pub(crate) restart_intensity: RestartIntensity,
     pub(crate) auto_shutdown: AutoShutdown,
-    pub(crate) children: Vec<ChildDefinition>,
+    pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,
     pub(crate) event_channel_capacity: usize,
 }
