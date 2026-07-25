@@ -101,7 +101,7 @@ impl Actor for OrderRouter {
                 );
                 let gateway = self.gateways.get(venue).expect("known venue").clone();
                 let message_key = key.clone();
-                ctx.step(
+                ctx.step_or(
                     CALL_DEADLINE,
                     async move {
                         let result = gateway
@@ -125,17 +125,15 @@ impl Actor for OrderRouter {
                         };
                         (disposition, submitted)
                     },
-                    move |outcome| {
-                        let (disposition, submitted) = outcome.unwrap_or((
-                            SubmitDisposition::Unknown,
-                            SubmitResult::Unknown(message_key.clone()),
-                        ));
-                        RouterMsg::SubmitResolved {
-                            key: message_key,
-                            disposition,
-                            submitted,
-                            reply,
-                        }
+                    (
+                        SubmitDisposition::Unknown,
+                        SubmitResult::Unknown(message_key.clone()),
+                    ),
+                    move |(disposition, submitted)| RouterMsg::SubmitResolved {
+                        key: message_key,
+                        disposition,
+                        submitted,
+                        reply,
                     },
                 );
             }
@@ -176,7 +174,7 @@ impl Actor for OrderRouter {
                     .get(intent.venue)
                     .expect("known venue")
                     .clone();
-                ctx.step(
+                ctx.step_or(
                     CALL_DEADLINE,
                     async move {
                         match gateway
@@ -187,10 +185,8 @@ impl Actor for OrderRouter {
                             Err(_) => CancelOutcome::Unknown,
                         }
                     },
-                    move |outcome| {
-                        let outcome = outcome.unwrap_or(CancelOutcome::Unknown);
-                        RouterMsg::CancelResolved { outcome, reply }
-                    },
+                    CancelOutcome::Unknown,
+                    move |outcome| RouterMsg::CancelResolved { outcome, reply },
                 );
             }
             RouterMsg::CancelResolved { outcome, reply } => reply.send(outcome),

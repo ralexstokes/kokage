@@ -96,11 +96,12 @@ impl AgentRun {
         };
         let model = self.model.clone();
         let cancel = self.cancel.clone();
-        ctx.step(MODEL_DEADLINE, model.turn(request, cancel), |outcome| {
-            RunMsg::ModelResult {
-                result: outcome.unwrap_or(Err(ModelError::Deadline)),
-            }
-        });
+        ctx.step_or(
+            MODEL_DEADLINE,
+            model.turn(request, cancel),
+            Err(ModelError::Deadline),
+            |result| RunMsg::ModelResult { result },
+        );
     }
 
     async fn start_tool(&self, index: usize, ctx: &ActorContext<RunMsg>) -> ActorResult {
@@ -115,7 +116,7 @@ impl AgentRun {
             .await?;
         let tool_host = self.tool_host.clone();
         let step_key = key.clone();
-        ctx.step(
+        ctx.step_or(
             TOOL_DEADLINE + PHASE_TIMEOUT,
             async move {
                 let execute = tool_host
@@ -146,13 +147,10 @@ impl AgentRun {
                     }
                 }
             },
-            move |outcome| RunMsg::ToolResult {
-                index,
-                key,
-                result: outcome.unwrap_or(ToolOutcome {
-                    output: "tool outcome remained unknown".into(),
-                }),
+            ToolOutcome {
+                output: "tool outcome remained unknown".into(),
             },
+            move |result| RunMsg::ToolResult { index, key, result },
         );
         Ok(Continue)
     }
