@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.spawn();
 
     orders.send("business cards x100".into()).await?;
-    let restart = handle.supervisor_handle().monitor_restart("press")?;
+    let restart = handle.supervisor_handle().monitor_restart("press");
     orders.send("origami cranes x1000".into()).await?;
     restart.await?;
     orders.send("flyers x500".into()).await?;

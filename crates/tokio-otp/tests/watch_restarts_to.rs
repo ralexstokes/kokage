@@ -70,10 +70,7 @@ async fn runtime_with_sink() -> (
 }
 
 async fn crash_once(handle: &RuntimeHandle, crasher: &ActorRef<()>) {
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("crasher")
-        .expect("crasher is a direct child");
+    let restarted = handle.supervisor_handle().monitor_restart("crasher");
     crasher.send(()).await.expect("crash request delivered");
     timeout(Duration::from_secs(1), restarted)
         .await
@@ -183,10 +180,7 @@ async fn cancelling_restart_watch_stops_delivery() {
 async fn restart_watch_follows_target_restarts() {
     let (handle, sink, _crasher, mut observed) = runtime_with_sink().await;
     let watch = handle.watch_restarts_to(&sink, |count| count);
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("sink")
-        .expect("sink is a direct child");
+    let restarted = handle.supervisor_handle().monitor_restart("sink");
 
     sink.send(0).await.expect("sink crash request delivered");
     timeout(Duration::from_secs(1), restarted)
@@ -310,10 +304,7 @@ async fn latest_total_is_resent_after_target_restart() {
     let watch = handle.watch_restarts_to(&sink, BlockingSinkMsg::RestartTotal);
     crash_once(&handle, &crasher).await;
     wait_until(|| sink.stats().messages_accepted >= 2).await;
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("sink")
-        .expect("sink is monitored");
+    let restarted = handle.supervisor_handle().monitor_restart("sink");
     release.notify_one();
     timeout(Duration::from_secs(1), restarted)
         .await
@@ -384,10 +375,7 @@ async fn watched_supervisor_termination_cancels_backpressured_delivery() {
     }
 
     let watch = watched.watch_restarts_to(&sink, BlockingSinkMsg::RestartTotal);
-    let restarted = watched
-        .supervisor_handle()
-        .monitor_restart("crasher")
-        .expect("nested child monitored");
+    let restarted = watched.supervisor_handle().monitor_restart("crasher");
     nested_crasher
         .send(())
         .await

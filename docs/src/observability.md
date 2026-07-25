@@ -1,13 +1,16 @@
 # Observability
 
-The crates expose four views into a running system:
+Supervisor observation is organized around two primitives:
 
-1. supervisor events
-2. supervisor snapshots
-3. `tracing`, pull-based actor stats, and optional metrics
-4. the `tokio-otp-console` web UI
+1. **state** through lossless, conflating supervisor snapshots
+2. **history** through lossy supervisor events intended for telemetry
 
-## Events And Snapshots
+`RestartMonitor`, `RestartWatch`, and the actor-facing `watch_restarts_to`
+pump are convenience views over the snapshot primitive, not additional event
+channels. The crates also expose `tracing`, pull-based actor stats, optional
+metrics, and the `tokio-otp-console` web UI.
+
+## State And History Primitives
 
 `RuntimeHandle::supervisor_handle()` exposes the lower-level supervisor
 control surface. Subscribe there for lossy lifecycle events used by logging,
@@ -61,7 +64,22 @@ same epoch that the supervisor assigned while inserting the child. Consumers
 that need to associate their own state with that exact membership should retain
 the returned value rather than performing a later id-based snapshot lookup.
 
-## Reliable Restart Counting
+## Snapshot-Based Restart Views
+
+Use `SupervisorHandle::monitor_restart(id)` for the per-child recovery
+predicate: it captures that direct child's generation synchronously, then
+resolves only when a later generation is observed in `Running` state. This is
+readiness-gated recovery completion, not merely a count of scheduled restarts.
+Creation is infallible so callers pay one error path: an unknown child, a child
+already being removed, or a child removed while waiting is reported as
+`RestartMonitorError::ChildUnavailable` when the monitor is awaited.
+
+Use `RestartWatch` for an ongoing aggregate count of scheduled restarts among
+a supervisor's direct children. It folds the snapshot's monotonic
+`total_restarts` counter into deltas; `watch_restarts_to` pumps the cumulative
+total into an actor mailbox.
+
+### Reliable Restart Counting
 
 For control logic that reacts to restart activity — an aggregate restart
 breaker, for example — pump the reliable counts directly into its actor:

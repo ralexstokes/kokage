@@ -27,11 +27,9 @@ async fn monitor_restart_resolves_after_child_returns_running() {
         .expect("valid supervisor")
         .spawn();
 
-    let restart = handle
-        .monitor_restart("worker")
-        .expect("worker child should be known");
+    let restart = handle.monitor_restart("worker");
     assert_eq!(restart.id(), "worker");
-    assert_eq!(restart.baseline_generation(), 0);
+    assert_eq!(restart.baseline_generation(), Some(0));
 
     trigger_failure.notify_one();
 
@@ -58,10 +56,7 @@ async fn monitor_created_after_completed_restart_waits_for_next_restart() {
     trigger_failure.notify_one();
     wait_for_child_running(&mut snapshots, "worker", 1).await;
 
-    let restart = handle
-        .monitor_restart("worker")
-        .expect("worker child should be known")
-        .into_future();
+    let restart = handle.monitor_restart("worker").into_future();
     tokio::pin!(restart);
 
     timeout(common::QUIET_TIMEOUT, restart.as_mut())
@@ -112,10 +107,10 @@ async fn monitor_restart_allows_coalesced_generations() {
         .expect("valid supervisor")
         .spawn();
 
-    let restart = handle
-        .monitor_restart("worker")
-        .expect("worker child should be known");
-    let baseline = restart.baseline_generation();
+    let restart = handle.monitor_restart("worker");
+    let baseline = restart
+        .baseline_generation()
+        .expect("worker should be available at monitor creation");
 
     trigger_failure.notify_one();
 
@@ -142,9 +137,7 @@ async fn monitor_restart_errors_when_child_is_removed() {
         .expect("valid supervisor")
         .spawn();
 
-    let restart = handle
-        .monitor_restart("worker")
-        .expect("worker child should be known");
+    let restart = handle.monitor_restart("worker");
     handle
         .remove_child("worker")
         .await
@@ -155,7 +148,7 @@ async fn monitor_restart_errors_when_child_is_removed() {
         .expect("restart monitor should resolve");
     assert_eq!(
         result,
-        Err(RestartMonitorError::ChildRemoved("worker".to_owned()))
+        Err(RestartMonitorError::ChildUnavailable("worker".to_owned()))
     );
 
     handle.shutdown();
@@ -182,9 +175,7 @@ async fn monitor_restart_errors_when_restart_intensity_is_exhausted() {
         .expect("valid supervisor")
         .spawn();
 
-    let restart = handle
-        .monitor_restart("worker")
-        .expect("worker child should be known");
+    let restart = handle.monitor_restart("worker");
     trigger_failure.notify_one();
 
     let result = timeout(common::EVENT_TIMEOUT, restart.into_future())
@@ -200,7 +191,7 @@ async fn monitor_restart_errors_when_restart_intensity_is_exhausted() {
 }
 
 #[tokio::test]
-async fn monitor_restart_errors_synchronously_during_removal_window() {
+async fn monitor_restart_reports_unavailable_when_created_during_removal() {
     let handle = SupervisorBuilder::new()
         .child(
             ChildSpec::new("worker", |_ctx| async move {
@@ -227,19 +218,21 @@ async fn monitor_restart_errors_synchronously_during_removal_window() {
     })
     .await;
 
-    let error = handle
-        .monitor_restart("worker")
-        .expect_err("constructor should reject a child in the removal window");
+    let monitor = handle.monitor_restart("worker");
+    assert_eq!(monitor.baseline_generation(), None);
+    let error = monitor
+        .await
+        .expect_err("monitor should reject a child in the removal window");
     assert_eq!(
         error,
-        RestartMonitorError::ChildRemoved("worker".to_owned())
+        RestartMonitorError::ChildUnavailable("worker".to_owned())
     );
 
     removal.abort();
 }
 
 #[tokio::test]
-async fn monitor_restart_unknown_child_errors_immediately() {
+async fn monitor_restart_unknown_child_errors_when_awaited() {
     let handle = SupervisorBuilder::new()
         .child(ChildSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -249,10 +242,15 @@ async fn monitor_restart_unknown_child_errors_immediately() {
         .expect("valid supervisor")
         .spawn();
 
-    let error = handle
-        .monitor_restart("nope")
-        .expect_err("unknown child should fail synchronously");
-    assert_eq!(error, RestartMonitorError::UnknownChild("nope".to_owned()));
+    let monitor = handle.monitor_restart("nope");
+    assert_eq!(monitor.baseline_generation(), None);
+    let error = monitor
+        .await
+        .expect_err("unknown child should fail on await");
+    assert_eq!(
+        error,
+        RestartMonitorError::ChildUnavailable("nope".to_owned())
+    );
 
     shutdown(handle).await;
 }

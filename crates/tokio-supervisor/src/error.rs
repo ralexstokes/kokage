@@ -71,17 +71,14 @@ pub enum ControlError {
     Internal(String),
 }
 
-/// Errors from [`SupervisorHandle::monitor_restart`](crate::SupervisorHandle::monitor_restart)
-/// and the [`RestartMonitor`](crate::RestartMonitor) future.
+/// Errors produced while awaiting a [`RestartMonitor`](crate::RestartMonitor).
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RestartMonitorError {
-    /// No child with this id is known to the supervisor.
-    #[error("unknown child id: {0}")]
-    UnknownChild(String),
-    /// The child was removed before the awaited restart happened.
-    #[error("child removed: {0}")]
-    ChildRemoved(String),
+    /// The child was absent when the monitor was created or was removed
+    /// before the awaited restart completed.
+    #[error("child unavailable: {0}")]
+    ChildUnavailable(String),
     /// The supervisor stopped before the awaited restart happened.
     #[error("supervisor stopped")]
     SupervisorStopped,

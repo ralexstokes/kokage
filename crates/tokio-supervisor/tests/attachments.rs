@@ -185,9 +185,7 @@ async fn reincarnation_never_exposes_a_displaced_nested_attachment_identity() {
             }
         });
 
-        let restart = root
-            .monitor_restart("middle")
-            .expect("middle restart is monitored");
+        let restart = root.monitor_restart("middle");
         crash.notify_one();
         timeout(Duration::from_secs(1), restart.into_future())
             .await

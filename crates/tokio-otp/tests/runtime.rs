@@ -564,10 +564,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         }
     });
 
-    let restart = handle
-        .supervisor_handle()
-        .monitor_restart("workers")
-        .expect("subtree child is known");
+    let restart = handle.supervisor_handle().monitor_restart("workers");
     static_ref.send(()).await.expect("failure triggered");
     timeout(Duration::from_secs(1), restart.into_future())
         .await
@@ -634,10 +631,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
         .expect("dynamic actor added");
     assert_eq!(root.actor_stats().len(), 2);
 
-    let restart = root
-        .supervisor_handle()
-        .monitor_restart("workers")
-        .expect("subtree is monitored");
+    let restart = root.supervisor_handle().monitor_restart("workers");
     static_ref.send(()).await.expect("failure triggered");
     timeout(Duration::from_secs(1), restart.into_future())
         .await
@@ -685,10 +679,7 @@ async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
             .any(|stats| stats.actor_id == "worker")
     );
 
-    let restart = root
-        .supervisor_handle()
-        .monitor_restart("parent")
-        .expect("parent subtree is monitored");
+    let restart = root.supervisor_handle().monitor_restart("parent");
     fuse.send(()).await.expect("parent failure triggered");
     timeout(Duration::from_secs(1), restart.into_future())
         .await
@@ -1036,10 +1027,7 @@ async fn runtime_handle_exposes_restart_monitor_via_supervisor_handle() {
         .expect("runtime builds");
     let handle = runtime.spawn();
 
-    let restart = handle
-        .supervisor_handle()
-        .monitor_restart("worker")
-        .expect("worker child should be known");
+    let restart = handle.supervisor_handle().monitor_restart("worker");
     worker_ref.send(()).await.expect("message sent");
 
     let generation = timeout(Duration::from_secs(1), restart.into_future())
@@ -1162,10 +1150,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
         5
     );
 
-    let restart = handle
-        .supervisor_handle()
-        .monitor_restart("counter")
-        .expect("counter child should be known");
+    let restart = handle.supervisor_handle().monitor_restart("counter");
     counter.send(CounterMsg::Crash).await.expect("crash sent");
     timeout(Duration::from_secs(2), restart.into_future())
         .await

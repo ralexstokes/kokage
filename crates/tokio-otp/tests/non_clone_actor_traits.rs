@@ -114,10 +114,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
             .expect("first incarnation replies"),
         (0, 1)
     );
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("handler")
-        .expect("restart monitor exists");
+    let restarted = handle.supervisor_handle().monitor_restart("handler");
     actor_ref
         .send(ProbeMsg::Crash)
         .await
@@ -184,10 +181,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
 
     actor_ref.send(false).await.expect("first message accepted");
     assert_eq!(observed_rx.recv().await, Some((0, 1)));
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("raw")
-        .expect("restart monitor exists");
+    let restarted = handle.supervisor_handle().monitor_restart("raw");
     actor_ref.send(true).await.expect("crash accepted");
     tokio::time::timeout(Duration::from_secs(1), restarted)
         .await

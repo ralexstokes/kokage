@@ -583,9 +583,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
         }
     }
 
-    let restart = handle
-        .monitor_restart("nested")
-        .expect("nested child should be monitorable");
+    let restart = handle.monitor_restart("nested");
     fail_first.notify_one();
     assert_eq!(restart.await.expect("nested child should restart"), 1);
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);

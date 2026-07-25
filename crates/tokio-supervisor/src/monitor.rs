@@ -16,17 +16,19 @@ use crate::{
 /// The monitor resolves when the watched direct child is next observed
 /// [`Running`](ChildStateView::Running) with a generation greater than the
 /// baseline captured at construction time. Explicitly readiness-gated
-/// children become running only after they report readiness.
+/// children become running only after they report readiness. This is a
+/// convenience predicate over the primitive supervisor snapshot watch, not a
+/// separate event channel.
 pub struct RestartMonitor {
     id: String,
-    baseline_generation: u64,
+    baseline_generation: Option<u64>,
     snapshots: watch::Receiver<SupervisorSnapshot>,
 }
 
 impl RestartMonitor {
     pub(crate) fn new(
         id: String,
-        baseline_generation: u64,
+        baseline_generation: Option<u64>,
         snapshots: watch::Receiver<SupervisorSnapshot>,
     ) -> Self {
         Self {
@@ -41,16 +43,21 @@ impl RestartMonitor {
         &self.id
     }
 
-    /// The generation observed when the monitor was created.
-    pub fn baseline_generation(&self) -> u64 {
+    /// The generation observed when the monitor was created, or `None` if the
+    /// child was already unavailable.
+    pub fn baseline_generation(&self) -> Option<u64> {
         self.baseline_generation
     }
 
     async fn wait(mut self) -> Result<u64, RestartMonitorError> {
+        let Some(baseline_generation) = self.baseline_generation else {
+            return Err(RestartMonitorError::ChildUnavailable(self.id));
+        };
+
         loop {
             let observation = {
                 let snapshot = self.snapshots.borrow();
-                observe_snapshot(&snapshot, &self.id, self.baseline_generation)
+                observe_snapshot(&snapshot, &self.id, baseline_generation)
             };
 
             match observation {
@@ -88,13 +95,13 @@ impl IntoFuture for RestartMonitor {
 /// Reliable observer of a supervisor's cumulative restart activity, created by
 /// [`SupervisorHandle::watch_restarts`](crate::SupervisorHandle::watch_restarts).
 ///
-/// The watch tracks [`SupervisorSnapshot::total_restarts`] over the lossless
-/// snapshot `watch` channel. The channel conflates intermediate snapshots but
-/// never lags, and the counter is cumulative, so none of the restarts the
-/// counter covers is ever silently missed: a batch of conflated updates is
-/// reported as a single delta covering every restart in the batch. This makes
-/// it a sound control input for safety mechanisms such as aggregate restart
-/// breakers — unlike counting
+/// This is a convenience fold over the primitive snapshot watch. It tracks
+/// [`SupervisorSnapshot::total_restarts`] over the lossless `watch` channel.
+/// The channel conflates intermediate snapshots but never lags, and the
+/// counter is cumulative, so none of the restarts the counter covers is ever
+/// silently missed: a batch of conflated updates is reported as a single
+/// delta covering every restart in the batch. This makes it a sound control
+/// input for safety mechanisms such as aggregate restart breakers — unlike counting
 /// [`SupervisorEvent`](crate::SupervisorEvent)s from the lossy broadcast
 /// channel.
 ///
@@ -203,7 +210,7 @@ fn observe_snapshot(
     baseline_generation: u64,
 ) -> RestartObservation {
     let Some(child) = snapshot.child(id) else {
-        return RestartObservation::Failed(RestartMonitorError::ChildRemoved(id.to_owned()));
+        return RestartObservation::Failed(RestartMonitorError::ChildUnavailable(id.to_owned()));
     };
 
     if child.generation > baseline_generation && child.state == ChildStateView::Running {
@@ -211,7 +218,7 @@ fn observe_snapshot(
     }
 
     if child.membership == ChildMembershipView::Removing {
-        return RestartObservation::Failed(RestartMonitorError::ChildRemoved(id.to_owned()));
+        return RestartObservation::Failed(RestartMonitorError::ChildUnavailable(id.to_owned()));
     }
 
     if snapshot.state == SupervisorStateView::Stopped {

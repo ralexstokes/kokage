@@ -84,7 +84,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Crash the worker. Each run gets a fresh mailbox, so an order queued
     // behind the jam would be lost with it — wait for the supervisor to
     // restart the worker before sending more.
-    let restart = handle.supervisor_handle().monitor_restart("worker")?;
+    let restart = handle.supervisor_handle().monitor_restart("worker");
     orders.send("jam".to_owned()).await?;
     restart.await?;
 

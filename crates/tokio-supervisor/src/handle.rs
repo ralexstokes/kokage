@@ -12,7 +12,7 @@ use tokio::{
 use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
-    error::{ControlError, RestartMonitorError, SupervisorError},
+    error::{ControlError, SupervisorError},
     event::SupervisorEvent,
     monitor::{RestartMonitor, RestartWatch},
     snapshot::{ChildMembershipView, SupervisorSnapshot, SupervisorStateView},
@@ -471,10 +471,12 @@ pub(crate) struct SupervisorHandleInit {
 /// - **Dynamic children**: [`add_child`](Self::add_child) /
 ///   [`remove_child`](Self::remove_child). Use [`supervisor`](Self::supervisor)
 ///   to obtain a scoped handle before changing a nested supervisor.
-/// - **Observability**: [`subscribe`](Self::subscribe) for (lossy) events,
-///   [`snapshot`](Self::snapshot) / [`subscribe_snapshots`](Self::subscribe_snapshots)
-///   for state, [`watch_restarts`](Self::watch_restarts) for reliable restart
-///   counting.
+/// - **Observability** has two primitives: [`subscribe`](Self::subscribe) is a
+///   lossy history stream for telemetry, while [`snapshot`](Self::snapshot) /
+///   [`subscribe_snapshots`](Self::subscribe_snapshots) provide current state
+///   over a lossless, conflating watch channel. [`monitor_restart`](Self::monitor_restart)
+///   and [`watch_restarts`](Self::watch_restarts) are convenience views over
+///   snapshots for per-child recovery and aggregate restart counting.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
 /// Dropping the last handle clone requests graceful shutdown, equivalent to
@@ -747,27 +749,25 @@ impl SupervisorHandle {
     /// Call this before triggering the crash: the baseline generation is
     /// captured here, synchronously, not when the monitor is awaited. A monitor
     /// created after a restart has fully completed waits for the next restart.
+    /// Creation is infallible; if the child is unknown or already being
+    /// removed, the returned monitor reports
+    /// [`RestartMonitorError::ChildUnavailable`](crate::RestartMonitorError::ChildUnavailable)
+    /// when awaited.
     ///
     /// This observes only direct children of this supervisor. Children inside
     /// nested supervisors are not visible by id at this level; a path-aware
     /// monitor is a future extension.
-    pub fn monitor_restart(
-        &self,
-        id: impl Into<String>,
-    ) -> Result<RestartMonitor, RestartMonitorError> {
+    pub fn monitor_restart(&self, id: impl Into<String>) -> RestartMonitor {
         let id = id.into();
         let snapshots_rx = self.snapshots_rx();
         let snapshot = snapshots_rx.borrow();
-        let child = snapshot
+        let generation = snapshot
             .child(&id)
-            .ok_or_else(|| RestartMonitorError::UnknownChild(id.clone()))?;
-        if child.membership == ChildMembershipView::Removing {
-            return Err(RestartMonitorError::ChildRemoved(id));
-        }
-        let generation = child.generation;
+            .filter(|child| child.membership == ChildMembershipView::Active)
+            .map(|child| child.generation);
         drop(snapshot);
 
-        Ok(RestartMonitor::new(id, generation, snapshots_rx))
+        RestartMonitor::new(id, generation, snapshots_rx)
     }
 
     /// Returns a new receiver for supervisor lifecycle events.
@@ -800,8 +800,8 @@ impl SupervisorHandle {
         self.events_tx().subscribe()
     }
 
-    /// Returns a [`RestartWatch`] that reliably reports this supervisor's
-    /// restart activity as it happens.
+    /// Returns a [`RestartWatch`] convenience view that reliably reports this
+    /// supervisor's restart activity from snapshot counters.
     ///
     /// The watch observes the monotonic
     /// [`SupervisorSnapshot::total_restarts`] counter over the lossless
@@ -838,8 +838,11 @@ impl SupervisorHandle {
         self.snapshots_rx().borrow().clone()
     }
 
-    /// Returns a watch receiver that is updated each time the supervisor's
-    /// snapshot changes. Useful for polling or `wait_for`-style patterns.
+    /// Returns the primitive state watch, updated each time the supervisor's
+    /// snapshot changes. Useful for polling or `wait_for`-style patterns and
+    /// as the foundation for higher-level observers such as
+    /// [`monitor_restart`](Self::monitor_restart) and
+    /// [`watch_restarts`](Self::watch_restarts).
     ///
     /// # Waiting until all children are running
     ///

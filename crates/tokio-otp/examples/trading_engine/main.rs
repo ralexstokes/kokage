@@ -435,7 +435,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree")
         .supervisor_handle();
-    let restarted = venues.monitor_restart("venue-a-feed")?;
+    let restarted = venues.monitor_restart("venue-a-feed");
     app.venue_a_feed.send(FeedMsg::Crash).await?;
     tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
     await_until(|| async {
@@ -656,7 +656,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
         ("venue-a-feed", &app.venue_a_feed),
         ("venue-b-feed", &app.venue_b_feed),
     ] {
-        let restarted = venues.monitor_restart(id)?;
+        let restarted = venues.monitor_restart(id);
         feed.send(FeedMsg::Crash).await?;
         tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
     }
