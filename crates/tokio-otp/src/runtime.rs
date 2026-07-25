@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     ActorFactory, ActorOptions, ActorRef, ActorStats, MailboxMode, MessageSize, RawActor,
-    RebindPolicy, RunnableActor, RunnableActorFactory, SupervisorPathSegment,
+    RunnableActor, RunnableActorFactory, SupervisorPathSegment,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -776,14 +776,13 @@ pub(crate) fn actor_child_spec(
 ) -> ChildSpec {
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
-    let rebind = rebind_policy_for_restart(restart);
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let mut child = ChildSpec::new(actor_id, move |ctx| {
         let actor = child_guard.actor.clone();
         async move {
             actor
-                .run_until_ready(ctx.shutdown_token().cancelled(), rebind, || {
+                .run_until_ready(ctx.shutdown_token().cancelled(), restart, || {
                     ctx.mark_ready()
                 })
                 .await
@@ -808,22 +807,6 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
         id: identity.id.clone(),
         membership_epoch: identity.membership_epoch,
         generation: identity.generation,
-    }
-}
-
-fn rebind_policy_for_restart(restart: RestartPolicy) -> RebindPolicy {
-    match restart {
-        RestartPolicy::Always => RebindPolicy::Always,
-        RestartPolicy::OnFailure => RebindPolicy::OnFailure,
-        RestartPolicy::Never => RebindPolicy::Never,
-        // `RestartPolicy` is intentionally extensible. A future policy must
-        // opt in to a more precise binding policy when this crate adopts it.
-        _ => {
-            tracing::warn!(
-                "unknown restart policy; defaulting actor rebind behavior to on-failure"
-            );
-            RebindPolicy::OnFailure
-        }
     }
 }
 

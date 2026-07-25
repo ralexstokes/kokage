@@ -115,7 +115,7 @@
 //!
 //! ```
 //! use tokio_otp::{
-//!     Actor, ActorContext, ActorResult, CancellationToken, GraphBuilder, RebindPolicy, Reply,
+//!     Actor, ActorContext, ActorResult, CancellationToken, GraphBuilder, Reply, RestartPolicy,
 //! };
 //! use tokio_otp::prelude::Continue;
 //!
@@ -155,7 +155,7 @@
 //! let stop = CancellationToken::new();
 //! let run = tokio::spawn({
 //!     let stop = stop.clone();
-//!     async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+//!     async move { actor.run_until(stop.cancelled(), RestartPolicy::Never).await }
 //! });
 //!
 //! counter.send(CounterMsg::Add(2)).await.expect("send succeeded");
@@ -271,7 +271,7 @@ pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, BoxError, CallError, CancellationHandle, Down, DownReason, DrainPolicy,
     Flow, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor,
-    RebindPolicy, Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline, StepHandle,
+    Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline, StepHandle,
     SupervisorPathSegment, TryRecvError,
 };
 pub use builder::RuntimeBuilder;

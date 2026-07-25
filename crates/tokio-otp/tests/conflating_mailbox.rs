@@ -10,7 +10,7 @@ use std::{
 use tokio::sync::{Notify, mpsc};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorResult, CallError, DrainPolicy, GraphBuilder,
-    MailboxMode, MessageSize, RawActor, RebindPolicy, Reply, prelude::Continue,
+    MailboxMode, MessageSize, RawActor, Reply, RestartPolicy, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -68,7 +68,11 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     started_rx.recv().await.expect("actor started");
 
@@ -132,7 +136,11 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     started_rx.recv().await.expect("actor started");
 
@@ -187,7 +195,11 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     started_rx.recv().await.expect("actor started");
 
@@ -271,7 +283,11 @@ async fn replaced_call_reports_reply_dropped() {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     started_rx.recv().await.expect("actor started");
 
@@ -361,7 +377,11 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     started_rx.recv().await.expect("actor started");
 
@@ -409,7 +429,11 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
-        async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await }
+        async move {
+            actor
+                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .await
+        }
     });
     started_rx.recv().await.expect("actor started");
 

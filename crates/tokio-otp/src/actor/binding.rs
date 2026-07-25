@@ -8,6 +8,7 @@ use std::{
 };
 
 use tokio::sync::{Notify, mpsc, watch};
+use tokio_supervisor::RestartPolicy;
 
 use crate::actor::{
     error::SendError,
@@ -659,20 +660,6 @@ impl<M> Clone for BindingState<M> {
     }
 }
 
-/// Controls whether a binding should wait for another mailbox after a run
-/// exits.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum RebindPolicy {
-    /// A rebind is always expected unless shutdown was requested.
-    Always,
-    /// A rebind is expected after failure, panic, cancellation, or drop.
-    OnFailure,
-    /// No rebind is expected.
-    #[default]
-    Never,
-}
-
 pub(crate) trait BindingLifecycle: Send + Sync {
     fn unbind(&self);
     fn terminate(&self);
@@ -829,7 +816,7 @@ impl<M> Drop for BindingCore<M> {
 pub(crate) struct BindingGuard<M> {
     core: Arc<BindingCore<M>>,
     observability: GraphObservability,
-    rebind_policy: RebindPolicy,
+    restart_policy: RestartPolicy,
 }
 
 impl<M> BindingGuard<M> {
@@ -837,23 +824,27 @@ impl<M> BindingGuard<M> {
         core: Arc<BindingCore<M>>,
         mailbox: MailboxRef<M>,
         observability: GraphObservability,
-        rebind_policy: RebindPolicy,
+        restart_policy: RestartPolicy,
     ) -> Self {
         core.bind(mailbox);
         observability.emit_mailbox_bound(core.actor_id());
         Self {
             core,
             observability,
-            rebind_policy,
+            restart_policy,
         }
     }
 }
 
 impl<M> Drop for BindingGuard<M> {
     fn drop(&mut self) {
-        match self.rebind_policy {
-            RebindPolicy::Always | RebindPolicy::OnFailure => self.core.unbind(),
-            RebindPolicy::Never => self.core.terminate(),
+        if matches!(self.restart_policy, RestartPolicy::Never) {
+            self.core.terminate();
+        } else {
+            // A dropped run is a failure for restart purposes. Unknown future
+            // policies remain rebindable until `run_disposition` can make the
+            // final decision from the observed exit status.
+            self.core.unbind();
         }
         self.observability
             .emit_mailbox_cleared(self.core.actor_id());

@@ -10,8 +10,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, RawActor, RebindPolicy, Reply,
-    RestartPolicy, Runtime, prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, RawActor, Reply, RestartPolicy,
+    Runtime, prelude::Continue,
 };
 
 struct HandlerWithNonCloneState {
@@ -221,7 +221,7 @@ async fn constructor_panic_uses_the_actor_panic_path() {
     let actor = graph.actors()[0].clone();
 
     let joined =
-        tokio::spawn(async move { actor.run_until(pending::<()>(), RebindPolicy::Never).await })
+        tokio::spawn(async move { actor.run_until(pending::<()>(), RestartPolicy::Never).await })
             .await;
     assert!(joined.expect_err("constructor panic propagates").is_panic());
 }

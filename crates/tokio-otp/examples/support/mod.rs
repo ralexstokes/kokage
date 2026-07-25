@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::task::JoinHandle;
-use tokio_otp::{ActorRunError, CancellationToken, Graph, RebindPolicy};
+use tokio_otp::{ActorRunError, CancellationToken, Graph, RestartPolicy};
 
 pub struct ActorTasks {
     stop: CancellationToken,
@@ -17,9 +17,11 @@ impl ActorTasks {
             .cloned()
             .map(|actor| {
                 let stop = stop.clone();
-                tokio::spawn(
-                    async move { actor.run_until(stop.cancelled(), RebindPolicy::Never).await },
-                )
+                tokio::spawn(async move {
+                    actor
+                        .run_until(stop.cancelled(), RestartPolicy::Never)
+                        .await
+                })
             })
             .collect();
         Self { stop, tasks }

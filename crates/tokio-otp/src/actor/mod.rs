@@ -2,9 +2,8 @@
 //! `tokio-actor` crate).
 //!
 //! This module tree is private; its public API is re-exported flat from the
-//! crate root. The seam between the actor layer and the runtime layer —
-//! the `RestartPolicy` → `RebindPolicy` mapping and the terminate-binding drop
-//! guard — lives in `crate::runtime` and is a crate-internal invariant.
+//! crate root. The terminate-binding drop guard connecting the actor and
+//! runtime layers lives in `crate::runtime` as a crate-internal invariant.
 
 mod binding;
 mod builder;
@@ -18,7 +17,7 @@ mod monitor;
 mod observability;
 mod raw;
 
-pub use binding::{ActorStats, MailboxMode, RebindPolicy, SupervisorPathSegment};
+pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::CancellationHandle;
 pub use context::{ActorContext, ActorRef, Reply, StepHandle};
