@@ -106,7 +106,10 @@ membership can be recreated from the graph when its supervisor restarts.
 the same ref keeps working across restarts of that actor. Its stability ends at
 the membership boundary: remove an actor and that ref becomes terminal. Adding
 another actor with the same id returns a fresh ref; the old one never silently
-rebinds to the new occupant.
+rebinds to the new occupant. The add reply means the membership was inserted
+and startup was scheduled. In sequential mode the actor may still be queued
+behind another child's readiness gate; the ref is usable immediately, while
+`supervisor_handle().wait_started()` waits for readiness.
 
 Removal is sequenced supervisor child removal. `remove_child(label)` marks the
 membership `Removing` and starts its configured shutdown. When cooperative
@@ -177,7 +180,10 @@ session
 Dynamic subtrees use the same actor registry nodes and recursive stats path as
 statically declared subtrees. Removing one with `remove_child` removes that
 registry node, and retained handles fail control operations with
-`ControlError::Unavailable`.
+`ControlError::Unavailable`. `add_subtree` also resolves on insertion. Its
+returned handle and attachment are available while a sequential parent still
+has the subtree queued, and control work sent through that handle waits in the
+subtree's own channel until its loop starts.
 
 Restart recovery follows the builder boundary. If a dynamic subtree itself
 restarts, actors and nested subtrees declared in the builder are recreated;

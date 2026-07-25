@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::{Mutex, Notify};
-use tokio_otp::{SupervisorError, prelude::*};
+use tokio::sync::{Mutex, Notify, watch};
+use tokio_otp::{ChildSpec, SupervisorError, prelude::*};
 
 #[derive(Clone)]
 struct Probe {
@@ -32,6 +32,121 @@ impl Actor for Probe {
         self.order.lock().await.push(message);
         Ok(Continue)
     }
+}
+
+#[derive(Clone)]
+struct AddsChildOnStart {
+    handle_rx: watch::Receiver<Option<RuntimeHandle>>,
+    added_started: Arc<Notify>,
+}
+
+impl Actor for AddsChildOnStart {
+    type Msg = ();
+
+    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+        let handle = {
+            let ready = self
+                .handle_rx
+                .wait_for(Option::is_some)
+                .await
+                .expect("test handle sender remains open");
+            ready
+                .as_ref()
+                .expect("runtime handle was installed")
+                .clone()
+        };
+        let added_started = Arc::clone(&self.added_started);
+        handle
+            .supervisor_handle()
+            .add_child(ChildSpec::new("added-from-on-start", move |ctx| {
+                let added_started = Arc::clone(&added_started);
+                async move {
+                    added_started.notify_one();
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            }))
+            .await?;
+        Ok(Continue)
+    }
+
+    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+        Ok(Continue)
+    }
+}
+
+#[tokio::test]
+async fn actor_on_start_can_await_add_child_on_its_own_supervisor() {
+    let (handle_tx, handle_rx) = watch::channel::<Option<RuntimeHandle>>(None);
+    let added_started = Arc::new(Notify::new());
+    let mut graph = GraphBuilder::new();
+    graph.add({
+        let added_started = Arc::clone(&added_started);
+        move || AddsChildOnStart {
+            handle_rx: handle_rx.clone(),
+            added_started: Arc::clone(&added_started),
+        }
+    });
+    let handle = Runtime::builder()
+        .graph(graph.build().expect("valid graph"))
+        .start_mode(StartMode::Sequential)
+        .build()
+        .expect("valid runtime")
+        .spawn();
+    handle_tx
+        .send(Some(handle.clone()))
+        .expect("startup actor retains handle receiver");
+
+    tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
+        .await
+        .expect("on_start add should not deadlock sequential startup")
+        .expect("runtime should become ready");
+    tokio::time::timeout(Duration::from_secs(1), added_started.notified())
+        .await
+        .expect("added child should start after on_start returns");
+    handle.shutdown_and_wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn add_subtree_returns_its_handle_while_sequentially_queued() {
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let release = Arc::new(Notify::new());
+    let mut graph = GraphBuilder::new();
+    graph.add({
+        let order = Arc::clone(&order);
+        let release = Arc::clone(&release);
+        move || Probe {
+            name: "gate",
+            order: Arc::clone(&order),
+            release: Some(Arc::clone(&release)),
+        }
+    });
+    let handle = Runtime::builder()
+        .graph(graph.build().expect("valid graph"))
+        .start_mode(StartMode::Sequential)
+        .build()
+        .expect("valid runtime")
+        .spawn();
+
+    let subtree = tokio::time::timeout(
+        Duration::from_secs(1),
+        handle.add_subtree("queued-subtree", Runtime::builder()),
+    )
+    .await
+    .expect("add_subtree should resolve on insertion")
+    .expect("queued subtree attachment should be discoverable");
+    assert!(handle.subtree("queued-subtree").is_some());
+    let snapshot = handle.snapshot();
+    let queued = snapshot
+        .child("queued-subtree")
+        .expect("queued subtree is visible in parent membership");
+    assert_eq!(queued.state, tokio_otp::ChildStateView::Starting);
+    assert!(!queued.started);
+    assert!(subtree.snapshot().children.is_empty());
+
+    release.notify_one();
+    handle.wait_started().await.unwrap();
+    handle.shutdown_and_wait().await.unwrap();
 }
 
 #[tokio::test]

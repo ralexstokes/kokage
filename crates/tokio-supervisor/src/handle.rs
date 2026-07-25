@@ -72,6 +72,15 @@ struct IncarnationBinding {
     done_rx: DoneReceiver,
 }
 
+pub(crate) struct InitialIncarnationChannels {
+    pub(crate) shutdown_tx: watch::Sender<bool>,
+    pub(crate) shutdown_rx: watch::Receiver<bool>,
+    pub(crate) command_tx: mpsc::Sender<SupervisorCommand>,
+    pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
+    pub(crate) done_tx: DoneSender,
+    pub(crate) done_rx: DoneReceiver,
+}
+
 pub(crate) type NestedChannels = Arc<Mutex<HashMap<String, Arc<StableSupervisorChannels>>>>;
 pub(crate) type AttachedChildrenState = Arc<Mutex<AttachedChildrenView>>;
 
@@ -115,6 +124,7 @@ struct SnapshotSlot {
 
 pub(crate) struct StableSupervisorChannels {
     binding: Mutex<Option<IncarnationBinding>>,
+    initial_incarnation: Mutex<Option<InitialIncarnationChannels>>,
     events_tx: broadcast::Sender<SupervisorEvent>,
     snapshots: Mutex<SnapshotSlot>,
     attached_children: AttachedChildrenState,
@@ -130,6 +140,7 @@ pub(crate) struct StableSupervisorChannels {
 impl StableSupervisorChannels {
     pub(crate) fn new(
         initial_snapshot: SupervisorSnapshot,
+        control_capacity: usize,
         event_capacity: usize,
         nested_channels: NestedChannels,
         attached_children: Vec<AttachedChildState>,
@@ -137,8 +148,19 @@ impl StableSupervisorChannels {
     ) -> Arc<Self> {
         let (events_tx, _) = broadcast::channel(event_capacity);
         let (snapshots_tx, snapshots_rx) = watch::channel(initial_snapshot);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (command_tx, command_rx) = mpsc::channel(control_capacity);
+        let (done_tx, done_rx) = watch::channel(None);
         Arc::new(Self {
             binding: Mutex::new(None),
+            initial_incarnation: Mutex::new(Some(InitialIncarnationChannels {
+                shutdown_tx,
+                shutdown_rx,
+                command_tx,
+                command_rx,
+                done_tx,
+                done_rx,
+            })),
             events_tx,
             snapshots: Mutex::new(SnapshotSlot {
                 tx: Some(snapshots_tx),
@@ -213,6 +235,28 @@ impl StableSupervisorChannels {
             .clone()
     }
 
+    fn initial_binding(&self) -> Option<IncarnationBinding> {
+        self.initial_incarnation
+            .lock()
+            .expect("initial incarnation slot poisoned")
+            .as_ref()
+            .map(|initial| IncarnationBinding {
+                generation: 0,
+                shutdown_tx: initial.shutdown_tx.clone(),
+                control: ControlEndpoint {
+                    command_tx: initial.command_tx.clone(),
+                },
+                done_rx: initial.done_rx.clone(),
+            })
+    }
+
+    pub(crate) fn take_initial_incarnation(&self) -> Option<InitialIncarnationChannels> {
+        self.initial_incarnation
+            .lock()
+            .expect("initial incarnation slot poisoned")
+            .take()
+    }
+
     pub(crate) fn events(&self) -> broadcast::Sender<SupervisorEvent> {
         self.events_tx.clone()
     }
@@ -250,6 +294,10 @@ impl StableSupervisorChannels {
     /// recreation mints a fresh one), or an orphaned dynamic child that no
     /// incarnation will spawn again.
     pub(crate) fn terminal(&self) {
+        self.initial_incarnation
+            .lock()
+            .expect("initial incarnation slot poisoned")
+            .take();
         {
             let mut attached_children = self
                 .attached_children
@@ -320,6 +368,7 @@ mod tests {
         let channels = StableSupervisorChannels::new(
             stale_snapshot,
             8,
+            8,
             empty_nested_channels(),
             Vec::new(),
             true,
@@ -354,6 +403,7 @@ mod tests {
         );
         let channels = StableSupervisorChannels::new(
             initial_snapshot.clone(),
+            8,
             8,
             empty_nested_channels(),
             Vec::new(),
@@ -517,7 +567,7 @@ impl SupervisorHandle {
                 let _ = root.shutdown_tx.send(true);
             }
             HandleKind::Stable(stable) => {
-                if let Some(binding) = stable.binding() {
+                if let Some(binding) = stable.binding().or_else(|| stable.initial_binding()) {
                     let _ = binding.shutdown_tx.send(true);
                 }
             }
@@ -536,7 +586,10 @@ impl SupervisorHandle {
     /// epoch assigned to the child by the supervisor. The epoch is allocated
     /// atomically with insertion, so it identifies the membership created by
     /// this specific call even if the same child id is later removed and
-    /// reused.
+    /// reused. Success means the membership was inserted and its start was
+    /// scheduled; under [`StartMode::Sequential`](crate::StartMode::Sequential)
+    /// the child may still be queued behind an earlier readiness gate. Use
+    /// [`wait_started`](Self::wait_started) when readiness is required.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
         self.control_endpoint()?.add_child(child).await
     }
@@ -545,7 +598,10 @@ impl SupervisorHandle {
     /// control channels.
     ///
     /// On success, returns the membership epoch assigned atomically with the
-    /// insertion.
+    /// insertion. The nested handle and attachment are registered at insertion,
+    /// even when [`StartMode::Sequential`](crate::StartMode::Sequential) leaves
+    /// the child queued; use [`wait_started`](Self::wait_started) to await
+    /// readiness.
     pub async fn add_supervisor(
         &self,
         id: impl Into<String>,
@@ -654,11 +710,14 @@ impl SupervisorHandle {
                 (root.done_rx.clone(), join)
             }
             HandleKind::Stable(stable) => {
-                let binding = stable.binding().ok_or_else(|| {
-                    SupervisorError::Internal(
-                        "nested supervisor incarnation is unavailable".to_owned(),
-                    )
-                })?;
+                let binding = stable
+                    .binding()
+                    .or_else(|| stable.initial_binding())
+                    .ok_or_else(|| {
+                        SupervisorError::Internal(
+                            "nested supervisor incarnation is unavailable".to_owned(),
+                        )
+                    })?;
                 (binding.done_rx, None)
             }
         };
@@ -879,6 +938,7 @@ impl SupervisorHandle {
             HandleKind::Root(root) => Ok(root.control_endpoint()),
             HandleKind::Stable(stable) => stable
                 .binding()
+                .or_else(|| stable.initial_binding())
                 .map(|binding| binding.control)
                 .ok_or(ControlError::Unavailable),
         }
