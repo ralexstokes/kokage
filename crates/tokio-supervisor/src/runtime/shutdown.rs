@@ -54,7 +54,7 @@ impl SupervisorRuntime {
 
         async {
             self.state = SupervisorState::Stopping;
-            self.cancel_running_children();
+            self.cancel_running_children(DrainScope::All);
             self.send_event(SupervisorEvent::SupervisorStopping);
             self.drain_children(DrainReason::Shutdown, DrainScope::All)
                 .await?;
@@ -68,7 +68,7 @@ impl SupervisorRuntime {
     pub(crate) async fn drain_for_group_restart(
         &mut self,
     ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
-        self.cancel_running_children();
+        self.cancel_running_children(DrainScope::All);
         self.drain_children(DrainReason::GroupRestart, DrainScope::All)
             .await
     }
@@ -78,30 +78,16 @@ impl SupervisorRuntime {
         keys: &[ChildKey],
     ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
         let keys: HashSet<_> = keys.iter().copied().collect();
-        for &key in self.child_order.iter().rev() {
-            if !keys.contains(&key) {
-                continue;
-            }
-            let Some(child) = self.children.get_mut(key) else {
-                continue;
-            };
-            if matches!(
-                child.runtime.state,
-                RuntimeChildState::Running | RuntimeChildState::Starting
-            ) {
-                child.runtime.completion.mark_cancelled();
-                child.runtime.state = RuntimeChildState::Stopping;
-                if let Some(token) = child.runtime.active_token.as_ref() {
-                    token.cancel();
-                }
-            }
-        }
+        self.cancel_running_children(DrainScope::Subset(&keys));
         self.drain_children(DrainReason::RestForOneRestart, DrainScope::Subset(&keys))
             .await
     }
 
-    fn cancel_running_children(&mut self) {
+    fn cancel_running_children(&mut self, scope: DrainScope<'_>) {
         for &key in self.child_order.iter().rev() {
+            if !scope.contains(key) {
+                continue;
+            }
             let Some(child) = self.children.get_mut(key) else {
                 continue;
             };
@@ -112,9 +98,16 @@ impl SupervisorRuntime {
             ) {
                 child.runtime.completion.mark_cancelled();
                 child.runtime.state = RuntimeChildState::Stopping;
+                if matches!(scope, DrainScope::Subset(_))
+                    && let Some(token) = child.runtime.active_token.as_ref()
+                {
+                    token.cancel();
+                }
             }
         }
-        self.group_token.cancel();
+        if matches!(scope, DrainScope::All) {
+            self.group_token.cancel();
+        }
     }
 
     async fn drain_children(

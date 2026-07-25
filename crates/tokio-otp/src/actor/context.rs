@@ -971,7 +971,7 @@ impl<M: Send + 'static> ActorContext<M> {
         R: Send + 'static,
     {
         let cancellation = self.shutdown.child_token();
-        let _cancel_on_drop = CancelOnDrop(cancellation.clone());
+        let _cancel_on_drop = cancellation.clone().drop_guard();
         let joined = tokio::task::spawn_blocking(move || f(&cancellation)).await;
 
         match joined {
@@ -1072,14 +1072,6 @@ impl Drop for StepGuard {
         }
         self.finished.store(true, Ordering::Release);
         self.steps.changed.notify_one();
-    }
-}
-
-struct CancelOnDrop(CancellationToken);
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.0.cancel();
     }
 }
 

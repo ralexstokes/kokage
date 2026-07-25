@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant as StdInstant},
 };
@@ -19,7 +19,7 @@ use crate::{
     context::ChildReady,
     error::{ControlError, SupervisorError},
     event::{ExitStatusView, NestedEventNotification, SupervisorEvent},
-    handle::{NestedChannels, NestedHandles, StableSupervisorChannels, SupervisorCommand},
+    handle::{NestedChannels, StableSupervisorChannels, SupervisorCommand},
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     shutdown::AutoShutdown,
@@ -114,6 +114,67 @@ impl ChildEntry {
     }
 }
 
+/// Reconciles the stable identities retained from a previous incarnation with
+/// the nested supervisors in the static configuration.
+///
+/// Static identities are reused. Missing identities are recreated, while
+/// dynamic identities that collide with static children or are absent from
+/// the new incarnation are made terminal.
+fn reconcile_stable_identities(
+    children: &[ChildDefinition],
+    nested_channels: &NestedChannels,
+) -> HashMap<String, Arc<StableSupervisorChannels>> {
+    let mut identities = HashMap::new();
+    let mut displaced = Vec::new();
+    let mut channel_map = nested_channels.lock().expect("nested channel map poisoned");
+
+    for child in children {
+        let ChildKind::Supervisor(supervisor) = &child.kind else {
+            continue;
+        };
+
+        // A dynamically added child that happens to share the id is a
+        // different identity and must not be conflated with the recreated
+        // static child.
+        let reusable = channel_map
+            .get(&child.id)
+            .filter(|channels| channels.statically_configured())
+            .cloned();
+        let stable = reusable.unwrap_or_else(|| {
+            // The identity is missing (a previous incarnation removed this
+            // static child) or occupied by a dynamic child. Mint a fresh
+            // static identity and displace any dynamic occupant.
+            let stable = supervisor.stable_channels(true);
+            if let Some(occupant) = channel_map.insert(child.id.clone(), Arc::clone(&stable)) {
+                displaced.push(occupant);
+            }
+            stable
+        });
+        identities.insert(child.id.clone(), stable);
+    }
+
+    // Anything else was added dynamically in a previous incarnation. The
+    // replacement incarnation will never spawn it, including when its id now
+    // belongs to a static task, so close the identity instead of leaving its
+    // observers hanging.
+    let orphaned_ids: Vec<String> = channel_map
+        .keys()
+        .filter(|id| !identities.contains_key(*id))
+        .cloned()
+        .collect();
+    let orphaned = orphaned_ids
+        .into_iter()
+        .filter_map(|id| channel_map.remove(&id))
+        .collect::<Vec<_>>();
+    drop(channel_map);
+
+    for channels in orphaned.into_iter().chain(displaced) {
+        channels.terminal();
+    }
+
+    identities
+}
+
 /// Read-only configuration and identity, fixed at construction time.
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
@@ -165,7 +226,6 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
-    pub(crate) nested_handles: NestedHandles,
     pub(crate) nested_channels: NestedChannels,
     pub(crate) nested_event_tx: mpsc::Sender<NestedEventNotification>,
     pub(crate) nested_event_rx: mpsc::Receiver<NestedEventNotification>,
@@ -191,7 +251,6 @@ impl SupervisorRuntime {
         events: broadcast::Sender<SupervisorEvent>,
         snapshots: watch::Sender<SupervisorSnapshot>,
         command_rx: mpsc::Receiver<SupervisorCommand>,
-        nested_handles: NestedHandles,
         nested_channels: NestedChannels,
         path_prefix: Vec<String>,
         parent_link: Option<ParentLink>,
@@ -204,37 +263,17 @@ impl SupervisorRuntime {
         let mut children_by_id = HashMap::with_capacity(config.children.len());
         let mut child_order = Vec::with_capacity(config.children.len());
         let mut next_child_instance = 0u64;
+        let mut stable_identities = reconcile_stable_identities(&config.children, &nested_channels);
 
-        let mut displaced: Vec<Arc<StableSupervisorChannels>> = Vec::new();
-        let mut handle_map = nested_handles.lock().expect("nested handle map poisoned");
-        let mut channel_map = nested_channels.lock().expect("nested channel map poisoned");
         for spec in config.children {
             let id = spec.id.clone();
             let formatted_path = format_child_path(&path_prefix, &id);
             let child_nested_channels = match &spec.kind {
-                ChildKind::Supervisor(supervisor) => {
-                    // Reuse the stable identity only if it was minted for this
-                    // static child. A dynamically added child that happens to
-                    // share the id is a different identity and must not be
-                    // conflated with the recreated static child.
-                    let reusable = channel_map
-                        .get(&id)
-                        .filter(|channels| channels.statically_configured())
-                        .cloned();
-                    Some(reusable.unwrap_or_else(|| {
-                        // Missing (a previous incarnation removed this static
-                        // child, ending its stable identity) or occupied by a
-                        // dynamically added child's channels: mint a fresh
-                        // static identity, displacing any dynamic occupant.
-                        let stable = supervisor.stable_channels(true);
-                        handle_map.insert(id.clone(), stable.handle());
-                        if let Some(occupant) = channel_map.insert(id.clone(), Arc::clone(&stable))
-                        {
-                            displaced.push(occupant);
-                        }
-                        stable
-                    }))
-                }
+                ChildKind::Supervisor(_) => Some(
+                    stable_identities
+                        .remove(&id)
+                        .expect("static supervisor identity was reconciled"),
+                ),
                 ChildKind::Task(_) => None,
             };
             let key = children.insert(ChildEntry::new(
@@ -248,35 +287,6 @@ impl SupervisorRuntime {
             next_child_instance = next_child_instance.saturating_add(1);
             children_by_id.insert(id.clone(), key);
             child_order.push(key);
-        }
-
-        // Stable channels left behind by a previous incarnation for children
-        // this incarnation will never spawn (added dynamically, so absent
-        // from the static supervisor configuration — including a dynamic
-        // supervisor whose id now belongs to a static task) are orphaned for
-        // good: no future incarnation spawns them either. Close them, along
-        // with any identities displaced above, so their observers terminate
-        // instead of hanging.
-        let static_supervisor_ids: HashSet<&str> = children
-            .iter()
-            .filter_map(|(_, entry)| entry.nested_channels.as_ref().map(|_| entry.id.as_str()))
-            .collect();
-        let orphaned_ids: Vec<String> = channel_map
-            .keys()
-            .filter(|id| !static_supervisor_ids.contains(id.as_str()))
-            .cloned()
-            .collect();
-        let orphaned: Vec<Arc<StableSupervisorChannels>> = orphaned_ids
-            .into_iter()
-            .filter_map(|id| {
-                handle_map.remove(&id);
-                channel_map.remove(&id)
-            })
-            .collect();
-        drop(channel_map);
-        drop(handle_map);
-        for channels in orphaned.into_iter().chain(displaced) {
-            channels.terminal();
         }
         // Nested incarnations reuse the stable snapshot channel. Binding the
         // new incarnation reset its child state while preserving the previous
@@ -313,7 +323,6 @@ impl SupervisorRuntime {
             snapshots,
             shutdown_rx,
             command_rx,
-            nested_handles,
             nested_channels,
             nested_event_tx,
             nested_event_rx,
@@ -406,13 +415,39 @@ impl SupervisorRuntime {
         &mut self,
         keys: Vec<ChildKey>,
     ) -> Result<bool, SupervisorError> {
+        self.respawn_sequence(keys, false).await
+    }
+
+    async fn respawn_sequence(
+        &mut self,
+        keys: Vec<ChildKey>,
+        emit_restart_events: bool,
+    ) -> Result<bool, SupervisorError> {
         let restart_epoch = self.restart_epoch;
         for key in keys {
-            let SpawnOutcome::Spawned { ready, .. } = self.spawn_child_for_start(key).await? else {
+            if emit_restart_events {
+                match self.group_respawn_disposition(key) {
+                    GroupRespawnDisposition::Respawn => {}
+                    GroupRespawnDisposition::Skip => continue,
+                    GroupRespawnDisposition::Finalize { startup_aborted } => {
+                        self.finalize_skipped_group_respawn(key, startup_aborted);
+                        continue;
+                    }
+                }
+            }
+            let SpawnOutcome::Spawned {
+                ready,
+                old_generation,
+                new_generation,
+            } = Box::pin(self.spawn_child_for_start(key)).await?
+            else {
                 continue;
             };
             if self.restart_epoch != restart_epoch {
                 return Ok(true);
+            }
+            if emit_restart_events && let Some(old_generation) = old_generation {
+                self.send_restart_event(key, old_generation, new_generation);
             }
             if !ready {
                 if self.children.contains(key) {
@@ -689,10 +724,6 @@ impl SupervisorRuntime {
         self.next_child_instance = self.next_child_instance.saturating_add(1);
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
-        self.nested_handles
-            .lock()
-            .expect("nested handle map poisoned")
-            .insert(id.clone(), stable.handle());
         self.nested_channels
             .lock()
             .expect("nested channel map poisoned")
@@ -961,10 +992,6 @@ impl SupervisorRuntime {
         self.children_by_id.remove(&entry.id);
         self.child_order.retain(|&existing| existing != key);
         if matches!(&entry.runtime.definition.kind, ChildKind::Supervisor(_)) {
-            self.nested_handles
-                .lock()
-                .expect("nested handle map poisoned")
-                .remove(&entry.id);
             self.nested_channels
                 .lock()
                 .expect("nested channel map poisoned")
@@ -1038,10 +1065,7 @@ impl SupervisorRuntime {
 
         if allow_restart && restart_policy.should_restart(classified.status.is_failure()) {
             match self.meta.strategy {
-                Strategy::OneForOne => {
-                    self.handle_one_for_one_restart(classified.key, classified.generation)
-                        .await?
-                }
+                Strategy::OneForOne => self.handle_one_for_one_restart(classified.key).await?,
                 Strategy::OneForAll => self.handle_one_for_all_restart(classified.key).await?,
                 Strategy::RestForOne => self.handle_rest_for_one_restart(classified.key).await?,
             }
@@ -1184,31 +1208,14 @@ impl SupervisorRuntime {
         });
     }
 
-    async fn handle_one_for_one_restart(
-        &mut self,
-        key: ChildKey,
-        previous_generation: u64,
-    ) -> Result<(), SupervisorError> {
-        let restart_instance = self.children[key].instance;
-        let delay = self.schedule_restart(key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[key].id.clone(),
-            generation: previous_generation,
-            delay,
-        });
-        if !self.wait_for_restart_delay(delay).await? {
-            return Ok(());
-        }
-        let Some(entry) = self.children.get(key) else {
+    async fn handle_one_for_one_restart(&mut self, key: ChildKey) -> Result<(), SupervisorError> {
+        let Some(permit) = self.begin_restart(key).await? else {
             return Ok(());
         };
-        if entry.instance != restart_instance || entry.membership != MembershipState::Active {
-            return Ok(());
-        }
         let (old_generation, new_generation) = self.spawn_child(key)?;
         self.send_restart_event(
             key,
-            old_generation.unwrap_or(previous_generation),
+            old_generation.unwrap_or(permit.previous_generation),
             new_generation,
         );
         Ok(())
@@ -1218,76 +1225,7 @@ impl SupervisorRuntime {
         &mut self,
         failing_key: ChildKey,
     ) -> Result<(), SupervisorError> {
-        let failing_instance = self.children[failing_key].instance;
-        let delay = self.schedule_restart(failing_key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[failing_key].id.clone(),
-            generation: self.children[failing_key].runtime.generation,
-            delay,
-        });
-        if !self.wait_for_restart_delay(delay).await? {
-            return Ok(());
-        }
-
-        let Some(failing_child) = self.children.get(failing_key) else {
-            return Ok(());
-        };
-        if failing_child.instance != failing_instance
-            || failing_child.membership != MembershipState::Active
-        {
-            return Ok(());
-        }
-        debug!(
-            "restarting child group after exit from {}",
-            failing_child.id
-        );
-        // Drain the old generation completely before creating a fresh group
-        // token so `OneForAll` restarts never overlap old and new tasks.
-        let completed = self.drain_for_group_restart().await?;
-        for classified in completed {
-            if !self.current_child_matches(
-                classified.key,
-                classified.instance,
-                classified.generation,
-            ) {
-                continue;
-            }
-            Box::pin(self.apply_drained_completion_policy(classified)).await?;
-        }
-        if self.pending_exit.is_some() {
-            return Ok(());
-        }
-        self.group_token = CancellationToken::new();
-        self.restart_epoch = self.restart_epoch.saturating_add(1);
-        let restart_epoch = self.restart_epoch;
-        let keys = self.child_order.clone();
-        for key in keys {
-            match self.group_respawn_disposition(key) {
-                GroupRespawnDisposition::Respawn => {}
-                GroupRespawnDisposition::Skip => continue,
-                GroupRespawnDisposition::Finalize { startup_aborted } => {
-                    self.finalize_skipped_group_respawn(key, startup_aborted);
-                    continue;
-                }
-            }
-            let SpawnOutcome::Spawned {
-                ready,
-                old_generation,
-                new_generation,
-            } = Box::pin(self.spawn_child_for_start(key)).await?
-            else {
-                continue;
-            };
-            if self.restart_epoch != restart_epoch {
-                return Ok(());
-            }
-            if let Some(old_generation) = old_generation {
-                self.send_restart_event(key, old_generation, new_generation);
-            }
-            if !ready && self.children.contains(key) {
-                break;
-            }
-        }
+        self.restart_group(failing_key, true).await?;
         Ok(())
     }
 
@@ -1295,81 +1233,7 @@ impl SupervisorRuntime {
         &mut self,
         failing_key: ChildKey,
     ) -> Result<(), SupervisorError> {
-        let failing_instance = self.children[failing_key].instance;
-        let delay = self.schedule_restart(failing_key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[failing_key].id.clone(),
-            generation: self.children[failing_key].runtime.generation,
-            delay,
-        });
-        if !self.wait_for_restart_delay(delay).await? {
-            return Ok(());
-        }
-
-        let Some(failing_child) = self.children.get(failing_key) else {
-            return Ok(());
-        };
-        if failing_child.instance != failing_instance
-            || failing_child.membership != MembershipState::Active
-        {
-            return Ok(());
-        }
-
-        let Some(failing_position) = self.child_order.iter().position(|&key| key == failing_key)
-        else {
-            return Ok(());
-        };
-        let keys = self.child_order[failing_position..].to_vec();
-        debug!(
-            "restarting child suffix after exit from {}",
-            failing_child.id
-        );
-        let deferred = self.drain_for_rest_for_one_restart(&keys).await?;
-        let (completed_in_suffix, deferred): (Vec<_>, Vec<_>) = deferred
-            .into_iter()
-            .partition(|classified| keys.contains(&classified.key));
-        for classified in completed_in_suffix {
-            if !self.current_child_matches(
-                classified.key,
-                classified.instance,
-                classified.generation,
-            ) {
-                continue;
-            }
-            Box::pin(self.apply_drained_completion_policy(classified)).await?;
-        }
-        if self.pending_exit.is_some() {
-            return Ok(());
-        }
-        self.restart_epoch = self.restart_epoch.saturating_add(1);
-        let restart_epoch = self.restart_epoch;
-        for key in keys {
-            match self.group_respawn_disposition(key) {
-                GroupRespawnDisposition::Respawn => {}
-                GroupRespawnDisposition::Skip => continue,
-                GroupRespawnDisposition::Finalize { startup_aborted } => {
-                    self.finalize_skipped_group_respawn(key, startup_aborted);
-                    continue;
-                }
-            }
-            let SpawnOutcome::Spawned {
-                ready,
-                old_generation,
-                new_generation,
-            } = Box::pin(self.spawn_child_for_start(key)).await?
-            else {
-                continue;
-            };
-            if self.restart_epoch != restart_epoch {
-                break;
-            }
-            if let Some(old_generation) = old_generation {
-                self.send_restart_event(key, old_generation, new_generation);
-            }
-            if !ready && self.children.contains(key) {
-                break;
-            }
-        }
+        let deferred = self.restart_group(failing_key, false).await?;
         for classified in deferred {
             if self.pending_exit.is_some() {
                 break;
@@ -1387,6 +1251,89 @@ impl SupervisorRuntime {
             Box::pin(self.apply_exit_policy(classified)).await?;
         }
         Ok(())
+    }
+
+    async fn begin_restart(
+        &mut self,
+        key: ChildKey,
+    ) -> Result<Option<RestartPermit>, SupervisorError> {
+        let restart_instance = self.children[key].instance;
+        let previous_generation = self.children[key].runtime.generation;
+        let delay = self.schedule_restart(key)?;
+        self.send_event(SupervisorEvent::ChildRestartScheduled {
+            id: self.children[key].id.clone(),
+            generation: previous_generation,
+            delay,
+        });
+        if !self.wait_for_restart_delay(delay).await? {
+            return Ok(None);
+        }
+        let Some(entry) = self.children.get(key) else {
+            return Ok(None);
+        };
+        if entry.instance != restart_instance || entry.membership != MembershipState::Active {
+            return Ok(None);
+        }
+        Ok(Some(RestartPermit {
+            previous_generation,
+        }))
+    }
+
+    async fn restart_group(
+        &mut self,
+        failing_key: ChildKey,
+        fresh_group_token: bool,
+    ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
+        if self.begin_restart(failing_key).await?.is_none() {
+            return Ok(Vec::new());
+        }
+        let keys = if fresh_group_token {
+            self.child_order.clone()
+        } else {
+            let Some(failing_position) =
+                self.child_order.iter().position(|&key| key == failing_key)
+            else {
+                return Ok(Vec::new());
+            };
+            self.child_order[failing_position..].to_vec()
+        };
+        let failing_id = self.children[failing_key].id.clone();
+        if fresh_group_token {
+            debug!("restarting child group after exit from {failing_id}");
+        } else {
+            debug!("restarting child suffix after exit from {failing_id}");
+        }
+
+        // OneForAll drains the old generation completely before creating a
+        // fresh group token, so old and new tasks never overlap. RestForOne
+        // cancels and drains only the selected suffix.
+        let completed = if fresh_group_token {
+            self.drain_for_group_restart().await?
+        } else {
+            self.drain_for_rest_for_one_restart(&keys).await?
+        };
+        let (completed_in_scope, deferred): (Vec<_>, Vec<_>) = completed
+            .into_iter()
+            .partition(|classified| keys.contains(&classified.key));
+        for classified in completed_in_scope {
+            if !self.current_child_matches(
+                classified.key,
+                classified.instance,
+                classified.generation,
+            ) {
+                continue;
+            }
+            Box::pin(self.apply_drained_completion_policy(classified)).await?;
+        }
+        if self.pending_exit.is_some() {
+            return Ok(deferred);
+        }
+        if fresh_group_token {
+            self.group_token = CancellationToken::new();
+        }
+        self.restart_epoch = self.restart_epoch.saturating_add(1);
+        let _ = self.respawn_sequence(keys, true).await?;
+        Ok(deferred)
     }
 
     fn schedule_restart(&mut self, key: ChildKey) -> Result<Duration, SupervisorError> {
@@ -1669,6 +1616,10 @@ enum GroupRespawnDisposition {
     Finalize { startup_aborted: bool },
 }
 
+struct RestartPermit {
+    previous_generation: u64,
+}
+
 /// Why the supervisor is draining its join set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DrainReason {
@@ -1705,5 +1656,67 @@ fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
         | SupervisorEvent::SupervisorStopping
         | SupervisorEvent::SupervisorStopped
         | SupervisorEvent::RestartIntensityExceeded => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Supervisor, SupervisorBuilder, handle::empty_nested_channels};
+
+    fn empty_supervisor() -> Supervisor {
+        SupervisorBuilder::new()
+            .build()
+            .expect("empty supervisor config is valid")
+    }
+
+    #[test]
+    fn stable_identity_reconciliation_reuses_static_and_closes_stale_channels() {
+        let config = SupervisorBuilder::new()
+            .supervisor("reused", empty_supervisor())
+            .supervisor("collision", empty_supervisor())
+            .build()
+            .expect("valid supervisor config")
+            .config;
+        let nested_channels = empty_nested_channels();
+        let reused = empty_supervisor().stable_channels(true);
+        let displaced = empty_supervisor().stable_channels(false);
+        let orphaned = empty_supervisor().stable_channels(false);
+        let reused_snapshots = reused.snapshots_rx();
+        let displaced_snapshots = displaced.snapshots_rx();
+        let orphaned_snapshots = orphaned.snapshots_rx();
+
+        {
+            let mut channels = nested_channels.lock().expect("nested channel map");
+            channels.insert("reused".to_owned(), Arc::clone(&reused));
+            channels.insert("collision".to_owned(), Arc::clone(&displaced));
+            channels.insert("orphaned".to_owned(), Arc::clone(&orphaned));
+        }
+
+        let identities = reconcile_stable_identities(&config.children, &nested_channels);
+        let channels = nested_channels.lock().expect("nested channel map");
+        let replacement = channels.get("collision").expect("replacement identity");
+
+        assert_eq!(channels.len(), 2);
+        assert!(Arc::ptr_eq(
+            channels.get("reused").expect("reused identity"),
+            &reused
+        ));
+        assert!(Arc::ptr_eq(
+            identities.get("reused").expect("reconciled identity"),
+            &reused
+        ));
+        assert!(Arc::ptr_eq(
+            identities.get("collision").expect("reconciled replacement"),
+            replacement
+        ));
+        assert!(!Arc::ptr_eq(replacement, &displaced));
+        assert!(replacement.statically_configured());
+        assert!(!channels.contains_key("orphaned"));
+        drop(channels);
+
+        assert!(reused_snapshots.has_changed().is_ok());
+        assert!(displaced_snapshots.has_changed().is_err());
+        assert!(orphaned_snapshots.has_changed().is_err());
     }
 }

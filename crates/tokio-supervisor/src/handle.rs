@@ -70,7 +70,6 @@ struct IncarnationBinding {
     done_rx: DoneReceiver,
 }
 
-pub(crate) type NestedHandles = Arc<Mutex<HashMap<String, SupervisorHandle>>>;
 pub(crate) type NestedChannels = Arc<Mutex<HashMap<String, Arc<StableSupervisorChannels>>>>;
 
 /// Stable snapshot channel for a nested supervisor.
@@ -88,7 +87,6 @@ pub(crate) struct StableSupervisorChannels {
     binding: Mutex<Option<IncarnationBinding>>,
     events_tx: broadcast::Sender<SupervisorEvent>,
     snapshots: Mutex<SnapshotSlot>,
-    nested_handles: NestedHandles,
     nested_channels: NestedChannels,
     /// Whether these channels belong to a statically configured child (part
     /// of the parent's `SupervisorConfig`) as opposed to a dynamically added
@@ -102,7 +100,6 @@ impl StableSupervisorChannels {
     pub(crate) fn new(
         initial_snapshot: SupervisorSnapshot,
         event_capacity: usize,
-        nested_handles: NestedHandles,
         nested_channels: NestedChannels,
         statically_configured: bool,
     ) -> Arc<Self> {
@@ -115,7 +112,6 @@ impl StableSupervisorChannels {
                 tx: Some(snapshots_tx),
                 rx: snapshots_rx,
             }),
-            nested_handles,
             nested_channels,
             statically_configured,
         })
@@ -232,10 +228,6 @@ impl StableSupervisorChannels {
         }
     }
 
-    pub(crate) fn nested_handles(&self) -> NestedHandles {
-        Arc::clone(&self.nested_handles)
-    }
-
     pub(crate) fn nested_channels(&self) -> NestedChannels {
         Arc::clone(&self.nested_channels)
     }
@@ -271,13 +263,8 @@ mod tests {
             )],
         );
         let expected_snapshot = initial_snapshot.clone().total_restarts(7);
-        let channels = StableSupervisorChannels::new(
-            stale_snapshot,
-            8,
-            empty_nested_handles(),
-            empty_nested_channels(),
-            true,
-        );
+        let channels =
+            StableSupervisorChannels::new(stale_snapshot, 8, empty_nested_channels(), true);
         let handle = channels.handle();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         let (command_tx, _command_rx) = mpsc::channel(1);
@@ -302,7 +289,6 @@ mod tests {
         let channels = StableSupervisorChannels::new(
             initial_snapshot.clone(),
             8,
-            empty_nested_handles(),
             empty_nested_channels(),
             true,
         );
@@ -351,7 +337,7 @@ struct RootHandle {
     done_rx: DoneReceiver,
     events_tx: broadcast::Sender<SupervisorEvent>,
     snapshots_rx: watch::Receiver<SupervisorSnapshot>,
-    nested_handles: NestedHandles,
+    nested_channels: NestedChannels,
     join_state: Arc<Mutex<Option<(SupervisorJoinHandle, DoneSender)>>>,
 }
 
@@ -359,10 +345,6 @@ struct RootHandle {
 enum HandleKind {
     Root(RootHandle),
     Stable(Arc<StableSupervisorChannels>),
-}
-
-pub(crate) fn empty_nested_handles() -> NestedHandles {
-    Arc::new(Mutex::new(HashMap::new()))
 }
 
 pub(crate) fn empty_nested_channels() -> NestedChannels {
@@ -396,7 +378,7 @@ pub(crate) enum SupervisorCommand {
 pub(crate) struct SupervisorHandleInit {
     pub(crate) shutdown_tx: watch::Sender<bool>,
     pub(crate) command_tx: mpsc::Sender<SupervisorCommand>,
-    pub(crate) nested_handles: NestedHandles,
+    pub(crate) nested_channels: NestedChannels,
     pub(crate) done_tx: DoneSender,
     pub(crate) done_rx: DoneReceiver,
     pub(crate) events_tx: broadcast::Sender<SupervisorEvent>,
@@ -439,7 +421,7 @@ impl SupervisorHandle {
                 done_rx: init.done_rx,
                 events_tx: init.events_tx,
                 snapshots_rx: init.snapshots_rx,
-                nested_handles: init.nested_handles,
+                nested_channels: init.nested_channels,
                 join_state: Arc::new(Mutex::new(Some((init.join_handle, init.done_tx)))),
             }),
         }
@@ -508,11 +490,11 @@ impl SupervisorHandle {
 
     /// Returns the restart-stable handle for a direct nested supervisor.
     pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
-        self.nested_handles()
+        self.nested_channels()
             .lock()
-            .expect("nested handle map poisoned")
+            .expect("nested channel map poisoned")
             .get(id)
-            .cloned()
+            .map(StableSupervisorChannels::handle)
     }
 
     /// Waits for the supervisor to stop.
@@ -779,10 +761,10 @@ impl SupervisorHandle {
         }
     }
 
-    fn nested_handles(&self) -> NestedHandles {
+    fn nested_channels(&self) -> NestedChannels {
         match &self.kind {
-            HandleKind::Root(root) => Arc::clone(&root.nested_handles),
-            HandleKind::Stable(stable) => stable.nested_handles(),
+            HandleKind::Root(root) => Arc::clone(&root.nested_channels),
+            HandleKind::Stable(stable) => stable.nested_channels(),
         }
     }
 }

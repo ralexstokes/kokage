@@ -10,8 +10,8 @@ use crate::{
     error::SupervisorError,
     event::{EventSink, SupervisorEvent},
     handle::{
-        NestedChannels, NestedHandles, StableSupervisorChannels, SupervisorCommand,
-        SupervisorHandle, SupervisorHandleInit, empty_nested_channels, empty_nested_handles,
+        NestedChannels, StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
+        SupervisorHandleInit, empty_nested_channels,
     },
     observability::{format_path, strategy_label, supervisor_name_for_path},
     restart::RestartIntensity,
@@ -73,7 +73,7 @@ impl Supervisor {
     /// Spawns the supervisor as a background Tokio task and returns a handle
     /// for control and observation.
     pub fn spawn(self) -> SupervisorHandle {
-        let (nested_handles, nested_channels) = prepare_nested_channels(&self.config);
+        let nested_channels = prepare_nested_channels(&self.config);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::channel(self.config.control_channel_capacity);
         let (done_tx, done_rx) = watch::channel(None);
@@ -82,7 +82,7 @@ impl Supervisor {
         let task_done_tx = done_tx.clone();
         let task_events_tx = events_tx.clone();
         let task_snapshots_tx = snapshots_tx.clone();
-        let task_nested_handles = nested_handles.clone();
+        let task_nested_channels = nested_channels.clone();
 
         let join_handle = tokio::spawn(async move {
             let result = self
@@ -91,8 +91,7 @@ impl Supervisor {
                     task_events_tx,
                     task_snapshots_tx,
                     command_rx,
-                    task_nested_handles,
-                    nested_channels,
+                    task_nested_channels,
                     Vec::new(),
                     None,
                     None,
@@ -106,7 +105,7 @@ impl Supervisor {
         SupervisorHandle::new(SupervisorHandleInit {
             shutdown_tx,
             command_tx,
-            nested_handles,
+            nested_channels,
             done_tx,
             done_rx,
             events_tx,
@@ -128,7 +127,6 @@ impl Supervisor {
         let (done_tx, done_rx) = watch::channel(None);
         let events_tx = channels.events();
         let snapshots_tx = channels.snapshots();
-        let nested_handles = channels.nested_handles();
         let nested_channels = channels.nested_channels();
         let generation = ctx.generation();
         let startup_ctx = ctx.clone();
@@ -152,7 +150,6 @@ impl Supervisor {
                     events_tx,
                     snapshots_tx,
                     command_rx,
-                    nested_handles,
                     nested_channels,
                     path,
                     Some(parent_link),
@@ -195,7 +192,6 @@ impl Supervisor {
         events_tx: broadcast::Sender<SupervisorEvent>,
         snapshots_tx: watch::Sender<SupervisorSnapshot>,
         command_rx: mpsc::Receiver<SupervisorCommand>,
-        nested_handles: NestedHandles,
         nested_channels: NestedChannels,
         path: Vec<String>,
         parent_link: Option<ParentLink>,
@@ -211,7 +207,6 @@ impl Supervisor {
             events_tx,
             snapshots_tx,
             command_rx,
-            nested_handles,
             nested_channels,
             path,
             parent_link,
@@ -234,11 +229,10 @@ impl Supervisor {
         &self,
         statically_configured: bool,
     ) -> Arc<StableSupervisorChannels> {
-        let (nested_handles, nested_channels) = prepare_nested_channels(&self.config);
+        let nested_channels = prepare_nested_channels(&self.config);
         StableSupervisorChannels::new(
             initial_snapshot(&self.config),
             self.config.event_channel_capacity,
-            nested_handles,
             nested_channels,
             statically_configured,
         )
@@ -251,23 +245,19 @@ impl std::fmt::Debug for Supervisor {
     }
 }
 
-fn prepare_nested_channels(config: &SupervisorConfig) -> (NestedHandles, NestedChannels) {
-    let handles = empty_nested_handles();
+fn prepare_nested_channels(config: &SupervisorConfig) -> NestedChannels {
     let channels = empty_nested_channels();
-    let mut prepared_handles = HashMap::new();
     let mut prepared_channels = HashMap::new();
 
     for child in &config.children {
         if let ChildKind::Supervisor(supervisor) = &child.kind {
             let stable = supervisor.stable_channels(true);
-            prepared_handles.insert(child.id.clone(), stable.handle());
             prepared_channels.insert(child.id.clone(), stable);
         }
     }
 
-    *handles.lock().expect("nested handle map poisoned") = prepared_handles;
     *channels.lock().expect("nested channel map poisoned") = prepared_channels;
-    (handles, channels)
+    channels
 }
 
 pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot {

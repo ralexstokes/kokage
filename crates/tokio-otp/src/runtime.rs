@@ -423,7 +423,7 @@ where
     let task_cancellation = cancellation.clone();
 
     tokio::spawn(async move {
-        let _cancel_on_exit = CancelRestartWatchOnDrop(task_cancellation.clone());
+        let _cancel_on_exit = task_cancellation.clone().drop_guard();
         let Some(mut total) = (tokio::select! {
             biased;
             () = task_cancellation.cancelled() => None,
@@ -463,14 +463,6 @@ where
     });
 
     RestartWatchRef { cancellation }
-}
-
-struct CancelRestartWatchOnDrop(CancellationToken);
-
-impl Drop for CancelRestartWatchOnDrop {
-    fn drop(&mut self) {
-        self.0.cancel();
-    }
 }
 
 /// Configured-but-not-yet-running runtime that owns a supervisor and its
