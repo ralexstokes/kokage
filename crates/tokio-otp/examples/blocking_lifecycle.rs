@@ -18,7 +18,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = Command;
 
-    async fn handle(&mut self, command: Command, ctx: &ActorContext<Command>) -> ActorResult {
+    async fn handle(&mut self, command: Command, ctx: &mut ActorContext<Command>) -> ActorResult {
         match command {
             Command::Start(input) => {
                 let myself = ctx.myself();

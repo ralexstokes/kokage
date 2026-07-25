@@ -22,7 +22,7 @@ struct FrontDesk {
 impl Actor for FrontDesk {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &ActorContext<String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
         self.press.send(order).await?;
         Ok(Continue)
     }
@@ -36,12 +36,12 @@ struct Press {
 impl Actor for Press {
     type Msg = String;
 
-    async fn on_start(&mut self, _ctx: &ActorContext<String>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut ActorContext<String>) -> ActorResult {
         self.run = self.runs.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
 
-    async fn handle(&mut self, order: String, _ctx: &ActorContext<String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
         if self.run == 0 && order.contains("origami") {
             return Err::<_, BoxError>(Box::new(io::Error::other("paper jam")));
         }

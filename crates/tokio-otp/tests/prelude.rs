@@ -47,7 +47,7 @@ struct BlockingWorker {
 impl Actor for BlockingWorker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), ctx: &ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), ctx: &mut ActorContext<()>) -> ActorResult {
         let observed = self.observed.clone();
         let actor_id = ctx.id().to_owned();
         ctx.run_blocking(move |token| {

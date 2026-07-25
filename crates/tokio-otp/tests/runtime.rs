@@ -1107,7 +1107,7 @@ struct ResettingCounter {
 impl Actor for ResettingCounter {
     type Msg = CounterMsg;
 
-    async fn on_start(&mut self, _ctx: &ActorContext<CounterMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut ActorContext<CounterMsg>) -> ActorResult {
         self.on_starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
@@ -1115,7 +1115,7 @@ impl Actor for ResettingCounter {
     async fn handle(
         &mut self,
         message: CounterMsg,
-        _ctx: &ActorContext<CounterMsg>,
+        _ctx: &mut ActorContext<CounterMsg>,
     ) -> ActorResult {
         match message {
             CounterMsg::Add(n) => {

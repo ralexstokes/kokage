@@ -16,7 +16,11 @@ pub struct ToolHost {
 impl Actor for ToolHost {
     type Msg = ToolHostMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             ToolHostMsg::Execute { key, call, reply } => {
                 if let Some(outcome) = self.effects.get(&key).cloned() {

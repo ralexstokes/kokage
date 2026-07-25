@@ -119,7 +119,7 @@ impl Session {
         Ok(Continue)
     }
 
-    fn arm_idle(&mut self, ctx: &ActorContext<SessionMsg>) {
+    fn arm_idle(&mut self, ctx: &mut ActorContext<SessionMsg>) {
         self.idle_generation += 1;
         ctx.state_timeout(
             SessionMsg::IdleSweep {
@@ -135,7 +135,7 @@ impl Session {
         role: Role,
         attempt: u64,
         input: PendingInput,
-        ctx: &ActorContext<SessionMsg>,
+        ctx: &mut ActorContext<SessionMsg>,
     ) -> ActorResult {
         ctx.clear_state_timeout();
         if self.heartbeat.is_none() {
@@ -202,7 +202,7 @@ impl Session {
     async fn start_input(
         &mut self,
         input: PendingInput,
-        ctx: &ActorContext<SessionMsg>,
+        ctx: &mut ActorContext<SessionMsg>,
     ) -> ActorResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
@@ -212,7 +212,7 @@ impl Session {
         &mut self,
         task: TaskId,
         approved: bool,
-        ctx: &ActorContext<SessionMsg>,
+        ctx: &mut ActorContext<SessionMsg>,
     ) -> ActorResult {
         let text = format!(
             "task {task} complete (approved={approved}, prior-context={})",
@@ -247,7 +247,7 @@ impl Session {
 impl Actor for Session {
     type Msg = SessionMsg;
 
-    async fn on_start(&mut self, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
         let mut proof = self.proof.lock().expect("proof lock poisoned");
         proof.session_ready_at.insert(self.chat, Instant::now());
         proof.session_generations.insert(self.chat, self.generation);
@@ -263,7 +263,11 @@ impl Actor for Session {
         DrainPolicy::Drain
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             SessionMsg::Rehydrate => {
                 let replay = self

@@ -68,7 +68,7 @@ impl Reconciler {
         }
     }
 
-    fn rearm(&mut self, ctx: &ActorContext<ReconcilerMsg>) {
+    fn rearm(&mut self, ctx: &mut ActorContext<ReconcilerMsg>) {
         let now = Instant::now();
         let earliest = self
             .venues
@@ -93,7 +93,7 @@ impl Reconciler {
 impl Actor for Reconciler {
     type Msg = ReconcilerMsg;
 
-    async fn on_start(&mut self, ctx: &ActorContext<ReconcilerMsg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut ActorContext<ReconcilerMsg>) -> ActorResult {
         for (venue, exchange) in &self.sessions {
             assert!(
                 exchange.feed_sessions(venue) >= 1,
@@ -113,7 +113,7 @@ impl Actor for Reconciler {
     async fn handle(
         &mut self,
         message: ReconcilerMsg,
-        ctx: &ActorContext<ReconcilerMsg>,
+        ctx: &mut ActorContext<ReconcilerMsg>,
     ) -> ActorResult {
         match message {
             ReconcilerMsg::Market(snapshot) => {

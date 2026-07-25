@@ -46,7 +46,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// #     async fn handle(
 /// #         &mut self,
 /// #         _: FrontendMsg,
-/// #         _: &ActorContext<FrontendMsg>,
+/// #         _: &mut ActorContext<FrontendMsg>,
 /// #     ) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
@@ -58,7 +58,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// # }
 /// # impl Actor for Parser {
 /// #     type Msg = ParserMsg;
-/// #     async fn handle(&mut self, _: ParserMsg, _: &ActorContext<ParserMsg>) -> ActorResult {
+/// #     async fn handle(&mut self, _: ParserMsg, _: &mut ActorContext<ParserMsg>) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }
@@ -66,7 +66,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// # struct Sink;
 /// # impl Actor for Sink {
 /// #     type Msg = SinkMsg;
-/// #     async fn handle(&mut self, _: SinkMsg, _: &ActorContext<SinkMsg>) -> ActorResult {
+/// #     async fn handle(&mut self, _: SinkMsg, _: &mut ActorContext<SinkMsg>) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }

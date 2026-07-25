@@ -24,7 +24,11 @@ impl Ledger {
 impl Actor for Ledger {
     type Msg = LedgerMsg;
 
-    async fn handle(&mut self, message: LedgerMsg, _ctx: &ActorContext<LedgerMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: LedgerMsg,
+        _ctx: &mut ActorContext<LedgerMsg>,
+    ) -> ActorResult {
         match message {
             LedgerMsg::Ack { key, venue } => {
                 tracing::debug!(venue, order_key = key, "order acknowledged");

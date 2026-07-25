@@ -13,7 +13,7 @@ struct Probe {
 impl Actor for Probe {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
         self.order.lock().await.push(self.name);
         if let Some(release) = &self.release {
             release.notified().await;
@@ -24,7 +24,11 @@ impl Actor for Probe {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         self.order.lock().await.push(message);
         Ok(Continue)
     }
@@ -92,11 +96,11 @@ struct FailsOnStart;
 impl Actor for FailsOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
         Err(std::io::Error::other("actor init failed").into())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -132,7 +136,11 @@ struct DrainContinuation {
 impl Actor for DrainContinuation {
     type Msg = &'static str;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" || message == "hold-and-continue" {
             if message == "hold-and-continue" {
@@ -225,19 +233,23 @@ struct StopsOnStart {
 impl Actor for StopsOnStart {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
         ctx.continue_with("continuation");
         self.started.notify_one();
         self.release.notified().await;
         Ok(Stop)
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         self.events.lock().await.push(message);
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &ActorContext<Self::Msg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> Result<(), BoxError> {
         self.events.lock().await.push("stopped");
         Ok(())
     }

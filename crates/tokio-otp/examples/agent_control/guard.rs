@@ -65,7 +65,11 @@ impl Guard {
 impl Actor for Guard {
     type Msg = GuardMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             GuardMsg::RunFailureObserved { chat, task } => {
                 tracing::debug!(chat, task, "guard observed run failure");

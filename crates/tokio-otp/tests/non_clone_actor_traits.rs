@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     future::pending,
     io,
     sync::{
@@ -21,7 +22,23 @@ struct HandlerWithNonCloneState {
 impl Actor for HandlerWithNonCloneState {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+        Ok(Continue)
+    }
+}
+
+struct HandlerWithSendOnlyMessage;
+
+impl Actor for HandlerWithSendOnlyMessage {
+    type Msg = Cell<usize>;
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
+        let value = ctx.run_blocking(move |_| message.get()).await;
+        ctx.continue_with(Cell::new(value));
         Ok(Continue)
     }
 }
@@ -48,6 +65,11 @@ fn actor_traits_accept_non_clone_state() {
     assert_raw_actor::<RawWithNonCloneState>();
 }
 
+#[test]
+fn mutable_handler_context_accepts_send_only_messages() {
+    assert_actor::<HandlerWithSendOnlyMessage>();
+}
+
 enum ProbeMsg {
     Increment(Reply<(usize, usize)>),
     Crash,
@@ -62,7 +84,11 @@ struct NonCloneHandler {
 impl Actor for NonCloneHandler {
     type Msg = ProbeMsg;
 
-    async fn handle(&mut self, message: ProbeMsg, _ctx: &ActorContext<ProbeMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: ProbeMsg,
+        _ctx: &mut ActorContext<ProbeMsg>,
+    ) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {
                 self.local += 1;
@@ -232,7 +258,7 @@ struct DefaultActor;
 impl Actor for DefaultActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
         Ok(Continue)
     }
 }

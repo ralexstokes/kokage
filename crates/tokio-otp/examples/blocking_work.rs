@@ -18,7 +18,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = WorkMsg;
 
-    async fn handle(&mut self, message: WorkMsg, ctx: &ActorContext<WorkMsg>) -> ActorResult {
+    async fn handle(&mut self, message: WorkMsg, ctx: &mut ActorContext<WorkMsg>) -> ActorResult {
         match message {
             WorkMsg::Process(input) => {
                 let output = ctx

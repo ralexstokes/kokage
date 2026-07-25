@@ -3,7 +3,7 @@ use std::{
     io::Error as IoError,
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -82,7 +82,7 @@ where
             );
             let myself = ActorRef::from_core(&binding, Some(actor_id.clone()));
             let monitor_hub = binding.monitor_hub();
-            let ctx = ActorContext {
+            let mut ctx = ActorContext {
                 id: actor_id,
                 mailbox,
                 myself,
@@ -90,10 +90,10 @@ where
                 shutdown: actor_shutdown,
                 observability,
                 timers,
-                state_timeout: Mutex::new(None),
+                state_timeout: None,
                 monitors,
-                ready: Mutex::new(Some(start.ready)),
-                continuations: Mutex::new(Default::default()),
+                ready: Some(start.ready),
+                continuations: Default::default(),
                 steps,
             };
             let mut monitor_exit = MonitorExitGuard::new(monitor_hub);
