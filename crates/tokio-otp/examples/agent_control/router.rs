@@ -3,14 +3,15 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ControlError, GraphBuilder, RuntimeHandle,
-    Strategy, SupervisionTree, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, ChildMembershipView, ControlError, GraphBuilder,
+    LifecycleEventKind, LifecycleWatchGuard, RuntimeHandle, Strategy, SupervisionTree,
+    SupervisorSnapshot, prelude::Continue,
 };
 
 use crate::{
@@ -46,11 +47,47 @@ enum SessionSlot {
     Removing { buffered: Vec<PendingInput> },
 }
 
+fn mount_reconciliation(
+    snapshot: SupervisorSnapshot,
+    mut routes_subtree: impl FnMut(&str) -> bool,
+) -> (u64, Vec<String>) {
+    let alignment_seq = snapshot.lifecycle_seq;
+    let orphaned = snapshot
+        .children
+        .into_iter()
+        .filter(|child| child.membership == ChildMembershipView::Active)
+        .filter(|child| !routes_subtree(&child.id))
+        .map(|child| child.id)
+        .collect();
+    (alignment_seq, orphaned)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MountEventDisposition {
+    ReconcileSnapshot,
+    Apply,
+    Ignore,
+}
+
+fn mount_event_disposition(
+    alignment_seq: u64,
+    event_seq: u64,
+    kind: &LifecycleEventKind,
+) -> MountEventDisposition {
+    if matches!(kind, LifecycleEventKind::Lagged { .. }) {
+        MountEventDisposition::ReconcileSnapshot
+    } else if event_seq > alignment_seq {
+        MountEventDisposition::Apply
+    } else {
+        MountEventDisposition::Ignore
+    }
+}
+
 #[derive(tokio_otp::ActorFactory)]
 pub struct Router {
-    /// Filled by `main` after the runtime spawns; unlike router state, the
-    /// cell is owned by `RouterFactory` and survives router restarts.
-    mount: Arc<OnceLock<RuntimeHandle>>,
+    /// Reserved before the root is built and retained by `RouterFactory`, so
+    /// it survives router restarts without late binding.
+    mount: RuntimeHandle,
     #[factory(default)]
     sessions: HashMap<ChatId, SessionSlot>,
     journal: ActorRef<JournalMsg>,
@@ -68,14 +105,15 @@ pub struct Router {
     /// predecessor's subtree still exists.
     session_epoch: Arc<AtomicU64>,
     proof: Proof,
+    #[factory(default)]
+    mount_watch: Option<LifecycleWatchGuard>,
+    #[factory(default)]
+    alignment_seq: u64,
 }
 
 impl Router {
     fn mount(&self) -> RuntimeHandle {
-        self.mount
-            .get()
-            .expect("sessions mount bound before chat traffic")
-            .clone()
+        self.mount.clone()
     }
 
     /// Mints a fresh incarnation for `chat`: a `Mounting` slot routing into
@@ -88,10 +126,6 @@ impl Router {
     fn mint(&mut self, chat: ChatId, buffered: Vec<PendingInput>, ctx: &ActorContext<RouterMsg>) {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
-        // The session spawns its run children into its own subtree, but that
-        // handle only exists once the mount completes; the cell is filled by
-        // the step below, before any traffic is forwarded.
-        let subtree_cell = Arc::new(OnceLock::new());
         let mut graph = GraphBuilder::new();
         let actor = graph.actor(
             "session",
@@ -106,7 +140,6 @@ impl Router {
                 outbound: self.outbound.clone(),
                 progress: self.progress.clone(),
                 router: ctx.myself(),
-                subtree: subtree_cell.clone(),
                 gate: self.gate.clone(),
                 model: self.model.clone(),
                 task_sequence: self.task_sequence.clone(),
@@ -128,7 +161,7 @@ impl Router {
                 let subtree = mount
                     .add_subtree(
                         step_id,
-                        SupervisionTree::new().actor_with_scope(
+                        SupervisionTree::new().actor_with_scope_strategy(
                             "session-runtime",
                             session_actor,
                             SupervisionTree::dynamic(),
@@ -136,13 +169,7 @@ impl Router {
                         ),
                     )
                     .await;
-                match subtree {
-                    Ok(subtree) => subtree
-                        .subtree("session-runtime")
-                        .and_then(|scope| scope.subtree("children"))
-                        .is_some_and(|runs| subtree_cell.set(runs).is_ok()),
-                    Err(_) => false,
-                }
+                subtree.is_ok()
             },
             false,
             move |ok| RouterMsg::Mounted { chat, ok },
@@ -212,10 +239,49 @@ impl Router {
             })
             .await
     }
+
+    fn routes_subtree(&self, subtree_id: &str) -> bool {
+        self.sessions.values().any(|slot| match slot {
+            SessionSlot::Mounting {
+                subtree_id: live, ..
+            }
+            | SessionSlot::Active {
+                subtree_id: live, ..
+            } => live == subtree_id,
+            SessionSlot::Removing { .. } => false,
+        })
+    }
+
+    /// Realigns edge-derived routing state with the mount's current truth.
+    ///
+    /// This is shared by initial watch alignment and lifecycle overflow. A
+    /// removal already in progress needs no second request; every active
+    /// membership not owned by this router incarnation is swept.
+    fn reconcile_mount_snapshot(&mut self, ctx: &ActorContext<RouterMsg>) {
+        let (alignment_seq, orphaned) =
+            mount_reconciliation(self.mount.snapshot(), |id| self.routes_subtree(id));
+        self.alignment_seq = alignment_seq;
+        for subtree_id in orphaned {
+            self.pipeline_sweep(subtree_id, ctx);
+        }
+    }
 }
 
 impl Actor for Router {
     type Msg = RouterMsg;
+
+    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+        // Alignment is watch first, snapshot second, then seq filtering in the
+        // handler. A restarted router owns no prior slots, so every membership
+        // in the snapshot is an orphan to sweep. A concurrently completed old
+        // add appears after the baseline as Added and is swept there instead.
+        self.mount_watch = Some(
+            self.mount
+                .watch_lifecycle_to(&ctx.myself(), RouterMsg::MountLifecycle),
+        );
+        self.reconcile_mount_snapshot(ctx);
+        Ok(Continue)
+    }
 
     async fn handle(
         &mut self,
@@ -223,6 +289,25 @@ impl Actor for Router {
         ctx: &mut ActorContext<Self::Msg>,
     ) -> ActorResult {
         match message {
+            RouterMsg::MountLifecycle(event) => {
+                match mount_event_disposition(self.alignment_seq, event.seq, &event.kind) {
+                    MountEventDisposition::ReconcileSnapshot => {
+                        // The marker retains the sequence of the oldest dropped
+                        // edge, which can precede our current baseline. Always
+                        // resnapshot instead of applying ordinary seq filtering.
+                        self.reconcile_mount_snapshot(ctx);
+                    }
+                    MountEventDisposition::Apply => {
+                        self.alignment_seq = event.seq;
+                        if matches!(event.kind, LifecycleEventKind::Added)
+                            && !self.routes_subtree(&event.child_id)
+                        {
+                            self.pipeline_sweep(event.child_id, ctx);
+                        }
+                    }
+                    MountEventDisposition::Ignore => {}
+                }
+            }
             RouterMsg::UserMessage {
                 envelope,
                 chat,
@@ -343,5 +428,45 @@ impl Actor for Router {
             }
         }
         Ok(Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio_otp::{ChildSnapshot, ChildStateView, Strategy, SupervisorStateView};
+
+    use super::*;
+
+    #[test]
+    fn lagged_event_bypasses_seq_filter_and_reconciles_active_orphans() {
+        assert_eq!(
+            mount_event_disposition(72, 1, &LifecycleEventKind::Lagged { dropped: 71 }),
+            MountEventDisposition::ReconcileSnapshot
+        );
+        assert_eq!(
+            mount_event_disposition(72, 71, &LifecycleEventKind::Added),
+            MountEventDisposition::Ignore
+        );
+        assert_eq!(
+            mount_event_disposition(72, 73, &LifecycleEventKind::Added),
+            MountEventDisposition::Apply
+        );
+
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            vec![
+                ChildSnapshot::new("routed", 0, ChildStateView::Running),
+                ChildSnapshot::new("orphan", 0, ChildStateView::Running),
+                ChildSnapshot::new("already-removing", 0, ChildStateView::Stopping)
+                    .membership(ChildMembershipView::Removing),
+            ],
+        )
+        .lifecycle_seq(73);
+
+        let (alignment_seq, orphaned) = mount_reconciliation(snapshot, |id| id == "routed");
+
+        assert_eq!(alignment_seq, 73);
+        assert_eq!(orphaned, ["orphan"]);
     }
 }

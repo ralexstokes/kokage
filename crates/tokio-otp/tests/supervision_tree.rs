@@ -157,7 +157,7 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
 #[tokio::test]
 async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let tree = SupervisionTree::new().actor_with_scope(
+    let tree = SupervisionTree::new().actor_with_scope_strategy(
         "owned",
         graph.actors()[0].clone(),
         SupervisionTree::dynamic(),

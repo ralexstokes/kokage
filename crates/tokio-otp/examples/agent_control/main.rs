@@ -119,7 +119,7 @@ use std::{
     error::Error,
     future::Future,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -198,7 +198,8 @@ async fn build_app() -> Result<App, AnyError> {
     // and the subtree-id allocator must not, or a reborn router could not
     // reach the mount and would re-mint ids that still exist. Both are durable
     // RouterFactory fields instead.
-    let sessions_mount = Arc::new(OnceLock::new());
+    let sessions_runtime = Runtime::dynamic();
+    let sessions_mount = sessions_runtime.handle();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
     // The gateway slots exist first, providing stable refs that the derived
@@ -279,7 +280,6 @@ async fn build_app() -> Result<App, AnyError> {
     let core_runtime = Runtime::builder()
         .graph(core_graph)
         .strategy(Strategy::OneForOne);
-    let sessions_runtime = Runtime::dynamic();
     let runtime = Runtime::builder()
         .strategy(Strategy::OneForOne)
         .subtree("gateway", gateway_runtime)
@@ -292,8 +292,6 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions = handle
         .subtree("sessions")
         .expect("dynamic sessions mount point");
-    assert!(sessions_mount.set(sessions.clone()).is_ok());
-
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, |event| GuardMsg::BridgeRestarts {
         total: event.total_restarts,
     });

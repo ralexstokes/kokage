@@ -197,6 +197,96 @@ the dynamic subtree itself is not recreated. Restart intensity remains per
 child. Dynamic siblings shut down concurrently under one shared maximum-grace
 deadline.
 
+## Reserve the handle before the scope exists
+
+Every runtime builder owns its stable scope identity from the moment the
+builder is created. Call `handle()` before `build()` when an actor factory must
+capture the scope it will later own or reconcile:
+
+```rust,ignore
+let sessions_builder = Runtime::dynamic();
+let sessions = sessions_builder.handle();
+
+let mut graph = GraphBuilder::new();
+graph.actor("router", move || Router::new(sessions.clone()));
+
+let app = Runtime::builder()
+    // Subtrees precede graph actors, so `sessions` is ready before Router::on_start.
+    .subtree("sessions", sessions_builder)
+    .graph(graph.build()?)
+    .build()?;
+```
+
+The builder, built `Runtime`, and spawned runtime all carry that exact identity;
+no `OnceLock` or post-spawn handle injection is needed. Before binding, control
+operations return `ControlError::Unavailable`, while `snapshot()` exposes the
+declared children as starting and lifecycle/snapshot subscriptions are already
+valid. `wait_started()` waits for a real bound incarnation, including for an
+empty dynamic scope. Dropping an unbuilt builder, failing `build()`, or having
+an insertion rejected makes the identity terminal and closes retained streams.
+
+The same rule applies to `SupervisorBuilder` and
+`DynamicSupervisorBuilder`, whose `handle()` returns a raw
+`SupervisorHandle`. A `Supervisor` clone is a new runnable declaration and
+therefore reserves an independent identity; handle clones continue to address
+one identity.
+
+## Scope handles inside actors
+
+`ActorContext::supervisor()` returns the actor-aware handle for the actor's
+enclosing scope. Observation always works. Membership changes work only for a
+dynamic scope; an ordered scope returns
+`ControlError::UnsupportedByScopeKind`. Awaiting ordinary scope operations is
+safe, with one residual cycle to avoid: do not await removal of a sibling whose
+drain needs this actor to keep consuming its own mailbox. Pipeline that removal
+with `ctx.step`.
+
+For the common leader-and-workers shape, declare an actor-owned scope:
+
+```rust,ignore
+let sessions = SupervisionTree::new().actor_with_scope(
+    "session-runtime",
+    session_actor,
+    SupervisionTree::dynamic(),
+);
+```
+
+This lowers to an ordered node containing `[session_actor, children]`.
+`ActorContext::children()` is `Some` only for that leader and returns the
+inner scope's pre-spawn handle without changing the actor factory signature.
+The inner scope starts after the leader reports ready and stops before the
+leader is cancelled. Consequently, work launched during `on_start` must be
+pipelined: let `on_start` return, wait for `children.wait_started()` in the
+step, then add members. A normal handler can await `children.add_actor(...)`
+directly once the node is ready.
+
+`actor_with_scope` defaults to `RestForOne`: leader failure recycles the leader
+and owned scope, while a worker failure stays inside the owned scope. Use
+`actor_with_scope_strategy(..., Strategy::OneForAll)` when either side failing
+must recycle both. Snapshot paths are
+`root.<node>.<leader-label>` and `root.<node>.children.<worker>`.
+
+## Keep dynamic membership single-writer and reconcile it
+
+Choose one actor as the membership writer and route all adds, removals, and
+replay decisions through it. On every writer incarnation, align its durable
+intent with the truthful supervisor view in this order:
+
+1. Start `watch_lifecycle_to` (or `watch_lifecycle`) first.
+2. Read `snapshot()` second and reconcile its current children.
+3. Remember `snapshot.lifecycle_seq`.
+4. Apply only ordinary watched events with a larger `seq`; treat `Added` as an
+   idempotent upsert.
+5. On `Lagged`, fetch and reconcile a fresh snapshot and replace the sequence
+   baseline with its `lifecycle_seq` before consuming more events.
+
+Because a builder handle can start the watch before spawn, the same recipe is
+gap-free for the first incarnation as well as restarts. A pre-spawn snapshot
+already projects declared membership, while the first actual `Added` events
+arrive only after bind. Dynamically added children are not replayed by the
+runtime after their parent restarts: the single writer compares durable intent
+with this ordered view and re-adds or removes members as needed.
+
 Both of those boundaries held up unchanged under the first realistic dynamic
 workload, the `agent_control` example's per-conversation subtrees. Per-child
 intensity means a storm of short-lived subtree crashes never trips an

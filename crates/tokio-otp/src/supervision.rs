@@ -17,7 +17,6 @@ use crate::{
 /// `children` is semantic for ordered nodes. Dynamic nodes must leave it empty;
 /// retaining it in the declaration lets [`build`](SupervisionTree::build)
 /// return a typed error when fluent construction attempts to declare a child.
-#[derive(Clone)]
 pub struct SupervisionScope {
     /// Optional id when this scope is nested in another scope.
     pub id: Option<String>,
@@ -34,6 +33,30 @@ pub struct SupervisionScope {
     /// Declared child nodes, in semantic order.
     pub children: Vec<SupervisionTree>,
     dynamic_factory: Option<RunnableActorFactory>,
+    reserved_builder: Option<ReservedScopeBuilder>,
+    reserved_actors: Option<Arc<ActorRuntimeState>>,
+}
+
+enum ReservedScopeBuilder {
+    Ordered(SupervisorBuilder),
+    Dynamic(DynamicSupervisorBuilder),
+}
+
+impl Clone for SupervisionScope {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            strategy: self.strategy,
+            auto_shutdown: self.auto_shutdown,
+            restart_intensity: self.restart_intensity,
+            default_restart: self.default_restart,
+            default_shutdown: self.default_shutdown,
+            children: self.children.clone(),
+            dynamic_factory: self.dynamic_factory.clone(),
+            reserved_builder: None,
+            reserved_actors: None,
+        }
+    }
 }
 
 impl SupervisionScope {
@@ -47,6 +70,8 @@ impl SupervisionScope {
             default_shutdown: ShutdownPolicy::default(),
             children: Vec::new(),
             dynamic_factory: None,
+            reserved_builder: None,
+            reserved_actors: None,
         }
     }
 }
@@ -175,6 +200,32 @@ impl SupervisionTree {
         }
     }
 
+    pub(crate) fn with_ordered_builder(
+        mut self,
+        builder: SupervisorBuilder,
+        actors: Arc<ActorRuntimeState>,
+    ) -> Self {
+        let scope = self
+            .scope_mut()
+            .expect("reserved builder applies only to scope nodes");
+        scope.reserved_builder = Some(ReservedScopeBuilder::Ordered(builder));
+        scope.reserved_actors = Some(actors);
+        self
+    }
+
+    pub(crate) fn with_dynamic_builder(
+        mut self,
+        builder: DynamicSupervisorBuilder,
+        actors: Arc<ActorRuntimeState>,
+    ) -> Self {
+        let scope = self
+            .scope_mut()
+            .expect("reserved builder applies only to scope nodes");
+        scope.reserved_builder = Some(ReservedScopeBuilder::Dynamic(builder));
+        scope.reserved_actors = Some(actors);
+        self
+    }
+
     /// Creates an ordered scope containing every actor in a graph.
     pub fn graph(graph: &Graph) -> Self {
         let mut tree = Self::new().dynamic_defaults(graph);
@@ -291,9 +342,26 @@ impl SupervisionTree {
         self
     }
 
-    /// Appends an actor leader with an owned scope.
+    /// Appends an actor leader with an owned scope using
+    /// [`Strategy::RestForOne`].
     #[must_use]
     pub fn actor_with_scope(
+        self,
+        id: impl Into<String>,
+        actor: impl Into<ActorChild>,
+        children: impl Into<SupervisionTree>,
+    ) -> Self {
+        self.actor_with_scope_strategy(id, actor, children, Strategy::RestForOne)
+    }
+
+    /// Appends an actor leader with an owned scope and an explicit restart
+    /// relationship.
+    ///
+    /// Prefer [`actor_with_scope`](Self::actor_with_scope) for the default
+    /// `RestForOne` relationship. Use `OneForAll` when leader and child scope
+    /// must always recycle together.
+    #[must_use]
+    pub fn actor_with_scope_strategy(
         self,
         id: impl Into<String>,
         actor: impl Into<ActorChild>,
@@ -395,16 +463,20 @@ impl SupervisionTree {
 
     fn lower_scope(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
         let kind = self.kind();
-        let scope = match self {
+        let mut scope = match self {
             Self::Ordered { scope } | Self::Dynamic { scope } => scope,
             _ => unreachable!("kind() accepted only a scope node"),
         };
-        let actor_factory = scope.dynamic_factory.unwrap_or_default();
-        let actors = Arc::new(ActorRuntimeState::new(
-            actor_factory,
-            scope.default_restart,
-            scope.default_shutdown,
-        ));
+        let actor_factory = scope.dynamic_factory.clone().unwrap_or_default();
+        let actors = scope.reserved_actors.take().unwrap_or_else(|| {
+            Arc::new(ActorRuntimeState::new(
+                actor_factory.clone(),
+                scope.default_restart,
+                scope.default_shutdown,
+            ))
+        });
+        actors.configure(actor_factory, scope.default_restart, scope.default_shutdown);
+        let reserved_builder = scope.reserved_builder.take();
 
         if kind == ScopeKind::Dynamic {
             if scope.strategy != Strategy::OneForOne {
@@ -422,7 +494,13 @@ impl SupervisionTree {
                     "dynamic scopes cannot have declared children",
                 ));
             }
-            let mut builder = DynamicSupervisorBuilder::new();
+            let mut builder = match reserved_builder {
+                Some(ReservedScopeBuilder::Dynamic(builder)) => builder,
+                Some(ReservedScopeBuilder::Ordered(_)) => {
+                    unreachable!("scope builder kind matches")
+                }
+                None => DynamicSupervisorBuilder::new(),
+            };
             builder = builder
                 .restart(scope.default_restart)
                 .shutdown(scope.default_shutdown);
@@ -432,7 +510,12 @@ impl SupervisionTree {
             return Ok((builder.build()?, actors));
         }
 
-        let mut builder = SupervisorBuilder::new()
+        let builder = match reserved_builder {
+            Some(ReservedScopeBuilder::Ordered(builder)) => builder,
+            Some(ReservedScopeBuilder::Dynamic(_)) => unreachable!("scope builder kind matches"),
+            None => SupervisorBuilder::new(),
+        };
+        let mut builder = builder
             .strategy(scope.strategy)
             .auto_shutdown(scope.auto_shutdown);
         if let Some(intensity) = scope.restart_intensity {
@@ -447,6 +530,7 @@ impl SupervisionTree {
                     actor.shutdown.unwrap_or(scope.default_shutdown),
                     actor.restart_intensity,
                     false,
+                    None,
                 )),
                 Self::Child(spec) => builder.child(spec),
                 tree @ (Self::Ordered { .. } | Self::Dynamic { .. }) => {
@@ -471,6 +555,11 @@ impl SupervisionTree {
                         scope.default_restart,
                         scope.default_shutdown,
                     ));
+                    let (children_supervisor, children_actors) = children.lower_scope()?;
+                    let children_handle = crate::RuntimeHandle::new(
+                        children_supervisor.handle(),
+                        Arc::clone(&children_actors),
+                    );
                     let leader = actor_child_spec(
                         actor.actor,
                         &owned_actors,
@@ -478,8 +567,8 @@ impl SupervisionTree {
                         actor.shutdown.unwrap_or(scope.default_shutdown),
                         actor.restart_intensity,
                         false,
+                        Some(children_handle),
                     );
-                    let (children_supervisor, children_actors) = children.lower_scope()?;
                     let owned = SupervisorBuilder::new()
                         .strategy(strategy)
                         .child(leader)
