@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant as StdInstant},
 };
@@ -19,7 +19,7 @@ use crate::{
     context::ChildReady,
     error::{ControlError, SupervisorError},
     event::{ExitStatusView, NestedEventNotification, SupervisorEvent},
-    handle::{NestedChannels, NestedHandles, StableSupervisorChannels, SupervisorCommand},
+    handle::{NestedChannels, StableSupervisorChannels, SupervisorCommand},
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     shutdown::AutoShutdown,
@@ -121,6 +121,67 @@ impl ChildEntry {
     }
 }
 
+/// Reconciles the stable identities retained from a previous incarnation with
+/// the nested supervisors in the static configuration.
+///
+/// Static identities are reused. Missing identities are recreated, while
+/// dynamic identities that collide with static children or are absent from
+/// the new incarnation are made terminal.
+fn reconcile_stable_identities(
+    children: &[ChildDefinition],
+    nested_channels: &NestedChannels,
+) -> HashMap<String, Arc<StableSupervisorChannels>> {
+    let mut identities = HashMap::new();
+    let mut displaced = Vec::new();
+    let mut channel_map = nested_channels.lock().expect("nested channel map poisoned");
+
+    for child in children {
+        let ChildKind::Supervisor(supervisor) = &child.kind else {
+            continue;
+        };
+
+        // A dynamically added child that happens to share the id is a
+        // different identity and must not be conflated with the recreated
+        // static child.
+        let reusable = channel_map
+            .get(&child.id)
+            .filter(|channels| channels.statically_configured())
+            .cloned();
+        let stable = reusable.unwrap_or_else(|| {
+            // The identity is missing (a previous incarnation removed this
+            // static child) or occupied by a dynamic child. Mint a fresh
+            // static identity and displace any dynamic occupant.
+            let stable = supervisor.stable_channels(true);
+            if let Some(occupant) = channel_map.insert(child.id.clone(), Arc::clone(&stable)) {
+                displaced.push(occupant);
+            }
+            stable
+        });
+        identities.insert(child.id.clone(), stable);
+    }
+
+    // Anything else was added dynamically in a previous incarnation. The
+    // replacement incarnation will never spawn it, including when its id now
+    // belongs to a static task, so close the identity instead of leaving its
+    // observers hanging.
+    let orphaned_ids: Vec<String> = channel_map
+        .keys()
+        .filter(|id| !identities.contains_key(*id))
+        .cloned()
+        .collect();
+    let orphaned = orphaned_ids
+        .into_iter()
+        .filter_map(|id| channel_map.remove(&id))
+        .collect::<Vec<_>>();
+    drop(channel_map);
+
+    for channels in orphaned.into_iter().chain(displaced) {
+        channels.terminal();
+    }
+
+    identities
+}
+
 /// Read-only configuration and identity, fixed at construction time.
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
@@ -176,7 +237,6 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
-    pub(crate) nested_handles: NestedHandles,
     pub(crate) nested_channels: NestedChannels,
     pub(crate) nested_event_tx: mpsc::Sender<NestedEventNotification>,
     pub(crate) nested_event_rx: mpsc::Receiver<NestedEventNotification>,
@@ -202,7 +262,6 @@ impl SupervisorRuntime {
         events: broadcast::Sender<SupervisorEvent>,
         snapshots: watch::Sender<SupervisorSnapshot>,
         command_rx: mpsc::Receiver<SupervisorCommand>,
-        nested_handles: NestedHandles,
         nested_channels: NestedChannels,
         path_prefix: Vec<String>,
         parent_link: Option<ParentLink>,
@@ -215,37 +274,17 @@ impl SupervisorRuntime {
         let mut children_by_id = HashMap::with_capacity(config.children.len());
         let mut child_order = Vec::with_capacity(config.children.len());
         let mut next_child_instance = 0u64;
+        let mut stable_identities = reconcile_stable_identities(&config.children, &nested_channels);
 
-        let mut displaced: Vec<Arc<StableSupervisorChannels>> = Vec::new();
-        let mut handle_map = nested_handles.lock().expect("nested handle map poisoned");
-        let mut channel_map = nested_channels.lock().expect("nested channel map poisoned");
         for spec in config.children {
             let id = spec.id.clone();
             let formatted_path = format_child_path(&path_prefix, &id);
             let child_nested_channels = match &spec.kind {
-                ChildKind::Supervisor(supervisor) => {
-                    // Reuse the stable identity only if it was minted for this
-                    // static child. A dynamically added child that happens to
-                    // share the id is a different identity and must not be
-                    // conflated with the recreated static child.
-                    let reusable = channel_map
-                        .get(&id)
-                        .filter(|channels| channels.statically_configured())
-                        .cloned();
-                    Some(reusable.unwrap_or_else(|| {
-                        // Missing (a previous incarnation removed this static
-                        // child, ending its stable identity) or occupied by a
-                        // dynamically added child's channels: mint a fresh
-                        // static identity, displacing any dynamic occupant.
-                        let stable = supervisor.stable_channels(true);
-                        handle_map.insert(id.clone(), stable.handle());
-                        if let Some(occupant) = channel_map.insert(id.clone(), Arc::clone(&stable))
-                        {
-                            displaced.push(occupant);
-                        }
-                        stable
-                    }))
-                }
+                ChildKind::Supervisor(_) => Some(
+                    stable_identities
+                        .remove(&id)
+                        .expect("static supervisor identity was reconciled"),
+                ),
                 ChildKind::Task(_) => None,
             };
             let key = children.insert(ChildEntry::new(
@@ -259,35 +298,6 @@ impl SupervisorRuntime {
             next_child_instance = next_child_instance.saturating_add(1);
             children_by_id.insert(id.clone(), key);
             child_order.push(key);
-        }
-
-        // Stable channels left behind by a previous incarnation for children
-        // this incarnation will never spawn (added dynamically, so absent
-        // from the static supervisor configuration — including a dynamic
-        // supervisor whose id now belongs to a static task) are orphaned for
-        // good: no future incarnation spawns them either. Close them, along
-        // with any identities displaced above, so their observers terminate
-        // instead of hanging.
-        let static_supervisor_ids: HashSet<&str> = children
-            .iter()
-            .filter_map(|(_, entry)| entry.nested_channels.as_ref().map(|_| entry.id.as_str()))
-            .collect();
-        let orphaned_ids: Vec<String> = channel_map
-            .keys()
-            .filter(|id| !static_supervisor_ids.contains(id.as_str()))
-            .cloned()
-            .collect();
-        let orphaned: Vec<Arc<StableSupervisorChannels>> = orphaned_ids
-            .into_iter()
-            .filter_map(|id| {
-                handle_map.remove(&id);
-                channel_map.remove(&id)
-            })
-            .collect();
-        drop(channel_map);
-        drop(handle_map);
-        for channels in orphaned.into_iter().chain(displaced) {
-            channels.terminal();
         }
         // Nested incarnations reuse the stable snapshot channel. Binding the
         // new incarnation reset its child state while preserving the previous
@@ -326,7 +336,6 @@ impl SupervisorRuntime {
             snapshots,
             shutdown_rx,
             command_rx,
-            nested_handles,
             nested_channels,
             nested_event_tx,
             nested_event_rx,
@@ -712,10 +721,6 @@ impl SupervisorRuntime {
         self.next_child_instance = self.next_child_instance.saturating_add(1);
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
-        self.nested_handles
-            .lock()
-            .expect("nested handle map poisoned")
-            .insert(id.clone(), stable.handle());
         self.nested_channels
             .lock()
             .expect("nested channel map poisoned")
@@ -1007,10 +1012,6 @@ impl SupervisorRuntime {
         self.children_by_id.remove(&entry.id);
         self.child_order.retain(|&existing| existing != key);
         if matches!(&entry.runtime.definition.kind, ChildKind::Supervisor(_)) {
-            self.nested_handles
-                .lock()
-                .expect("nested handle map poisoned")
-                .remove(&entry.id);
             self.nested_channels
                 .lock()
                 .expect("nested channel map poisoned")
@@ -1660,5 +1661,67 @@ fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
         | SupervisorEvent::SupervisorStopping
         | SupervisorEvent::SupervisorStopped
         | SupervisorEvent::RestartIntensityExceeded => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Supervisor, SupervisorBuilder, handle::empty_nested_channels};
+
+    fn empty_supervisor() -> Supervisor {
+        SupervisorBuilder::new()
+            .build()
+            .expect("empty supervisor config is valid")
+    }
+
+    #[test]
+    fn stable_identity_reconciliation_reuses_static_and_closes_stale_channels() {
+        let config = SupervisorBuilder::new()
+            .supervisor("reused", empty_supervisor())
+            .supervisor("collision", empty_supervisor())
+            .build()
+            .expect("valid supervisor config")
+            .config;
+        let nested_channels = empty_nested_channels();
+        let reused = empty_supervisor().stable_channels(true);
+        let displaced = empty_supervisor().stable_channels(false);
+        let orphaned = empty_supervisor().stable_channels(false);
+        let reused_snapshots = reused.snapshots_rx();
+        let displaced_snapshots = displaced.snapshots_rx();
+        let orphaned_snapshots = orphaned.snapshots_rx();
+
+        {
+            let mut channels = nested_channels.lock().expect("nested channel map");
+            channels.insert("reused".to_owned(), Arc::clone(&reused));
+            channels.insert("collision".to_owned(), Arc::clone(&displaced));
+            channels.insert("orphaned".to_owned(), Arc::clone(&orphaned));
+        }
+
+        let identities = reconcile_stable_identities(&config.children, &nested_channels);
+        let channels = nested_channels.lock().expect("nested channel map");
+        let replacement = channels.get("collision").expect("replacement identity");
+
+        assert_eq!(channels.len(), 2);
+        assert!(Arc::ptr_eq(
+            channels.get("reused").expect("reused identity"),
+            &reused
+        ));
+        assert!(Arc::ptr_eq(
+            identities.get("reused").expect("reconciled identity"),
+            &reused
+        ));
+        assert!(Arc::ptr_eq(
+            identities.get("collision").expect("reconciled replacement"),
+            replacement
+        ));
+        assert!(!Arc::ptr_eq(replacement, &displaced));
+        assert!(replacement.statically_configured());
+        assert!(!channels.contains_key("orphaned"));
+        drop(channels);
+
+        assert!(reused_snapshots.has_changed().is_ok());
+        assert!(displaced_snapshots.has_changed().is_err());
+        assert!(orphaned_snapshots.has_changed().is_err());
     }
 }
