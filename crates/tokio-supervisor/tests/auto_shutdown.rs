@@ -12,8 +12,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    AutoShutdown, ChildSpec, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorSpec,
+    AutoShutdown, ChildSpec, ControlError, ControlOperation, DynamicSupervisorBuilder,
+    ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,
+    SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorSpec,
 };
 
 mod common;
@@ -205,64 +206,40 @@ async fn significant_nested_supervisor_triggers_parent_auto_shutdown() {
 }
 
 #[tokio::test]
-async fn dynamic_significant_child_triggers_and_is_validated() {
-    let disabled = SupervisorBuilder::new()
+async fn dynamic_significant_children_are_rejected_by_scope_kind() {
+    let handle = DynamicSupervisorBuilder::new()
         .build()
-        .expect("valid empty supervisor")
+        .expect("valid dynamic supervisor")
         .spawn();
-    let err = disabled
+    let err = handle
         .add_child(ChildSpec::new("invalid", |_| async { Ok(()) }).significant())
         .await
-        .expect_err("significant child requires automatic shutdown");
+        .expect_err("dynamic scopes reject significant children");
     assert_eq!(
         err,
-        ControlError::InvalidConfig("significant children require automatic shutdown")
+        ControlError::UnsupportedByScopeKind {
+            operation: ControlOperation::AddChild,
+            kind: ScopeKind::Dynamic,
+        }
     );
     let nested = SupervisorBuilder::new()
         .build()
         .expect("valid nested supervisor");
-    let err = disabled
+    let err = handle
         .add_supervisor("nested", SupervisorSpec::new(nested).significant())
         .await
-        .expect_err("significant nested child requires automatic shutdown");
+        .expect_err("dynamic scopes reject significant nested supervisors");
     assert_eq!(
         err,
-        ControlError::InvalidConfig("significant children require automatic shutdown")
+        ControlError::UnsupportedByScopeKind {
+            operation: ControlOperation::AddSupervisor,
+            kind: ScopeKind::Dynamic,
+        }
     );
-    disabled
+    handle
         .shutdown_and_wait()
         .await
-        .expect("disabled supervisor shuts down");
-
-    let enabled = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .build()
-        .expect("valid empty supervisor")
-        .spawn();
-    let nested = SupervisorBuilder::new()
-        .build()
-        .expect("valid nested supervisor");
-    let err = enabled
-        .add_supervisor(
-            "invalid-nested",
-            SupervisorSpec::new(nested)
-                .restart(RestartPolicy::Always)
-                .significant(),
-        )
-        .await
-        .expect_err("significant nested child cannot always restart");
-    assert_eq!(
-        err,
-        ControlError::InvalidConfig("significant children cannot use RestartPolicy::Always")
-    );
-    enabled
-        .add_child(ChildSpec::new("dynamic", |_| async { Ok(()) }).significant())
-        .await
-        .expect("valid significant child");
-    enabled
-        .wait()
-        .await
-        .expect("dynamic significant completion should stop supervisor");
+        .expect("dynamic supervisor shuts down");
 }
 
 #[tokio::test]
@@ -566,13 +543,13 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         }
     });
 
-    let handle = SupervisorBuilder::new()
+    let handle = DynamicSupervisorBuilder::new()
         .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
-        .child(removable)
-        .child(failing)
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle.add_child(removable).await.expect("removable added");
+    handle.add_child(failing).await.expect("failing added");
     common::recv_n(&mut started_rx, 2).await;
 
     let _ = handle.remove_child("removable").await;
@@ -580,55 +557,4 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         .await
         .expect("fatal restart observed during removal must stop supervisor");
     assert_eq!(result, Err(SupervisorError::RestartIntensityExceeded));
-}
-
-#[tokio::test]
-async fn abort_removal_emits_nothing_after_auto_shutdown_stopped() {
-    let complete = Arc::new(Notify::new());
-    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let removable = ChildSpec::new("removable", {
-        let complete = complete.clone();
-        let started_tx = started_tx.clone();
-        move |_| {
-            let guard = NotifyOnDrop(complete.clone());
-            let started_tx = started_tx.clone();
-            async move {
-                let _guard = guard;
-                started_tx.send(()).expect("test receiver dropped");
-                pending::<()>().await;
-                Ok(())
-            }
-        }
-    })
-    .shutdown(ShutdownPolicy::abort());
-    let significant = ChildSpec::new("significant", move |_| {
-        let complete = complete.clone();
-        let started_tx = started_tx.clone();
-        async move {
-            started_tx.send(()).expect("test receiver dropped");
-            complete.notified().await;
-            Ok(())
-        }
-    })
-    .significant();
-
-    let handle = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .child(removable)
-        .child(significant)
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-    let mut events = handle.subscribe();
-    common::recv_n(&mut started_rx, 2).await;
-
-    let _ = handle.remove_child("removable").await;
-    handle.wait().await.expect("auto-shutdown should be clean");
-
-    let mut stopped = false;
-    while let Ok(event) = events.try_recv() {
-        assert!(!stopped, "event emitted after SupervisorStopped: {event:?}");
-        stopped = event == SupervisorEvent::SupervisorStopped;
-    }
-    assert!(stopped, "SupervisorStopped should be observed");
 }

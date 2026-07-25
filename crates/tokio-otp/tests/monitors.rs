@@ -5,7 +5,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, CancellationHandle, Down, DownReason, GraphBuilder,
+    ActorContext, ActorRef, ActorResult, CancellationHandle, Down, DownReason, DynamicActorOptions,
     MonitorEvent, RawActor, RestartPolicy, RunnableActor, RunnableActorFactory, Runtime,
     prelude::Continue,
 };
@@ -1111,29 +1111,38 @@ impl RawActor for UnitObserver {
 
 #[tokio::test]
 async fn supervisor_abort_delivers_failure_down_then_terminated() {
-    let mut builder = GraphBuilder::new();
-    let (peer_slot, peer_ref) = builder.slot("peer");
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    builder.define(peer_slot, move || StubbornPeer {
-        started: peer_started_tx.clone(),
-    });
+    let handle = Runtime::dynamic()
+        .build()
+        .expect("dynamic runtime builds")
+        .spawn();
+    let peer_ref = handle
+        .add_actor(
+            "peer",
+            move || StubbornPeer {
+                started: peer_started_tx.clone(),
+            },
+            DynamicActorOptions::new().shutdown(ShutdownPolicy::abort()),
+        )
+        .await
+        .expect("peer added");
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
-    builder.actor("observer", {
-        let peer_ref = peer_ref.clone();
-        move || UnitObserver {
-            peer: peer_ref.clone(),
-            observed: observed_tx.clone(),
-            started: observer_started_tx.clone(),
-        }
-    });
-    let graph = builder.build().expect("valid graph");
-    let runtime = Runtime::builder()
-        .graph(graph)
-        .actor_shutdown(&peer_ref, ShutdownPolicy::abort())
-        .build()
-        .expect("runtime builds");
-    let handle = runtime.spawn();
+    handle
+        .add_actor(
+            "observer",
+            {
+                let peer_ref = peer_ref.clone();
+                move || UnitObserver {
+                    peer: peer_ref.clone(),
+                    observed: observed_tx.clone(),
+                    started: observer_started_tx.clone(),
+                }
+            },
+            DynamicActorOptions::default(),
+        )
+        .await
+        .expect("observer added");
     started(&mut peer_started).await;
     started(&mut observer_started).await;
     assert_eq!(next_event(&mut observed).await, up("peer", 0));

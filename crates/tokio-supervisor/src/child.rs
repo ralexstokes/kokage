@@ -27,9 +27,11 @@ pub(crate) type OpaqueAttachment = Arc<dyn Any + Send + Sync>;
 pub(crate) struct ChildDefinition {
     pub(crate) id: String,
     pub(crate) restart: RestartPolicy,
+    restart_is_default: bool,
     pub(crate) remove_on_exit: bool,
     pub(crate) restart_intensity: Option<RestartIntensity>,
     pub(crate) shutdown_policy: ShutdownPolicy,
+    shutdown_is_default: bool,
     pub(crate) significant: bool,
     pub(crate) readiness: ChildReadiness,
     pub(crate) attachment: Option<OpaqueAttachment>,
@@ -74,8 +76,10 @@ pub struct ChildSpec {
 pub struct SupervisorSpec {
     pub(crate) supervisor: Supervisor,
     pub(crate) restart: RestartPolicy,
+    restart_is_default: bool,
     pub(crate) restart_intensity: Option<RestartIntensity>,
     pub(crate) shutdown_policy: ShutdownPolicy,
+    shutdown_is_default: bool,
     pub(crate) significant: bool,
     pub(crate) attachment: Option<OpaqueAttachment>,
 }
@@ -86,8 +90,10 @@ impl SupervisorSpec {
         Self {
             supervisor,
             restart: RestartPolicy::default(),
+            restart_is_default: true,
             restart_intensity: None,
             shutdown_policy: ShutdownPolicy::default(),
+            shutdown_is_default: true,
             significant: false,
             attachment: None,
         }
@@ -97,6 +103,7 @@ impl SupervisorSpec {
     #[must_use]
     pub fn restart(mut self, restart: RestartPolicy) -> Self {
         self.restart = restart;
+        self.restart_is_default = false;
         self
     }
 
@@ -104,6 +111,7 @@ impl SupervisorSpec {
     #[must_use]
     pub fn shutdown(mut self, policy: ShutdownPolicy) -> Self {
         self.shutdown_policy = policy;
+        self.shutdown_is_default = false;
         self
     }
 
@@ -195,9 +203,11 @@ impl ChildSpec {
             inner: Arc::new(ChildDefinition {
                 id: id.into(),
                 restart: RestartPolicy::default(),
+                restart_is_default: true,
                 remove_on_exit: false,
                 restart_intensity: None,
                 shutdown_policy: ShutdownPolicy::default(),
+                shutdown_is_default: true,
                 significant: false,
                 readiness: ChildReadiness::Immediate,
                 attachment: None,
@@ -209,7 +219,10 @@ impl ChildSpec {
     /// Sets the restart policy for this child. See [`RestartPolicy`] for options.
     #[must_use]
     pub fn restart(self, restart: RestartPolicy) -> Self {
-        self.map_inner(|inner| inner.restart = restart)
+        self.map_inner(|inner| {
+            inner.restart = restart;
+            inner.restart_is_default = false;
+        })
     }
 
     /// Sets whether this child is removed after an exit that its restart
@@ -243,7 +256,10 @@ impl ChildSpec {
     /// options.
     #[must_use]
     pub fn shutdown(self, policy: ShutdownPolicy) -> Self {
-        self.map_inner(|inner| inner.shutdown_policy = policy)
+        self.map_inner(|inner| {
+            inner.shutdown_policy = policy;
+            inner.shutdown_is_default = false;
+        })
     }
 
     /// Overrides the supervisor-level [`RestartIntensity`] for this child.
@@ -282,7 +298,8 @@ impl ChildSpec {
     /// Requires the child to call [`ChildContext::mark_ready`](crate::ChildContext::mark_ready)
     /// before it is considered started.
     ///
-    /// This is primarily useful with [`StartMode::Sequential`](crate::StartMode::Sequential).
+    /// An ordered supervisor waits for this signal before starting its next
+    /// declared child.
     /// If the child exits before reporting readiness, its ordinary restart
     /// policy applies. The sequence waits through a scheduled restart; if the
     /// exit is terminal, the child is marked startup-aborted and the sequence
@@ -321,17 +338,39 @@ impl ChildSpec {
 }
 
 impl ChildDefinition {
+    pub(crate) fn apply_defaults(&mut self, restart: RestartPolicy, shutdown: ShutdownPolicy) {
+        if self.restart_is_default {
+            self.restart = restart;
+        }
+        if self.shutdown_is_default {
+            self.shutdown_policy = shutdown;
+        }
+    }
+
     pub(crate) fn supervisor(id: String, spec: SupervisorSpec) -> Self {
         Self {
             id,
             restart: spec.restart,
+            restart_is_default: spec.restart_is_default,
             remove_on_exit: false,
             restart_intensity: spec.restart_intensity,
             shutdown_policy: spec.shutdown_policy,
+            shutdown_is_default: spec.shutdown_is_default,
             significant: spec.significant,
             readiness: ChildReadiness::Explicit,
             attachment: spec.attachment,
             kind: ChildKind::Supervisor(spec.supervisor),
+        }
+    }
+}
+
+impl SupervisorSpec {
+    pub(crate) fn apply_defaults(&mut self, restart: RestartPolicy, shutdown: ShutdownPolicy) {
+        if self.restart_is_default {
+            self.restart = restart;
+        }
+        if self.shutdown_is_default {
+            self.shutdown_policy = shutdown;
         }
     }
 }

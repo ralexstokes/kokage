@@ -1,6 +1,6 @@
 # Dynamic Actors
 
-A runtime does not need a graph at all: `Runtime::builder().build()` starts
+A dynamic runtime does not need a graph: `Runtime::dynamic().build()` starts
 empty and idles until `RuntimeHandle::add_actor` adds a typed actor. Each
 added actor becomes a supervised child whose id is the actor's label, and
 `add_actor` returns the typed `ActorRef<M>` directly — there is no registry
@@ -12,7 +12,6 @@ spec structs are useful when durable configuration deserves its own type.
 ```rust,no_run
 use tokio_otp::prelude::Continue;
 use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, Runtime};
-use tokio_supervisor::Strategy;
 
 struct FrontDesk {
     rush: Option<ActorRef<String>>,
@@ -58,7 +57,7 @@ impl Actor for RushPress {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = Runtime::builder().strategy(Strategy::OneForOne).build()?;
+    let runtime = Runtime::dynamic().build()?;
     let handle = runtime.spawn();
 
     let orders = handle
@@ -160,7 +159,7 @@ Subtrees can also be added dynamically. `add_subtree` takes the same
 
 ```rust,ignore
 let sessions = handle
-    .add_subtree("sessions", Runtime::builder())
+    .add_subtree("sessions", Runtime::dynamic())
     .await?;
 let session = sessions
     .add_subtree(
@@ -180,17 +179,17 @@ session
 Dynamic subtrees use the same actor registry nodes and recursive stats path as
 statically declared subtrees. Removing one with `remove_child` removes that
 registry node, and retained handles fail control operations with
-`ControlError::Unavailable`. `add_subtree` also resolves on insertion. Its
-returned handle and attachment are available while a sequential parent still
-has the subtree queued, and control work sent through that handle waits in the
-subtree's own channel until its loop starts.
+`ControlError::Unavailable`. `add_subtree` resolves when insertion and
+immediate startup are scheduled. These operations require a dynamic parent;
+an ordered parent returns `ControlError::UnsupportedByScopeKind`.
 
 Restart recovery follows the builder boundary. If a dynamic subtree itself
 restarts, actors and nested subtrees declared in the builder are recreated;
 children added later through its handle are not and must be replayed by the
 application. If the parent supervisor that received `add_subtree` restarts,
 the dynamic subtree itself is not recreated. Restart intensity remains per
-child, and shutdown remains concurrent under the parent's shared deadline.
+child. Dynamic siblings shut down concurrently under one shared maximum-grace
+deadline.
 
 Both of those boundaries held up unchanged under the first realistic dynamic
 workload, the `agent_control` example's per-conversation subtrees. Per-child

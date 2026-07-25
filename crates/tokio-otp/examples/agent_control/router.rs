@@ -10,7 +10,7 @@ use std::{
 
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, ControlError, GraphBuilder, Runtime, RuntimeHandle,
-    StartMode, Strategy, prelude::Continue,
+    Strategy, prelude::Continue,
 };
 
 use crate::{
@@ -129,8 +129,7 @@ impl Router {
                         step_id,
                         Runtime::builder()
                             .graph(graph)
-                            .strategy(Strategy::OneForAll)
-                            .start_mode(StartMode::Sequential),
+                            .strategy(Strategy::OneForAll),
                     )
                     .await;
                 match subtree {

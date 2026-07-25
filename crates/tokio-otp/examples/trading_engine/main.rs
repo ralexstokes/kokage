@@ -305,12 +305,10 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let venue_runtime = Runtime::builder()
         .graph(venue_graph)
         .strategy(Strategy::OneForOne)
-        .start_mode(StartMode::Sequential)
         .restart_intensity(RestartIntensity::new(5, Duration::from_secs(10)));
     let runtime = Runtime::builder()
         .graph(core_graph)
         .strategy(Strategy::OneForOne)
-        .start_mode(StartMode::Sequential)
         .subtree("venues", venue_runtime)
         .build()?;
     let handle = runtime.spawn();

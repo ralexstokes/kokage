@@ -1116,7 +1116,8 @@ mod runnable_actor {
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         DrainPolicy, DynamicActorOptions, Graph, GraphBuilder, MessageSize, RawActor,
-        RestartPolicy, RunnableActor, RunnableActorFactory, Runtime, SendError, prelude::Continue,
+        RestartPolicy, RunnableActor, RunnableActorFactory, SendError, SupervisionTree,
+        prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1406,12 +1407,12 @@ mod runnable_actor {
     async fn dynamic_factory_actor_inherits_shutdown_timeout() {
         let mut builder = GraphBuilder::new();
         builder.actor_shutdown_timeout(Duration::from_millis(100));
-        builder.actor("anchor", Drain::<()>::new);
+        builder.actor("factory-template", Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
-        let handle = Runtime::builder()
-            .graph(graph)
+        let handle = SupervisionTree::dynamic()
+            .dynamic_defaults(&graph)
             .build()
-            .expect("runtime builds")
+            .expect("dynamic runtime builds")
             .spawn();
         handle
             .add_actor("worker", || NeverStops, DynamicActorOptions::default())

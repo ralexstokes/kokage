@@ -275,15 +275,11 @@ async fn build_app() -> Result<App, AnyError> {
 
     let gateway_runtime = Runtime::builder()
         .graph(gateway_graph.build()?)
-        .strategy(Strategy::RestForOne)
-        .start_mode(StartMode::Sequential);
+        .strategy(Strategy::RestForOne);
     let core_runtime = Runtime::builder()
         .graph(core_graph)
-        .strategy(Strategy::OneForOne)
-        .start_mode(StartMode::Sequential);
-    let sessions_runtime = Runtime::builder()
-        .strategy(Strategy::OneForOne)
-        .start_mode(StartMode::Sequential);
+        .strategy(Strategy::OneForOne);
+    let sessions_runtime = Runtime::builder().strategy(Strategy::OneForOne);
     let runtime = Runtime::builder()
         .strategy(Strategy::OneForOne)
         .subtree("gateway", gateway_runtime)
