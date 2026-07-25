@@ -1,15 +1,13 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU8, Ordering},
-};
+use std::sync::Arc;
 
 use crate::{
     child::{ChildKind, ChildReadiness},
     context::{ChildContext, ChildReady, ReadySignal, SupervisorToken},
     error::SupervisorError,
     event::{EventSink, SupervisorEvent},
+    handle::StableSupervisorChannels,
     runtime::{
-        child_runtime::{COMPLETION_CLEAN, COMPLETION_PENDING, RuntimeChildState},
+        child_runtime::{CompletionFlag, RuntimeChildState},
         supervision::{ChildEnvelope, SupervisorRuntime, TaskMeta},
     },
     snapshot::{NestedSnapshotState, SnapshotCell},
@@ -17,31 +15,38 @@ use crate::{
 };
 use tracing::{Instrument, info_span};
 
+struct SpawnPlan {
+    child_id: String,
+    generation: u64,
+    old_generation: Option<u64>,
+    kind: ChildKind,
+    ctx: ChildContext,
+    instance: u64,
+    snapshot_state: Option<NestedSnapshotState>,
+    nested_channels: Option<Arc<StableSupervisorChannels>>,
+    completion: CompletionFlag,
+}
+
 impl SupervisorRuntime {
     pub(crate) fn spawn_child(
         &mut self,
         key: usize,
     ) -> Result<(Option<u64>, u64), SupervisorError> {
-        let (
+        let SpawnPlan {
             child_id,
             generation,
             old_generation,
             kind,
             ctx,
-            counted_before,
             instance,
             snapshot_state,
             nested_channels,
-            completion_state,
-        ) = {
+            completion,
+        } = {
             let entry = self.children.get_mut(key).ok_or_else(|| {
                 SupervisorError::Internal(format!("missing child slot for key {key}"))
             })?;
             let child = &mut entry.runtime;
-            let counted_before = matches!(
-                child.state,
-                RuntimeChildState::Starting | RuntimeChildState::Running
-            );
             let instance = entry.instance;
 
             let old_generation = if child.has_started {
@@ -63,8 +68,8 @@ impl SupervisorRuntime {
             child.has_reported_ready = false;
             child.startup_aborted = false;
             child.next_restart_deadline = None;
-            let completion_state = Arc::new(AtomicU8::new(COMPLETION_PENDING));
-            child.completion_state = completion_state.clone();
+            let completion = CompletionFlag::pending();
+            child.completion = completion.clone();
             entry.nested_snapshot = None;
             let snapshot_state = if matches!(&child.definition.kind, ChildKind::Supervisor(_)) {
                 let state = NestedSnapshotState::default();
@@ -95,18 +100,17 @@ impl SupervisorRuntime {
             let kind = child.definition.kind.clone();
             let nested_channels = entry.nested_channels.clone();
 
-            (
+            SpawnPlan {
                 child_id,
                 generation,
                 old_generation,
                 kind,
                 ctx,
-                counted_before,
                 instance,
                 snapshot_state,
                 nested_channels,
-                completion_state,
-            )
+                completion,
+            }
         };
         let child_path_segments = self.child_path(key);
         // A nested supervisor can be revived after this incarnation ends if
@@ -189,19 +193,9 @@ impl SupervisorRuntime {
                     }
                 };
                 if result.is_ok() {
-                    let _ = completion_state.compare_exchange(
-                        COMPLETION_PENDING,
-                        COMPLETION_CLEAN,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    );
+                    completion.mark_clean();
                 }
-                ChildEnvelope {
-                    key,
-                    instance,
-                    generation,
-                    result,
-                }
+                ChildEnvelope { result }
             }
             .instrument(child_span),
         );
@@ -220,9 +214,6 @@ impl SupervisorRuntime {
                 RuntimeChildState::Starting
             };
             child.abort_handle = Some(abort_handle);
-        }
-        if !counted_before {
-            self.running_children = self.running_children.saturating_add(1);
         }
         self.live_tasks = self.live_tasks.saturating_add(1);
         self.task_map.insert(

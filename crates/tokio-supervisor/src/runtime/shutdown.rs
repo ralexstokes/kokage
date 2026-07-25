@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::atomic::Ordering, time::Instant as StdInstant};
+use std::{collections::HashSet, time::Instant as StdInstant};
 
 use slab::Slab;
 use tokio::time::{Instant, sleep_until};
@@ -8,9 +8,7 @@ use crate::{
     error::SupervisorError,
     event::SupervisorEvent,
     runtime::{
-        child_runtime::{
-            COMPLETION_CANCELLED, COMPLETION_CLEAN, COMPLETION_PENDING, RuntimeChildState,
-        },
+        child_runtime::RuntimeChildState,
         supervision::{
             ChildEntry, ChildKey, ClassifiedExit, DrainReason, MembershipState, SupervisorState,
         },
@@ -80,7 +78,6 @@ impl SupervisorRuntime {
         keys: &[ChildKey],
     ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
         let keys: HashSet<_> = keys.iter().copied().collect();
-        let mut cancelled = 0usize;
         for &key in self.child_order.iter().rev() {
             if !keys.contains(&key) {
                 continue;
@@ -92,30 +89,18 @@ impl SupervisorRuntime {
                 child.runtime.state,
                 RuntimeChildState::Running | RuntimeChildState::Starting
             ) {
-                child
-                    .runtime
-                    .completion_state
-                    .compare_exchange(
-                        COMPLETION_PENDING,
-                        COMPLETION_CANCELLED,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
-                    .ok();
+                child.runtime.completion.mark_cancelled();
                 child.runtime.state = RuntimeChildState::Stopping;
                 if let Some(token) = child.runtime.active_token.as_ref() {
                     token.cancel();
                 }
-                cancelled = cancelled.saturating_add(1);
             }
         }
-        self.running_children = self.running_children.saturating_sub(cancelled);
         self.drain_children(DrainReason::RestForOneRestart, DrainScope::Subset(&keys))
             .await
     }
 
     fn cancel_running_children(&mut self) {
-        let mut cancelled = 0usize;
         for &key in self.child_order.iter().rev() {
             let Some(child) = self.children.get_mut(key) else {
                 continue;
@@ -125,21 +110,10 @@ impl SupervisorRuntime {
                 child.runtime.state,
                 RuntimeChildState::Running | RuntimeChildState::Starting
             ) {
-                child
-                    .runtime
-                    .completion_state
-                    .compare_exchange(
-                        COMPLETION_PENDING,
-                        COMPLETION_CANCELLED,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
-                    .ok();
+                child.runtime.completion.mark_cancelled();
                 child.runtime.state = RuntimeChildState::Stopping;
-                cancelled = cancelled.saturating_add(1);
             }
         }
-        self.running_children = self.running_children.saturating_sub(cancelled);
         self.group_token.cancel();
     }
 
@@ -266,11 +240,7 @@ impl SupervisorRuntime {
         // drain that includes this key would wait on a join that never comes.
         self.record_exit(classified.key, classified.generation, &classified.status);
         let naturally_completed = matches!(classified.status, super::exit::ExitStatus::Completed)
-            && self.children[classified.key]
-                .runtime
-                .completion_state
-                .load(Ordering::Acquire)
-                == COMPLETION_CLEAN;
+            && self.children[classified.key].runtime.completion.is_clean();
         if !scope.contains(classified.key) || naturally_completed {
             deferred.push(classified);
         }

@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicU8};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
 use tokio::{task::AbortHandle, time::Instant};
 use tokio_util::sync::CancellationToken;
@@ -7,9 +10,43 @@ use crate::{
     child::ChildDefinition, restart::RestartIntensity, runtime::intensity::RestartTracker,
 };
 
-pub(crate) const COMPLETION_PENDING: u8 = 0;
-pub(crate) const COMPLETION_CANCELLED: u8 = 1;
-pub(crate) const COMPLETION_CLEAN: u8 = 2;
+const COMPLETION_PENDING: u8 = 0;
+const COMPLETION_CANCELLED: u8 = 1;
+const COMPLETION_CLEAN: u8 = 2;
+
+/// Orders a child's natural clean return against supervisor-driven
+/// cancellation. The winner of the transition out of `PENDING` determines
+/// whether a completed join is treated as natural or cancellation-induced.
+#[derive(Clone)]
+pub(crate) struct CompletionFlag(Arc<AtomicU8>);
+
+impl CompletionFlag {
+    pub(crate) fn pending() -> Self {
+        Self(Arc::new(AtomicU8::new(COMPLETION_PENDING)))
+    }
+
+    pub(crate) fn mark_cancelled(&self) {
+        let _ = self.0.compare_exchange(
+            COMPLETION_PENDING,
+            COMPLETION_CANCELLED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn mark_clean(&self) {
+        let _ = self.0.compare_exchange(
+            COMPLETION_PENDING,
+            COMPLETION_CLEAN,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(crate) fn is_clean(&self) -> bool {
+        self.0.load(Ordering::Acquire) == COMPLETION_CLEAN
+    }
+}
 
 /// Mutable per-child state managed by the supervisor runtime.
 ///
@@ -26,9 +63,7 @@ pub(crate) struct ChildRuntime {
     pub(crate) has_reported_ready: bool,
     pub(crate) startup_aborted: bool,
     pub(crate) next_restart_deadline: Option<Instant>,
-    /// Atomically orders a natural clean return against supervisor-driven
-    /// cancellation.
-    pub(crate) completion_state: Arc<AtomicU8>,
+    pub(crate) completion: CompletionFlag,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,7 +99,7 @@ impl ChildRuntime {
             has_reported_ready: false,
             startup_aborted: false,
             next_restart_deadline: None,
-            completion_state: Arc::new(AtomicU8::new(COMPLETION_PENDING)),
+            completion: CompletionFlag::pending(),
         }
     }
 }

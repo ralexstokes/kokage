@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, atomic::Ordering},
+    sync::Arc,
     time::{Duration, Instant as StdInstant},
 };
 
@@ -32,9 +32,7 @@ use crate::{
 };
 
 use super::{
-    child_runtime::{
-        COMPLETION_CANCELLED, COMPLETION_CLEAN, COMPLETION_PENDING, ChildRuntime, RuntimeChildState,
-    },
+    child_runtime::{ChildRuntime, RuntimeChildState},
     exit::ExitStatus,
 };
 
@@ -42,19 +40,14 @@ use super::{
 /// child is removed from the slab.
 pub(crate) type ChildKey = usize;
 
-/// Message returned by a child task through the `JoinSet`, carrying the task
-/// result alongside the bookkeeping keys needed to correlate it back to the
-/// correct child entry.
+/// Message returned by a child task through the `JoinSet`. Task identity is
+/// correlated through `task_map`, including for successful joins.
 pub(crate) struct ChildEnvelope {
-    pub(crate) key: ChildKey,
-    pub(crate) instance: u64,
-    pub(crate) generation: u64,
     pub(crate) result: crate::child::ChildResult,
 }
 
-/// Metadata stored alongside a Tokio task ID so that `JoinError`s (panics,
-/// cancellations) can be mapped back to the originating child even when the
-/// `ChildEnvelope` is not available.
+/// Metadata stored alongside a Tokio task ID so every join result can be
+/// mapped back to the originating child.
 #[derive(Clone, Copy)]
 pub(crate) struct TaskMeta {
     pub(crate) key: ChildKey,
@@ -144,17 +137,14 @@ pub(crate) struct RuntimeMeta {
 ///
 /// # Key invariants
 ///
-/// - `running_children` tracks children in `Starting` or `Running` state whose
-///   `membership` is not `Removed`. It is maintained incrementally by
-///   `spawn_child`, `record_exit`, and `cancel_running_children`.
 /// - `live_tasks` tracks children that have a live Tokio task (i.e. an
 ///   `abort_handle` was stored). It is decremented in `consume_joined_child`
 ///   and `finalize_removed_child`. When it reaches zero during shutdown the
 ///   drain loop exits.
 /// - `child_order` preserves insertion order for deterministic snapshot output
 ///   and `OneForAll` restart sequencing.
-/// - `task_map` maps Tokio `Id` → `TaskMeta` so that `JoinError`s (which
-///   don't carry the `ChildEnvelope`) can be attributed to the correct child.
+/// - `task_map` maps Tokio `Id` → `TaskMeta` so all join results are
+///   attributed to the correct child generation in one place.
 /// - `pending_exit` is set when a fatal condition (e.g. shutdown or intensity
 ///   breach) is detected inside a nested call and must be surfaced to the
 ///   top-level loop on the next iteration.
@@ -169,7 +159,6 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) children: Slab<ChildEntry>,
     pub(crate) children_by_id: HashMap<String, ChildKey>,
     pub(crate) child_order: Vec<ChildKey>,
-    pub(crate) running_children: usize,
     pub(crate) live_tasks: usize,
     pub(crate) next_child_instance: u64,
     pub(crate) events: broadcast::Sender<SupervisorEvent>,
@@ -180,8 +169,8 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) nested_channels: NestedChannels,
     pub(crate) nested_event_tx: mpsc::Sender<NestedEventNotification>,
     pub(crate) nested_event_rx: mpsc::Receiver<NestedEventNotification>,
-    pub(crate) nested_snapshot_tx: mpsc::Sender<NestedSnapshotNotification>,
-    pub(crate) nested_snapshot_rx: mpsc::Receiver<NestedSnapshotNotification>,
+    pub(crate) nested_snapshot_tx: mpsc::UnboundedSender<NestedSnapshotNotification>,
+    pub(crate) nested_snapshot_rx: mpsc::UnboundedReceiver<NestedSnapshotNotification>,
     pub(crate) ready_tx: mpsc::UnboundedSender<ChildReady>,
     pub(crate) ready_rx: mpsc::UnboundedReceiver<ChildReady>,
     pub(crate) commands_open: bool,
@@ -295,10 +284,9 @@ impl SupervisorRuntime {
         // root channel holds the initial snapshot (zero). Resume from that
         // preserved value to keep `total_restarts` monotonic.
         let total_restarts = snapshots.borrow().total_restarts;
-        let nested_snapshot_capacity = config
-            .control_channel_capacity
-            .max(config.event_channel_capacity);
-        let (nested_snapshot_tx, nested_snapshot_rx) = mpsc::channel(nested_snapshot_capacity);
+        // At most one notification per nested child can be queued because
+        // `NestedSnapshotState` coalesces updates behind an atomic flag.
+        let (nested_snapshot_tx, nested_snapshot_rx) = mpsc::unbounded_channel();
         let (nested_event_tx, nested_event_rx) = mpsc::channel(config.event_channel_capacity);
         let (ready_tx, ready_rx) = mpsc::unbounded_channel();
 
@@ -319,7 +307,6 @@ impl SupervisorRuntime {
             children,
             children_by_id,
             child_order,
-            running_children: 0,
             live_tasks: 0,
             next_child_instance,
             events,
@@ -421,7 +408,7 @@ impl SupervisorRuntime {
     ) -> Result<bool, SupervisorError> {
         let restart_epoch = self.restart_epoch;
         for key in keys {
-            let Some((ready, _, _)) = self.spawn_child_for_start(key).await? else {
+            let SpawnOutcome::Spawned { ready, .. } = self.spawn_child_for_start(key).await? else {
                 continue;
             };
             if self.restart_epoch != restart_epoch {
@@ -440,14 +427,14 @@ impl SupervisorRuntime {
     async fn spawn_child_for_start(
         &mut self,
         key: ChildKey,
-    ) -> Result<Option<(bool, Option<u64>, u64)>, SupervisorError> {
+    ) -> Result<SpawnOutcome, SupervisorError> {
         let Some(entry) = self.children.get(key) else {
-            return Ok(None);
+            return Ok(SpawnOutcome::Skipped);
         };
         if entry.membership != MembershipState::Active
             || entry.runtime.state != RuntimeChildState::Stopped
         {
-            return Ok(None);
+            return Ok(SpawnOutcome::Skipped);
         }
         let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
         let (old_generation, new_generation) = self.spawn_child(key)?;
@@ -456,7 +443,11 @@ impl SupervisorRuntime {
         } else {
             true
         };
-        Ok(Some((ready, old_generation, new_generation)))
+        Ok(SpawnOutcome::Spawned {
+            ready,
+            old_generation,
+            new_generation,
+        })
     }
 
     async fn wait_until_child_ready(&mut self, key: ChildKey) -> Result<bool, SupervisorError> {
@@ -551,33 +542,35 @@ impl SupervisorRuntime {
         });
     }
 
-    fn should_skip_group_respawn(&mut self, key: ChildKey) -> bool {
-        let Some(entry) = self.children.get_mut(key) else {
-            return true;
+    fn group_respawn_disposition(&self, key: ChildKey) -> GroupRespawnDisposition {
+        let Some(entry) = self.children.get(key) else {
+            return GroupRespawnDisposition::Skip;
         };
         if entry.membership != MembershipState::Active {
-            return true;
+            return GroupRespawnDisposition::Skip;
         }
         if entry.runtime.has_started
             && matches!(entry.runtime.definition.restart, RestartPolicy::Never)
         {
-            let startup_aborted = !entry.runtime.has_reported_ready;
-            if startup_aborted {
-                entry.runtime.startup_aborted = true;
-            }
-            if startup_aborted {
-                self.publish_snapshot();
-            }
-            // Skipped by the group respawn and never restarted afterwards; if
-            // this supervisor is the root, that judgment is final.
-            if self.children[key].runtime.definition.remove_on_exit {
-                self.finalize_removed_child(key);
-            } else {
-                self.mark_child_terminal(key);
-            }
-            return true;
+            return GroupRespawnDisposition::Finalize {
+                startup_aborted: !entry.runtime.has_reported_ready,
+            };
         }
-        false
+        GroupRespawnDisposition::Respawn
+    }
+
+    fn finalize_skipped_group_respawn(&mut self, key: ChildKey, startup_aborted: bool) {
+        if startup_aborted {
+            self.children[key].runtime.startup_aborted = true;
+            self.publish_snapshot();
+        }
+        // Skipped by the group respawn and never restarted afterwards; if
+        // this supervisor is the root, that judgment is final.
+        if self.children[key].runtime.definition.remove_on_exit {
+            self.finalize_removed_child(key);
+        } else {
+            self.mark_child_terminal(key);
+        }
     }
 
     async fn handle_command(&mut self, command: SupervisorCommand) {
@@ -783,9 +776,8 @@ impl SupervisorRuntime {
             return Err(ControlError::ChildRemovalInProgress(id));
         }
 
-        let (mode, grace, active, was_running) = {
+        let (mode, grace, active) = {
             let entry = &mut self.children[key];
-            let was_running = counts_as_running(entry.membership, entry.runtime.state);
             entry.membership = MembershipState::Removing;
             let active = entry.runtime.state.is_active();
             if active {
@@ -795,12 +787,8 @@ impl SupervisorRuntime {
                 entry.runtime.definition.shutdown_policy.mode,
                 entry.runtime.definition.shutdown_policy.grace,
                 active,
-                was_running,
             )
         };
-        if was_running {
-            self.running_children = self.running_children.saturating_sub(1);
-        }
 
         self.publish_snapshot();
 
@@ -917,32 +905,14 @@ impl SupervisorRuntime {
     }
 
     fn cancel_child(&mut self, key: ChildKey) {
-        self.children[key]
-            .runtime
-            .completion_state
-            .compare_exchange(
-                COMPLETION_PENDING,
-                COMPLETION_CANCELLED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .ok();
+        self.children[key].runtime.completion.mark_cancelled();
         if let Some(token) = self.children[key].runtime.active_token.as_ref() {
             token.cancel();
         }
     }
 
     fn abort_child(&mut self, key: ChildKey) {
-        self.children[key]
-            .runtime
-            .completion_state
-            .compare_exchange(
-                COMPLETION_PENDING,
-                COMPLETION_CANCELLED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .ok();
+        self.children[key].runtime.completion.mark_cancelled();
         if let Some(abort_handle) = self.children[key].runtime.abort_handle.as_ref() {
             abort_handle.abort();
         }
@@ -1152,7 +1122,7 @@ impl SupervisorRuntime {
                     return true;
                 }
                 !child.runtime.state.is_active()
-                    && child.runtime.completion_state.load(Ordering::Acquire) == COMPLETION_CLEAN
+                    && child.runtime.completion.is_clean()
                     && matches!(child.last_exit, Some(ExitStatusView::Completed))
             }),
         }
@@ -1164,11 +1134,15 @@ impl SupervisorRuntime {
     ) -> Result<ClassifiedExit, SupervisorError> {
         match joined {
             Ok((task_id, envelope)) => {
-                self.task_map.remove(&task_id);
+                let Some(meta) = self.task_map.remove(&task_id) else {
+                    return Err(SupervisorError::Internal(format!(
+                        "missing task metadata for successful join: {task_id:?}"
+                    )));
+                };
                 Ok(ClassifiedExit {
-                    key: envelope.key,
-                    instance: envelope.instance,
-                    generation: envelope.generation,
+                    key: meta.key,
+                    instance: meta.instance,
+                    generation: meta.generation,
                     status: ExitStatus::from_child_result(envelope.result),
                 })
             }
@@ -1191,13 +1165,6 @@ impl SupervisorRuntime {
     }
 
     pub(crate) fn record_exit(&mut self, key: ChildKey, generation: u64, status: &ExitStatus) {
-        if counts_as_running(
-            self.children[key].membership,
-            self.children[key].runtime.state,
-        ) {
-            self.running_children = self.running_children.saturating_sub(1);
-        }
-
         let id = {
             let entry = &mut self.children[key];
             entry.runtime.restart_tracker.record_exit(Instant::now());
@@ -1295,11 +1262,19 @@ impl SupervisorRuntime {
         let restart_epoch = self.restart_epoch;
         let keys = self.child_order.clone();
         for key in keys {
-            if self.should_skip_group_respawn(key) {
-                continue;
+            match self.group_respawn_disposition(key) {
+                GroupRespawnDisposition::Respawn => {}
+                GroupRespawnDisposition::Skip => continue,
+                GroupRespawnDisposition::Finalize { startup_aborted } => {
+                    self.finalize_skipped_group_respawn(key, startup_aborted);
+                    continue;
+                }
             }
-            let Some((ready, old_generation, new_generation)) =
-                Box::pin(self.spawn_child_for_start(key)).await?
+            let SpawnOutcome::Spawned {
+                ready,
+                old_generation,
+                new_generation,
+            } = Box::pin(self.spawn_child_for_start(key)).await?
             else {
                 continue;
             };
@@ -1369,11 +1344,19 @@ impl SupervisorRuntime {
         self.restart_epoch = self.restart_epoch.saturating_add(1);
         let restart_epoch = self.restart_epoch;
         for key in keys {
-            if self.should_skip_group_respawn(key) {
-                continue;
+            match self.group_respawn_disposition(key) {
+                GroupRespawnDisposition::Respawn => {}
+                GroupRespawnDisposition::Skip => continue,
+                GroupRespawnDisposition::Finalize { startup_aborted } => {
+                    self.finalize_skipped_group_respawn(key, startup_aborted);
+                    continue;
+                }
             }
-            let Some((ready, old_generation, new_generation)) =
-                Box::pin(self.spawn_child_for_start(key)).await?
+            let SpawnOutcome::Spawned {
+                ready,
+                old_generation,
+                new_generation,
+            } = Box::pin(self.spawn_child_for_start(key)).await?
             else {
                 continue;
             };
@@ -1491,7 +1474,10 @@ impl SupervisorRuntime {
     }
 
     fn running_child_count(&self) -> usize {
-        self.running_children
+        self.children
+            .iter()
+            .filter(|(_, child)| counts_as_running(child.membership, child.runtime.state))
+            .count()
     }
 
     fn send_restart_event(&self, key: ChildKey, old_generation: u64, new_generation: u64) {
@@ -1666,6 +1652,21 @@ pub(crate) struct ClassifiedExit {
     instance: u64,
     pub(crate) generation: u64,
     pub(crate) status: ExitStatus,
+}
+
+enum SpawnOutcome {
+    Skipped,
+    Spawned {
+        ready: bool,
+        old_generation: Option<u64>,
+        new_generation: u64,
+    },
+}
+
+enum GroupRespawnDisposition {
+    Respawn,
+    Skip,
+    Finalize { startup_aborted: bool },
 }
 
 /// Why the supervisor is draining its join set.
