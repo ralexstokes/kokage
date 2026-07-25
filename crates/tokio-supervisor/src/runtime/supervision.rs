@@ -125,7 +125,7 @@ impl ChildEntry {
 /// Static identities are reused. Missing identities are recreated, while
 /// dynamic identities that collide with static children or are absent from
 /// the new incarnation are made terminal.
-fn reconcile_stable_identities(
+pub(crate) fn reconcile_stable_identities(
     children: &[Arc<ChildDefinition>],
     nested_channels: &NestedChannels,
 ) -> HashMap<String, Arc<StableSupervisorChannels>> {
@@ -1466,10 +1466,15 @@ impl SupervisorRuntime {
     }
 
     pub(crate) fn publish_snapshot(&self) {
-        *self
+        let mut attached_children = self
             .attached_children
             .lock()
-            .expect("attached child view poisoned") = self.attached_children_view();
+            .expect("attached child view poisoned");
+        let generation = self.meta.parent_link.as_ref().map(|link| link.generation);
+        if !attached_children.terminal && attached_children.generation == generation {
+            attached_children.children = self.attached_children_view();
+        }
+        drop(attached_children);
         let snapshot = self.snapshot_view();
         let _ = self.snapshots.send_replace(snapshot.clone());
         if let Some(parent_link) = self.meta.parent_link.as_ref() {

@@ -494,7 +494,8 @@ impl RuntimeHandle {
     ) -> Result<RuntimeHandle, AddSubtreeError> {
         let id = id.into();
         let (nested_supervisor, nested_actors) = builder.build()?.into_parts();
-        self.supervisor
+        let membership_epoch = self
+            .supervisor
             .add_supervisor(
                 id.clone(),
                 SupervisorSpec::new(nested_supervisor).attachment(RuntimeAttachment::subtree(
@@ -503,7 +504,8 @@ impl RuntimeHandle {
                 )),
             )
             .await?;
-        self.subtree(&id).ok_or(ControlError::Unavailable.into())
+        self.subtree_membership(&id, Some(membership_epoch))
+            .ok_or(ControlError::Unavailable.into())
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -512,6 +514,10 @@ impl RuntimeHandle {
     /// A raw supervisor added through [`supervisor_handle`](Self::supervisor_handle)
     /// is intentionally outside this name-based runtime view.
     pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
+        self.subtree_membership(id, None)
+    }
+
+    fn subtree_membership(&self, id: &str, membership_epoch: Option<u64>) -> Option<RuntimeHandle> {
         self.supervisor
             .attached_children::<RuntimeAttachment>()
             .into_iter()
@@ -519,7 +525,12 @@ impl RuntimeHandle {
                 let [identity] = attached.path() else {
                     return None;
                 };
-                if identity.id != id || !attached.attachment().belongs_to(&self.actors) {
+                if identity.id != id
+                    || membership_epoch.is_some_and(|membership_epoch| {
+                        identity.membership_epoch != membership_epoch
+                    })
+                    || !attached.attachment().belongs_to(&self.actors)
+                {
                     return None;
                 }
                 let RuntimeAttachmentKind::Subtree(actors) = &attached.attachment().kind else {
@@ -813,5 +824,49 @@ fn rebind_policy_for_restart(restart: RestartPolicy) -> RebindPolicy {
             );
             RebindPolicy::OnFailure
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
+        let root = crate::Runtime::builder()
+            .build()
+            .expect("runtime builds")
+            .spawn();
+        root.add_subtree("workers", crate::Runtime::builder())
+            .await
+            .expect("first subtree added");
+        let first_epoch = root
+            .snapshot()
+            .child("workers")
+            .expect("first membership is visible")
+            .membership_epoch;
+
+        root.remove_child("workers")
+            .await
+            .expect("first subtree removed");
+        root.add_subtree("workers", crate::Runtime::builder())
+            .await
+            .expect("replacement subtree added");
+        let replacement_epoch = root
+            .snapshot()
+            .child("workers")
+            .expect("replacement membership is visible")
+            .membership_epoch;
+
+        assert_ne!(first_epoch, replacement_epoch);
+        assert!(
+            root.subtree_membership("workers", Some(first_epoch))
+                .is_none(),
+            "a lookup bound to the completed add must not return a same-id replacement"
+        );
+        assert!(
+            root.subtree_membership("workers", Some(replacement_epoch))
+                .is_some()
+        );
+
+        root.shutdown_and_wait().await.expect("clean shutdown");
     }
 }

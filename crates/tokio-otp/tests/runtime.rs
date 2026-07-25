@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -365,6 +365,9 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
         .expect("middle subtree removed");
     assert!(root.subtree("middle").is_none());
     assert!(root.actor_stats().is_empty());
+    assert!(middle.subtree("leaf").is_none());
+    assert!(middle.actor_stats().is_empty());
+    assert!(leaf.actor_stats().is_empty());
     assert!(matches!(
         leaf.add_actor("late", Drain::<()>::new, DynamicActorOptions::default())
             .await,
@@ -503,7 +506,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let mut nested_graph = GraphBuilder::new();
     let static_ref = nested_graph.actor("static-worker", || FailOnMessage);
@@ -535,6 +538,32 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
             .any(|stats| stats.actor_id == "dynamic-worker")
     );
 
+    let old_generation = handle
+        .snapshot()
+        .child("workers")
+        .expect("subtree snapshot exists")
+        .generation;
+    let sampling = Arc::new(AtomicBool::new(true));
+    let sampler_handle = handle.clone();
+    let sampler_sampling = Arc::clone(&sampling);
+    let sampler = tokio::spawn(async move {
+        while sampler_sampling.load(Ordering::Relaxed) {
+            for stats in sampler_handle.actor_stats() {
+                if stats.actor_id != "dynamic-worker" {
+                    continue;
+                }
+                let path = stats
+                    .supervisor_path
+                    .expect("nested actor stats carry their supervisor path");
+                assert_eq!(
+                    path[0].generation, old_generation,
+                    "an old incarnation's attachment cache must not be traversed through the new incarnation"
+                );
+            }
+            tokio::task::yield_now().await;
+        }
+    });
+
     let restart = handle
         .supervisor_handle()
         .monitor_restart("workers")
@@ -552,6 +581,11 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         dynamic_ref.send(()).await,
         Err(SendError::ActorTerminated { .. })
     ));
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    sampling.store(false, Ordering::Relaxed);
+    sampler.await.expect("restart-window sampler completed");
 
     subtree
         .supervisor_handle()

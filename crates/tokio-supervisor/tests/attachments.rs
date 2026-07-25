@@ -1,4 +1,16 @@
-use tokio_supervisor::{ChildSpec, SupervisorBuilder, SupervisorSpec};
+use std::{
+    future::IntoFuture,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
+use tokio::{sync::Notify, time::timeout};
+use tokio_supervisor::{
+    ChildSpec, ChildStateView, RestartIntensity, RestartPolicy, SupervisorBuilder, SupervisorSpec,
+};
 
 fn waiting_child(id: &str) -> ChildSpec {
     ChildSpec::new(id, |ctx| async move {
@@ -81,6 +93,130 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
     assert_ne!(new_epoch, old_epoch);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reincarnation_never_exposes_a_displaced_nested_attachment_identity() {
+    let crash = Arc::new(Notify::new());
+    let crash_for_child = Arc::clone(&crash);
+    let static_slot = SupervisorBuilder::new()
+        .child(waiting_child("static-leaf").attachment("static leaf".to_owned()))
+        .build()
+        .expect("static slot builds");
+    let middle = SupervisorBuilder::new()
+        .supervisor(
+            "slot",
+            SupervisorSpec::new(static_slot).attachment("static slot".to_owned()),
+        )
+        .child(
+            ChildSpec::new("bomb", move |_ctx| {
+                let crash = Arc::clone(&crash_for_child);
+                async move {
+                    crash.notified().await;
+                    Err(std::io::Error::other("middle failed").into())
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("middle builds");
+    let root = SupervisorBuilder::new()
+        .supervisor(
+            "middle",
+            SupervisorSpec::new(middle)
+                .restart(RestartPolicy::OnFailure)
+                .restart_intensity(RestartIntensity::new(32, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("root builds")
+        .spawn();
+    root.wait_started().await.expect("tree starts");
+
+    for expected_generation in 1..=16 {
+        let middle = root.supervisor("middle").expect("middle handle");
+        middle
+            .remove_child("slot")
+            .await
+            .expect("static slot removed");
+        let dynamic_slot = SupervisorBuilder::new()
+            .child(waiting_child("dynamic-leaf").attachment("dynamic leaf".to_owned()))
+            .build()
+            .expect("dynamic slot builds");
+        middle
+            .add_supervisor(
+                "slot",
+                SupervisorSpec::new(dynamic_slot).attachment("dynamic slot".to_owned()),
+            )
+            .await
+            .expect("same-id dynamic slot added");
+
+        let sampling = Arc::new(AtomicBool::new(true));
+        let sampler_root = root.clone();
+        let sampler_sampling = Arc::clone(&sampling);
+        let sampler = tokio::spawn(async move {
+            while sampler_sampling.load(Ordering::Relaxed) {
+                for attached in sampler_root.attached_children::<String>() {
+                    let Some(middle_identity) = attached.path().first() else {
+                        continue;
+                    };
+                    if middle_identity.id != "middle"
+                        || middle_identity.generation < expected_generation
+                    {
+                        continue;
+                    }
+                    assert_ne!(
+                        attached.attachment().as_str(),
+                        "dynamic leaf",
+                        "the new middle incarnation descended through the displaced dynamic slot"
+                    );
+                    if attached.attachment().as_str() == "static slot" {
+                        let slot_snapshot = attached
+                            .supervisor()
+                            .expect("slot attachment carries a supervisor handle")
+                            .snapshot();
+                        assert!(
+                            slot_snapshot.child("dynamic-leaf").is_none(),
+                            "the initial static attachment used the displaced dynamic stable identity"
+                        );
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        let restart = root
+            .monitor_restart("middle")
+            .expect("middle restart is monitored");
+        crash.notify_one();
+        timeout(Duration::from_secs(1), restart.into_future())
+            .await
+            .expect("middle restart completed in time")
+            .expect("middle restarted");
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let current = root.attached_children::<String>();
+                if current.iter().any(|attached| {
+                    attached.attachment().as_str() == "static leaf"
+                        && attached.path()[0].generation == expected_generation
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("reconciled static attachment became visible");
+        sampling.store(false, Ordering::Relaxed);
+        sampler.await.expect("attachment sampler completed");
+
+        assert!(root.snapshot().child("middle").is_some_and(|child| {
+            child.generation == expected_generation && child.state == ChildStateView::Running
+        }));
+    }
+
+    root.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[cfg(feature = "serde")]

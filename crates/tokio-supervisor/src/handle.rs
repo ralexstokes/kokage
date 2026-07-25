@@ -73,7 +73,16 @@ struct IncarnationBinding {
 }
 
 pub(crate) type NestedChannels = Arc<Mutex<HashMap<String, Arc<StableSupervisorChannels>>>>;
-pub(crate) type AttachedChildrenState = Arc<Mutex<Vec<AttachedChildState>>>;
+pub(crate) type AttachedChildrenState = Arc<Mutex<AttachedChildrenView>>;
+
+#[derive(Clone)]
+pub(crate) struct AttachedChildrenView {
+    /// `None` identifies the root supervisor. Nested views are bound to the
+    /// generation of the supervisor child incarnation that owns them.
+    pub(crate) generation: Option<u64>,
+    pub(crate) terminal: bool,
+    pub(crate) children: Vec<AttachedChildState>,
+}
 
 #[derive(Clone)]
 pub(crate) struct AttachedChildState {
@@ -82,8 +91,15 @@ pub(crate) struct AttachedChildState {
     pub(crate) supervisor: Option<SupervisorHandle>,
 }
 
-pub(crate) fn attached_children_state(children: Vec<AttachedChildState>) -> AttachedChildrenState {
-    Arc::new(Mutex::new(children))
+pub(crate) fn attached_children_state(
+    generation: Option<u64>,
+    children: Vec<AttachedChildState>,
+) -> AttachedChildrenState {
+    Arc::new(Mutex::new(AttachedChildrenView {
+        generation,
+        terminal: false,
+        children,
+    }))
 }
 
 /// Stable snapshot channel for a nested supervisor.
@@ -128,7 +144,7 @@ impl StableSupervisorChannels {
                 tx: Some(snapshots_tx),
                 rx: snapshots_rx,
             }),
-            attached_children: attached_children_state(attached_children),
+            attached_children: attached_children_state(Some(0), attached_children),
             nested_channels,
             statically_configured,
         })
@@ -173,7 +189,11 @@ impl StableSupervisorChannels {
         *self
             .attached_children
             .lock()
-            .expect("attached child view poisoned") = initial_attached_children;
+            .expect("attached child view poisoned") = AttachedChildrenView {
+            generation: Some(generation),
+            terminal: false,
+            children: initial_attached_children,
+        };
         *self.binding.lock().expect("stable control slot poisoned") = Some(IncarnationBinding {
             generation,
             shutdown_tx,
@@ -230,6 +250,14 @@ impl StableSupervisorChannels {
     /// recreation mints a fresh one), or an orphaned dynamic child that no
     /// incarnation will spawn again.
     pub(crate) fn terminal(&self) {
+        {
+            let mut attached_children = self
+                .attached_children
+                .lock()
+                .expect("attached child view poisoned");
+            attached_children.terminal = true;
+            attached_children.children.clear();
+        }
         let tx = self
             .snapshots
             .lock()
@@ -558,22 +586,29 @@ impl SupervisorHandle {
         T: Any + Send + Sync,
     {
         let mut attached = Vec::new();
-        self.collect_attached_children(&mut Vec::new(), &mut attached);
+        self.collect_attached_children(None, &mut Vec::new(), &mut attached);
         attached
     }
 
     fn collect_attached_children<T>(
         &self,
+        expected_generation: Option<u64>,
         parent_path: &mut Vec<AttachedChildIdentity>,
         attached: &mut Vec<AttachedChild<T>>,
     ) where
         T: Any + Send + Sync,
     {
-        let children = self
+        let view = self
             .attached_children_state()
             .lock()
             .expect("attached child view poisoned")
             .clone();
+        if view.terminal
+            || expected_generation.is_some_and(|generation| view.generation != Some(generation))
+        {
+            return;
+        }
+        let children = view.children;
 
         for child in &children {
             let Some(value) = child
@@ -592,8 +627,9 @@ impl SupervisorHandle {
             let Some(supervisor) = child.supervisor else {
                 continue;
             };
+            let generation = child.identity.generation;
             parent_path.push(child.identity);
-            supervisor.collect_attached_children(parent_path, attached);
+            supervisor.collect_attached_children(Some(generation), parent_path, attached);
             parent_path.pop();
         }
     }

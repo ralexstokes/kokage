@@ -16,7 +16,7 @@ use crate::{
     },
     observability::{format_path, strategy_label, supervisor_name_for_path},
     restart::RestartIntensity,
-    runtime::SupervisorRuntime,
+    runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
     shutdown::AutoShutdown,
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotCell, SupervisorSnapshot,
@@ -75,8 +75,10 @@ impl Supervisor {
     /// for control and observation.
     pub fn spawn(self) -> SupervisorHandle {
         let nested_channels = prepare_nested_channels(&self.config);
-        let attached_children =
-            attached_children_state(initial_attached_children(&self.config, &nested_channels));
+        let attached_children = attached_children_state(
+            None,
+            initial_attached_children(&self.config, &nested_channels),
+        );
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::channel(self.config.control_channel_capacity);
         let (done_tx, done_rx) = watch::channel(None);
@@ -139,6 +141,11 @@ impl Supervisor {
         let startup_ctx = ctx.clone();
         let task_done_tx = done_tx.clone();
         let initial_snapshot = initial_snapshot(&self.config);
+        // Reconcile retained stable identities before exposing the new
+        // incarnation's initial attachment view. This prevents a displaced
+        // dynamic same-id supervisor from leaking into the static view during
+        // the interval before the runtime publishes its first snapshot.
+        reconcile_stable_identities(&self.config.children, &nested_channels);
         let initial_attached_children = initial_attached_children(&self.config, &nested_channels);
 
         // Rebind before the runtime task can publish so observers never see
