@@ -58,19 +58,7 @@ pub(crate) enum ChildKind {
 /// shares the same factory.
 #[derive(Clone)]
 pub struct ChildSpec {
-    pub(crate) inner: Arc<ChildSpecInner>,
-}
-
-#[derive(Clone)]
-pub(crate) struct ChildSpecInner {
-    pub(crate) id: String,
-    pub(crate) restart: RestartPolicy,
-    pub(crate) remove_on_exit: bool,
-    pub(crate) restart_intensity: Option<RestartIntensity>,
-    pub(crate) shutdown_policy: ShutdownPolicy,
-    pub(crate) significant: bool,
-    pub(crate) readiness: ChildReadiness,
-    pub(crate) factory: Arc<dyn ChildFactory>,
+    pub(crate) inner: Arc<ChildDefinition>,
 }
 
 /// Policies for a nested supervisor child.
@@ -167,7 +155,7 @@ where
 }
 
 impl ChildSpec {
-    fn map_inner(mut self, update: impl FnOnce(&mut ChildSpecInner)) -> Self {
+    fn map_inner(mut self, update: impl FnOnce(&mut ChildDefinition)) -> Self {
         let inner = Arc::make_mut(&mut self.inner);
         update(inner);
         self
@@ -186,7 +174,7 @@ impl ChildSpec {
         Fut: Future<Output = ChildResult> + Send + 'static,
     {
         Self {
-            inner: Arc::new(ChildSpecInner {
+            inner: Arc::new(ChildDefinition {
                 id: id.into(),
                 restart: RestartPolicy::default(),
                 remove_on_exit: false,
@@ -194,7 +182,7 @@ impl ChildSpec {
                 shutdown_policy: ShutdownPolicy::default(),
                 significant: false,
                 readiness: ChildReadiness::Immediate,
-                factory: make_child_factory(f),
+                kind: ChildKind::Task(make_child_factory(f)),
             }),
         }
     }
@@ -297,19 +285,6 @@ impl ChildSpec {
     /// Returns whether this child is significant to its supervisor.
     pub fn is_significant(&self) -> bool {
         self.inner.significant
-    }
-
-    pub(crate) fn into_definition(self) -> ChildDefinition {
-        ChildDefinition {
-            id: self.inner.id.clone(),
-            restart: self.inner.restart,
-            remove_on_exit: self.inner.remove_on_exit,
-            restart_intensity: self.inner.restart_intensity,
-            shutdown_policy: self.inner.shutdown_policy,
-            significant: self.inner.significant,
-            readiness: self.inner.readiness,
-            kind: ChildKind::Task(self.inner.factory.clone()),
-        }
     }
 }
 
