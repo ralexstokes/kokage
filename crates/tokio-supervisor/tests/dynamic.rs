@@ -839,6 +839,58 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
     handle.wait().await.expect("shutdown should succeed");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn remove_child_preempts_zero_delay_restart() {
+    let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
+
+    let handle = SupervisorBuilder::new()
+        .restart_intensity(tokio_supervisor::RestartIntensity::new(
+            8,
+            std::time::Duration::from_secs(1),
+        ))
+        .child(
+            ChildSpec::new("removable", move |ctx| {
+                let starts_tx = starts_tx.clone();
+                async move {
+                    starts_tx
+                        .send(ctx.generation())
+                        .expect("test receiver dropped");
+                    Err(common::test_error("restart immediately"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut events = handle.subscribe();
+
+    assert_eq!(common::recv_event(&mut starts_rx).await, 0);
+    loop {
+        match common::recv_supervisor_event(&mut events).await {
+            SupervisorEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
+                assert!(delay.is_zero(), "test requires zero-delay restart");
+                break;
+            }
+            SupervisorEvent::RestartIntensityExceeded => {
+                panic!("remove command lost to zero-delay restarts");
+            }
+            _ => {}
+        }
+    }
+
+    timeout(common::QUIET_TIMEOUT, handle.remove_child("removable"))
+        .await
+        .expect("remove_child should beat the zero-delay restart")
+        .expect("child removal should succeed");
+
+    assert!(handle.snapshot().child("removable").is_none());
+    common::assert_no_event(&mut starts_rx).await;
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
+}
+
 #[tokio::test]
 async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     let (removable_tx, mut removable_rx) = mpsc::unbounded_channel();
