@@ -44,6 +44,8 @@ fn a_runtime_builder_projects_to_an_equivalent_ordered_tree() {
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::RestForOne);
+    assert_eq!(outline.default_restart, RestartPolicy::Always);
+    assert_eq!(outline.default_shutdown, ShutdownPolicy::default());
     assert_eq!(outline.child_ids(), ["workers", "clock", "ingest", "parse"]);
 
     let ChildOutline::Scope {
@@ -139,6 +141,19 @@ fn dynamic_scope_rejects_strategy_and_declared_children() {
     assert!(child.to_string().contains("cannot have declared children"));
 }
 
+#[test]
+fn dynamic_outlines_include_future_member_policy_defaults() {
+    let standard = SupervisionTree::dynamic().outline();
+    let customized = SupervisionTree::dynamic()
+        .default_restart(RestartPolicy::Never)
+        .default_shutdown(ShutdownPolicy::abort())
+        .outline();
+
+    assert_ne!(standard, customized);
+    assert_eq!(customized.default_restart, RestartPolicy::Never);
+    assert_eq!(customized.default_shutdown, ShutdownPolicy::abort());
+}
+
 #[tokio::test]
 async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     let (graph, _ingest, _parse) = two_actor_graph();
@@ -189,10 +204,23 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let (graph, _ingest, _parse) = two_actor_graph();
     let outline = SupervisionTree::graph(&graph)
         .strategy(Strategy::RestForOne)
-        .subtree("workers", SupervisionTree::dynamic())
+        .subtree(
+            "workers",
+            SupervisionTree::dynamic()
+                .default_restart(RestartPolicy::Never)
+                .default_shutdown(ShutdownPolicy::abort()),
+        )
         .outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     let decoded: tokio_otp::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");
     assert_eq!(outline, decoded);
+    let ChildOutline::Scope {
+        outline: workers, ..
+    } = decoded.child("workers").expect("dynamic scope survives")
+    else {
+        panic!("expected dynamic scope");
+    };
+    assert_eq!(workers.default_restart, RestartPolicy::Never);
+    assert_eq!(workers.default_shutdown, ShutdownPolicy::abort());
 }

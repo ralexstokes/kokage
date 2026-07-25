@@ -434,7 +434,7 @@ async fn ws_streams_events() {
 
 #[tokio::test]
 async fn runtime_convenience_wires_public_observability() {
-    let runtime = Runtime::builder()
+    let runtime = Runtime::dynamic()
         .build()
         .expect("failed to build empty runtime");
     let runtime = runtime.spawn();
