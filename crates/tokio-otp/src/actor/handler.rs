@@ -177,10 +177,10 @@ impl<H: Actor> RawActor for H {
                         if ctx.outstanding_steps() == 0 =>
                     {
                         // A final step can enqueue its postback after the
-                        // first poll and then deregister before the gauge
-                        // check. Deregistration synchronizes through the step
-                        // registry, so re-poll after observing zero before
-                        // declaring the mailbox quiescent.
+                        // first poll and then decrement the gauge before this
+                        // check. The step's Release decrement synchronizes
+                        // with the Acquire load that observed zero, so re-poll
+                        // before declaring the mailbox quiescent.
                         ctx.mailbox.try_recv().ok()
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {

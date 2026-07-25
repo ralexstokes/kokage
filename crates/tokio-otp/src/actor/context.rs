@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fmt,
     future::Future,
     sync::{
@@ -584,7 +584,7 @@ impl<M: Send + 'static> ActorContext<M> {
         T: Send + 'static,
         C: FnOnce(Result<T, StepDeadline>) -> M + Send + 'static,
     {
-        let (id, cancellation, finished) = self.steps.start();
+        let (cancellation, finished) = self.steps.start();
         let handle = StepHandle {
             cancellation: cancellation.clone(),
             finished: Arc::clone(&finished),
@@ -592,14 +592,10 @@ impl<M: Send + 'static> ActorContext<M> {
         let steps = self.steps.inner();
         let myself = self.myself.clone();
         let incarnation = self.incarnation.clone();
-        let guard = StepGuard {
-            id,
-            steps,
-            finished,
-        };
+        let guard = StepGuard { steps, finished };
         tokio::spawn(async move {
             // Constructed before spawning so dropping an unpolled task still
-            // unregisters the step and marks its handle finished.
+            // decrements the outstanding count and marks its handle finished.
             let _guard = guard;
             let outcome = tokio::select! {
                 biased;
@@ -988,8 +984,6 @@ pub(crate) struct ActorSteps {
 }
 
 struct ActorStepsInner {
-    next_id: AtomicU64,
-    active: Mutex<HashMap<u64, CancellationToken>>,
     changed: Arc<Notify>,
     outstanding: Arc<AtomicU64>,
 }
@@ -998,8 +992,6 @@ impl ActorSteps {
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(ActorStepsInner {
-                next_id: AtomicU64::new(0),
-                active: Mutex::new(HashMap::new()),
                 changed: Arc::new(Notify::new()),
                 outstanding: Arc::new(AtomicU64::new(0)),
             }),
@@ -1009,16 +1001,10 @@ impl ActorSteps {
         }
     }
 
-    fn start(&self) -> (u64, CancellationToken, Arc<AtomicBool>) {
-        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+    fn start(&self) -> (CancellationToken, Arc<AtomicBool>) {
         let cancellation = self.cancellation.child_token();
-        self.inner
-            .active
-            .lock()
-            .expect("actor step registry poisoned")
-            .insert(id, cancellation.clone());
         self.inner.outstanding.fetch_add(1, Ordering::Relaxed);
-        (id, cancellation, Arc::new(AtomicBool::new(false)))
+        (cancellation, Arc::new(AtomicBool::new(false)))
     }
 
     fn inner(&self) -> Arc<ActorStepsInner> {
@@ -1034,11 +1020,7 @@ impl ActorSteps {
     }
 
     fn outstanding(&self) -> usize {
-        self.inner
-            .active
-            .lock()
-            .expect("actor step registry poisoned")
-            .len()
+        self.inner.outstanding.load(Ordering::Acquire) as usize
     }
 
     fn change_notify(&self) -> Arc<Notify> {
@@ -1053,23 +1035,13 @@ impl Drop for ActorSteps {
 }
 
 struct StepGuard {
-    id: u64,
     steps: Arc<ActorStepsInner>,
     finished: Arc<AtomicBool>,
 }
 
 impl Drop for StepGuard {
     fn drop(&mut self) {
-        if self
-            .steps
-            .active
-            .lock()
-            .expect("actor step registry poisoned")
-            .remove(&self.id)
-            .is_some()
-        {
-            self.steps.outstanding.fetch_sub(1, Ordering::Relaxed);
-        }
+        self.steps.outstanding.fetch_sub(1, Ordering::Release);
         self.finished.store(true, Ordering::Release);
         self.steps.changed.notify_one();
     }
