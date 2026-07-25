@@ -413,6 +413,27 @@ impl<M> ActorRef<M> {
             self.record_message_size(message_size);
         }
     }
+
+    async fn post_state_timeout_to_incarnation(
+        &self,
+        mailbox: MailboxRef<M>,
+        message: M,
+        cancellation: CancellationToken,
+    ) {
+        let message_size = self
+            .message_size
+            .as_ref()
+            .map(|observer| observer.size_hint(&message));
+        if let SendOutcome::Accepted { conflated } = mailbox
+            .send_state_timeout_retaining(message, cancellation)
+            .await
+        {
+            self.observe_send(MessageOperation::Send, None);
+            self.stats.record_send(true);
+            self.stats.record_conflated(conflated);
+            self.record_message_size(message_size);
+        }
+    }
 }
 
 /// One-shot reply channel carried inside a request message.
@@ -761,12 +782,10 @@ impl<M: Send + 'static> ActorContext<M> {
     /// when entering an untimed state. Like other timers, the timeout is
     /// cancelled automatically if this actor incarnation stops or restarts.
     ///
-    /// Cancellation cannot retract a timeout message already accepted by the
-    /// mailbox. The message should identify the state (or a generation) it was
-    /// scheduled for so the handler can reject stale timeouts. Replacing or
-    /// clearing the slot cancels its token even if it already fired, so a
-    /// retained handle will then report [`CancellationHandle::is_cancelled`]
-    /// as `true`.
+    /// Replacing or clearing the slot also suppresses a stale timeout that has
+    /// already reached the mailbox but has not yet been received. A retained
+    /// handle will report [`CancellationHandle::is_cancelled`] as `true` once
+    /// its slot has been replaced or cleared.
     pub fn state_timeout(&mut self, message: M, delay: Duration) -> CancellationHandle {
         let cancellation = self.timers.child_token();
         let timer = CancellationHandle::new(cancellation.clone());
@@ -774,15 +793,21 @@ impl<M: Send + 'static> ActorContext<M> {
         if let Some(previous) = previous {
             previous.cancel();
         }
-        spawn_delayed_send(self.myself(), message, delay, cancellation);
+        spawn_state_timeout_send(
+            self.myself(),
+            self.incarnation.clone(),
+            message,
+            delay,
+            cancellation,
+        );
 
         timer
     }
 
     /// Cancels and clears the current state timeout, if any.
     ///
-    /// Call this when entering a state that has no timeout. A timeout message
-    /// already accepted by the mailbox cannot be retracted.
+    /// Call this when entering a state that has no timeout. A timeout already
+    /// accepted by the mailbox is discarded if it has not yet been received.
     pub fn clear_state_timeout(&mut self) {
         let timeout = self.state_timeout.take();
         if let Some(timeout) = timeout {
@@ -1042,6 +1067,32 @@ fn spawn_delayed_send<T: Send + 'static>(
                     biased;
                     () = cancellation.cancelled() => {}
                     _ = target.send(message) => {}
+                }
+            }
+        }
+    });
+}
+
+fn spawn_state_timeout_send<T: Send + 'static>(
+    target: ActorRef<T>,
+    incarnation: MailboxRef<T>,
+    message: T,
+    delay: Duration,
+    cancellation: CancellationToken,
+) {
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {}
+            () = tokio::time::sleep(delay) => {
+                tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => {}
+                    _ = target.post_state_timeout_to_incarnation(
+                        incarnation,
+                        message,
+                        cancellation.clone(),
+                    ) => {}
                 }
             }
         }
