@@ -15,6 +15,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::RuntimeHandle;
+
 use crate::actor::{
     binding::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, MailboxReceiver, MailboxRef,
@@ -504,6 +506,8 @@ pub struct ActorContext<M> {
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
     pub(crate) steps: ActorSteps,
+    pub(crate) supervisor: RuntimeHandle,
+    pub(crate) children: Option<RuntimeHandle>,
 }
 
 impl<M: Send + 'static> ActorContext<M> {
@@ -645,6 +649,26 @@ impl<M: Send + 'static> ActorContext<M> {
     /// Returns the shared graph shutdown token.
     pub fn shutdown_token(&self) -> &CancellationToken {
         &self.shutdown
+    }
+
+    /// Returns the actor-aware handle for this actor's enclosing scope.
+    ///
+    /// Awaiting control operations on the enclosing scope is safe. The
+    /// remaining self-deadlock is awaiting removal of a sibling whose drain
+    /// depends on this actor draining its own mailbox; pipeline that operation
+    /// with [`step`](Self::step) instead.
+    pub fn supervisor(&self) -> RuntimeHandle {
+        self.supervisor.clone()
+    }
+
+    /// Returns the actor-aware handle for this leader's declared child scope.
+    ///
+    /// This is `Some` exactly for the leader of an
+    /// [`ActorWithScope`](crate::SupervisionTree::ActorWithScope) node. Other
+    /// actor shapes use ordinary builder-handle plumbing when they need a
+    /// pre-spawn scope handle.
+    pub fn children(&self) -> Option<RuntimeHandle> {
+        self.children.clone()
     }
 
     /// Returns `true` if graph shutdown has been requested.

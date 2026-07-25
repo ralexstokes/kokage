@@ -624,6 +624,7 @@ async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
+    handle.wait_started().await.expect("mixed runtime starts");
     let dynamic = handle
         .subtree("dynamic")
         .expect("dynamic subtree is available");
@@ -1131,6 +1132,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
+    handle.wait_started().await.expect("mixed runtime starts");
     let dynamic = handle
         .subtree("dynamic")
         .expect("dynamic subtree is available");
@@ -1187,6 +1189,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
+    handle.wait_started().await.expect("mixed runtime starts");
     let dynamic_scope = handle
         .subtree("dynamic")
         .expect("dynamic subtree is available");

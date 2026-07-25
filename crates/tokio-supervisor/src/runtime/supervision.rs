@@ -14,13 +14,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::{
-    child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment, SupervisorSpec},
+    child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},
     event::{ExitStatusView, NestedEventNotification, SupervisorEvent},
     handle::{
-        AttachedChildState, AttachedChildrenState, NestedChannels, StableSupervisorChannels,
-        SupervisorCommand,
+        AttachedChildState, AttachedChildrenState, NestedChannels, PendingSupervisorSpec,
+        StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
     },
     lifecycle::{LifecycleEventDraft, LifecycleEventKind, LifecycleHub},
     observability::{SupervisorObservability, format_child_path},
@@ -342,6 +342,7 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
     pub(crate) nested_channels: NestedChannels,
+    pub(crate) own_handle: SupervisorHandle,
     pub(crate) nested_event_tx: mpsc::Sender<NestedEventNotification>,
     pub(crate) nested_event_rx: mpsc::Receiver<NestedEventNotification>,
     pub(crate) nested_snapshot_tx: mpsc::UnboundedSender<NestedSnapshotNotification>,
@@ -372,6 +373,7 @@ impl SupervisorRuntime {
         path_prefix: Vec<String>,
         parent_link: Option<ParentLink>,
         revivable: bool,
+        own_handle: SupervisorHandle,
     ) -> Self {
         let default_restart_intensity = config.restart_intensity;
         let kind = config.kind;
@@ -445,6 +447,7 @@ impl SupervisorRuntime {
             shutdown_rx,
             command_rx,
             nested_channels,
+            own_handle,
             nested_event_tx,
             nested_event_rx,
             nested_snapshot_tx,
@@ -928,7 +931,7 @@ impl SupervisorRuntime {
                 id,
                 supervisor,
                 reply,
-            } => complete_command(reply, self.add_supervisor(id, *supervisor)),
+            } => complete_command(reply, self.add_supervisor(id, supervisor)),
         }
     }
 
@@ -994,7 +997,11 @@ impl SupervisorRuntime {
         Ok(membership_epoch)
     }
 
-    fn add_supervisor(&mut self, id: String, mut supervisor: SupervisorSpec) -> CommandResult<u64> {
+    fn add_supervisor(
+        &mut self,
+        id: String,
+        mut pending: PendingSupervisorSpec,
+    ) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
@@ -1005,18 +1012,20 @@ impl SupervisorRuntime {
             }
             .into());
         }
-        if supervisor.significant {
+        if pending.spec_mut().significant {
             return Err(ControlError::UnsupportedByScopeKind {
                 operation: ControlOperation::AddSupervisor,
                 kind: self.meta.kind,
             }
             .into());
         }
-        supervisor.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        pending
+            .spec_mut()
+            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
         }
-        if let Some(intensity) = supervisor.restart_intensity {
+        if let Some(intensity) = pending.spec_mut().restart_intensity {
             intensity
                 .validate()
                 .map_err(|error| map_build_error_to_control(&id, error))?;
@@ -1030,7 +1039,8 @@ impl SupervisorRuntime {
             return Err(error.into());
         }
 
-        let stable = supervisor.supervisor.stable_channels(false);
+        let stable = pending.spec_mut().supervisor.stable_channels(false);
+        let supervisor = pending.accept();
         let definition = Arc::new(ChildDefinition::supervisor(id.clone(), supervisor));
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
         let membership_epoch = self.next_child_instance;
@@ -1845,7 +1855,7 @@ impl SupervisorRuntime {
                 supervisor: entry
                     .nested_channels
                     .as_ref()
-                    .map(|channels| channels.handle()),
+                    .map(|channels| channels.internal_handle()),
             })
             .collect()
     }
@@ -2040,7 +2050,9 @@ mod tests {
 
     #[tokio::test]
     async fn readiness_wake_prioritizes_ready_over_nested_traffic() {
-        let config = empty_supervisor().config;
+        let supervisor = empty_supervisor();
+        let own_handle = supervisor.handle();
+        let config = supervisor.config;
         let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
@@ -2060,6 +2072,7 @@ mod tests {
             Vec::new(),
             None,
             false,
+            own_handle,
         );
 
         runtime
@@ -2099,6 +2112,7 @@ mod tests {
             )
             .build()
             .expect("valid supervisor config");
+        let own_handle = supervisor.handle();
         let config = supervisor.config;
         let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
@@ -2119,6 +2133,7 @@ mod tests {
             Vec::new(),
             None,
             false,
+            own_handle,
         );
         let key = runtime.child_order[0];
         let instance = runtime.children[key].instance;

@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -11,7 +11,7 @@ use std::{
 use tokio::time::Instant;
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, RestartPolicy, RuntimeHandle, prelude::Continue,
+    DynamicActorOptions, RestartPolicy, prelude::Continue,
 };
 
 use crate::{
@@ -46,7 +46,6 @@ pub struct Session {
     outbound: ActorRef<OutboundMsg>,
     progress: ActorRef<ProgressMsg>,
     router: ActorRef<RouterMsg>,
-    subtree: Arc<OnceLock<RuntimeHandle>>,
     gate: Arc<AtomicBool>,
     model: Arc<dyn ModelClient>,
     task_sequence: Arc<AtomicU64>,
@@ -102,10 +101,10 @@ impl Session {
             Role::Reviewer => "reviewer",
         };
         let id = format!("run:{task}:{role_name}:{attempt}");
-        let run_ref = self
-            .subtree
-            .get()
-            .expect("session subtree handle bound before traffic")
+        let children = ctx
+            .children()
+            .ok_or("session leader is missing its declared child scope")?;
+        let run_ref = children
             .add_actor(
                 id.clone(),
                 AgentRunFactory {

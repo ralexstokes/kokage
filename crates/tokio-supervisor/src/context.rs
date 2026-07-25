@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::SupervisorHandle;
+
 #[derive(Debug)]
 pub(crate) struct ChildReady {
     pub(crate) key: usize,
@@ -46,6 +48,7 @@ pub struct ChildContext {
     generation: u64,
     token: CancellationToken,
     supervisor: SupervisorToken,
+    scope: SupervisorHandle,
     ready: Option<ReadySignal>,
 }
 
@@ -55,6 +58,7 @@ impl ChildContext {
         generation: u64,
         token: CancellationToken,
         supervisor: SupervisorToken,
+        scope: SupervisorHandle,
         ready: Option<ReadySignal>,
     ) -> Self {
         Self {
@@ -62,6 +66,7 @@ impl ChildContext {
             generation,
             token,
             supervisor,
+            scope,
             ready,
         }
     }
@@ -88,6 +93,16 @@ impl ChildContext {
     /// Returns a read-only view of the supervisor's cancellation state.
     pub fn supervisor_token(&self) -> &SupervisorToken {
         &self.supervisor
+    }
+
+    /// Returns the stable handle for this child's enclosing supervisor scope.
+    ///
+    /// Awaiting control operations on the enclosing scope is safe. The
+    /// remaining self-deadlock is awaiting removal of a sibling whose drain
+    /// depends on this child draining its own input; pipeline that operation
+    /// instead of awaiting it inline.
+    pub fn supervisor(&self) -> SupervisorHandle {
+        self.scope.clone()
     }
 
     /// Reports that this child has completed initialization.
