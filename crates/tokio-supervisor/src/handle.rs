@@ -742,15 +742,16 @@ impl SupervisorHandle {
         }
     }
 
-    /// Captures a direct child's current generation and returns an awaitable
-    /// that resolves once the child is next observed running with a greater
-    /// generation.
+    /// Captures a direct child's current membership identity and generation,
+    /// then returns an awaitable that resolves once that membership is next
+    /// observed running with a greater generation.
     ///
-    /// Call this before triggering the crash: the baseline generation is
-    /// captured here, synchronously, not when the monitor is awaited. A monitor
-    /// created after a restart has fully completed waits for the next restart.
-    /// Creation is infallible; if the child is unknown or already being
-    /// removed, the returned monitor reports
+    /// Call this before triggering the crash: the baseline membership identity
+    /// and generation are captured here, synchronously, not when the monitor is
+    /// awaited. A monitor created after a restart has fully completed waits for
+    /// the next restart. Creation is infallible; if the child is unknown or
+    /// already being removed, or is later replaced by another child with the
+    /// same id, the returned monitor reports
     /// [`RestartMonitorError::ChildUnavailable`](crate::RestartMonitorError::ChildUnavailable)
     /// when awaited.
     ///
@@ -761,13 +762,13 @@ impl SupervisorHandle {
         let id = id.into();
         let snapshots_rx = self.snapshots_rx();
         let snapshot = snapshots_rx.borrow();
-        let generation = snapshot
+        let baseline = snapshot
             .child(&id)
             .filter(|child| child.membership == ChildMembershipView::Active)
-            .map(|child| child.generation);
+            .map(|child| (child.membership_epoch, child.generation));
         drop(snapshot);
 
-        RestartMonitor::new(id, generation, snapshots_rx)
+        RestartMonitor::new(id, baseline, snapshots_rx)
     }
 
     /// Returns a new receiver for supervisor lifecycle events.

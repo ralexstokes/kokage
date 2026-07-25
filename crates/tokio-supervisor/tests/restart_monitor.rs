@@ -156,6 +156,52 @@ async fn monitor_restart_errors_when_child_is_removed() {
 }
 
 #[tokio::test]
+async fn monitor_restart_rejects_same_id_replacement_before_first_poll() {
+    let handle = SupervisorBuilder::new()
+        .child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    let restart = handle.monitor_restart("worker");
+    assert_eq!(restart.baseline_generation(), Some(0));
+    let original_epoch = handle
+        .snapshot()
+        .child("worker")
+        .expect("original child should exist")
+        .membership_epoch;
+
+    handle
+        .remove_child("worker")
+        .await
+        .expect("original child removal should succeed");
+
+    let trigger_failure = Arc::new(Notify::new());
+    handle
+        .add_child(fail_on_generations("worker", trigger_failure.clone(), 1))
+        .await
+        .expect("replacement child should be added");
+
+    let mut snapshots = handle.subscribe_snapshots();
+    trigger_failure.notify_one();
+    let replacement = wait_for_child_running(&mut snapshots, "worker", 1).await;
+    assert_ne!(replacement.membership_epoch, original_epoch);
+
+    let result = timeout(common::EVENT_TIMEOUT, restart.into_future())
+        .await
+        .expect("restart monitor should resolve");
+    assert_eq!(
+        result,
+        Err(RestartMonitorError::ChildUnavailable("worker".to_owned()))
+    );
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
 async fn monitor_restart_errors_when_restart_intensity_is_exhausted() {
     let trigger_failure = Arc::new(Notify::new());
     let trigger_for_child = trigger_failure.clone();

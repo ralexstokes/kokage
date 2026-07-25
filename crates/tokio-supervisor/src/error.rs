@@ -75,8 +75,8 @@ pub enum ControlError {
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RestartMonitorError {
-    /// The child was absent when the monitor was created or was removed
-    /// before the awaited restart completed.
+    /// The child was absent when the monitor was created, or its membership was
+    /// removed or replaced before the awaited restart completed.
     #[error("child unavailable: {0}")]
     ChildUnavailable(String),
     /// The supervisor stopped before the awaited restart happened.

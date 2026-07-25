@@ -13,14 +13,16 @@ use crate::{
 
 /// Awaitable created by [`SupervisorHandle::monitor_restart`](crate::SupervisorHandle::monitor_restart).
 ///
-/// The monitor resolves when the watched direct child is next observed
-/// [`Running`](ChildStateView::Running) with a generation greater than the
-/// baseline captured at construction time. Explicitly readiness-gated
-/// children become running only after they report readiness. This is a
-/// convenience predicate over the primitive supervisor snapshot watch, not a
-/// separate event channel.
+/// The monitor resolves when the watched direct child membership is next
+/// observed [`Running`](ChildStateView::Running) with a generation greater
+/// than the baseline captured at construction time. Removing that membership
+/// makes the monitor fail even if another child is added under the same id.
+/// Explicitly readiness-gated children become running only after they report
+/// readiness. This is a convenience predicate over the primitive supervisor
+/// snapshot watch, not a separate event channel.
 pub struct RestartMonitor {
     id: String,
+    baseline_membership_epoch: Option<u64>,
     baseline_generation: Option<u64>,
     snapshots: watch::Receiver<SupervisorSnapshot>,
 }
@@ -28,11 +30,15 @@ pub struct RestartMonitor {
 impl RestartMonitor {
     pub(crate) fn new(
         id: String,
-        baseline_generation: Option<u64>,
+        baseline: Option<(u64, u64)>,
         snapshots: watch::Receiver<SupervisorSnapshot>,
     ) -> Self {
+        let (baseline_membership_epoch, baseline_generation) = baseline
+            .map(|(membership_epoch, generation)| (Some(membership_epoch), Some(generation)))
+            .unwrap_or((None, None));
         Self {
             id,
+            baseline_membership_epoch,
             baseline_generation,
             snapshots,
         }
@@ -43,21 +49,28 @@ impl RestartMonitor {
         &self.id
     }
 
-    /// The generation observed when the monitor was created, or `None` if the
-    /// child was already unavailable.
+    /// The captured membership's generation when the monitor was created, or
+    /// `None` if the child was already unavailable.
     pub fn baseline_generation(&self) -> Option<u64> {
         self.baseline_generation
     }
 
     async fn wait(mut self) -> Result<u64, RestartMonitorError> {
-        let Some(baseline_generation) = self.baseline_generation else {
+        let (Some(baseline_membership_epoch), Some(baseline_generation)) =
+            (self.baseline_membership_epoch, self.baseline_generation)
+        else {
             return Err(RestartMonitorError::ChildUnavailable(self.id));
         };
 
         loop {
             let observation = {
                 let snapshot = self.snapshots.borrow();
-                observe_snapshot(&snapshot, &self.id, baseline_generation)
+                observe_snapshot(
+                    &snapshot,
+                    &self.id,
+                    baseline_membership_epoch,
+                    baseline_generation,
+                )
             };
 
             match observation {
@@ -78,6 +91,7 @@ impl fmt::Debug for RestartMonitor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RestartMonitor")
             .field("id", &self.id)
+            .field("baseline_membership_epoch", &self.baseline_membership_epoch)
             .field("baseline_generation", &self.baseline_generation)
             .finish_non_exhaustive()
     }
@@ -207,11 +221,16 @@ enum RestartObservation {
 fn observe_snapshot(
     snapshot: &SupervisorSnapshot,
     id: &str,
+    baseline_membership_epoch: u64,
     baseline_generation: u64,
 ) -> RestartObservation {
     let Some(child) = snapshot.child(id) else {
         return RestartObservation::Failed(RestartMonitorError::ChildUnavailable(id.to_owned()));
     };
+
+    if child.membership_epoch != baseline_membership_epoch {
+        return RestartObservation::Failed(RestartMonitorError::ChildUnavailable(id.to_owned()));
+    }
 
     if child.generation > baseline_generation && child.state == ChildStateView::Running {
         return RestartObservation::Resolved(child.generation);
@@ -254,7 +273,7 @@ mod tests {
             }],
         };
 
-        match observe_snapshot(&snapshot, "worker", 0) {
+        match observe_snapshot(&snapshot, "worker", 0, 0) {
             RestartObservation::Resolved(1) => {}
             RestartObservation::Resolved(generation) => {
                 panic!("resolved with unexpected generation {generation}");
