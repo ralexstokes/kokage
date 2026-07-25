@@ -14,9 +14,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, ChildMembershipView, ChildSpec,
-    ControlError, DownReason, DrainPolicy, DynamicActorOptions, GraphBuilder, MailboxMode,
-    MessageSize, MonitorEvent, MonitorRef, RawActor, RestartPolicy, Runtime, RuntimeHandle,
+    Actor, ActorContext, ActorRef, ActorResult, BoxError, CancellationHandle, ChildMembershipView,
+    ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions, GraphBuilder,
+    MailboxMode, MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle,
     SendError, ShutdownPolicy, Strategy, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
@@ -121,7 +121,7 @@ impl RawActor for Watcher {
     type Msg = WatchMsg;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut watch: Option<MonitorRef> = None;
+        let mut watch: Option<CancellationHandle> = None;
         while let Some(message) = ctx.recv().await {
             match message {
                 WatchMsg::Watch(target) => {

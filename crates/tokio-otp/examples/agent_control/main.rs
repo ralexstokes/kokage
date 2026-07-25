@@ -165,7 +165,7 @@ struct App {
     tool_host: ActorRef<ToolHostMsg>,
     proof: Proof,
     gate: Arc<AtomicBool>,
-    restart_watch: RestartWatchRef,
+    restart_watch: RestartWatchGuard,
 }
 
 #[tokio::main]
@@ -549,7 +549,7 @@ async fn phase_5(app: &App) -> Result<(), AnyError> {
                 entry.chat == CHAT_B && matches!(entry.entry, JournalEntry::TaskCancelled { .. })
             })
     );
-    println!("PHASE 5 OK — urgent CancellationToken + keyed conflation + TimerRef::cancel");
+    println!("PHASE 5 OK — urgent CancellationToken + keyed conflation + timer cancellation");
     Ok(())
 }
 

@@ -89,31 +89,6 @@ pub enum MonitorEvent {
     },
 }
 
-/// A cancellable actor watch.
-///
-/// Clones refer to the same watch. Dropping the handle does not cancel the
-/// watch; call [`cancel`](Self::cancel) explicitly. Watches also end when
-/// either the observing or watched actor membership is permanently removed.
-#[derive(Clone, Debug)]
-pub struct MonitorRef {
-    pub(crate) cancellation: CancellationToken,
-}
-
-impl MonitorRef {
-    /// Cancels the watch. Cancellation is idempotent.
-    ///
-    /// An event already accepted by the observer's mailbox cannot be
-    /// retracted.
-    pub fn cancel(&self) {
-        self.cancellation.cancel();
-    }
-
-    /// Returns whether this watch has been cancelled.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
-    }
-}
-
 /// Bounded, drop-oldest staging buffer between a target's [`MonitorHub`] and
 /// one observer's forwarder task.
 ///

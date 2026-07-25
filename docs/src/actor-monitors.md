@@ -83,11 +83,11 @@ generation `0` starts, and a watch registered between incarnations stays
 silent until the next `Up`. This removes actor-start and restart ordering
 races from a graph: there is never a reason to retry registration.
 
-`ActorContext::watch` returns a cloneable `MonitorRef`. Calling `cancel` on
-any clone suppresses future delivery. Cancellation cannot retract an event
-already accepted by the mailbox. Permanently removing either actor membership
-also ends the watch; a watched actor's final `Terminated` event is queued
-before its membership removal completes.
+`ActorContext::watch` returns a cloneable `CancellationHandle`. Calling
+`cancel` on any clone suppresses future delivery. Cancellation cannot retract
+an event already accepted by the mailbox. Permanently removing either actor
+membership also ends the watch; a watched actor's final `Terminated` event is
+queued before its membership removal completes.
 
 Calling `watch` again for the same observer/subject pair is idempotent. This
 keeps the common pattern of registering in `on_start` safe when the observer
@@ -95,15 +95,15 @@ restarts: the replacement incarnation gets the existing watch rather than a
 duplicate immediate `Up`. The mapping closure from the first registration is
 membership-owned and remains in use until cancellation, so it should capture
 durable configuration rather than incarnation-local state. This also applies
-to repeated calls within one incarnation: every returned `MonitorRef` aliases
-the same watch, the later mapping closures are unused, and cancelling any alias
-cancels the pair.
+to repeated calls within one incarnation: every returned `CancellationHandle`
+aliases the same watch, the later mapping closures are unused, and cancelling
+any alias cancels the pair.
 
 A replacement observer does not receive a fresh snapshot when it re-registers.
 Events that a previous incarnation accepted and then lost in a crash are not
 replayed, so an observer that needs its last known target state after restart
-must persist that state durably. To trade staged transition history for a fresh
-snapshot, cancel the existing `MonitorRef` and call `watch` again. A running
+must persist that state durably. To trade staged transition history for a
+fresh snapshot, cancel the existing handle and call `watch` again. A running
 target then emits an immediate `Up`, a terminated target emits an immediate
 `Terminated`, and a target between incarnations remains silent until its next
 `Up`.
@@ -127,4 +127,4 @@ dropped.
 
 For one-shot, incarnation-scoped monitoring — "tell me if the incarnation I
 am talking to right now dies" — watch the target, act on the first `Down`,
-and cancel the `MonitorRef`.
+and cancel the handle.

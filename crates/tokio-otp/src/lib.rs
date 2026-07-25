@@ -95,8 +95,8 @@
 //! actor is permanently gone, and `Lagged` if a stalled observer misses
 //! transitions under overload — is mapped into the observer's message type and
 //! delivered through the ordinary mailbox. Watches survive restarts of both
-//! actors, [`MonitorRef::cancel`] suppresses future delivery, and permanent
-//! removal of either actor membership ends the watch.
+//! actors, [`CancellationHandle::cancel`] suppresses future delivery, and
+//! permanent removal of either actor membership ends the watch.
 //!
 //! # Static topologies
 //!
@@ -248,11 +248,12 @@ pub mod prelude {
     pub use crate::Topology;
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
-        BoxError, CallError, CancellationToken, Down, DownReason, DrainPolicy, Flow,
+        BoxError, CallError, CancellationHandle, CancellationToken, Down, DownReason, DrainPolicy,
+        Flow,
         Flow::{Continue, Stop},
-        Graph, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, MonitorRef, RawActor, Reply,
-        RestartWatchRef, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StepDeadline,
-        StepHandle, TimerRef,
+        Graph, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor, Reply,
+        RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StepDeadline,
+        StepHandle,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildMembershipView,
@@ -268,13 +269,15 @@ pub use tokio_otp_derive::Topology;
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, BoxError, CallError, Down, DownReason, DrainPolicy, Flow, Graph,
-    GraphBuildError, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, MonitorRef, RawActor,
+    ActorSlot, ActorStats, BoxError, CallError, CancellationHandle, Down, DownReason, DrainPolicy,
+    Flow, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor,
     RebindPolicy, Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline, StepHandle,
-    SupervisorPathSegment, TimerRef, TryRecvError,
+    SupervisorPathSegment, TryRecvError,
 };
 pub use builder::RuntimeBuilder;
-pub use runtime::{AddSubtreeError, DynamicActorOptions, RestartWatchRef, Runtime, RuntimeHandle};
+pub use runtime::{
+    AddSubtreeError, DynamicActorOptions, RestartWatchGuard, Runtime, RuntimeHandle,
+};
 pub use tokio_supervisor::{
     AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildContext,
     ChildMembershipView, ChildResult, ChildSnapshot, ChildSpec, ChildStateView, ControlError,

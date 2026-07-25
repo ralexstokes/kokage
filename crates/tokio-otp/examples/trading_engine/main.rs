@@ -169,7 +169,7 @@ struct App {
     intake_gate: Arc<AtomicBool>,
     background_stop: CancellationToken,
     sampler: tokio::task::JoinHandle<()>,
-    restart_watch: RestartWatchRef,
+    restart_watch: RestartWatchGuard,
 }
 
 #[tokio::main]
