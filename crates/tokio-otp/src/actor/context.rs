@@ -20,8 +20,9 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, MailboxReceiver, MailboxRef,
         MessageSizeObserver, SendOutcome,
     },
+    cancellation::CancellationHandle,
     error::{CallError, SendError, StepDeadline, TryRecvError},
-    monitor::{ActorMonitors, MonitorEvent, MonitorHub, MonitorRef},
+    monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
 };
 
@@ -423,16 +424,6 @@ pub struct Reply<T> {
     sender: oneshot::Sender<T>,
 }
 
-/// Handle for a message timer created by [`ActorContext`].
-///
-/// Clones refer to the same timer. Dropping the handle does not cancel the
-/// timer; call [`cancel`](Self::cancel) explicitly. Timers are also cancelled
-/// automatically when their actor incarnation stops or restarts.
-#[derive(Clone, Debug)]
-pub struct TimerRef {
-    cancellation: CancellationToken,
-}
-
 /// Handle for one bounded future started by [`ActorContext::step`].
 ///
 /// Dropping the handle does not affect the step. [`abort`](Self::abort)
@@ -454,24 +445,6 @@ impl StepHandle {
     /// Returns whether the step has finished or its abort has been observed.
     pub fn is_finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
-    }
-}
-
-impl TimerRef {
-    /// Cancels the timer.
-    ///
-    /// Cancellation is idempotent. A message already accepted by the mailbox
-    /// cannot be retracted.
-    pub fn cancel(&self) {
-        self.cancellation.cancel();
-    }
-
-    /// Returns `true` if this timer has been cancelled.
-    ///
-    /// Completion is distinct from cancellation: a one-shot timer that has
-    /// already fired is not considered cancelled.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
     }
 }
 
@@ -505,7 +478,7 @@ pub struct ActorContext<M> {
     pub(crate) shutdown: CancellationToken,
     pub(crate) observability: GraphObservability,
     pub(crate) timers: ActorTimers,
-    pub(crate) state_timeout: Mutex<Option<TimerRef>>,
+    pub(crate) state_timeout: Mutex<Option<CancellationHandle>>,
     pub(crate) monitors: Arc<ActorMonitors>,
     pub(crate) ready: Mutex<Option<oneshot::Sender<()>>>,
     pub(crate) continuations: Mutex<VecDeque<M>>,
@@ -709,15 +682,13 @@ impl<M: Send + 'static> ActorContext<M> {
     /// without bound. On overflow the oldest transitions are dropped and the
     /// loss surfaces as a [`MonitorEvent::Lagged`] resync marker rather than
     /// silently; the terminal `Terminated` is never dropped.
-    pub fn watch<T, F>(&self, target: &ActorRef<T>, mut map: F) -> MonitorRef
+    pub fn watch<T, F>(&self, target: &ActorRef<T>, mut map: F) -> CancellationHandle
     where
         T: Send + 'static,
         F: FnMut(MonitorEvent) -> M + Send + 'static,
     {
         let (cancellation, install) = self.monitors.register(&target.monitors);
-        let monitor = MonitorRef {
-            cancellation: cancellation.clone(),
-        };
+        let monitor = CancellationHandle::new(cancellation.clone());
         if !install {
             return monitor;
         }
@@ -766,7 +737,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// timer is cancelled automatically if this actor incarnation stops or
     /// restarts. To schedule delayed delivery to another actor, use
     /// [`send_after_to`](Self::send_after_to).
-    pub fn send_after(&self, message: M, delay: Duration) -> TimerRef {
+    pub fn send_after(&self, message: M, delay: Duration) -> CancellationHandle {
         self.send_after_to(&self.myself, message, delay)
     }
 
@@ -786,11 +757,9 @@ impl<M: Send + 'static> ActorContext<M> {
         target: &ActorRef<T>,
         message: T,
         delay: Duration,
-    ) -> TimerRef {
+    ) -> CancellationHandle {
         let cancellation = self.timers.child_token();
-        let timer = TimerRef {
-            cancellation: cancellation.clone(),
-        };
+        let timer = CancellationHandle::new(cancellation.clone());
         spawn_delayed_send(target.clone(), message, delay, cancellation);
 
         timer
@@ -807,12 +776,11 @@ impl<M: Send + 'static> ActorContext<M> {
     /// mailbox. The message should identify the state (or a generation) it was
     /// scheduled for so the handler can reject stale timeouts. Replacing or
     /// clearing the slot cancels its token even if it already fired, so a
-    /// retained handle will then report [`TimerRef::is_cancelled`] as `true`.
-    pub fn state_timeout(&self, message: M, delay: Duration) -> TimerRef {
+    /// retained handle will then report [`CancellationHandle::is_cancelled`]
+    /// as `true`.
+    pub fn state_timeout(&self, message: M, delay: Duration) -> CancellationHandle {
         let cancellation = self.timers.child_token();
-        let timer = TimerRef {
-            cancellation: cancellation.clone(),
-        };
+        let timer = CancellationHandle::new(cancellation.clone());
         let previous = self
             .state_timeout
             .lock()
@@ -853,7 +821,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// # Panics
     ///
     /// Panics if `period` is zero.
-    pub fn interval(&self, message: M, period: Duration) -> TimerRef
+    pub fn interval(&self, message: M, period: Duration) -> CancellationHandle
     where
         M: Clone,
     {
@@ -876,16 +844,19 @@ impl<M: Send + 'static> ActorContext<M> {
     /// # Panics
     ///
     /// Panics if `period` is zero.
-    pub fn interval_to<T>(&self, target: &ActorRef<T>, message: T, period: Duration) -> TimerRef
+    pub fn interval_to<T>(
+        &self,
+        target: &ActorRef<T>,
+        message: T,
+        period: Duration,
+    ) -> CancellationHandle
     where
         T: Clone + Send + 'static,
     {
         assert!(!period.is_zero(), "timer period must be non-zero");
 
         let cancellation = self.timers.child_token();
-        let timer = TimerRef {
-            cancellation: cancellation.clone(),
-        };
+        let timer = CancellationHandle::new(cancellation.clone());
         let target = target.clone();
 
         tokio::spawn(async move {

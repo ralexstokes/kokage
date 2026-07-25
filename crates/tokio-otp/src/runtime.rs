@@ -202,11 +202,11 @@ struct DynamicChildOptions {
 /// the pump. It also stops automatically when the watched supervisor can no
 /// longer restart a child or when the target actor permanently terminates.
 #[must_use = "dropping the guard immediately cancels the restart watch"]
-pub struct RestartWatchRef {
+pub struct RestartWatchGuard {
     cancellation: CancellationToken,
 }
 
-impl RestartWatchRef {
+impl RestartWatchGuard {
     /// Cancels the restart-count pump.
     ///
     /// Cancellation is idempotent. A message already accepted by the target
@@ -221,15 +221,15 @@ impl RestartWatchRef {
     }
 }
 
-impl std::fmt::Debug for RestartWatchRef {
+impl std::fmt::Debug for RestartWatchGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RestartWatchRef")
+        f.debug_struct("RestartWatchGuard")
             .field("is_cancelled", &self.is_cancelled())
             .finish()
     }
 }
 
-impl Drop for RestartWatchRef {
+impl Drop for RestartWatchGuard {
     fn drop(&mut self) {
         self.cancel();
     }
@@ -239,7 +239,7 @@ fn spawn_restart_watch_to<M, F>(
     mut restarts: RestartWatch,
     target: ActorRef<M>,
     mut map: F,
-) -> RestartWatchRef
+) -> RestartWatchGuard
 where
     M: Send + 'static,
     F: FnMut(u64) -> M + Send + 'static,
@@ -287,7 +287,7 @@ where
         }
     });
 
-    RestartWatchRef { cancellation }
+    RestartWatchGuard { cancellation }
 }
 
 /// Configured-but-not-yet-running runtime that owns a supervisor and its
@@ -639,11 +639,11 @@ impl RuntimeHandle {
     /// fresh incarnation can restore its state. Consumers should therefore
     /// treat observations as idempotent totals, not additive deltas.
     ///
-    /// The pump stops when the returned [`RestartWatchRef`] is dropped or
+    /// The pump stops when the returned [`RestartWatchGuard`] is dropped or
     /// cancelled, when this runtime reaches a terminal state, or when the
     /// target actor permanently terminates. It follows the target through
     /// ordinary actor restarts.
-    pub fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchRef
+    pub fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchGuard
     where
         M: Send + 'static,
         F: FnMut(u64) -> M + Send + 'static,

@@ -18,8 +18,8 @@ enum Message {
 
 #[derive(Clone, Default)]
 struct Worker {
-    reconnect: Option<TimerRef>,
-    reconcile: Option<TimerRef>,
+    reconnect: Option<CancellationHandle>,
+    reconcile: Option<CancellationHandle>,
 }
 
 impl Actor for Worker {
@@ -43,14 +43,14 @@ impl Actor for Worker {
 
 `send_after` owns its message and sends it once after the delay. `interval`
 clones its message on each period, so its message type must implement `Clone`.
-Both return a cloneable `TimerRef`; calling `cancel` on any clone cancels the
-same timer. Dropping a timer ref does not cancel it.
+Both return a cloneable `CancellationHandle`; calling `cancel` on any clone
+cancels the same timer. Dropping the handle does not cancel it.
 
 Timer messages use the normal bounded mailbox. When the mailbox is full,
 FIFO delivery waits for capacity just like `ActorRef::send`; conflating
 mailboxes replace stale unread state instead. Intervals do not build
 an unbounded backlog while waiting: missed ticks are skipped. A one-shot timer
-that has fired is complete, not cancelled, so its ref still reports
+that has fired is complete, not cancelled, so its handle still reports
 `is_cancelled() == false`.
 
 Timers belong to one actor incarnation. The runtime cancels all of them when
@@ -134,10 +134,11 @@ impl Actor for Order {
 }
 ```
 
-Calling `state_timeout` takes ownership of the message and returns a `TimerRef`, like
-`send_after`, but the actor does not need to retain it. Entering another timed
-state and calling `state_timeout` automatically cancels the previous timeout.
-Call `clear_state_timeout` when entering a state without a timeout.
+Calling `state_timeout` takes ownership of the message and returns a
+`CancellationHandle`, like `send_after`, but the actor does not need to retain
+it. Entering another timed state and calling `state_timeout` automatically
+cancels the previous timeout. Call `clear_state_timeout` when entering a state
+without a timeout.
 
 Timeout messages that were already accepted by the mailbox cannot be
 retracted. Each timeout message must therefore identify the state it was set

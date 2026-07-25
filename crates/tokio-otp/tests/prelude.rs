@@ -8,9 +8,9 @@ mod coverage_probe {
     mod actor {
         use tokio_otp::prelude::{
             Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CallError,
-            CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuilder,
-            MailboxMode, MessageSize, MonitorEvent, MonitorRef, RawActor, Reply, SendError, Stop,
-            TimerRef, Topology,
+            CancellationHandle, CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow,
+            Graph, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor, Reply,
+            SendError, Stop, Topology,
         };
     }
 
@@ -25,7 +25,7 @@ mod coverage_probe {
     }
 
     mod otp {
-        use tokio_otp::prelude::{RestartWatchRef, Runtime, RuntimeBuilder, RuntimeHandle};
+        use tokio_otp::prelude::{RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle};
     }
 
     mod advanced_root {

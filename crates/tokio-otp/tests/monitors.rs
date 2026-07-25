@@ -5,8 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, Down, DownReason, GraphBuilder, MonitorEvent, MonitorRef,
-    RawActor, RebindPolicy, RunnableActor, RunnableActorFactory, Runtime, prelude::Continue,
+    ActorContext, ActorRef, ActorResult, CancellationHandle, Down, DownReason, GraphBuilder,
+    MonitorEvent, RawActor, RebindPolicy, RunnableActor, RunnableActorFactory, Runtime,
+    prelude::Continue,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -130,7 +131,7 @@ async fn assert_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEvent>) {
     );
 }
 
-async fn watch_cancelled(watch: &MonitorRef) {
+async fn watch_cancelled(watch: &CancellationHandle) {
     timeout(Duration::from_secs(1), async {
         while !watch.is_cancelled() {
             tokio::task::yield_now().await;
@@ -476,7 +477,7 @@ enum AliasedObserverMessage {
 #[derive(Clone)]
 struct AliasedObserver {
     peer: ActorRef<PeerMessage>,
-    watches: mpsc::UnboundedSender<MonitorRef>,
+    watches: mpsc::UnboundedSender<CancellationHandle>,
     started: mpsc::UnboundedSender<()>,
     observed: mpsc::UnboundedSender<(usize, MonitorEvent)>,
 }
@@ -592,7 +593,7 @@ enum ManagedObserverMessage {
 #[derive(Clone)]
 struct ManagedObserver {
     peer: ActorRef<PeerMessage>,
-    watch: mpsc::UnboundedSender<MonitorRef>,
+    watch: mpsc::UnboundedSender<CancellationHandle>,
     observed: mpsc::UnboundedSender<MonitorEvent>,
 }
 
@@ -990,7 +991,7 @@ async fn two_observers_receive_the_same_events() {
 struct GatedObserver {
     peer: ActorRef<PeerMessage>,
     gate: Arc<Notify>,
-    watch: mpsc::UnboundedSender<MonitorRef>,
+    watch: mpsc::UnboundedSender<CancellationHandle>,
     observed: mpsc::UnboundedSender<MonitorEvent>,
 }
 

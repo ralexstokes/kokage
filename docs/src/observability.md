@@ -86,7 +86,7 @@ state. As with every actor send, acceptance is not an acknowledgement that the
 handler processed the message; use an application-level acknowledgement when
 processing itself must be confirmed.
 
-Keep the returned `RestartWatchRef` alive for as long as the pump is needed.
+Keep the returned `RestartWatchGuard` alive for as long as the pump is needed.
 Dropping or cancelling it stops the pump; it also stops when the target
 permanently terminates or the watched supervisor reaches a terminal state,
 even if delivery is currently waiting for mailbox capacity. An actor restart

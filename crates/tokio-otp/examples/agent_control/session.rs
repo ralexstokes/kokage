@@ -10,8 +10,8 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, CancellationToken, DrainPolicy,
-    DynamicActorOptions, RestartPolicy, RuntimeHandle, TimerRef, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
+    DynamicActorOptions, RestartPolicy, RuntimeHandle, prelude::Continue,
 };
 
 use crate::{
@@ -53,7 +53,7 @@ pub struct Session {
     transcript_len: usize,
     pending: VecDeque<PendingInput>,
     active: Option<ActiveRun>,
-    heartbeat: Option<TimerRef>,
+    heartbeat: Option<CancellationHandle>,
     idle_generation: u64,
     evict_requested: bool,
 }

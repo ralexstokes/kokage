@@ -8,6 +8,7 @@
 
 mod binding;
 mod builder;
+mod cancellation;
 mod context;
 mod error;
 mod factory;
@@ -19,10 +20,11 @@ mod raw;
 
 pub use binding::{ActorStats, MailboxMode, RebindPolicy, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
-pub use context::{ActorContext, ActorRef, Reply, StepHandle, TimerRef};
+pub use cancellation::CancellationHandle;
+pub use context::{ActorContext, ActorRef, Reply, StepHandle};
 pub use error::{CallError, GraphBuildError, SendError, StepDeadline, TryRecvError};
 pub use factory::ActorFactory;
 pub use graph::{ActorRunError, Graph, RunnableActor, RunnableActorFactory};
 pub use handler::{Actor, DrainPolicy};
-pub use monitor::{Down, DownReason, MonitorEvent, MonitorRef};
+pub use monitor::{Down, DownReason, MonitorEvent};
 pub use raw::{ActorResult, BoxError, Flow, RawActor};
