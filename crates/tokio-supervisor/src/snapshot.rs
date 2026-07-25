@@ -341,7 +341,7 @@ impl NestedSnapshotState {
 
 #[derive(Clone)]
 pub(crate) struct SnapshotCell {
-    notifications: mpsc::Sender<NestedSnapshotNotification>,
+    notifications: mpsc::UnboundedSender<NestedSnapshotNotification>,
     state: NestedSnapshotState,
     parent_key: usize,
     parent_instance: u64,
@@ -349,7 +349,7 @@ pub(crate) struct SnapshotCell {
 
 impl SnapshotCell {
     pub(crate) fn new(
-        notifications: mpsc::Sender<NestedSnapshotNotification>,
+        notifications: mpsc::UnboundedSender<NestedSnapshotNotification>,
         state: NestedSnapshotState,
         parent_key: usize,
         parent_instance: u64,
@@ -374,20 +374,8 @@ impl SnapshotCell {
             generation,
         };
 
-        match self.notifications.try_send(notification) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(notification)) => {
-                let notifications = self.notifications.clone();
-                let state = self.state.clone();
-                tokio::spawn(async move {
-                    if notifications.send(notification).await.is_err() {
-                        state.mark_dequeued();
-                    }
-                });
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                self.state.mark_dequeued();
-            }
+        if self.notifications.send(notification).is_err() {
+            self.state.mark_dequeued();
         }
     }
 }

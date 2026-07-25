@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 #[cfg(feature = "metrics")]
-use metrics::{counter, gauge, histogram};
+use metrics::{Label, counter, gauge, histogram};
 use tracing::{debug, info, trace, warn};
 
 use crate::{
@@ -74,29 +74,8 @@ impl SupervisorObservability {
 
     #[cfg(feature = "metrics")]
     pub(crate) fn record_shutdown_timeout(&self, operation: &'static str, child_id: Option<&str>) {
-        match child_id {
-            Some(child_id) => {
-                counter!(
-                    "supervisor.shutdown_timeouts",
-                    "supervisor" => self.supervisor_name.clone(),
-                    "path" => self.child_path(child_id),
-                    "child_id" => child_id.to_owned(),
-                    "strategy" => self.strategy_label,
-                    "operation" => operation,
-                )
-                .increment(1);
-            }
-            None => {
-                counter!(
-                    "supervisor.shutdown_timeouts",
-                    "supervisor" => self.supervisor_name.clone(),
-                    "path" => self.supervisor_path.clone(),
-                    "strategy" => self.strategy_label,
-                    "operation" => operation,
-                )
-                .increment(1);
-            }
-        }
+        let labels = self.shutdown_metric_labels(operation, child_id);
+        counter!("supervisor.shutdown_timeouts", labels).increment(1);
     }
 
     #[cfg(not(feature = "metrics"))]
@@ -114,29 +93,8 @@ impl SupervisorObservability {
         duration: Duration,
         child_id: Option<&str>,
     ) {
-        match child_id {
-            Some(child_id) => {
-                histogram!(
-                    "supervisor.child_shutdown.duration",
-                    "supervisor" => self.supervisor_name.clone(),
-                    "path" => self.child_path(child_id),
-                    "child_id" => child_id.to_owned(),
-                    "strategy" => self.strategy_label,
-                    "operation" => operation,
-                )
-                .record(duration.as_secs_f64());
-            }
-            None => {
-                histogram!(
-                    "supervisor.child_shutdown.duration",
-                    "supervisor" => self.supervisor_name.clone(),
-                    "path" => self.supervisor_path.clone(),
-                    "strategy" => self.strategy_label,
-                    "operation" => operation,
-                )
-                .record(duration.as_secs_f64());
-            }
-        }
+        let labels = self.shutdown_metric_labels(operation, child_id);
+        histogram!("supervisor.child_shutdown.duration", labels).record(duration.as_secs_f64());
     }
 
     #[cfg(not(feature = "metrics"))]
@@ -146,6 +104,27 @@ impl SupervisorObservability {
         _duration: Duration,
         _child_id: Option<&str>,
     ) {
+    }
+
+    #[cfg(feature = "metrics")]
+    fn shutdown_metric_labels(
+        &self,
+        operation: &'static str,
+        child_id: Option<&str>,
+    ) -> Vec<Label> {
+        let mut labels = vec![
+            Label::new("supervisor", self.supervisor_name.clone()),
+            Label::new(
+                "path",
+                child_id.map_or_else(|| self.supervisor_path.clone(), |id| self.child_path(id)),
+            ),
+            Label::new("strategy", self.strategy_label),
+            Label::new("operation", operation),
+        ];
+        if let Some(child_id) = child_id {
+            labels.push(Label::new("child_id", child_id.to_owned()));
+        }
+        labels
     }
 
     fn resolve_child_path<'a>(&'a self, child_id: &str, precomputed: Option<&'a str>) -> String {
@@ -209,49 +188,42 @@ impl SupervisorObservability {
                 id,
                 generation,
                 status,
-            } => match status {
-                ExitStatusView::Completed => trace!(
-                    supervisor_name = %self.supervisor_name,
-                    supervisor_path = %self.supervisor_path,
-                    child_id = %id,
-                    child_path = %self.resolve_child_path(id, child_path),
-                    generation = *generation,
-                    status = "completed",
-                    strategy = self.strategy_label,
-                    "child exited"
-                ),
-                ExitStatusView::Failed(message) => warn!(
-                    supervisor_name = %self.supervisor_name,
-                    supervisor_path = %self.supervisor_path,
-                    child_id = %id,
-                    child_path = %self.resolve_child_path(id, child_path),
-                    generation = *generation,
-                    status = "failed",
-                    error = %message,
-                    strategy = self.strategy_label,
-                    "child exited"
-                ),
-                ExitStatusView::Panicked => warn!(
-                    supervisor_name = %self.supervisor_name,
-                    supervisor_path = %self.supervisor_path,
-                    child_id = %id,
-                    child_path = %self.resolve_child_path(id, child_path),
-                    generation = *generation,
-                    status = "panicked",
-                    strategy = self.strategy_label,
-                    "child exited"
-                ),
-                ExitStatusView::Aborted => warn!(
-                    supervisor_name = %self.supervisor_name,
-                    supervisor_path = %self.supervisor_path,
-                    child_id = %id,
-                    child_path = %self.resolve_child_path(id, child_path),
-                    generation = *generation,
-                    status = "aborted",
-                    strategy = self.strategy_label,
-                    "child exited"
-                ),
-            },
+            } => {
+                let status_label = exit_status_label(status);
+                match status {
+                    ExitStatusView::Completed => trace!(
+                        supervisor_name = %self.supervisor_name,
+                        supervisor_path = %self.supervisor_path,
+                        child_id = %id,
+                        child_path = %self.resolve_child_path(id, child_path),
+                        generation = *generation,
+                        status = status_label,
+                        strategy = self.strategy_label,
+                        "child exited"
+                    ),
+                    ExitStatusView::Failed(message) => warn!(
+                        supervisor_name = %self.supervisor_name,
+                        supervisor_path = %self.supervisor_path,
+                        child_id = %id,
+                        child_path = %self.resolve_child_path(id, child_path),
+                        generation = *generation,
+                        status = status_label,
+                        error = %message,
+                        strategy = self.strategy_label,
+                        "child exited"
+                    ),
+                    ExitStatusView::Panicked | ExitStatusView::Aborted => warn!(
+                        supervisor_name = %self.supervisor_name,
+                        supervisor_path = %self.supervisor_path,
+                        child_id = %id,
+                        child_path = %self.resolve_child_path(id, child_path),
+                        generation = *generation,
+                        status = status_label,
+                        strategy = self.strategy_label,
+                        "child exited"
+                    ),
+                }
+            }
             SupervisorEvent::AutoShutdownTriggered { id, mode } => info!(
                 supervisor_name = %self.supervisor_name,
                 supervisor_path = %self.supervisor_path,
@@ -413,7 +385,6 @@ pub(crate) fn strategy_label(strategy: Strategy) -> &'static str {
     }
 }
 
-#[cfg(feature = "metrics")]
 fn exit_status_label(status: &ExitStatusView) -> &'static str {
     match status {
         ExitStatusView::Completed => "completed",
@@ -550,6 +521,22 @@ mod tests {
                 r#""status":"failed""#,
             ],
         );
+        for status in [ExitStatusView::Panicked, ExitStatusView::Aborted] {
+            let output = capture_tracing_output(|| {
+                root.emit_event(
+                    &SupervisorEvent::ChildExited {
+                        id: "worker".to_owned(),
+                        generation: 0,
+                        status,
+                    },
+                    0,
+                    None,
+                );
+            });
+            assert!(output.contains("child exited"), "got: {output}");
+            assert!(output.contains("\"status\""), "got: {output}");
+            assert!(!output.contains("\"error\""), "got: {output}");
+        }
         assert_tracing_output(
             || {
                 root.emit_event(
