@@ -3,12 +3,18 @@ use tokio_otp::{Actor, ActorContext, ActorResult, Topology};
 mod application {
     use super::*;
 
+    pub struct Message;
+
     pub struct Worker;
 
     impl Actor for Worker {
-        type Msg = ();
+        type Msg = Message;
 
-        async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+        async fn handle(
+            &mut self,
+            _: Message,
+            _: &mut ActorContext<Message>,
+        ) -> ActorResult {
             Ok(tokio_otp::prelude::Continue)
         }
     }
