@@ -419,13 +419,29 @@ impl SupervisorRuntime {
         &mut self,
         keys: Vec<ChildKey>,
     ) -> Result<bool, SupervisorError> {
+        self.respawn_sequence(keys, false).await
+    }
+
+    async fn respawn_sequence(
+        &mut self,
+        keys: Vec<ChildKey>,
+        emit_restart_events: bool,
+    ) -> Result<bool, SupervisorError> {
         let restart_epoch = self.restart_epoch;
         for key in keys {
-            let Some((ready, _, _)) = self.spawn_child_for_start(key).await? else {
+            if emit_restart_events && self.should_skip_group_respawn(key) {
+                continue;
+            }
+            let Some((ready, old_generation, new_generation)) =
+                Box::pin(self.spawn_child_for_start(key)).await?
+            else {
                 continue;
             };
             if self.restart_epoch != restart_epoch {
                 return Ok(true);
+            }
+            if emit_restart_events && let Some(old_generation) = old_generation {
+                self.send_restart_event(key, old_generation, new_generation);
             }
             if !ready {
                 if self.children.contains(key) {
@@ -1068,10 +1084,7 @@ impl SupervisorRuntime {
 
         if allow_restart && restart_policy.should_restart(classified.status.is_failure()) {
             match self.meta.strategy {
-                Strategy::OneForOne => {
-                    self.handle_one_for_one_restart(classified.key, classified.generation)
-                        .await?
-                }
+                Strategy::OneForOne => self.handle_one_for_one_restart(classified.key).await?,
                 Strategy::OneForAll => self.handle_one_for_all_restart(classified.key).await?,
                 Strategy::RestForOne => self.handle_rest_for_one_restart(classified.key).await?,
             }
@@ -1217,31 +1230,14 @@ impl SupervisorRuntime {
         });
     }
 
-    async fn handle_one_for_one_restart(
-        &mut self,
-        key: ChildKey,
-        previous_generation: u64,
-    ) -> Result<(), SupervisorError> {
-        let restart_instance = self.children[key].instance;
-        let delay = self.schedule_restart(key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[key].id.clone(),
-            generation: previous_generation,
-            delay,
-        });
-        if !self.wait_for_restart_delay(delay).await? {
-            return Ok(());
-        }
-        let Some(entry) = self.children.get(key) else {
+    async fn handle_one_for_one_restart(&mut self, key: ChildKey) -> Result<(), SupervisorError> {
+        let Some(permit) = self.begin_restart(key).await? else {
             return Ok(());
         };
-        if entry.instance != restart_instance || entry.membership != MembershipState::Active {
-            return Ok(());
-        }
         let (old_generation, new_generation) = self.spawn_child(key)?;
         self.send_restart_event(
             key,
-            old_generation.unwrap_or(previous_generation),
+            old_generation.unwrap_or(permit.previous_generation),
             new_generation,
         );
         Ok(())
@@ -1251,68 +1247,7 @@ impl SupervisorRuntime {
         &mut self,
         failing_key: ChildKey,
     ) -> Result<(), SupervisorError> {
-        let failing_instance = self.children[failing_key].instance;
-        let delay = self.schedule_restart(failing_key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[failing_key].id.clone(),
-            generation: self.children[failing_key].runtime.generation,
-            delay,
-        });
-        if !self.wait_for_restart_delay(delay).await? {
-            return Ok(());
-        }
-
-        let Some(failing_child) = self.children.get(failing_key) else {
-            return Ok(());
-        };
-        if failing_child.instance != failing_instance
-            || failing_child.membership != MembershipState::Active
-        {
-            return Ok(());
-        }
-        debug!(
-            "restarting child group after exit from {}",
-            failing_child.id
-        );
-        // Drain the old generation completely before creating a fresh group
-        // token so `OneForAll` restarts never overlap old and new tasks.
-        let completed = self.drain_for_group_restart().await?;
-        for classified in completed {
-            if !self.current_child_matches(
-                classified.key,
-                classified.instance,
-                classified.generation,
-            ) {
-                continue;
-            }
-            Box::pin(self.apply_drained_completion_policy(classified)).await?;
-        }
-        if self.pending_exit.is_some() {
-            return Ok(());
-        }
-        self.group_token = CancellationToken::new();
-        self.restart_epoch = self.restart_epoch.saturating_add(1);
-        let restart_epoch = self.restart_epoch;
-        let keys = self.child_order.clone();
-        for key in keys {
-            if self.should_skip_group_respawn(key) {
-                continue;
-            }
-            let Some((ready, old_generation, new_generation)) =
-                Box::pin(self.spawn_child_for_start(key)).await?
-            else {
-                continue;
-            };
-            if self.restart_epoch != restart_epoch {
-                return Ok(());
-            }
-            if let Some(old_generation) = old_generation {
-                self.send_restart_event(key, old_generation, new_generation);
-            }
-            if !ready && self.children.contains(key) {
-                break;
-            }
-        }
+        self.restart_group(failing_key, true).await?;
         Ok(())
     }
 
@@ -1320,73 +1255,7 @@ impl SupervisorRuntime {
         &mut self,
         failing_key: ChildKey,
     ) -> Result<(), SupervisorError> {
-        let failing_instance = self.children[failing_key].instance;
-        let delay = self.schedule_restart(failing_key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[failing_key].id.clone(),
-            generation: self.children[failing_key].runtime.generation,
-            delay,
-        });
-        if !self.wait_for_restart_delay(delay).await? {
-            return Ok(());
-        }
-
-        let Some(failing_child) = self.children.get(failing_key) else {
-            return Ok(());
-        };
-        if failing_child.instance != failing_instance
-            || failing_child.membership != MembershipState::Active
-        {
-            return Ok(());
-        }
-
-        let Some(failing_position) = self.child_order.iter().position(|&key| key == failing_key)
-        else {
-            return Ok(());
-        };
-        let keys = self.child_order[failing_position..].to_vec();
-        debug!(
-            "restarting child suffix after exit from {}",
-            failing_child.id
-        );
-        let deferred = self.drain_for_rest_for_one_restart(&keys).await?;
-        let (completed_in_suffix, deferred): (Vec<_>, Vec<_>) = deferred
-            .into_iter()
-            .partition(|classified| keys.contains(&classified.key));
-        for classified in completed_in_suffix {
-            if !self.current_child_matches(
-                classified.key,
-                classified.instance,
-                classified.generation,
-            ) {
-                continue;
-            }
-            Box::pin(self.apply_drained_completion_policy(classified)).await?;
-        }
-        if self.pending_exit.is_some() {
-            return Ok(());
-        }
-        self.restart_epoch = self.restart_epoch.saturating_add(1);
-        let restart_epoch = self.restart_epoch;
-        for key in keys {
-            if self.should_skip_group_respawn(key) {
-                continue;
-            }
-            let Some((ready, old_generation, new_generation)) =
-                Box::pin(self.spawn_child_for_start(key)).await?
-            else {
-                continue;
-            };
-            if self.restart_epoch != restart_epoch {
-                break;
-            }
-            if let Some(old_generation) = old_generation {
-                self.send_restart_event(key, old_generation, new_generation);
-            }
-            if !ready && self.children.contains(key) {
-                break;
-            }
-        }
+        let deferred = self.restart_group(failing_key, false).await?;
         for classified in deferred {
             if self.pending_exit.is_some() {
                 break;
@@ -1404,6 +1273,89 @@ impl SupervisorRuntime {
             Box::pin(self.apply_exit_policy(classified)).await?;
         }
         Ok(())
+    }
+
+    async fn begin_restart(
+        &mut self,
+        key: ChildKey,
+    ) -> Result<Option<RestartPermit>, SupervisorError> {
+        let restart_instance = self.children[key].instance;
+        let previous_generation = self.children[key].runtime.generation;
+        let delay = self.schedule_restart(key)?;
+        self.send_event(SupervisorEvent::ChildRestartScheduled {
+            id: self.children[key].id.clone(),
+            generation: previous_generation,
+            delay,
+        });
+        if !self.wait_for_restart_delay(delay).await? {
+            return Ok(None);
+        }
+        let Some(entry) = self.children.get(key) else {
+            return Ok(None);
+        };
+        if entry.instance != restart_instance || entry.membership != MembershipState::Active {
+            return Ok(None);
+        }
+        Ok(Some(RestartPermit {
+            previous_generation,
+        }))
+    }
+
+    async fn restart_group(
+        &mut self,
+        failing_key: ChildKey,
+        fresh_group_token: bool,
+    ) -> Result<Vec<ClassifiedExit>, SupervisorError> {
+        if self.begin_restart(failing_key).await?.is_none() {
+            return Ok(Vec::new());
+        }
+        let keys = if fresh_group_token {
+            self.child_order.clone()
+        } else {
+            let Some(failing_position) =
+                self.child_order.iter().position(|&key| key == failing_key)
+            else {
+                return Ok(Vec::new());
+            };
+            self.child_order[failing_position..].to_vec()
+        };
+        let failing_id = self.children[failing_key].id.clone();
+        if fresh_group_token {
+            debug!("restarting child group after exit from {failing_id}");
+        } else {
+            debug!("restarting child suffix after exit from {failing_id}");
+        }
+
+        // OneForAll drains the old generation completely before creating a
+        // fresh group token, so old and new tasks never overlap. RestForOne
+        // cancels and drains only the selected suffix.
+        let completed = if fresh_group_token {
+            self.drain_for_group_restart().await?
+        } else {
+            self.drain_for_rest_for_one_restart(&keys).await?
+        };
+        let (completed_in_scope, deferred): (Vec<_>, Vec<_>) = completed
+            .into_iter()
+            .partition(|classified| keys.contains(&classified.key));
+        for classified in completed_in_scope {
+            if !self.current_child_matches(
+                classified.key,
+                classified.instance,
+                classified.generation,
+            ) {
+                continue;
+            }
+            Box::pin(self.apply_drained_completion_policy(classified)).await?;
+        }
+        if self.pending_exit.is_some() {
+            return Ok(deferred);
+        }
+        if fresh_group_token {
+            self.group_token = CancellationToken::new();
+        }
+        self.restart_epoch = self.restart_epoch.saturating_add(1);
+        let _ = self.respawn_sequence(keys, true).await?;
+        Ok(deferred)
     }
 
     fn schedule_restart(&mut self, key: ChildKey) -> Result<Duration, SupervisorError> {
@@ -1666,6 +1618,10 @@ pub(crate) struct ClassifiedExit {
     instance: u64,
     pub(crate) generation: u64,
     pub(crate) status: ExitStatus,
+}
+
+struct RestartPermit {
+    previous_generation: u64,
 }
 
 /// Why the supervisor is draining its join set.
