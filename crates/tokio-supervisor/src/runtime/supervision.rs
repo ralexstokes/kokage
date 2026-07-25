@@ -2220,7 +2220,6 @@ mod tests {
     #[tokio::test]
     async fn gated_group_restarts_emit_each_generation_before_readiness() {
         let supervisor = SupervisorBuilder::new()
-            .start_mode(StartMode::Sequential)
             .child(
                 ChildSpec::new("gated", |ctx| async move {
                     ctx.shutdown_token().cancelled().await;
