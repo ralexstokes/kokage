@@ -19,7 +19,7 @@ struct Printer;
 impl Actor for Printer {
     type Msg = Order;
 
-    async fn handle(&mut self, order: Order, _ctx: &ActorContext<Order>) -> ActorResult {
+    async fn handle(&mut self, order: Order, _ctx: &mut ActorContext<Order>) -> ActorResult {
         println!("{} x {}", order.quantity, order.item);
         Ok(Continue)
     }

@@ -22,7 +22,11 @@ pub struct Journal {
 impl Actor for Journal {
     type Msg = JournalMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             JournalMsg::Append { chat, entry, reply } => {
                 let duplicate = matches!(

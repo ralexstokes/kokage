@@ -240,7 +240,11 @@ impl Router {
 impl Actor for Router {
     type Msg = RouterMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             RouterMsg::UserMessage {
                 envelope,

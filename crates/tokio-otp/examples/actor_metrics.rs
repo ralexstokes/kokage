@@ -19,7 +19,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: &'static str,
-        _ctx: &ActorContext<&'static str>,
+        _ctx: &mut ActorContext<&'static str>,
     ) -> ActorResult {
         println!("processing `{message}`");
         self.completed.send(()).expect("receiver alive");

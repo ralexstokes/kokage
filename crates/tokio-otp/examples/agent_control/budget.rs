@@ -24,7 +24,11 @@ impl Budget {
 impl Actor for Budget {
     type Msg = BudgetMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             BudgetMsg::Charge { chat, tokens } => {
                 *self.report.by_chat.entry(chat).or_default() += tokens;

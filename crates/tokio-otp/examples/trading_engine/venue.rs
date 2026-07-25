@@ -197,12 +197,12 @@ impl ActorFactory for VenueFeedSpec {
 impl Actor for VenueFeed {
     type Msg = FeedMsg;
 
-    async fn on_start(&mut self, _ctx: &ActorContext<FeedMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut ActorContext<FeedMsg>) -> ActorResult {
         self.exchange.open_feed_session(self.venue);
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: FeedMsg, _ctx: &ActorContext<FeedMsg>) -> ActorResult {
+    async fn handle(&mut self, message: FeedMsg, _ctx: &mut ActorContext<FeedMsg>) -> ActorResult {
         let started = Instant::now();
         match message {
             FeedMsg::Tick(snapshot) => {
@@ -280,7 +280,7 @@ impl ActorFactory for VenueGatewaySpec {
 impl Actor for VenueGateway {
     type Msg = GatewayMsg;
 
-    async fn on_start(&mut self, _ctx: &ActorContext<GatewayMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut ActorContext<GatewayMsg>) -> ActorResult {
         // Stalled replies belong to the actor session. A restart drops them,
         // allowing abandoned callers to observe the incarnation boundary.
         self.stalled_replies
@@ -291,7 +291,11 @@ impl Actor for VenueGateway {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: GatewayMsg, ctx: &ActorContext<GatewayMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: GatewayMsg,
+        ctx: &mut ActorContext<GatewayMsg>,
+    ) -> ActorResult {
         let started = Instant::now();
         match message {
             GatewayMsg::Place {

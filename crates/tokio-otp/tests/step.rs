@@ -28,7 +28,7 @@ struct Outcomes {
 impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
-    async fn on_start(&mut self, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
         ctx.step(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
         ctx.step(
             Duration::from_millis(10),
@@ -50,7 +50,11 @@ impl Actor for Outcomes {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         self.observed.send(message).unwrap();
         Ok(Continue)
     }
@@ -150,7 +154,11 @@ impl Drop for ReleaseOnDrop {
 impl Actor for StaleActor {
     type Msg = StaleMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             StaleMsg::Start => {
                 assert_eq!(self.incarnation, 0);
@@ -229,7 +237,11 @@ struct AbortActor {
 impl Actor for AbortActor {
     type Msg = AbortMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             AbortMsg::Start => {
                 let handle = ctx.step(Duration::from_secs(1), pending::<()>(), |_| AbortMsg::Done);
@@ -302,7 +314,11 @@ struct ShutdownActor {
 impl Actor for ShutdownActor {
     type Msg = DrainMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             DrainMsg::Start => {
                 let release = self.release.clone();
@@ -401,7 +417,11 @@ struct BackpressureActor {
 impl Actor for BackpressureActor {
     type Msg = BackpressureMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             BackpressureMsg::Start => {
                 let release = self.step_release.clone();
@@ -519,7 +539,11 @@ struct DeadlineDrainActor {
 impl Actor for DeadlineDrainActor {
     type Msg = DeadlineDrainMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             DeadlineDrainMsg::Start => {
                 ctx.step(

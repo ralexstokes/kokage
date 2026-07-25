@@ -27,7 +27,11 @@ impl Outbound {
 impl Actor for Outbound {
     type Msg = OutboundMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         match message {
             OutboundMsg::Reply { chat, text } | OutboundMsg::Notice { chat, text } => {
                 self.chat.deliver_reply(chat, text);
@@ -55,7 +59,11 @@ impl Progress {
 impl Actor for Progress {
     type Msg = ProgressMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
         let (chat, line) = match message {
             ProgressMsg::Delta { chat, line } => (chat, line),
             ProgressMsg::Typing { chat } => (chat, "typing…".to_owned()),

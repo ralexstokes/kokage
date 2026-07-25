@@ -59,7 +59,7 @@ impl Actor for Frontend {
     async fn handle(
         &mut self,
         message: FrontendMsg,
-        _ctx: &ActorContext<FrontendMsg>,
+        _ctx: &mut ActorContext<FrontendMsg>,
     ) -> ActorResult {
         match message {
             FrontendMsg::Feed(line) => self.parser.send(ParserMsg(line)).await?,
@@ -78,7 +78,11 @@ struct Parser {
 impl Actor for Parser {
     type Msg = ParserMsg;
 
-    async fn handle(&mut self, message: ParserMsg, _ctx: &ActorContext<ParserMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: ParserMsg,
+        _ctx: &mut ActorContext<ParserMsg>,
+    ) -> ActorResult {
         self.sink.send(SinkMsg(message.0.to_uppercase())).await?;
         self.frontend.send(FrontendMsg::Ack).await?;
         Ok(Continue)
@@ -93,7 +97,7 @@ struct Sink {
 impl Actor for Sink {
     type Msg = SinkMsg;
 
-    async fn handle(&mut self, message: SinkMsg, _ctx: &ActorContext<SinkMsg>) -> ActorResult {
+    async fn handle(&mut self, message: SinkMsg, _ctx: &mut ActorContext<SinkMsg>) -> ActorResult {
         self.out.send(message.0).expect("test receiver alive");
         Ok(Continue)
     }

@@ -335,7 +335,7 @@ impl Runtime {
     /// impl Actor for Worker {
     ///     type Msg = ();
     ///
-    ///     async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    ///     async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
     ///         Ok(Continue)
     ///     }
     /// }
@@ -387,7 +387,7 @@ impl Runtime {
     /// impl Actor for Worker {
     ///     type Msg = ();
     ///
-    ///     async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    ///     async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
     ///         Ok(Continue)
     ///     }
     /// }

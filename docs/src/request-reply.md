@@ -123,7 +123,7 @@ impl Actor for Router {
     async fn handle(
         &mut self,
         message: RouterMsg,
-        ctx: &ActorContext<RouterMsg>,
+        ctx: &mut ActorContext<RouterMsg>,
     ) -> ActorResult {
         match message {
             RouterMsg::Submit { venue, order, reply } => {

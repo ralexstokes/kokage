@@ -22,7 +22,7 @@ impl Actor for Frontend {
     async fn handle(
         &mut self,
         message: FrontendMsg,
-        _ctx: &ActorContext<FrontendMsg>,
+        _ctx: &mut ActorContext<FrontendMsg>,
     ) -> ActorResult {
         match message {
             FrontendMsg::SetRushPress(rush) => self.rush = Some(rush),
@@ -46,7 +46,7 @@ struct RushPress {
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &ActorContext<String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
         self.observed.send(order).expect("receiver alive");
         Ok(Continue)
     }

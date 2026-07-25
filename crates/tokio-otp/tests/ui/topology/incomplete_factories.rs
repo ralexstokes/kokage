@@ -5,7 +5,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

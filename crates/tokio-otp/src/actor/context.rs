@@ -3,7 +3,7 @@ use std::{
     fmt,
     future::Future,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -478,10 +478,10 @@ pub struct ActorContext<M> {
     pub(crate) shutdown: CancellationToken,
     pub(crate) observability: GraphObservability,
     pub(crate) timers: ActorTimers,
-    pub(crate) state_timeout: Mutex<Option<CancellationHandle>>,
+    pub(crate) state_timeout: Option<CancellationHandle>,
     pub(crate) monitors: Arc<ActorMonitors>,
-    pub(crate) ready: Mutex<Option<oneshot::Sender<()>>>,
-    pub(crate) continuations: Mutex<VecDeque<M>>,
+    pub(crate) ready: Option<oneshot::Sender<()>>,
+    pub(crate) continuations: VecDeque<M>,
     pub(crate) steps: ActorSteps,
 }
 
@@ -492,22 +492,14 @@ impl<M: Send + 'static> ActorContext<M> {
     /// This is only needed when `RawActor::readiness_gated` is overridden to
     /// return `true`. Handler-style [`Actor`](crate::Actor) implementations
     /// report readiness automatically after `on_start` succeeds.
-    pub fn mark_ready(&self) {
-        if let Some(ready) = self
-            .ready
-            .lock()
-            .expect("actor ready signal poisoned")
-            .take()
-        {
+    pub fn mark_ready(&mut self) {
+        if let Some(ready) = self.ready.take() {
             let _ = ready.send(());
         }
     }
 
-    pub(crate) fn take_continuation(&self) -> Option<M> {
-        self.continuations
-            .lock()
-            .expect("actor continuation queue poisoned")
-            .pop_front()
+    pub(crate) fn take_continuation(&mut self) -> Option<M> {
+        self.continuations.pop_front()
     }
 
     /// Queues initialization follow-up work as the actor's next message.
@@ -518,11 +510,8 @@ impl<M: Send + 'static> ActorContext<M> {
     /// readiness-critical initialization path. Continuations count as
     /// received messages in [`ActorStats`](crate::ActorStats), but not as
     /// externally accepted mailbox messages.
-    pub fn continue_with(&self, message: M) {
-        self.continuations
-            .lock()
-            .expect("actor continuation queue poisoned")
-            .push_back(message);
+    pub fn continue_with(&mut self, message: M) {
+        self.continuations.push_back(message);
     }
 
     /// Runs a bounded future and substitutes `fallback` when its deadline
@@ -778,14 +767,10 @@ impl<M: Send + 'static> ActorContext<M> {
     /// clearing the slot cancels its token even if it already fired, so a
     /// retained handle will then report [`CancellationHandle::is_cancelled`]
     /// as `true`.
-    pub fn state_timeout(&self, message: M, delay: Duration) -> CancellationHandle {
+    pub fn state_timeout(&mut self, message: M, delay: Duration) -> CancellationHandle {
         let cancellation = self.timers.child_token();
         let timer = CancellationHandle::new(cancellation.clone());
-        let previous = self
-            .state_timeout
-            .lock()
-            .expect("state timeout lock poisoned")
-            .replace(timer.clone());
+        let previous = self.state_timeout.replace(timer.clone());
         if let Some(previous) = previous {
             previous.cancel();
         }
@@ -798,12 +783,8 @@ impl<M: Send + 'static> ActorContext<M> {
     ///
     /// Call this when entering a state that has no timeout. A timeout message
     /// already accepted by the mailbox cannot be retracted.
-    pub fn clear_state_timeout(&self) {
-        let timeout = self
-            .state_timeout
-            .lock()
-            .expect("state timeout lock poisoned")
-            .take();
+    pub fn clear_state_timeout(&mut self) {
+        let timeout = self.state_timeout.take();
         if let Some(timeout) = timeout {
             timeout.cancel();
         }

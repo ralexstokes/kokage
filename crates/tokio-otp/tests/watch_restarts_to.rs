@@ -18,7 +18,7 @@ struct Sink {
 impl Actor for Sink {
     type Msg = u64;
 
-    async fn handle(&mut self, count: u64, _ctx: &ActorContext<u64>) -> ActorResult {
+    async fn handle(&mut self, count: u64, _ctx: &mut ActorContext<u64>) -> ActorResult {
         if count == 0 {
             return Err(io::Error::other("sink crash requested").into());
         }
@@ -32,7 +32,7 @@ struct Crasher;
 impl Actor for Crasher {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
         Err(io::Error::other("crash requested").into())
     }
 }
@@ -109,7 +109,7 @@ impl Actor for BlockingSink {
     async fn handle(
         &mut self,
         message: BlockingSinkMsg,
-        _ctx: &ActorContext<BlockingSinkMsg>,
+        _ctx: &mut ActorContext<BlockingSinkMsg>,
     ) -> ActorResult {
         match message {
             BlockingSinkMsg::Block => {

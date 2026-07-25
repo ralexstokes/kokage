@@ -320,14 +320,14 @@ struct GatedDrainActor {
 impl Actor for GatedDrainActor {
     type Msg = u64;
 
-    async fn handle(&mut self, message: u64, _ctx: &ActorContext<u64>) -> ActorResult {
+    async fn handle(&mut self, message: u64, _ctx: &mut ActorContext<u64>) -> ActorResult {
         self.received
             .send(message)
             .expect("test receives drained message");
         Ok(Continue)
     }
 
-    async fn on_start(&mut self, _ctx: &ActorContext<u64>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut ActorContext<u64>) -> ActorResult {
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         Ok(Continue)

@@ -29,7 +29,7 @@ impl Actor for FrontDesk {
     async fn handle(
         &mut self,
         message: FrontDeskMsg,
-        _ctx: &ActorContext<FrontDeskMsg>,
+        _ctx: &mut ActorContext<FrontDeskMsg>,
     ) -> ActorResult {
         match message {
             FrontDeskMsg::SetRushPress(rush) => self.rush = Some(rush),
@@ -50,7 +50,7 @@ struct RushPress;
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &ActorContext<String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
         println!("RUSH printed {order}");
         Ok(Continue)
     }

@@ -30,7 +30,11 @@ impl Health {
 impl Actor for Health {
     type Msg = HealthMsg;
 
-    async fn handle(&mut self, message: HealthMsg, _ctx: &ActorContext<HealthMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: HealthMsg,
+        _ctx: &mut ActorContext<HealthMsg>,
+    ) -> ActorResult {
         match message {
             HealthMsg::RestartsObserved { total } => {
                 let count = total.saturating_sub(self.observed_restart_total);
