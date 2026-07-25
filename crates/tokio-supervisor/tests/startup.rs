@@ -388,6 +388,83 @@ async fn nested_supervisor_gates_later_parent_siblings() {
     handle.shutdown_and_wait().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nested_traffic_does_not_starve_sequential_readiness() {
+    let noisy_attempts = Arc::new(AtomicUsize::new(0));
+    let gated_started = Arc::new(Notify::new());
+    let release_gated = Arc::new(Notify::new());
+    let later_started = Arc::new(Notify::new());
+
+    let mut root = SupervisorBuilder::new()
+        .start_mode(StartMode::Sequential)
+        .event_channel_capacity(1_024);
+    for index in 0..4 {
+        let attempts = Arc::clone(&noisy_attempts);
+        let nested = SupervisorBuilder::new()
+            .restart_intensity(RestartIntensity::new(100_000, Duration::from_secs(60)))
+            .child(
+                ChildSpec::new("flapping", move |_ctx| {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    async move { Err(std::io::Error::other("emit another nested update").into()) }
+                })
+                .restart(RestartPolicy::OnFailure),
+            )
+            .build()
+            .unwrap();
+        root = root.supervisor(format!("noisy-{index}"), nested);
+    }
+
+    let gated = ChildSpec::new("gated", {
+        let gated_started = Arc::clone(&gated_started);
+        let release_gated = Arc::clone(&release_gated);
+        move |ctx| {
+            let gated_started = Arc::clone(&gated_started);
+            let release_gated = Arc::clone(&release_gated);
+            async move {
+                gated_started.notify_one();
+                release_gated.notified().await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .wait_for_ready();
+    let later = ChildSpec::new("later", {
+        let later_started = Arc::clone(&later_started);
+        move |ctx| {
+            let later_started = Arc::clone(&later_started);
+            async move {
+                later_started.notify_one();
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }
+    })
+    .wait_for_ready();
+
+    let handle = root.child(gated).child(later).build().unwrap().spawn();
+    tokio::time::timeout(Duration::from_secs(2), gated_started.notified())
+        .await
+        .expect("parent should reach the readiness-gated child");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while noisy_attempts.load(Ordering::SeqCst) < 200 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("nested children should continuously emit lifecycle updates");
+
+    release_gated.notify_one();
+    tokio::time::timeout(Duration::from_millis(250), later_started.notified())
+        .await
+        .expect("queued readiness must preempt continuous nested traffic");
+
+    handle.wait_started().await.unwrap();
+    handle.shutdown_and_wait().await.unwrap();
+}
+
 #[tokio::test]
 async fn rest_for_one_restart_preserves_sequential_readiness_order() {
     let order = Arc::new(Mutex::new(Vec::new()));
