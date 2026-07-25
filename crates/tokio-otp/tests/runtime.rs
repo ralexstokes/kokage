@@ -375,7 +375,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 }
 
 #[tokio::test]
-async fn duplicate_dynamic_subtree_id_leaves_registry_unchanged() {
+async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
     let root = Runtime::builder().build().expect("runtime builds").spawn();
     let first = root
         .add_subtree("workers", Runtime::builder())
@@ -497,7 +497,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
             .actor_stats()
             .iter()
             .all(|stats| stats.actor_id != "worker"),
-        "the stale registry entry is filtered by its retained membership epoch"
+        "the replacement membership does not carry the old actor attachment"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
@@ -566,7 +566,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
             .actor_stats()
             .iter()
             .all(|stats| stats.actor_id != "dynamic-worker"),
-        "the old dynamic registry entry must not attach to a reused local epoch"
+        "the replacement child must not inherit the old actor attachment"
     );
 
     handle

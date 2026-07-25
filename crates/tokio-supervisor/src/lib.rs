@@ -189,6 +189,7 @@
 //! - `examples/tracing.rs` — structured logging output.
 //! - `examples/metrics.rs` — Prometheus metrics (requires `--features metrics`).
 
+mod attachment;
 mod builder;
 mod child;
 mod context;
@@ -205,6 +206,7 @@ mod snapshot;
 mod strategy;
 mod supervisor;
 
+pub use attachment::{AttachedChild, AttachedChildIdentity};
 pub use builder::{StartMode, SupervisorBuilder};
 pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
 pub use context::{ChildContext, SupervisorToken};

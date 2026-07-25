@@ -15,11 +15,14 @@ use tracing::{debug, trace};
 
 use crate::{
     builder::StartMode,
-    child::{ChildDefinition, ChildKind, ChildReadiness, SupervisorSpec},
+    child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment, SupervisorSpec},
     context::ChildReady,
     error::{ControlError, SupervisorError},
     event::{ExitStatusView, NestedEventNotification, SupervisorEvent},
-    handle::{NestedChannels, StableSupervisorChannels, SupervisorCommand},
+    handle::{
+        AttachedChildState, AttachedChildrenState, NestedChannels, StableSupervisorChannels,
+        SupervisorCommand,
+    },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     shutdown::AutoShutdown,
@@ -83,6 +86,7 @@ pub(crate) struct ChildEntry {
     pub(crate) formatted_path: String,
     /// Monotonic membership instance. See struct-level docs.
     pub(crate) instance: u64,
+    pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) runtime: ChildRuntime,
     last_exit: Option<ExitStatusView>,
     pub(crate) nested_snapshot: Option<SupervisorSnapshot>,
@@ -104,6 +108,7 @@ impl ChildEntry {
             id,
             formatted_path,
             instance,
+            attachment: definition.attachment.clone(),
             runtime: ChildRuntime::new(definition, default_restart_intensity),
             last_exit: None,
             nested_snapshot: None,
@@ -224,6 +229,7 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) next_child_instance: u64,
     pub(crate) events: broadcast::Sender<SupervisorEvent>,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
+    pub(crate) attached_children: AttachedChildrenState,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
     pub(crate) nested_channels: NestedChannels,
@@ -250,6 +256,7 @@ impl SupervisorRuntime {
         shutdown_rx: watch::Receiver<bool>,
         events: broadcast::Sender<SupervisorEvent>,
         snapshots: watch::Sender<SupervisorSnapshot>,
+        attached_children: AttachedChildrenState,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         nested_channels: NestedChannels,
         path_prefix: Vec<String>,
@@ -321,6 +328,7 @@ impl SupervisorRuntime {
             next_child_instance,
             events,
             snapshots,
+            attached_children,
             shutdown_rx,
             command_rx,
             nested_channels,
@@ -1458,11 +1466,34 @@ impl SupervisorRuntime {
     }
 
     pub(crate) fn publish_snapshot(&self) {
+        *self
+            .attached_children
+            .lock()
+            .expect("attached child view poisoned") = self.attached_children_view();
         let snapshot = self.snapshot_view();
         let _ = self.snapshots.send_replace(snapshot.clone());
         if let Some(parent_link) = self.meta.parent_link.as_ref() {
             parent_link.publish_snapshot(snapshot);
         }
+    }
+
+    fn attached_children_view(&self) -> Vec<AttachedChildState> {
+        self.child_order
+            .iter()
+            .filter_map(|&key| self.children.get(key))
+            .map(|entry| AttachedChildState {
+                identity: crate::AttachedChildIdentity {
+                    id: entry.id.clone(),
+                    membership_epoch: entry.instance,
+                    generation: entry.runtime.generation,
+                },
+                attachment: entry.attachment.clone(),
+                supervisor: entry
+                    .nested_channels
+                    .as_ref()
+                    .map(|channels| channels.handle()),
+            })
+            .collect()
     }
 
     fn snapshot_view(&self) -> SupervisorSnapshot {

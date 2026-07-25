@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Weak},
 };
 
 use crate::{
@@ -10,227 +10,52 @@ use crate::{
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
-    ChildSpec, ControlError, RestartIntensity, RestartPolicy, RestartWatch, ShutdownPolicy,
-    Supervisor, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    AttachedChildIdentity, ChildSpec, ControlError, RestartIntensity, RestartPolicy, RestartWatch,
+    ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSpec,
 };
 use tokio_util::sync::CancellationToken;
 
-#[derive(Clone, Debug)]
-struct TrackedActor {
-    actor: RunnableActor,
-    membership_epoch: Option<u64>,
-    registration_path: Option<Vec<SupervisorPathSegment>>,
-}
-
-#[derive(Clone, Debug)]
-struct TrackedSubtree {
-    id: String,
-    state: Arc<ActorRuntimeState>,
-    membership_epoch: Option<u64>,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ActorRuntimeState {
     actor_factory: RunnableActorFactory,
-    actors: Arc<Mutex<Vec<TrackedActor>>>,
-    subtrees: Arc<Mutex<Vec<TrackedSubtree>>>,
 }
 
 impl ActorRuntimeState {
-    fn new(actor_factory: RunnableActorFactory, actors: Vec<RunnableActor>) -> Self {
+    pub(crate) fn new(actor_factory: RunnableActorFactory) -> Self {
+        Self { actor_factory }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeAttachment {
+    owner: Weak<ActorRuntimeState>,
+    kind: RuntimeAttachmentKind,
+}
+
+#[derive(Clone, Debug)]
+enum RuntimeAttachmentKind {
+    Actor(RunnableActor),
+    Subtree(Arc<ActorRuntimeState>),
+}
+
+impl RuntimeAttachment {
+    fn actor(owner: &Arc<ActorRuntimeState>, actor: RunnableActor) -> Self {
         Self {
-            actor_factory,
-            actors: Arc::new(Mutex::new(
-                actors
-                    .into_iter()
-                    .map(|actor| TrackedActor {
-                        actor,
-                        membership_epoch: None,
-                        registration_path: None,
-                    })
-                    .collect(),
-            )),
-            subtrees: Arc::new(Mutex::new(Vec::new())),
+            owner: Arc::downgrade(owner),
+            kind: RuntimeAttachmentKind::Actor(actor),
         }
     }
 
-    fn bind_initial_memberships(&self, supervisor: &SupervisorHandle) {
-        let snapshot = supervisor.snapshot();
-        let membership_epochs = snapshot
-            .children
-            .iter()
-            .map(|child| (child.id.as_str(), child.membership_epoch))
-            .collect::<HashMap<_, _>>();
-
-        self.actors
-            .lock()
-            .expect("actor stats lock poisoned")
-            .iter_mut()
-            .filter(|entry| entry.membership_epoch.is_none())
-            .for_each(|entry| {
-                entry.membership_epoch = membership_epochs.get(entry.actor.label()).copied();
-            });
-        let subtrees = self
-            .subtrees
-            .lock()
-            .expect("actor subtree lock poisoned")
-            .iter_mut()
-            .filter_map(|entry| {
-                if entry.membership_epoch.is_none() {
-                    entry.membership_epoch = membership_epochs.get(entry.id.as_str()).copied();
-                }
-                entry
-                    .membership_epoch
-                    .map(|_| (entry.id.clone(), Arc::clone(&entry.state)))
-            })
-            .collect::<Vec<_>>();
-        for (id, subtree) in subtrees {
-            if let Some(supervisor) = supervisor.supervisor(&id) {
-                subtree.bind_initial_memberships(&supervisor);
-            }
+    pub(crate) fn subtree(owner: &Arc<ActorRuntimeState>, state: Arc<ActorRuntimeState>) -> Self {
+        Self {
+            owner: Arc::downgrade(owner),
+            kind: RuntimeAttachmentKind::Subtree(state),
         }
     }
 
-    fn actor_stats(
-        &self,
-        supervisor: &SupervisorHandle,
-        supervisor_path: &[SupervisorPathSegment],
-        registration_path: &[SupervisorPathSegment],
-    ) -> Vec<ActorStats> {
-        let snapshot = supervisor.snapshot();
-        let child_identities = snapshot
-            .children
-            .iter()
-            .map(|child| {
-                (
-                    child.id.as_str(),
-                    (child.membership_epoch, child.generation),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
-        let mut stats = self
-            .actors
-            .lock()
-            .expect("actor stats lock poisoned")
-            .iter()
-            .filter_map(|entry| {
-                let membership_epoch = entry.membership_epoch?;
-                let (current_epoch, _) = child_identities.get(entry.actor.label())?;
-                if membership_epoch != *current_epoch {
-                    return None;
-                }
-                if entry
-                    .registration_path
-                    .as_ref()
-                    .is_some_and(|path| path != registration_path)
-                {
-                    return None;
-                }
-                let mut stats = entry.actor.stats();
-                stats.supervisor_path = Some(supervisor_path.to_vec());
-                stats.membership_epoch = Some(membership_epoch);
-                Some(stats)
-            })
-            .collect::<Vec<_>>();
-        let subtrees = self
-            .subtrees
-            .lock()
-            .expect("actor subtree lock poisoned")
-            .iter()
-            .filter_map(|entry| {
-                let membership_epoch = entry.membership_epoch?;
-                let (current_epoch, generation) = child_identities.get(entry.id.as_str())?;
-                (membership_epoch == *current_epoch).then(|| {
-                    (
-                        entry.id.clone(),
-                        Arc::clone(&entry.state),
-                        membership_epoch,
-                        *generation,
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        for (id, subtree, membership_epoch, generation) in subtrees {
-            if let Some(nested_supervisor) = supervisor.supervisor(&id) {
-                let mut path = supervisor_path.to_vec();
-                let segment = SupervisorPathSegment {
-                    id: id.clone(),
-                    membership_epoch,
-                    generation,
-                };
-                path.push(segment.clone());
-                let mut nested_registration_path = registration_path.to_vec();
-                nested_registration_path.push(segment);
-                let subtree_stats =
-                    subtree.actor_stats(&nested_supervisor, &path, &nested_registration_path);
-                let parent_unchanged = supervisor.snapshot().child(&id).is_some_and(|child| {
-                    (child.membership_epoch, child.generation) == (membership_epoch, generation)
-                });
-                if parent_unchanged {
-                    stats.extend(subtree_stats);
-                }
-            }
-        }
-        stats
-    }
-
-    fn record_actor(
-        &self,
-        actor: RunnableActor,
-        membership_epoch: u64,
-        registration_path: Vec<SupervisorPathSegment>,
-    ) {
-        let mut actors = self.actors.lock().expect("actor stats lock poisoned");
-        actors.retain(|existing| existing.actor.label() != actor.label());
-        actors.push(TrackedActor {
-            actor,
-            membership_epoch: Some(membership_epoch),
-            registration_path: Some(registration_path),
-        });
-    }
-
-    pub(crate) fn record_subtree(
-        &self,
-        id: String,
-        state: Arc<ActorRuntimeState>,
-        membership_epoch: Option<u64>,
-    ) {
-        let mut subtrees = self.subtrees.lock().expect("actor subtree lock poisoned");
-        subtrees.retain(|existing| existing.id != id);
-        subtrees.push(TrackedSubtree {
-            id,
-            state,
-            membership_epoch,
-        });
-    }
-
-    fn forget_actor(&self, label: &str) {
-        self.actors
-            .lock()
-            .expect("actor stats lock poisoned")
-            .retain(|entry| entry.actor.label() != label);
-    }
-
-    fn subtree(&self, id: &str, membership_epoch: u64) -> Option<Arc<ActorRuntimeState>> {
-        self.subtrees
-            .lock()
-            .expect("actor subtree lock poisoned")
-            .iter()
-            .find(|entry| entry.id == id && entry.membership_epoch == Some(membership_epoch))
-            .map(|entry| Arc::clone(&entry.state))
-    }
-
-    fn forget_subtree(&self, id: &str) {
-        self.subtrees
-            .lock()
-            .expect("actor subtree lock poisoned")
-            .retain(|entry| entry.id != id);
-    }
-
-    fn forget_child(&self, id: &str) {
-        self.forget_actor(id);
-        self.forget_subtree(id);
+    fn belongs_to(&self, owner: &Arc<ActorRuntimeState>) -> bool {
+        self.owner.ptr_eq(&Arc::downgrade(owner))
     }
 }
 
@@ -533,26 +358,12 @@ impl Runtime {
     pub fn new(supervisor: Supervisor) -> Self {
         Self {
             supervisor,
-            actors: Arc::new(ActorRuntimeState::new(
-                RunnableActorFactory::new(),
-                Vec::new(),
-            )),
+            actors: Arc::new(ActorRuntimeState::new(RunnableActorFactory::new())),
         }
     }
 
-    pub(crate) fn with_actor_tree(
-        supervisor: Supervisor,
-        actor_factory: RunnableActorFactory,
-        actors: Vec<RunnableActor>,
-    ) -> Self {
-        Self {
-            supervisor,
-            actors: Arc::new(ActorRuntimeState::new(actor_factory, actors)),
-        }
-    }
-
-    pub(crate) fn actor_state(&self) -> &ActorRuntimeState {
-        &self.actors
+    pub(crate) fn with_actor_tree(supervisor: Supervisor, actors: Arc<ActorRuntimeState>) -> Self {
+        Self { supervisor, actors }
     }
 
     pub(crate) fn into_parts(self) -> (Supervisor, Arc<ActorRuntimeState>) {
@@ -602,7 +413,6 @@ impl Runtime {
     /// Spawns the supervisor in the background and returns a combined handle.
     pub fn spawn(self) -> RuntimeHandle {
         let supervisor = self.supervisor.spawn();
-        self.actors.bind_initial_memberships(&supervisor);
         RuntimeHandle::new(supervisor, self.actors)
     }
 }
@@ -622,7 +432,6 @@ impl std::fmt::Debug for Runtime {
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
-    ancestors: Vec<(SupervisorHandle, String)>,
 }
 
 /// Errors returned when adding an actor-aware runtime subtree dynamically.
@@ -639,45 +448,15 @@ pub enum AddSubtreeError {
 
 impl RuntimeHandle {
     fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
-        Self {
-            supervisor,
-            actors,
-            ancestors: Vec::new(),
-        }
-    }
-
-    fn current_supervisor_path(&self) -> Option<Vec<SupervisorPathSegment>> {
-        let path = self
-            .ancestors
-            .iter()
-            .map(|(supervisor, id)| {
-                supervisor
-                    .snapshot()
-                    .child(id)
-                    .map(|child| SupervisorPathSegment {
-                        id: id.clone(),
-                        membership_epoch: child.membership_epoch,
-                        generation: child.generation,
-                    })
-            })
-            .collect::<Option<Vec<_>>>()?;
-        self.ancestors
-            .iter()
-            .zip(&path)
-            .all(|((supervisor, id), expected)| {
-                supervisor.snapshot().child(id).is_some_and(|child| {
-                    child.membership_epoch == expected.membership_epoch
-                        && child.generation == expected.generation
-                })
-            })
-            .then_some(path)
+        Self { supervisor, actors }
     }
 
     /// Returns a clone of the underlying supervisor handle.
     ///
     /// This is the explicit low-level escape hatch for raw supervisor
-    /// operations. Children and supervisors added through it are not tracked
-    /// by this runtime's actor registry and do not appear in [`actor_stats`](Self::actor_stats).
+    /// operations. Children and supervisors added through it do not carry this
+    /// runtime's private actor attachment and do not appear in
+    /// [`actor_stats`](Self::actor_stats).
     pub fn supervisor_handle(&self) -> SupervisorHandle {
         self.supervisor.clone()
     }
@@ -696,8 +475,9 @@ impl RuntimeHandle {
     ///
     /// The returned handle can add actors or further subtrees, and recursive
     /// [`actor_stats`](Self::actor_stats) include the new subtree. Removing the
-    /// child from this handle forgets its registry node; retained subtree
-    /// handles then fail control operations with [`ControlError::Unavailable`].
+    /// child detaches its actor metadata with the supervisor membership;
+    /// retained subtree handles then fail control operations with
+    /// [`ControlError::Unavailable`].
     ///
     /// If the subtree itself restarts, the static graph supplied by `builder`
     /// is recreated, while children added later through the returned handle
@@ -714,28 +494,16 @@ impl RuntimeHandle {
     ) -> Result<RuntimeHandle, AddSubtreeError> {
         let id = id.into();
         let (nested_supervisor, nested_actors) = builder.build()?.into_parts();
-        let membership_epoch = self
-            .supervisor
-            .add_supervisor(id.clone(), nested_supervisor)
+        self.supervisor
+            .add_supervisor(
+                id.clone(),
+                SupervisorSpec::new(nested_supervisor).attachment(RuntimeAttachment::subtree(
+                    &self.actors,
+                    Arc::clone(&nested_actors),
+                )),
+            )
             .await?;
-        let nested_handle = self
-            .supervisor
-            .supervisor(&id)
-            .ok_or(ControlError::Unavailable)?;
-        self.actors.record_subtree(
-            id.clone(),
-            Arc::clone(&nested_actors),
-            Some(membership_epoch),
-        );
-        nested_actors.bind_initial_memberships(&nested_handle);
-
-        let mut ancestors = self.ancestors.clone();
-        ancestors.push((self.supervisor.clone(), id));
-        Ok(Self {
-            supervisor: nested_handle,
-            actors: nested_actors,
-            ancestors,
-        })
+        self.subtree(&id).ok_or(ControlError::Unavailable.into())
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -744,20 +512,24 @@ impl RuntimeHandle {
     /// A raw supervisor added through [`supervisor_handle`](Self::supervisor_handle)
     /// is intentionally outside this name-based runtime view.
     pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
-        let supervisor = self.supervisor.supervisor(id)?;
-        let membership_epoch = self
-            .supervisor
-            .snapshot()
-            .child(id)
-            .map(|child| child.membership_epoch)?;
-        let actors = self.actors.subtree(id, membership_epoch)?;
-        let mut ancestors = self.ancestors.clone();
-        ancestors.push((self.supervisor.clone(), id.to_owned()));
-        Some(Self {
-            supervisor,
-            actors,
-            ancestors,
-        })
+        self.supervisor
+            .attached_children::<RuntimeAttachment>()
+            .into_iter()
+            .find_map(|attached| {
+                let [identity] = attached.path() else {
+                    return None;
+                };
+                if identity.id != id || !attached.attachment().belongs_to(&self.actors) {
+                    return None;
+                }
+                let RuntimeAttachmentKind::Subtree(actors) = &attached.attachment().kind else {
+                    return None;
+                };
+                Some(Self::new(
+                    attached.supervisor()?.clone(),
+                    Arc::clone(actors),
+                ))
+            })
     }
 
     /// Adds a supervised runtime actor from an incarnation factory and returns
@@ -788,21 +560,15 @@ impl RuntimeHandle {
         (actor, actor_ref): (RunnableActor, ActorRef<M>),
         options: DynamicChildOptions,
     ) -> Result<ActorRef<M>, ControlError> {
-        let registration_path = self.current_supervisor_path();
         let child = actor_child_spec(
             actor.clone(),
+            &self.actors,
             options.restart,
             options.shutdown,
             options.restart_intensity,
             options.remove_on_exit,
         );
-        let membership_epoch = self.supervisor.add_child(child).await?;
-        if let Some(registration_path) =
-            registration_path.filter(|path| self.current_supervisor_path().as_ref() == Some(path))
-        {
-            self.actors
-                .record_actor(actor, membership_epoch, registration_path);
-        }
+        self.supervisor.add_child(child).await?;
 
         Ok(actor_ref)
     }
@@ -829,19 +595,7 @@ impl RuntimeHandle {
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        let id = id.into();
-        let result = self.supervisor.remove_child(id.clone()).await;
-        if result.is_ok()
-            || matches!(&result, Err(ControlError::ShutdownTimedOut(actor_id)) if actor_id == &id)
-        {
-            // Keep this eager cleanup even though `actor_stats` also
-            // reconciles against snapshots. It gives the caller immediate
-            // read-your-writes consistency, including timed-out removals
-            // whose child may still be visible as `Removing` while winding
-            // down.
-            self.actors.forget_child(&id);
-        }
-        result
+        self.supervisor.remove_child(id).await
     }
 
     /// Waits for the supervisor to stop.
@@ -895,16 +649,45 @@ impl RuntimeHandle {
     /// subtrees. This runtime's actors come first, followed recursively by each
     /// subtree in declaration order.
     ///
-    /// Samples are validated against the membership identity retained by each
-    /// registry entry. This excludes stale entries after raw child removal,
-    /// same-id replacement, or a subtree restart that drops incarnation-local
-    /// dynamic children.
+    /// Each sample is derived from the opaque actor attachment carried by the
+    /// supervisor's current child membership. This excludes stale actors after
+    /// raw child removal, same-id replacement, or a subtree restart that drops
+    /// incarnation-local dynamic children by construction.
     pub fn actor_stats(&self) -> Vec<ActorStats> {
-        let Some(registration_path) = self.current_supervisor_path() else {
-            return Vec::new();
-        };
-        self.actors
-            .actor_stats(&self.supervisor, &[], &registration_path)
+        let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
+        let mut stats = Vec::new();
+
+        for attached in self.supervisor.attached_children::<RuntimeAttachment>() {
+            let Some((child, supervisor_path)) = attached.path().split_last() else {
+                continue;
+            };
+            let Some(owner) = runtime_owners.get(supervisor_path) else {
+                continue;
+            };
+            let attachment = attached.attachment();
+            if !attachment.belongs_to(owner) {
+                continue;
+            }
+
+            match &attachment.kind {
+                RuntimeAttachmentKind::Actor(actor) => {
+                    let mut actor_stats = actor.stats();
+                    actor_stats.supervisor_path = Some(
+                        supervisor_path
+                            .iter()
+                            .map(supervisor_path_segment)
+                            .collect(),
+                    );
+                    actor_stats.membership_epoch = Some(child.membership_epoch);
+                    stats.push(actor_stats);
+                }
+                RuntimeAttachmentKind::Subtree(subtree) => {
+                    runtime_owners.insert(attached.path().to_vec(), Arc::clone(subtree));
+                }
+            }
+        }
+
+        stats
     }
 
     /// Returns a watch receiver that updates when the snapshot changes.
@@ -949,6 +732,7 @@ pub(crate) struct ActorOverrides {
 
 pub(crate) fn actor_children(
     graph: &crate::Graph,
+    owner: &Arc<ActorRuntimeState>,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
     overrides: &HashMap<String, ActorOverrides>,
@@ -961,6 +745,7 @@ pub(crate) fn actor_children(
             let actor_overrides = overrides.get(actor.label()).copied().unwrap_or_default();
             actor_child_spec(
                 actor,
+                owner,
                 actor_overrides.restart.unwrap_or(default_restart),
                 actor_overrides.shutdown.unwrap_or(default_shutdown),
                 actor_overrides.restart_intensity,
@@ -972,12 +757,14 @@ pub(crate) fn actor_children(
 
 pub(crate) fn actor_child_spec(
     actor: RunnableActor,
+    owner: &Arc<ActorRuntimeState>,
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
     restart_intensity: Option<RestartIntensity>,
     remove_on_exit: bool,
 ) -> ChildSpec {
     let actor_id = actor.label().to_owned();
+    let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let rebind = rebind_policy_for_restart(restart);
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
@@ -992,6 +779,7 @@ pub(crate) fn actor_child_spec(
                 .map_err(Into::into)
         }
     })
+    .attachment(attachment)
     .wait_for_ready()
     .restart(restart)
     .remove_on_exit(remove_on_exit)
@@ -1002,6 +790,14 @@ pub(crate) fn actor_child_spec(
     }
 
     child
+}
+
+fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSegment {
+    SupervisorPathSegment {
+        id: identity.id.clone(),
+        membership_epoch: identity.membership_epoch,
+        generation: identity.generation,
+    }
 }
 
 fn rebind_policy_for_restart(restart: RestartPolicy) -> RebindPolicy {
