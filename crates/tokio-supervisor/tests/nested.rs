@@ -583,11 +583,28 @@ async fn nested_handle_subscription_survives_parent_restart() {
         }
     }
 
-    let restart = handle
-        .monitor_restart("nested")
-        .expect("nested child should be monitorable");
+    let baseline = handle
+        .snapshot()
+        .child("nested")
+        .expect("nested child exists")
+        .generation;
+    let mut lifecycle = handle.watch_lifecycle();
     fail_first.notify_one();
-    assert_eq!(restart.await.expect("nested child should restart"), 1);
+    loop {
+        let event = lifecycle
+            .next()
+            .await
+            .expect("outer supervisor remains live");
+        if event.child_id == "nested"
+            && matches!(
+                event.kind,
+                tokio_supervisor::LifecycleEventKind::Started { generation }
+                    if generation > baseline
+            )
+        {
+            break;
+        }
+    }
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
 
     loop {

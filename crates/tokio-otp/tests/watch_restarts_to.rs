@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use std::{io, time::Duration};
 
 use std::sync::Arc;
@@ -7,8 +9,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder, MailboxMode,
-    RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder,
+    LifecycleEventKind, LifecycleWatch, MailboxMode, RestartPolicy, Runtime, RuntimeHandle,
+    prelude::Continue,
 };
 
 struct Sink {
@@ -70,15 +73,35 @@ async fn runtime_with_sink() -> (
 }
 
 async fn crash_once(handle: &RuntimeHandle, crasher: &ActorRef<()>) {
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("crasher")
-        .expect("crasher is a direct child");
+    let (lifecycle, baseline) = restart_observer(handle, "crasher");
     crasher.send(()).await.expect("crash request delivered");
-    timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("crasher restarted in time")
-        .expect("crasher restarted");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "crasher", baseline),
+    )
+    .await
+    .expect("crasher restarted in time");
+}
+
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+    let baseline = handle
+        .snapshot()
+        .child(id)
+        .unwrap_or_else(|| panic!("{id} is a direct child"))
+        .generation;
+    (handle.watch_lifecycle(), baseline)
+}
+
+async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) -> u64 {
+    loop {
+        let event = lifecycle.next().await.expect("runtime remains live");
+        if event.child_id == id
+            && let LifecycleEventKind::Started { generation } = event.kind
+            && generation > baseline
+        {
+            return generation;
+        }
+    }
 }
 
 async fn wait_until(mut predicate: impl FnMut() -> bool) {
@@ -183,16 +206,15 @@ async fn cancelling_restart_watch_stops_delivery() {
 async fn restart_watch_follows_target_restarts() {
     let (handle, sink, _crasher, mut observed) = runtime_with_sink().await;
     let watch = handle.watch_restarts_to(&sink, |count| count);
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("sink")
-        .expect("sink is a direct child");
+    let (lifecycle, baseline) = restart_observer(&handle, "sink");
 
     sink.send(0).await.expect("sink crash request delivered");
-    timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("sink restarted in time")
-        .expect("sink restarted");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "sink", baseline),
+    )
+    .await
+    .expect("sink restarted in time");
     assert_eq!(
         timeout(Duration::from_secs(1), observed.recv())
             .await
@@ -310,15 +332,14 @@ async fn latest_total_is_resent_after_target_restart() {
     let watch = handle.watch_restarts_to(&sink, BlockingSinkMsg::RestartTotal);
     crash_once(&handle, &crasher).await;
     wait_until(|| sink.stats().messages_accepted >= 2).await;
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("sink")
-        .expect("sink is monitored");
+    let (lifecycle, baseline) = restart_observer(&handle, "sink");
     release.notify_one();
-    timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("sink restarted in time")
-        .expect("sink restarted");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "sink", baseline),
+    )
+    .await
+    .expect("sink restarted in time");
 
     let restored = timeout(Duration::from_secs(1), async {
         loop {
@@ -384,18 +405,17 @@ async fn watched_supervisor_termination_cancels_backpressured_delivery() {
     }
 
     let watch = watched.watch_restarts_to(&sink, BlockingSinkMsg::RestartTotal);
-    let restarted = watched
-        .supervisor_handle()
-        .monitor_restart("crasher")
-        .expect("nested child monitored");
+    let (lifecycle, baseline) = restart_observer(&watched, "crasher");
     nested_crasher
         .send(())
         .await
         .expect("crash request delivered");
-    timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("nested child restarted in time")
-        .expect("nested child restarted");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "crasher", baseline),
+    )
+    .await
+    .expect("nested child restarted in time");
     handle
         .remove_child("watched")
         .await

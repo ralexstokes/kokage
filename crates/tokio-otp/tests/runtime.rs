@@ -1,5 +1,4 @@
 use std::{
-    future::IntoFuture,
     io,
     marker::PhantomData,
     sync::{
@@ -15,7 +14,8 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DynamicActorOptions, GraphBuilder, RawActor, Reply, Runtime, SendError, prelude::Continue,
+    DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch, RawActor, Reply,
+    Runtime, RuntimeHandle, SendError, prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -91,6 +91,27 @@ where
         .expect("runtime builds");
 
     (runtime, actor_ref)
+}
+
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+    let baseline = handle
+        .snapshot()
+        .child(id)
+        .unwrap_or_else(|| panic!("{id} is a direct child"))
+        .generation;
+    (handle.watch_lifecycle(), baseline)
+}
+
+async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) -> u64 {
+    loop {
+        let event = lifecycle.next().await.expect("runtime remains live");
+        if event.child_id == id
+            && let LifecycleEventKind::Started { generation } = event.kind
+            && generation > baseline
+        {
+            return generation;
+        }
+    }
 }
 
 #[tokio::test]
@@ -564,15 +585,14 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         }
     });
 
-    let restart = handle
-        .supervisor_handle()
-        .monitor_restart("workers")
-        .expect("subtree child is known");
+    let (lifecycle, baseline) = restart_observer(&handle, "workers");
     static_ref.send(()).await.expect("failure triggered");
-    timeout(Duration::from_secs(1), restart.into_future())
-        .await
-        .expect("subtree restarted within timeout")
-        .expect("subtree restart succeeded");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "workers", baseline),
+    )
+    .await
+    .expect("subtree restarted within timeout");
 
     let stats = handle.actor_stats();
     assert_eq!(stats.len(), 1);
@@ -634,15 +654,14 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
         .expect("dynamic actor added");
     assert_eq!(root.actor_stats().len(), 2);
 
-    let restart = root
-        .supervisor_handle()
-        .monitor_restart("workers")
-        .expect("subtree is monitored");
+    let (lifecycle, baseline) = restart_observer(&root, "workers");
     static_ref.send(()).await.expect("failure triggered");
-    timeout(Duration::from_secs(1), restart.into_future())
-        .await
-        .expect("subtree restarted within timeout")
-        .expect("subtree restart succeeded");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "workers", baseline),
+    )
+    .await
+    .expect("subtree restarted within timeout");
 
     let stats = root.actor_stats();
     assert_eq!(stats.len(), 1);
@@ -685,15 +704,14 @@ async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
             .any(|stats| stats.actor_id == "worker")
     );
 
-    let restart = root
-        .supervisor_handle()
-        .monitor_restart("parent")
-        .expect("parent subtree is monitored");
+    let (lifecycle, baseline) = restart_observer(&root, "parent");
     fuse.send(()).await.expect("parent failure triggered");
-    timeout(Duration::from_secs(1), restart.into_future())
-        .await
-        .expect("parent restarted within timeout")
-        .expect("parent restart succeeded");
+    timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "parent", baseline),
+    )
+    .await
+    .expect("parent restarted within timeout");
 
     assert!(
         root.actor_stats()
@@ -1023,7 +1041,7 @@ impl RawActor for FailOnMessage {
 }
 
 #[tokio::test]
-async fn runtime_handle_exposes_restart_monitor_via_supervisor_handle() {
+async fn runtime_handle_exposes_lifecycle_watch() {
     let mut builder = GraphBuilder::new();
     let worker_ref = builder.actor("worker", || FailOnMessage);
     let graph = builder.build().expect("valid graph");
@@ -1036,16 +1054,15 @@ async fn runtime_handle_exposes_restart_monitor_via_supervisor_handle() {
         .expect("runtime builds");
     let handle = runtime.spawn();
 
-    let restart = handle
-        .supervisor_handle()
-        .monitor_restart("worker")
-        .expect("worker child should be known");
+    let (lifecycle, baseline) = restart_observer(&handle, "worker");
     worker_ref.send(()).await.expect("message sent");
 
-    let generation = timeout(Duration::from_secs(1), restart.into_future())
-        .await
-        .expect("restart monitor should resolve")
-        .expect("restart monitor should succeed");
+    let generation = timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "worker", baseline),
+    )
+    .await
+    .expect("lifecycle watch should observe restart");
     assert_eq!(generation, 1);
 
     handle
@@ -1162,15 +1179,14 @@ async fn supervised_restart_constructs_fresh_actor_state() {
         5
     );
 
-    let restart = handle
-        .supervisor_handle()
-        .monitor_restart("counter")
-        .expect("counter child should be known");
+    let (lifecycle, baseline) = restart_observer(&handle, "counter");
     counter.send(CounterMsg::Crash).await.expect("crash sent");
-    timeout(Duration::from_secs(2), restart.into_future())
-        .await
-        .expect("restart observed")
-        .expect("restart monitor succeeded");
+    timeout(
+        Duration::from_secs(2),
+        await_restart(lifecycle, "counter", baseline),
+    )
+    .await
+    .expect("restart observed");
 
     assert_eq!(
         counter

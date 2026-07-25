@@ -69,7 +69,8 @@ Things this tutorial glossed over that matter in production:
   manager, an alert) instead of looping forever.
 - **Application-level breakers must not count events.** The event subscription
   is lossy observability; a breaker that counts `ChildRestarted` events can
-  silently under-count. Drive it from `watch_restarts()` or the cumulative
-  restart counters on snapshots instead — see the observability chapter.
+  silently under-count. Drive it from `watch_lifecycle()` and the cumulative
+  counters on its event envelope, or from snapshots — see the observability
+  chapter.
 - **Blocking work needs cancellation checks.** Cooperative shutdown is only as
   graceful as your `token.is_cancelled()` checks are frequent.

@@ -9,7 +9,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, Runtime, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, LifecycleEventKind,
+    Runtime, prelude::Continue,
 };
 use tokio_supervisor::{RestartIntensity, RestartPolicy, Strategy};
 
@@ -82,9 +83,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
     let handle = runtime.spawn();
 
-    let restart = handle.supervisor_handle().monitor_restart("worker")?;
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .generation;
+    let mut lifecycle = handle.watch_lifecycle();
     frontend.send("fail-worker".to_owned()).await?;
-    restart.await?;
+    while let Some(event) = lifecycle.next().await {
+        if event.child_id == "worker"
+            && matches!(
+                event.kind,
+                LifecycleEventKind::Started { generation } if generation > baseline
+            )
+        {
+            break;
+        }
+    }
     frontend.send("after-restart".to_owned()).await?;
     println!("observed {}", observed_rx.recv().await.expect("message"));
 

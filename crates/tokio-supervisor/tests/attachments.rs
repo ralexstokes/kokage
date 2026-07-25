@@ -1,5 +1,4 @@
 use std::{
-    future::IntoFuture,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -185,14 +184,29 @@ async fn reincarnation_never_exposes_a_displaced_nested_attachment_identity() {
             }
         });
 
-        let restart = root
-            .monitor_restart("middle")
-            .expect("middle restart is monitored");
+        let baseline = root
+            .snapshot()
+            .child("middle")
+            .expect("middle child exists")
+            .generation;
+        let mut lifecycle = root.watch_lifecycle();
         crash.notify_one();
-        timeout(Duration::from_secs(1), restart.into_future())
-            .await
-            .expect("middle restart completed in time")
-            .expect("middle restarted");
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let event = lifecycle.next().await.expect("root remains live");
+                if event.child_id == "middle"
+                    && matches!(
+                        event.kind,
+                        tokio_supervisor::LifecycleEventKind::Started { generation }
+                            if generation > baseline
+                    )
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("middle restart completed in time");
 
         timeout(Duration::from_secs(1), async {
             loop {

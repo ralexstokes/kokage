@@ -8,9 +8,32 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, Reply, RestartPolicy, Runtime,
-    prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LifecycleEventKind,
+    LifecycleWatch, Reply, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
+
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+    let child = handle
+        .snapshot()
+        .child(id)
+        .expect("child exists")
+        .generation;
+    (handle.watch_lifecycle(), child)
+}
+
+async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
+    loop {
+        let event = lifecycle.next().await.expect("runtime remains live");
+        if event.child_id == id
+            && matches!(
+                event.kind,
+                LifecycleEventKind::Started { generation } if generation > baseline
+            )
+        {
+            return;
+        }
+    }
+}
 
 enum ProbeMsg {
     Increment(Reply<(usize, usize)>),
@@ -88,18 +111,17 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
         (0, 2)
     );
 
-    let restarted = handle
-        .supervisor_handle()
-        .monitor_restart("derived")
-        .expect("restart monitor exists");
+    let (lifecycle, baseline) = restart_observer(&handle, "derived");
     actor_ref
         .send(ProbeMsg::Crash)
         .await
         .expect("crash accepted");
-    tokio::time::timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("restart observed")
-        .expect("restart succeeds");
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        await_restart(lifecycle, "derived", baseline),
+    )
+    .await
+    .expect("restart observed");
 
     assert_eq!(
         actor_ref

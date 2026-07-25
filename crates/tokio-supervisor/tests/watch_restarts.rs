@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::timeout};

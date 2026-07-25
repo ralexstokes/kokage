@@ -110,11 +110,15 @@
 //!
 //! # Observability
 //!
-//! The crate provides three complementary observability channels:
+//! The crate provides two supervisor observation primitives plus diagnostic
+//! projections:
 //!
-//! - **[`SupervisorEvent`] subscriptions** — the most precise choice when your
-//!   code needs to react programmatically to lifecycle changes. Subscribe via
-//!   [`SupervisorHandle::subscribe`].
+//! - **[`SupervisorSnapshot`] state** — current state and cumulative counters,
+//!   read directly or through [`SupervisorHandle::subscribe_snapshots`].
+//! - **[`LifecycleEvent`] streams** — ordered, reliable direct-child
+//!   transitions from [`SupervisorHandle::watch_lifecycle`].
+//! - **[`SupervisorEvent`] subscriptions** — a legacy, lossy broadcast for
+//!   logging and dashboards via [`SupervisorHandle::subscribe`].
 //! - **`tracing` spans and logs** — automatic structured output for every
 //!   lifecycle event. The supervisor runs inside an `info_span!("supervisor")`
 //!   and each child inside an `info_span!("child")`, both carrying
@@ -126,11 +130,13 @@
 //!   `supervisor.restart_intensity_exceeded`, `supervisor.events.dropped`,
 //!   `supervisor.shutdown_timeouts`, and `supervisor.child_shutdown.duration`.
 //!
-//! ## Ordering guarantee
+//! ## Snapshot/lifecycle alignment
 //!
-//! The supervisor publishes an updated [`SupervisorSnapshot`] **before**
-//! broadcasting the corresponding [`SupervisorEvent`], so event handlers can
-//! read already-consistent snapshot state.
+//! Create a lifecycle watch first, then read a snapshot, then discard watched
+//! events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
+//! state-plus-stream view without replay. Lifecycle overflow is explicit as
+//! [`LifecycleEventKind::Lagged`]; the legacy event broadcast can lose nested
+//! forwarded events without an equivalent end-to-end marker.
 //!
 //! ## Nested event forwarding
 //!
@@ -167,7 +173,7 @@
 //!     .build()?;
 //!
 //! let handle = supervisor.spawn();
-//! let _events = handle.subscribe();
+//! let _lifecycle = handle.watch_lifecycle();
 //! let _snapshot = handle.snapshot();
 //! # handle.shutdown();
 //! # handle.wait().await?;
@@ -203,6 +209,7 @@ mod context;
 mod error;
 mod event;
 mod handle;
+mod lifecycle;
 mod monitor;
 mod observability;
 pub mod prelude;
@@ -217,10 +224,12 @@ pub use attachment::{AttachedChild, AttachedChildIdentity};
 pub use builder::{StartMode, SupervisorBuilder};
 pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
 pub use context::{ChildContext, SupervisorToken};
-pub use error::{ControlError, RestartMonitorError, SupervisorBuildError, SupervisorError};
+pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::{EventPathSegment, ExitStatusView, SupervisorEvent};
 pub use handle::SupervisorHandle;
-pub use monitor::{RestartMonitor, RestartWatch};
+pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
+#[allow(deprecated)]
+pub use monitor::RestartWatch;
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
 pub use shutdown::{AutoShutdown, ShutdownMode, ShutdownPolicy};
 pub use snapshot::{

@@ -17,22 +17,25 @@ mod coverage_probe {
     mod supervisor {
         use tokio_otp::prelude::{
             AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildMembershipView,
-            ChildSnapshot, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-            ShutdownMode, ShutdownPolicy, StartMode, Strategy, SupervisorEvent,
-            SupervisorEventReceiverExt as _, SupervisorSnapshot,
-            SupervisorSnapshotReceiverExt as _, SupervisorStateView,
+            ChildSnapshot, ChildStateView, ExitStatusView, LifecycleEvent, LifecycleEventKind,
+            LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
+            StartMode, Strategy, SupervisorEvent, SupervisorEventReceiverExt as _,
+            SupervisorSnapshot, SupervisorSnapshotReceiverExt as _, SupervisorStateView,
         };
     }
 
+    #[allow(deprecated)]
     mod otp {
-        use tokio_otp::prelude::{RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle};
+        use tokio_otp::prelude::{
+            LifecycleWatchGuard, RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle,
+        };
     }
 
     mod advanced_root {
         use tokio_otp::{
-            ChildContext, ChildResult, ChildSpec, ControlError, EventPathSegment, RestartMonitor,
-            RestartMonitorError, Supervisor, SupervisorBuildError, SupervisorBuilder,
-            SupervisorError, SupervisorHandle, SupervisorSpec, SupervisorToken,
+            ChildContext, ChildResult, ChildSpec, ControlError, EventPathSegment, LifecycleEvent,
+            LifecycleEventKind, LifecycleWatch, Supervisor, SupervisorBuildError,
+            SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec, SupervisorToken,
         };
     }
 }
