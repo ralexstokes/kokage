@@ -1124,21 +1124,24 @@ async fn remove_child_preempts_zero_delay_restart() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
-    let handle = SupervisorBuilder::new()
+    let handle = DynamicSupervisorBuilder::new()
         .restart_intensity(tokio_supervisor::RestartIntensity::new(
             8,
             std::time::Duration::from_secs(1),
         ))
-        .child(
+        .build()
+        .expect("valid dynamic supervisor")
+        .spawn();
+    let mut events = handle.subscribe();
+    handle
+        .add_child(
             ChildSpec::new("removable", |_ctx| async move {
                 Err(common::test_error("restart immediately"))
             })
             .restart(RestartPolicy::OnFailure),
         )
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-    let mut events = handle.subscribe();
+        .await
+        .expect("initial dynamic child should be accepted");
 
     loop {
         match common::recv_supervisor_event(&mut events).await {

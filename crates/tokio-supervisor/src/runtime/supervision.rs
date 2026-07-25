@@ -2090,7 +2090,6 @@ mod tests {
     #[tokio::test]
     async fn gate_restart_discards_the_failed_generations_deferred_event() {
         let supervisor = SupervisorBuilder::new()
-            .start_mode(StartMode::Sequential)
             .child(
                 ChildSpec::new("gated", |ctx| async move {
                     ctx.shutdown_token().cancelled().await;
