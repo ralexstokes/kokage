@@ -15,7 +15,8 @@ use tokio::{
     sync::Notify,
 };
 use tokio_supervisor::{
-    BoxError, ChildSpec, RestartPolicy, Strategy, SupervisorBuilder, SupervisorEvent,
+    BoxError, ChildSpec, DynamicSupervisorBuilder, RestartPolicy, Strategy, SupervisorBuilder,
+    SupervisorEvent,
 };
 
 const DEFAULT_WARMUP_ITERS: usize = 10;
@@ -221,15 +222,19 @@ async fn one_for_all_restart_flow() {
 }
 
 async fn dynamic_add_remove_flow() {
-    let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("seed", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
     let mut events = handle.subscribe();
+
+    handle
+        .add_child(ChildSpec::new("seed", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("seed child should be accepted");
 
     wait_for_named_child_started(&mut events, "seed").await;
 
