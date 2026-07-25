@@ -121,7 +121,7 @@ impl ChildEntry {
 /// dynamic identities that collide with static children or are absent from
 /// the new incarnation are made terminal.
 fn reconcile_stable_identities(
-    children: &[ChildDefinition],
+    children: &[Arc<ChildDefinition>],
     nested_channels: &NestedChannels,
 ) -> HashMap<String, Arc<StableSupervisorChannels>> {
     let mut identities = HashMap::new();
