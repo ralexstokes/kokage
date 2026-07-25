@@ -1,8 +1,7 @@
 use std::{
-    any::{Any, TypeId, type_name},
+    any::type_name,
     collections::HashMap,
     fmt,
-    marker::PhantomData,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -114,15 +113,22 @@ static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(1);
 pub struct ActorSlot<M> {
     builder_id: u64,
     index: Option<usize>,
-    _message: PhantomData<fn(M)>,
+    core: Arc<BindingCore<M>>,
+    mailbox_mode: MailboxMode<M>,
 }
 
 impl<M> ActorSlot<M> {
-    fn new(builder_id: u64, index: Option<usize>) -> Self {
+    fn new(
+        builder_id: u64,
+        index: Option<usize>,
+        core: Arc<BindingCore<M>>,
+        mailbox_mode: MailboxMode<M>,
+    ) -> Self {
         Self {
             builder_id,
             index,
-            _message: PhantomData,
+            core,
+            mailbox_mode,
         }
     }
 }
@@ -157,10 +163,7 @@ pub struct GraphBuilder {
 
 struct Slot {
     actor_id: Arc<str>,
-    message_type: TypeId,
-    binding: Arc<dyn Any + Send + Sync>,
     binding_lifecycle: Arc<dyn BindingLifecycle>,
-    mailbox_mode: Option<Box<dyn Any + Send + Sync>>,
     runner: Option<Arc<dyn ErasedRunner>>,
 }
 
@@ -245,14 +248,26 @@ impl GraphBuilder {
         actor_id: &str,
         options: ActorOptions<M>,
     ) -> (ActorSlot<M>, ActorRef<M>) {
-        let size_hint = options.size_hint;
-        match self.push_slot_with_options(actor_id, options) {
-            Some((index, actor_ref)) => (ActorSlot::new(self.builder_id, Some(index)), actor_ref),
-            None => (
-                ActorSlot::new(self.builder_id, None),
-                Self::detached_ref(actor_id, size_hint),
-            ),
-        }
+        let ActorOptions {
+            mailbox_mode,
+            size_hint,
+        } = options;
+        let actor_id: Arc<str> = actor_id.into();
+        let core = Arc::new(match size_hint {
+            Some(size_hint) => {
+                BindingCore::<M>::with_message_size(Arc::clone(&actor_id), size_hint)
+            }
+            None => BindingCore::<M>::new(Arc::clone(&actor_id)),
+        });
+        let registration = self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core));
+        let (index, actor_ref) = match registration {
+            Some((index, actor_ref)) => (Some(index), actor_ref),
+            None => (None, Self::detached_ref(&actor_id, size_hint)),
+        };
+        (
+            ActorSlot::new(self.builder_id, index, core, mailbox_mode),
+            actor_ref,
+        )
     }
 
     /// Fills a previously opened actor slot from a reusable incarnation factory.
@@ -265,14 +280,20 @@ impl GraphBuilder {
     where
         F: ActorFactory,
     {
-        if slot.builder_id != self.builder_id {
+        let ActorSlot {
+            builder_id,
+            index,
+            core,
+            mailbox_mode,
+        } = slot;
+        if builder_id != self.builder_id {
             self.errors.push(GraphBuildError::InvalidConfig(
                 "actor slot belongs to a different graph builder",
             ));
             return;
         }
 
-        let Some(index) = slot.index else {
+        let Some(index) = index else {
             return;
         };
         let Some(slot) = self.slots.get_mut(index) else {
@@ -281,27 +302,10 @@ impl GraphBuilder {
             return;
         };
 
-        debug_assert_eq!(
-            slot.message_type,
-            TypeId::of::<<F::Actor as RawActor>::Msg>()
-        );
-        let Ok(binding) = slot
-            .binding
-            .clone()
-            .downcast::<BindingCore<<F::Actor as RawActor>::Msg>>()
-        else {
-            unreachable!("message type enforced by ActorSlot")
-        };
-        let mailbox_mode = slot
-            .mailbox_mode
-            .take()
-            .expect("unfilled slot retains mailbox mode")
-            .downcast::<MailboxMode<<F::Actor as RawActor>::Msg>>()
-            .unwrap_or_else(|_| unreachable!("message type enforced by ActorSlot"));
         slot.runner = Some(Arc::new(TypedRunner {
             factory: Arc::new(factory),
-            binding,
-            mailbox_mode: *mailbox_mode,
+            binding: core,
+            mailbox_mode,
         }));
     }
 
@@ -327,44 +331,8 @@ impl GraphBuilder {
     where
         F: ActorFactory,
     {
-        let size_hint = options.size_hint;
-        let registration = self.push_slot_with_options(actor_id, options);
-        self.finish_actor_registration(registration, factory, || {
-            Self::detached_ref(actor_id, size_hint)
-        })
-    }
-
-    fn finish_actor_registration<F>(
-        &mut self,
-        registration: Option<(usize, ActorRef<<F::Actor as RawActor>::Msg>)>,
-        factory: F,
-        detached: impl FnOnce() -> ActorRef<<F::Actor as RawActor>::Msg>,
-    ) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        let Some((index, actor_ref)) = registration else {
-            return detached();
-        };
-        let slot = &mut self.slots[index];
-        let Ok(binding) = slot
-            .binding
-            .clone()
-            .downcast::<BindingCore<<F::Actor as RawActor>::Msg>>()
-        else {
-            unreachable!("message type id already verified")
-        };
-        let mailbox_mode = slot
-            .mailbox_mode
-            .take()
-            .expect("new actor retains mailbox mode")
-            .downcast::<MailboxMode<<F::Actor as RawActor>::Msg>>()
-            .unwrap_or_else(|_| unreachable!("message type id already verified"));
-        slot.runner = Some(Arc::new(TypedRunner {
-            factory: Arc::new(factory),
-            binding,
-            mailbox_mode: *mailbox_mode,
-        }));
+        let (slot, actor_ref) = self.slot_with_options(actor_id, options);
+        self.define(slot, factory);
         actor_ref
     }
 
@@ -456,24 +424,6 @@ impl GraphBuilder {
         ))
     }
 
-    fn push_slot_with_options<M: Send + 'static>(
-        &mut self,
-        actor_id: &str,
-        options: ActorOptions<M>,
-    ) -> Option<(usize, ActorRef<M>)> {
-        let ActorOptions {
-            mailbox_mode,
-            size_hint,
-        } = options;
-        let (index, actor_ref) =
-            self.push_slot_with_core(actor_id, |actor_id| match size_hint {
-                Some(size_hint) => BindingCore::<M>::with_message_size(actor_id, size_hint),
-                None => BindingCore::<M>::new(actor_id),
-            })?;
-        self.slots[index].mailbox_mode = Some(Box::new(mailbox_mode));
-        Some((index, actor_ref))
-    }
-
     fn detached_ref<M>(actor_id: &str, size_hint: Option<fn(&M) -> usize>) -> ActorRef<M> {
         match size_hint {
             Some(size_hint) => ActorRef::detached_with_size_hint(actor_id.into(), size_hint),
@@ -483,8 +433,8 @@ impl GraphBuilder {
 
     fn push_slot_with_core<M: Send + 'static>(
         &mut self,
-        actor_id: &str,
-        make_core: impl FnOnce(Arc<str>) -> BindingCore<M>,
+        actor_id: Arc<str>,
+        core: Arc<BindingCore<M>>,
     ) -> Option<(usize, ActorRef<M>)> {
         if actor_id.is_empty() {
             self.errors
@@ -492,24 +442,19 @@ impl GraphBuilder {
             return None;
         }
 
-        if self.index.contains_key(actor_id) {
+        if self.index.contains_key(actor_id.as_ref()) {
             self.errors.push(GraphBuildError::DuplicateActorId {
                 actor_id: actor_id.to_string(),
             });
             return None;
         }
 
-        let actor_id: Arc<str> = actor_id.into();
-        let core = Arc::new(make_core(actor_id.clone()));
         let actor_ref = ActorRef::from_core(&core, None);
         let index = self.slots.len();
         self.index.insert(actor_id.clone(), index);
         self.slots.push(Slot {
             actor_id,
-            message_type: TypeId::of::<M>(),
-            binding: core.clone(),
             binding_lifecycle: core,
-            mailbox_mode: None,
             runner: None,
         });
         Some((index, actor_ref))

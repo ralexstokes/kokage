@@ -1210,9 +1210,13 @@ mod runnable_actor {
         let mut slot_builder = GraphBuilder::new();
         slot_builder
             .slot_with_options::<SizedPayload>("worker", ActorOptions::new().message_size());
-        let (_slot, detached) = slot_builder
+        let (_detached_slot, detached) = slot_builder
             .slot_with_options::<SizedPayload>("worker", ActorOptions::new().message_size());
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
+        assert!(matches!(
+            detached.try_send(SizedPayload(Vec::new())),
+            Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+        ));
     }
 
     impl RawActor for GatedDrain {
