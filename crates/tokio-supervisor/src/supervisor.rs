@@ -131,10 +131,8 @@ impl Supervisor {
         revivable: bool,
     ) -> ChildResult {
         let generation = ctx.generation();
-        let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) = channels
-            .take_initial_incarnation()
-            .filter(|_| generation == 0)
-            .map_or_else(
+        let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) =
+            channels.take_initial_incarnation(generation).map_or_else(
                 || {
                     let (shutdown_tx, shutdown_rx) = watch::channel(false);
                     let (command_tx, command_rx) =
