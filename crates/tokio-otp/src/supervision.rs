@@ -335,6 +335,8 @@ impl SupervisionTree {
             kind: self.kind(),
             strategy: scope.strategy,
             auto_shutdown: scope.auto_shutdown,
+            default_restart: scope.default_restart,
+            default_shutdown: scope.default_shutdown,
             restart_intensity: scope.restart_intensity.unwrap_or_default(),
             children: scope
                 .children
@@ -526,6 +528,12 @@ pub struct SupervisionOutline {
     pub strategy: Strategy,
     /// Automatic-shutdown policy.
     pub auto_shutdown: AutoShutdown,
+    /// Restart policy inherited by children without an explicit override.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub default_restart: RestartPolicy,
+    /// Shutdown policy inherited by children without an explicit override.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub default_shutdown: ShutdownPolicy,
     /// Default restart-intensity policy.
     pub restart_intensity: RestartIntensity,
     /// Declared children in semantic order; empty for a valid dynamic scope.

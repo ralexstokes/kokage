@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::{Mutex, Notify};
-use tokio_otp::{SupervisorError, prelude::*};
+use tokio::sync::{Mutex, Notify, watch};
+use tokio_otp::{ChildSpec, DynamicActorOptions, SupervisorError, prelude::*};
 
 #[derive(Clone)]
 struct Probe {
@@ -32,6 +32,79 @@ impl Actor for Probe {
         self.order.lock().await.push(message);
         Ok(Continue)
     }
+}
+
+#[derive(Clone)]
+struct AddsChildOnStart {
+    handle_rx: watch::Receiver<Option<RuntimeHandle>>,
+    added_started: Arc<Notify>,
+}
+
+impl Actor for AddsChildOnStart {
+    type Msg = ();
+
+    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+        let handle = {
+            let ready = self
+                .handle_rx
+                .wait_for(Option::is_some)
+                .await
+                .expect("test handle sender remains open");
+            ready
+                .as_ref()
+                .expect("runtime handle was installed")
+                .clone()
+        };
+        let added_started = Arc::clone(&self.added_started);
+        handle
+            .supervisor_handle()
+            .add_child(ChildSpec::new("added-from-on-start", move |ctx| {
+                let added_started = Arc::clone(&added_started);
+                async move {
+                    added_started.notify_one();
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            }))
+            .await?;
+        Ok(Continue)
+    }
+
+    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+        Ok(Continue)
+    }
+}
+
+#[tokio::test]
+async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
+    let (handle_tx, handle_rx) = watch::channel::<Option<RuntimeHandle>>(None);
+    let added_started = Arc::new(Notify::new());
+    let handle = Runtime::dynamic()
+        .build()
+        .expect("dynamic runtime builds")
+        .spawn();
+    handle_tx
+        .send(Some(handle.clone()))
+        .expect("startup actor retains handle receiver");
+    handle
+        .add_actor(
+            "starter",
+            {
+                let added_started = Arc::clone(&added_started);
+                move || AddsChildOnStart {
+                    handle_rx: handle_rx.clone(),
+                    added_started: Arc::clone(&added_started),
+                }
+            },
+            DynamicActorOptions::default(),
+        )
+        .await
+        .expect("startup actor added");
+
+    tokio::time::timeout(Duration::from_secs(1), added_started.notified())
+        .await
+        .expect("self-scope add_child should not deadlock actor startup");
+    handle.shutdown_and_wait().await.unwrap();
 }
 
 #[tokio::test]
