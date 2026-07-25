@@ -16,6 +16,8 @@ use tokio_otp::prelude::*;
 enum OutcomeMsg {
     Success(Result<u32, StepDeadline>),
     Timeout(Result<(), StepDeadline>),
+    OrSuccess(u32),
+    OrFallback(u32),
 }
 
 #[derive(Clone)]
@@ -33,6 +35,18 @@ impl Actor for Outcomes {
             pending::<()>(),
             OutcomeMsg::Timeout,
         );
+        ctx.step_or(
+            Duration::from_secs(1),
+            async { 42 },
+            0,
+            OutcomeMsg::OrSuccess,
+        );
+        ctx.step_or(
+            Duration::from_millis(10),
+            pending::<u32>(),
+            7,
+            OutcomeMsg::OrFallback,
+        );
         Ok(Continue)
     }
 
@@ -43,7 +57,7 @@ impl Actor for Outcomes {
 }
 
 #[tokio::test]
-async fn step_posts_success_and_total_timeout_outcomes() {
+async fn step_and_step_or_post_total_and_fallback_outcomes() {
     let (observed, mut outcomes) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.add(move || Outcomes {
@@ -56,15 +70,15 @@ async fn step_posts_success_and_total_timeout_outcomes() {
         .spawn();
     runtime.wait_started().await.unwrap();
 
-    let first = tokio::time::timeout(Duration::from_secs(1), outcomes.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let second = tokio::time::timeout(Duration::from_secs(1), outcomes.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let observed = [first, second];
+    let mut observed = Vec::new();
+    for _ in 0..4 {
+        observed.push(
+            tokio::time::timeout(Duration::from_secs(1), outcomes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
     assert!(
         observed
             .iter()
@@ -74,6 +88,16 @@ async fn step_posts_success_and_total_timeout_outcomes() {
         observed
             .iter()
             .any(|message| matches!(message, OutcomeMsg::Timeout(Err(StepDeadline))))
+    );
+    assert!(
+        observed
+            .iter()
+            .any(|message| matches!(message, OutcomeMsg::OrSuccess(42)))
+    );
+    assert!(
+        observed
+            .iter()
+            .any(|message| matches!(message, OutcomeMsg::OrFallback(7)))
     );
     runtime.shutdown_and_wait().await.unwrap();
 }

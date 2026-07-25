@@ -552,14 +552,40 @@ impl<M: Send + 'static> ActorContext<M> {
             .push_back(message);
     }
 
-    /// Runs a bounded future without blocking this actor's receive loop and
-    /// posts its outcome back as an ordinary message.
+    /// Runs a bounded future and substitutes `fallback` when its deadline
+    /// expires, then posts the resulting value back as an ordinary message.
     ///
-    /// The continuation is total: it receives either the future's value or
-    /// [`StepDeadline`] and must produce a message in both cases. Delivery
-    /// uses this actor's normal mailbox policy and FIFO backpressure. It is
-    /// stamped to this exact incarnation, so a completion racing a restart is
-    /// silently dropped rather than delivered to fresh state.
+    /// This is the usual way to pipeline bounded work from an actor. A timed
+    /// out step may already have initiated an external effect, so `fallback`
+    /// should represent an unknown outcome that the actor can reconcile.
+    /// Use [`Self::step`] when the continuation needs to distinguish a
+    /// deadline from a value returned by the future.
+    pub fn step_or<F, T, C>(
+        &self,
+        deadline: Duration,
+        future: F,
+        fallback: T,
+        continuation: C,
+    ) -> StepHandle
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        C: FnOnce(T) -> M + Send + 'static,
+    {
+        self.step(deadline, future, move |outcome| {
+            continuation(outcome.unwrap_or(fallback))
+        })
+    }
+
+    /// Runs a bounded future without blocking this actor's receive loop and
+    /// posts its total outcome back as an ordinary message.
+    ///
+    /// This is the lower-level form of [`Self::step_or`]. The continuation is
+    /// total: it receives either the future's value or [`StepDeadline`] and
+    /// must produce a message in both cases. Delivery uses this actor's normal
+    /// mailbox policy and FIFO backpressure. It is stamped to this exact
+    /// incarnation, so a completion racing a restart is silently dropped
+    /// rather than delivered to fresh state.
     ///
     /// Steps are incarnation-owned. They are aborted when the incarnation
     /// fails, restarts, or uses [`DrainPolicy::Discard`](crate::DrainPolicy).

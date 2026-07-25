@@ -145,7 +145,7 @@ impl Router {
         let graph = graph.build().expect("session graph builds");
         let mount = self.mount();
         let step_id = subtree_id.clone();
-        ctx.step(
+        ctx.step_or(
             PHASE_TIMEOUT,
             async move {
                 // OneForAll: a session panic tears its transient runs down
@@ -167,10 +167,8 @@ impl Router {
                     Err(_) => false,
                 }
             },
-            move |outcome| RouterMsg::Mounted {
-                chat,
-                ok: outcome.unwrap_or(false),
-            },
+            false,
+            move |ok| RouterMsg::Mounted { chat, ok },
         );
         self.sessions.insert(
             chat,
@@ -186,21 +184,21 @@ impl Router {
     fn pipeline_remove(&self, chat: ChatId, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
-        ctx.step(
+        ctx.step_or(
             PHASE_TIMEOUT,
-            async move { mount.remove_child(remove_id).await },
-            move |outcome| {
-                let done = matches!(
-                    outcome,
-                    Ok(Ok(()))
-                        | Ok(Err(ControlError::UnknownChildId(_)))
-                        | Ok(Err(ControlError::ShutdownTimedOut(_)))
-                );
-                RouterMsg::Reaped {
-                    chat,
-                    subtree_id,
-                    done,
-                }
+            async move {
+                matches!(
+                    mount.remove_child(remove_id).await,
+                    Ok(())
+                        | Err(ControlError::UnknownChildId(_))
+                        | Err(ControlError::ShutdownTimedOut(_))
+                )
+            },
+            false,
+            move |done| RouterMsg::Reaped {
+                chat,
+                subtree_id,
+                done,
             },
         );
     }
@@ -210,19 +208,19 @@ impl Router {
     fn pipeline_sweep(&self, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
-        ctx.step(
+        ctx.step_or(
             PHASE_TIMEOUT,
-            async move { mount.remove_child(remove_id).await },
-            move |outcome| {
-                let done = matches!(
-                    outcome,
-                    Ok(Ok(()))
-                        | Ok(Err(ControlError::UnknownChildId(_)))
-                        | Ok(Err(ControlError::ShutdownTimedOut(_)))
-                        | Ok(Err(ControlError::ChildRemovalInProgress(_)))
-                );
-                RouterMsg::Swept { subtree_id, done }
+            async move {
+                matches!(
+                    mount.remove_child(remove_id).await,
+                    Ok(())
+                        | Err(ControlError::UnknownChildId(_))
+                        | Err(ControlError::ShutdownTimedOut(_))
+                        | Err(ControlError::ChildRemovalInProgress(_))
+                )
             },
+            false,
+            move |done| RouterMsg::Swept { subtree_id, done },
         );
     }
 

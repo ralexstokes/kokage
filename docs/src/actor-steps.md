@@ -1,27 +1,38 @@
 # Bounded actor steps
 
 An actor that awaits slow work inside `handle` stops receiving messages until
-that work completes. `ActorContext::step` moves a bounded future off the
-handler loop and maps its result back into an ordinary typed message:
+that work completes. `ActorContext::step_or` moves a bounded future off the
+handler loop, substitutes an explicit fallback value at the deadline, and maps
+the value back into an ordinary typed message:
 
 ```rust,no_run
 use std::time::Duration;
-use tokio_otp::{ActorContext, StepDeadline};
+use tokio_otp::ActorContext;
 
 enum Msg {
-    Loaded(Result<String, StepDeadline>),
+    Loaded(String),
 }
 
 # async fn load() -> String { String::new() }
 # fn start(ctx: &ActorContext<Msg>) {
-ctx.step(Duration::from_millis(250), load(), Msg::Loaded);
+ctx.step_or(
+    Duration::from_millis(250),
+    load(),
+    "value remained unknown".into(),
+    Msg::Loaded,
+);
 # }
 ```
 
-The deadline is required, and the continuation is total: it receives
-`Result<T, StepDeadline>` so timeout cannot be forgotten. The completion uses
-the actor's ordinary mailbox policy. A full FIFO mailbox backpressures it;
-conflating mailboxes may replace it like any other message.
+The deadline and fallback are required: timeout cannot be forgotten, but the
+common path does not need to expose a separate deadline type in the message
+protocol. The completion uses the actor's ordinary mailbox policy. A full
+FIFO mailbox backpressures it; conflating mailboxes may replace it like any
+other message.
+
+Use the lower-level `ActorContext::step` when the actor must distinguish a
+deadline from a value returned by the future. Its continuation receives the
+total `Result<T, StepDeadline>` outcome.
 
 ## Incarnations and correlation
 

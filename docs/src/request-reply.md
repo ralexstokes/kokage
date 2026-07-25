@@ -131,7 +131,7 @@ impl Actor for Router {
                 self.in_flight.insert(order, venue);
                 let gateway = self.venues[venue].clone();
                 // ...then move the slow call off it.
-                ctx.step(
+                ctx.step_or(
                     Duration::from_millis(250),
                     async move {
                         matches!(
@@ -143,9 +143,10 @@ impl Actor for Router {
                             Ok(true)
                         )
                     },
-                    move |outcome| RouterMsg::Resolved {
+                    false,
+                    move |accepted| RouterMsg::Resolved {
                         order,
-                        accepted: outcome.unwrap_or(false),
+                        accepted,
                         reply,
                     },
                 );
