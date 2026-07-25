@@ -27,6 +27,8 @@ use crate::actor::raw::RawActor;
 /// the generated factory and freshly default-constructs them instead:
 ///
 /// ```
+/// # #[cfg(feature = "derive")]
+/// # fn main() {
 /// # use std::sync::{Arc, atomic::AtomicU64};
 /// # use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, prelude::Continue};
 /// #[derive(tokio_otp::ActorFactory)]
@@ -48,6 +50,9 @@ use crate::actor::raw::RawActor;
 /// let ids = Arc::new(AtomicU64::new(0));
 /// let mut graph = GraphBuilder::new();
 /// graph.actor("worker", WorkerFactory { ids: ids.clone() });
+/// # }
+/// # #[cfg(not(feature = "derive"))]
+/// # fn main() {}
 /// ```
 ///
 /// Derivation is intended for the common clone-configuration/default-local
