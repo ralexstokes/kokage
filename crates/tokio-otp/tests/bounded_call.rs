@@ -33,7 +33,11 @@ fn start(actor: RunnableActor) -> (CancellationToken, tokio::task::JoinHandle<()
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
                 .expect("actor run succeeds");
         }

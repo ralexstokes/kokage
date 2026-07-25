@@ -83,6 +83,9 @@ fn print_event(event: &SupervisorEvent, depth: usize) {
             ExitStatusView::Aborted => {
                 println!("{indent}child aborted: {id} generation={generation}");
             }
+            ExitStatusView::ShutdownTimedOut => {
+                println!("{indent}child shutdown timed out: {id} generation={generation}");
+            }
             _ => println!("{indent}child exited: {id} generation={generation}"),
         },
         SupervisorEvent::AutoShutdownTriggered { id, mode, .. } => {

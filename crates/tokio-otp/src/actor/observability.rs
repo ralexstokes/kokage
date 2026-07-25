@@ -214,6 +214,7 @@ pub(crate) enum ActorExitStatus {
     Failed,
     Panicked,
     Cancelled,
+    ShutdownTimedOut,
 }
 
 impl ActorExitStatus {
@@ -224,6 +225,7 @@ impl ActorExitStatus {
             Self::Failed => "failed",
             Self::Panicked => "panicked",
             Self::Cancelled => "cancelled",
+            Self::ShutdownTimedOut => "shutdown_timed_out",
         }
     }
 }

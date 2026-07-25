@@ -157,7 +157,15 @@
 //! let stop = CancellationToken::new();
 //! let run = tokio::spawn({
 //!     let stop = stop.clone();
-//!     async move { actor.run_until(stop.cancelled(), RestartPolicy::Never).await }
+//!     async move {
+//!         actor
+//!             .run_until(
+//!                 stop.cancelled(),
+//!                 RestartPolicy::Never,
+//!                 std::time::Duration::from_secs(5),
+//!             )
+//!             .await
+//!     }
 //! });
 //!
 //! counter.send(CounterMsg::Add(2)).await.expect("send succeeded");

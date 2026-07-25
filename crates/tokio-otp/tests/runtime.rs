@@ -14,8 +14,8 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch, RawActor, Reply,
-    Runtime, RuntimeHandle, SendError, prelude::Continue,
+    DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch, RawActor,
+    Reply, Runtime, RuntimeHandle, SendError, prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -1231,6 +1231,93 @@ struct PendingActor {
     started: Arc<Notify>,
 }
 
+enum StuckDrainMsg {
+    Gate,
+    Stuck,
+}
+
+#[derive(Clone)]
+struct StuckDrainActor {
+    handling_gate: Arc<Notify>,
+    release_gate: Arc<Notify>,
+}
+
+impl Actor for StuckDrainActor {
+    type Msg = StuckDrainMsg;
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
+        match message {
+            StuckDrainMsg::Gate => {
+                self.handling_gate.notify_one();
+                self.release_gate.notified().await;
+            }
+            StuckDrainMsg::Stuck => std::future::pending::<()>().await,
+        }
+        Ok(Continue)
+    }
+
+    fn drain_policy(&self) -> DrainPolicy {
+        DrainPolicy::Drain
+    }
+}
+
+#[tokio::test]
+async fn child_grace_bounds_the_whole_actor_drain() {
+    let handling_gate = Arc::new(Notify::new());
+    let release_gate = Arc::new(Notify::new());
+    let mut graph = GraphBuilder::new();
+    let worker = graph.actor("worker", {
+        let handling_gate = handling_gate.clone();
+        let release_gate = release_gate.clone();
+        move || StuckDrainActor {
+            handling_gate: handling_gate.clone(),
+            release_gate: release_gate.clone(),
+        }
+    });
+    let handle = Runtime::builder()
+        .graph(graph.build().expect("graph builds"))
+        .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
+            20,
+        )))
+        .build()
+        .expect("runtime builds")
+        .spawn();
+
+    worker
+        .send(StuckDrainMsg::Gate)
+        .await
+        .expect("gate accepted");
+    handling_gate.notified().await;
+    worker
+        .send(StuckDrainMsg::Stuck)
+        .await
+        .expect("drain work queued");
+    handle.shutdown();
+    let shutdown = tokio::spawn({
+        let handle = handle.clone();
+        async move { handle.wait().await }
+    });
+    tokio::task::yield_now().await;
+    release_gate.notify_one();
+
+    assert!(matches!(
+        shutdown.await.expect("shutdown task joined"),
+        Err(SupervisorError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
+    ));
+    assert_eq!(
+        handle
+            .snapshot()
+            .child("worker")
+            .expect("static membership remains")
+            .last_exit,
+        Some(ExitStatusView::ShutdownTimedOut)
+    );
+}
+
 impl RawActor for PendingActor {
     type Msg = ();
 
@@ -1241,37 +1328,9 @@ impl RawActor for PendingActor {
 }
 
 #[tokio::test]
-async fn actor_deadline_can_complete_before_strict_supervisor_deadline() {
+async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
     let started = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    builder.actor_shutdown_timeout(Duration::from_millis(20));
-    builder.actor("worker", {
-        let started = started.clone();
-        move || PendingActor {
-            started: started.clone(),
-        }
-    });
-    let runtime = Runtime::builder()
-        .graph(builder.build().expect("valid graph"))
-        .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_secs(1)))
-        .build()
-        .expect("runtime builds");
-    let handle = runtime.spawn();
-
-    timeout(Duration::from_secs(1), started.notified())
-        .await
-        .expect("actor started");
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("inner actor timeout completed the outer child cleanly");
-}
-
-#[tokio::test]
-async fn strict_supervisor_deadline_can_abort_before_actor_deadline() {
-    let started = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
-    builder.actor_shutdown_timeout(Duration::from_secs(1));
     builder.actor("worker", {
         let started = started.clone();
         move || PendingActor {
@@ -1286,6 +1345,7 @@ async fn strict_supervisor_deadline_can_abort_before_actor_deadline() {
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
+    let mut lifecycle = handle.watch_lifecycle();
 
     timeout(Duration::from_secs(1), started.notified())
         .await
@@ -1294,13 +1354,27 @@ async fn strict_supervisor_deadline_can_abort_before_actor_deadline() {
         handle.shutdown_and_wait().await,
         Err(SupervisorError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
     ));
+    assert_eq!(
+        handle
+            .snapshot()
+            .child("worker")
+            .expect("actor remains in static membership")
+            .last_exit,
+        Some(ExitStatusView::ShutdownTimedOut)
+    );
+    while let Some(event) = lifecycle.next().await {
+        if let LifecycleEventKind::Exited { reason, .. } = event.kind {
+            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            return;
+        }
+    }
+    panic!("timeout exit was not published");
 }
 
 #[tokio::test]
-async fn aborting_supervisor_deadline_can_complete_before_actor_deadline() {
+async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
     let started = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    builder.actor_shutdown_timeout(Duration::from_secs(1));
     builder.actor("worker", {
         let started = started.clone();
         move || PendingActor {
@@ -1315,6 +1389,7 @@ async fn aborting_supervisor_deadline_can_complete_before_actor_deadline() {
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
+    let mut lifecycle = handle.watch_lifecycle();
 
     timeout(Duration::from_secs(1), started.notified())
         .await
@@ -1322,7 +1397,22 @@ async fn aborting_supervisor_deadline_can_complete_before_actor_deadline() {
     handle
         .shutdown_and_wait()
         .await
-        .expect("outer abort is a successful supervisor shutdown");
+        .expect("cooperative-then-abort keeps shutdown successful");
+    assert_eq!(
+        handle
+            .snapshot()
+            .child("worker")
+            .expect("actor remains in static membership")
+            .last_exit,
+        Some(ExitStatusView::ShutdownTimedOut)
+    );
+    while let Some(event) = lifecycle.next().await {
+        if let LifecycleEventKind::Exited { reason, .. } = event.kind {
+            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            return;
+        }
+    }
+    panic!("timeout exit was not published");
 }
 
 #[tokio::test]

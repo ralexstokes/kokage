@@ -70,7 +70,11 @@ async fn conflate_keeps_only_the_newest_unread_message() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -128,7 +132,11 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -194,7 +202,11 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -253,7 +265,11 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -341,7 +357,11 @@ async fn replaced_call_reports_reply_dropped() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -435,7 +455,11 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -487,7 +511,11 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });

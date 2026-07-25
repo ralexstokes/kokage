@@ -13,6 +13,7 @@ use crate::{
     snapshot::{NestedSnapshotState, SnapshotCell},
     supervisor::ParentLink,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
 struct SpawnPlan {
@@ -65,7 +66,10 @@ impl SupervisorRuntime {
                 .restart_tracker
                 .record_spawn(tokio::time::Instant::now());
             let child_token = self.group_token.child_token();
+            let abort_token = CancellationToken::new();
             child.active_token = Some(child_token.clone());
+            child.active_abort_token = Some(abort_token.clone());
+            child.shutdown_timed_out = false;
             child.state = RuntimeChildState::Starting;
             child.has_reported_ready = false;
             child.startup_aborted = false;
@@ -89,6 +93,7 @@ impl SupervisorRuntime {
                 child_id.clone(),
                 generation,
                 child_token,
+                abort_token,
                 SupervisorToken::new(self.group_token.clone()),
                 self.own_handle.clone(),
                 (child.definition.readiness == ChildReadiness::Explicit).then(|| {

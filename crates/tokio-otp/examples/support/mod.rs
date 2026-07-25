@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, time::Duration};
 
 use tokio::task::JoinHandle;
 use tokio_otp::{ActorRunError, CancellationToken, Graph, RestartPolicy};
@@ -19,7 +19,11 @@ impl ActorTasks {
                 let stop = stop.clone();
                 tokio::spawn(async move {
                     actor
-                        .run_until(stop.cancelled(), RestartPolicy::Never)
+                        .run_until(
+                            stop.cancelled(),
+                            RestartPolicy::Never,
+                            Duration::from_secs(5),
+                        )
                         .await
                 })
             })

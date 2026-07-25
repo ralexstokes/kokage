@@ -39,7 +39,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let first_run = tokio::spawn({
         let sink = sink.clone();
-        async move { sink.run_until(pending::<()>(), RestartPolicy::Always).await }
+        async move {
+            sink.run_until(
+                pending::<()>(),
+                RestartPolicy::Always,
+                Duration::from_secs(5),
+            )
+            .await
+        }
     });
     sink_ref.send("first run".to_owned()).await?;
     println!(
@@ -72,7 +79,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let second_run = tokio::spawn({
         let sink = sink.clone();
-        async move { sink.run_until(pending::<()>(), RestartPolicy::Always).await }
+        async move {
+            sink.run_until(
+                pending::<()>(),
+                RestartPolicy::Always,
+                Duration::from_secs(5),
+            )
+            .await
+        }
     });
     println!(
         "sink observed `{}`",

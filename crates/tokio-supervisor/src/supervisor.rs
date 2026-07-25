@@ -307,12 +307,16 @@ impl Supervisor {
         };
         tokio::pin!(join_handle);
         let mut shutdown_requested = false;
+        let mut abort_requested = false;
 
         let result = loop {
             tokio::select! {
                 result = &mut join_handle => {
                     break match result {
                         Ok(result) => result,
+                        Err(_error) if abort_requested => {
+                            Err(SupervisorError::ShutdownTimedOut(ctx.id().to_owned()))
+                        }
                         Err(error) => Err(SupervisorError::Internal(format!(
                             "nested supervisor task failed to join: {error}"
                         ))),
@@ -321,6 +325,10 @@ impl Supervisor {
                 _ = ctx.shutdown_token().cancelled(), if !shutdown_requested => {
                     shutdown_requested = true;
                     let _ = shutdown_tx.send(true);
+                }
+                _ = ctx.abort_token().cancelled(), if !abort_requested => {
+                    abort_requested = true;
+                    join_handle.abort();
                 }
             }
         };

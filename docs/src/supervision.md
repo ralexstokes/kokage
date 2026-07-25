@@ -166,8 +166,8 @@ its [`ShutdownPolicy`] governs how:
   and wait up to `grace` for a voluntary exit; abort *and report a timeout
   error* otherwise.
 - **`ShutdownPolicy::cooperative_then_abort(grace)`** (default, 5 s grace) —
-  same, but the fallback Tokio `abort()` is expected and not reported as an
-  error.
+  same, but the enclosing shutdown operation does not return an error. The
+  child's lifecycle exit still reads `ShutdownTimedOut`.
 - **`ShutdownPolicy::abort()`** — abort immediately.
 
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
@@ -175,34 +175,32 @@ A child stuck in a non-yielding loop cannot be preempted — isolate truly
 blocking work behind a blocking pool (as the actor layer's `run_blocking`
 does, see the next chapter) or an external process.
 
-### Actor and supervisor deadlines
+### One shutdown clock per child
 
-A supervised actor has two nested shutdown deadlines:
+A supervised actor has one user-facing shutdown deadline: its child
+`ShutdownPolicy` grace. The grace bounds the whole actor drain, including
+queued messages, outstanding steps, and `on_stop`. Step deadlines remain
+independent bounds on individual steps; they do not extend the child grace.
 
-1. `GraphBuilder::actor_shutdown_timeout` belongs to the actor layer. Once the
-   supervisor cancels the child token, `RunnableActor` passes cancellation to
-   the inner actor task, waits for this timeout, and then aborts that inner task.
-   An actor-layer timeout during requested shutdown completes the child cleanly
-   with a `Cancelled` actor exit.
-2. The child's `ShutdownPolicy` belongs to the supervisor layer. It waits for
-   the entire child future. During removal this uses that child's grace period;
-   during a supervisor shutdown or group restart, every affected child is
-   drained against the longest configured grace period in that drain group. If
-   the supervisor deadline expires first, it aborts the outer future; dropping
-   that future also cancels and aborts the inner actor task.
+When a cooperative grace expires, the supervisor records a
+`ShutdownTimedOut` exit and signals the actor wrapper's tidy-abort path. The
+wrapper aborts and joins the inner actor task, terminates its mailbox binding,
+and publishes actor observability before returning. If the wrapper does not
+finish within a short fixed accounting beat, the supervisor hard-aborts it.
+`cooperative_then_abort` still lets the enclosing shutdown operation succeed;
+`cooperative_strict` also returns a timeout error. Both modes expose the same
+truthful `ShutdownTimedOut` reason in snapshots and lifecycle streams.
 
-These deadlines run concurrently rather than one after the other. To preserve
-the actor layer's clean completion path, ensure the applicable supervisor drain
-grace is at least `actor_shutdown_timeout`. If the supervisor deadline wins,
-`cooperative_then_abort` still lets supervisor shutdown complete successfully,
-while `cooperative_strict` reports a timeout. In either case the supervised
-Tokio task has been issued an abort and actor bindings are terminated, but—as
-with every Tokio abort—code that never reaches a poll boundary, and blocking
-work already running on the blocking pool, can continue outside that task.
+Ordered scopes stop children in reverse declaration order and give each child
+its complete grace. Dynamic scopes start every clock together and stop
+children concurrently, but each child escalates when its own grace expires;
+a short-grace child cannot borrow a longer-grace sibling's budget.
 
-Both defaults are five seconds, so local programs can use `Runtime::builder()`
-without extra shutdown configuration. Customize the pair only when an actor's
-cleanup budget or the host's shutdown deadline requires it.
+Standalone hosts pass an explicit shutdown bound to `RunnableActor::run_until`.
+That bound provides the same inner-task backstop without storing execution
+policy on the graph. As with every Tokio abort, code that never reaches a poll
+boundary, and blocking work already running on the blocking pool, can continue
+outside the actor task.
 
 ## Automatic shutdown for finite work
 

@@ -8,9 +8,9 @@ use tokio::{
     time::{Duration, Instant, sleep, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ControlError, DynamicSupervisorBuilder, LifecycleEventKind,
-    RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, SupervisorBuilder,
-    SupervisorError, SupervisorEvent,
+    BackoffPolicy, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
+    LifecycleEventKind, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
+    SupervisorBuilder, SupervisorError, SupervisorEvent,
 };
 
 mod common;
@@ -302,6 +302,75 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
 }
 
 #[tokio::test]
+async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (short_escalated_tx, mut short_escalated_rx) = mpsc::unbounded_channel();
+    let short_started_tx = started_tx.clone();
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("dynamic supervisor builds")
+        .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
+
+    handle
+        .add_child(
+            ChildSpec::new("short", move |ctx| {
+                let started_tx = short_started_tx.clone();
+                let short_escalated_tx = short_escalated_tx.clone();
+                async move {
+                    started_tx.send(()).expect("test receiver dropped");
+                    ctx.abort_token().cancelled().await;
+                    short_escalated_tx.send(()).expect("test receiver dropped");
+                    Ok(())
+                }
+            })
+            .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
+                20,
+            ))),
+        )
+        .await
+        .expect("short child added");
+    handle
+        .add_child(
+            ChildSpec::new("long", move |ctx| {
+                let started_tx = started_tx.clone();
+                async move {
+                    started_tx.send(()).expect("test receiver dropped");
+                    ctx.shutdown_token().cancelled().await;
+                    sleep(Duration::from_millis(100)).await;
+                    Ok(())
+                }
+            })
+            .shutdown(ShutdownPolicy::cooperative_then_abort(Duration::from_secs(
+                5,
+            ))),
+        )
+        .await
+        .expect("long child added");
+    common::recv_n(&mut started_rx, 2).await;
+
+    handle.shutdown();
+    timeout(Duration::from_millis(200), short_escalated_rx.recv())
+        .await
+        .expect("short child escalated at its own grace")
+        .expect("short escalation sender remained live");
+    assert_eq!(
+        handle.wait().await,
+        Err(SupervisorError::ShutdownTimedOut("short".to_owned()))
+    );
+
+    while let Some(event) = lifecycle.next().await {
+        if event.child_id == "short"
+            && let LifecycleEventKind::Exited { reason, .. } = event.kind
+        {
+            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            return;
+        }
+    }
+    panic!("short child timeout exit was not published");
+}
+
+#[tokio::test]
 async fn cooperative_remove_child_times_out_with_stuck_child_name() {
     let live_flag = common::LiveFlag::new();
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -339,6 +408,7 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .await
         .expect("keeper added");
     common::recv_event(&mut started_rx).await;
+    let mut lifecycle = handle.watch_lifecycle();
 
     let err = handle
         .remove_child("stubborn")
@@ -349,6 +419,15 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         !live_flag.is_live(),
         "timed-out cooperative removal should abort the child before returning"
     );
+    loop {
+        let event = lifecycle.next().await.expect("keeper keeps scope live");
+        if event.child_id == "stubborn"
+            && let LifecycleEventKind::Exited { reason, .. } = event.kind
+        {
+            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            break;
+        }
+    }
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -758,7 +837,7 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
 }
 
 #[tokio::test]
-async fn ordered_shutdown_graces_sum_while_dynamic_shutdown_keeps_one_shared_deadline() {
+async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently() {
     const GRACE: Duration = Duration::from_millis(40);
     let stubborn = |id: &'static str| {
         ChildSpec::new(id, |ctx| async move {

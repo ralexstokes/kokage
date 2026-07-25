@@ -267,9 +267,16 @@ async fn constructor_panic_uses_the_actor_panic_path() {
     let graph = builder.build().expect("registration does not construct");
     let actor = graph.actors()[0].clone();
 
-    let joined =
-        tokio::spawn(async move { actor.run_until(pending::<()>(), RestartPolicy::Never).await })
-            .await;
+    let joined = tokio::spawn(async move {
+        actor
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                Duration::from_secs(5),
+            )
+            .await
+    })
+    .await;
     assert!(joined.expect_err("constructor panic propagates").is_panic());
 }
 

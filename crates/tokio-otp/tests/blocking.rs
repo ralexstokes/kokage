@@ -38,7 +38,11 @@ fn start_graph(graph: &Graph) -> (CancellationToken, JoinHandle<Result<(), Actor
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::Never)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -232,7 +236,6 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
     let (finished_tx, finished_rx) = oneshot::channel();
     let finished = sender_slot(finished_tx);
     let mut builder = GraphBuilder::new();
-    builder.actor_shutdown_timeout(Duration::from_millis(50));
     builder.actor("worker", {
         let started = started.clone();
         let release = release.clone();
@@ -243,17 +246,33 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
         }
     });
     let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(&graph);
+    let actor = graph.actors().first().expect("actor exists").clone();
+    let stop = CancellationToken::new();
+    let task = tokio::spawn({
+        let stop = stop.clone();
+        async move {
+            actor
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_millis(50),
+                )
+                .await
+        }
+    });
 
     started.notified().await;
     stop.cancel();
-    timeout(Duration::from_secs(1), task)
+    let result = timeout(Duration::from_secs(1), task)
         .await
         .expect("graph terminated despite the stuck closure")
-        .expect("graph task joined")
-        .expect("graph stopped cleanly");
+        .expect("graph task joined");
 
     release.store(true, Ordering::Release);
+    assert!(matches!(
+        result,
+        Err(ActorRunError::ShutdownTimedOut { actor_id, .. }) if actor_id == "worker"
+    ));
     timeout(Duration::from_secs(1), finished_rx)
         .await
         .expect("detached closure ran to completion")
@@ -282,7 +301,15 @@ async fn blocking_panic_propagates_as_actor_panic() {
     let actor = graph.actors()[0].clone();
     let result = timeout(
         Duration::from_secs(1),
-        tokio::spawn(async move { actor.run_until(pending::<()>(), RestartPolicy::Never).await }),
+        tokio::spawn(async move {
+            actor
+                .run_until(
+                    pending::<()>(),
+                    RestartPolicy::Never,
+                    Duration::from_secs(5),
+                )
+                .await
+        }),
     )
     .await
     .expect("actor panic observed")

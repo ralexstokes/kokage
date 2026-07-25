@@ -14,7 +14,7 @@ use crate::{
         },
     },
     scope::ScopeKind,
-    shutdown::ShutdownMode,
+    shutdown::{ShutdownMode, TIDY_ABORT_BEAT},
 };
 
 use super::supervision::SupervisorRuntime;
@@ -23,6 +23,18 @@ use super::supervision::SupervisorRuntime;
 enum DrainScope<'a> {
     All,
     Subset(&'a HashSet<ChildKey>),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DrainDeadlinePhase {
+    Grace,
+    HardAbort,
+}
+
+struct DrainDeadline {
+    key: ChildKey,
+    at: Instant,
+    phase: DrainDeadlinePhase,
 }
 
 impl DrainScope<'_> {
@@ -189,7 +201,18 @@ impl SupervisorRuntime {
                 if matches!(policy.mode, ShutdownMode::CooperativeStrict) {
                     timed_out.push(id);
                 }
-                self.abort_child(key);
+                self.escalate_child(key);
+                let hard_abort_needed = self
+                    .wait_for_ordered_child(
+                        key,
+                        Some(Instant::now() + TIDY_ABORT_BEAT),
+                        scope,
+                        &mut deferred,
+                    )
+                    .await?;
+                if hard_abort_needed {
+                    self.abort_child(key);
+                }
             }
 
             // Abort-mode children and expired cooperative children still own
@@ -223,11 +246,12 @@ impl SupervisorRuntime {
 
             if let Some(deadline) = deadline {
                 tokio::select! {
+                    biased;
+                    _ = sleep_until(deadline) => return Ok(true),
                     joined = self.join_set.join_next_with_id() => {
                         let Some(joined) = joined else { return Ok(false); };
                         self.handle_join_for_scope(joined, scope, Some(key), deferred)?;
                     }
-                    _ = sleep_until(deadline) => return Ok(true),
                 }
             } else {
                 let Some(joined) = self.join_set.join_next_with_id().await else {
@@ -247,25 +271,27 @@ impl SupervisorRuntime {
             self.command_rx.close();
         }
         let started_at = StdInstant::now();
+        let cancelled_at = Instant::now();
         let mut deferred = Vec::new();
-        let mut max_grace: Option<std::time::Duration> = None;
-
-        for (key, child) in self.children.iter() {
-            if !scope.contains(key)
-                || child.membership == MembershipState::Removed
-                || !child.runtime.state.is_active()
-            {
-                continue;
-            }
-
-            let grace = child.runtime.definition.shutdown_policy.grace;
-            match child.runtime.definition.shutdown_policy.mode {
-                ShutdownMode::Abort => {}
-                ShutdownMode::CooperativeStrict | ShutdownMode::CooperativeThenAbort => {
-                    max_grace = Some(max_grace.map_or(grace, |current| current.max(grace)));
-                }
-            }
-        }
+        let mut timed_out = Vec::new();
+        let mut deadlines: Vec<_> = self
+            .children
+            .iter()
+            .filter(|(key, child)| {
+                scope.contains(*key)
+                    && child.membership != MembershipState::Removed
+                    && child.runtime.state.is_active()
+                    && !matches!(
+                        child.runtime.definition.shutdown_policy.mode,
+                        ShutdownMode::Abort
+                    )
+            })
+            .map(|(key, child)| DrainDeadline {
+                key,
+                at: cancelled_at + child.runtime.definition.shutdown_policy.grace,
+                phase: DrainDeadlinePhase::Grace,
+            })
+            .collect();
 
         abort_matching_children(&self.children, |key, child| {
             scope.contains(key)
@@ -282,36 +308,74 @@ impl SupervisorRuntime {
             return Ok(deferred);
         }
 
-        if let Some(grace) = max_grace {
-            let deadline = Instant::now() + grace;
-            while !scope.is_drained(self) {
-                tokio::select! {
-                    maybe = self.join_set.join_next_with_id() => {
-                        let Some(joined) = maybe else { break; };
-                        self.handle_join_for_scope(joined, scope, None, &mut deferred)?;
-                    }
-                    _ = sleep_until(deadline) => break,
-                }
-            }
+        while !scope.is_drained(self) {
+            deadlines.retain(|deadline| {
+                self.children.get(deadline.key).is_some_and(|child| {
+                    child.membership != MembershipState::Removed && child.runtime.state.is_active()
+                })
+            });
+            let Some(next_deadline) = deadlines.iter().map(|deadline| deadline.at).min() else {
+                break;
+            };
 
-            if !scope.is_drained(self) && matches!(reason, DrainReason::Shutdown) {
-                self.meta
-                    .observability
-                    .record_shutdown_timeout("shutdown", None);
+            tokio::select! {
+                biased;
+                _ = sleep_until(next_deadline) => {
+                    let now = Instant::now();
+                    let grace_expired: Vec<_> = deadlines
+                        .iter()
+                        .filter(|deadline| {
+                            deadline.phase == DrainDeadlinePhase::Grace && deadline.at <= now
+                        })
+                        .map(|deadline| deadline.key)
+                        .collect();
+                    for key in grace_expired {
+                        let child = &self.children[key];
+                        if matches!(reason, DrainReason::Shutdown) {
+                            self.meta.observability.record_shutdown_timeout(
+                                "shutdown",
+                                Some(&child.id),
+                            );
+                        }
+                        if matches!(
+                            child.runtime.definition.shutdown_policy.mode,
+                            ShutdownMode::CooperativeStrict
+                        ) && (matches!(reason, DrainReason::Shutdown)
+                            || child.membership != MembershipState::Removing)
+                        {
+                            timed_out.push(child.id.clone());
+                        }
+                        self.escalate_child(key);
+                        if let Some(deadline) = deadlines
+                            .iter_mut()
+                            .find(|deadline| deadline.key == key)
+                        {
+                            deadline.phase = DrainDeadlinePhase::HardAbort;
+                            deadline.at = now + TIDY_ABORT_BEAT;
+                        }
+                    }
+
+                    let hard_abort_due: Vec<_> = deadlines
+                        .iter()
+                        .filter(|deadline| {
+                            deadline.phase == DrainDeadlinePhase::HardAbort && deadline.at <= now
+                        })
+                        .map(|deadline| deadline.key)
+                        .collect();
+                    for key in hard_abort_due {
+                        self.abort_child(key);
+                    }
+                    deadlines.retain(|deadline| {
+                        deadline.phase != DrainDeadlinePhase::HardAbort || deadline.at > now
+                    });
+                }
+                maybe = self.join_set.join_next_with_id() => {
+                    let Some(joined) = maybe else { break; };
+                    self.handle_join_for_scope(joined, scope, None, &mut deferred)?;
+                }
             }
         }
 
-        let timed_out = collect_child_names(&self.children, |key, child| {
-            scope.contains(key)
-                && child.membership != MembershipState::Removed
-                && (matches!(reason, DrainReason::Shutdown)
-                    || child.membership != MembershipState::Removing)
-                && child.runtime.state.is_active()
-                && matches!(
-                    child.runtime.definition.shutdown_policy.mode,
-                    ShutdownMode::CooperativeStrict
-                )
-        });
         let remaining = active_task_names(&self.children, scope);
         if !remaining.is_empty() {
             abort_matching_children(&self.children, |key, _| scope.contains(key));
@@ -323,7 +387,7 @@ impl SupervisorRuntime {
         let remaining = active_task_names(&self.children, scope);
         self.record_drain_duration(reason, started_at);
         if !timed_out.is_empty() {
-            return Err(SupervisorError::ShutdownTimedOut(timed_out));
+            return Err(SupervisorError::ShutdownTimedOut(timed_out.join(", ")));
         }
         if !remaining.is_empty() && !matches!(reason, DrainReason::Shutdown) {
             return Err(SupervisorError::ShutdownTimedOut(remaining));

@@ -1,5 +1,9 @@
 use std::time::Duration;
 
+/// Fixed window in which a child wrapper can turn grace expiry into a tidy,
+/// truthfully classified exit before the supervisor hard-aborts its task.
+pub(crate) const TIDY_ABORT_BEAT: Duration = Duration::from_millis(10);
+
 /// Controls whether clean exits from significant children automatically stop
 /// their supervisor.
 ///
@@ -30,18 +34,27 @@ pub enum AutoShutdown {
 #[non_exhaustive]
 pub enum ShutdownMode {
     /// Like [`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort), but
-    /// failing to exit within the grace period is reported as a timeout error
-    /// instead of being aborted silently.
+    /// failing to exit within the grace period makes the enclosing shutdown or
+    /// removal operation return a timeout error. Both cooperative modes still
+    /// expose a [`ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut)
+    /// child exit.
     ///
-    /// Abort remains cooperative at Tokio poll boundaries, so a non-yielding
-    /// future can outlive the shutdown call briefly. For hard-stop guarantees,
-    /// isolate blocking work outside the supervised Tokio task.
+    /// On expiry the supervisor first signals
+    /// [`ChildContext::abort_token`](crate::ChildContext::abort_token), then
+    /// hard-aborts the task after a short fixed accounting beat. Abort remains
+    /// cooperative at Tokio poll boundaries, so a non-yielding future can
+    /// outlive the shutdown call briefly. For hard-stop guarantees, isolate
+    /// blocking work outside the supervised Tokio task.
     CooperativeStrict,
-    /// Wait for the grace period, then issue a Tokio abort and return promptly.
+    /// Wait for the grace period, then escalate and return from the enclosing
+    /// shutdown operation without a timeout error.
     ///
-    /// Abort remains cooperative at Tokio poll boundaries, so a non-yielding
-    /// future can outlive the shutdown call briefly. For hard-stop guarantees,
-    /// isolate blocking work outside the supervised Tokio task.
+    /// On expiry the supervisor first signals
+    /// [`ChildContext::abort_token`](crate::ChildContext::abort_token), then
+    /// hard-aborts the task after a short fixed accounting beat. Abort remains
+    /// cooperative at Tokio poll boundaries, so a non-yielding future can
+    /// outlive the shutdown call briefly. For hard-stop guarantees, isolate
+    /// blocking work outside the supervised Tokio task.
     CooperativeThenAbort,
     /// Issue a Tokio abort and return promptly.
     ///

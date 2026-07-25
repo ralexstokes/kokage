@@ -188,8 +188,9 @@ restarts, actors and nested subtrees declared in the builder are recreated;
 children added later through its handle are not and must be replayed by the
 application. If the parent supervisor that received `add_subtree` restarts,
 the dynamic subtree itself is not recreated. Restart intensity remains per
-child. Dynamic siblings shut down concurrently under one shared maximum-grace
-deadline.
+child. Dynamic siblings shut down concurrently; each child escalates at its
+own configured grace, so total teardown is bounded by the largest grace plus
+the fixed tidy-abort accounting beat.
 
 ## Reserve the handle before the scope exists
 

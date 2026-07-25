@@ -1,4 +1,4 @@
-use std::{error::Error, future::pending, marker::PhantomData};
+use std::{error::Error, future::pending, marker::PhantomData, time::Duration};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
@@ -69,7 +69,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
         let actor = actor.clone();
         async move {
             actor
-                .run_until(pending::<()>(), RestartPolicy::OnFailure)
+                .run_until(
+                    pending::<()>(),
+                    RestartPolicy::OnFailure,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });
@@ -85,7 +89,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), RestartPolicy::OnFailure)
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::OnFailure,
+                    Duration::from_secs(5),
+                )
                 .await
         }
     });

@@ -23,7 +23,11 @@ fn start_graph(
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(stop.cancelled(), RestartPolicy::Never)
+                    .run_until(
+                        stop.cancelled(),
+                        RestartPolicy::Never,
+                        Duration::from_secs(5),
+                    )
                     .await
             })
         })
@@ -325,7 +329,6 @@ async fn graph_with_applies_builder_config() {
     let mut builder = GraphBuilder::new();
     builder.name("configured");
     builder.mailbox_capacity(1);
-    builder.actor_shutdown_timeout(Duration::from_millis(50));
 
     let mut park = None;
     let graph = ParkGraph::graph_with(builder, |refs| {

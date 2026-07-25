@@ -1000,6 +1000,7 @@ pub(crate) fn actor_child_spec(
             actor
                 .run_until_ready(
                     ctx.shutdown_token().cancelled(),
+                    ctx.abort_token().cancelled(),
                     restart,
                     supervisor,
                     children,
