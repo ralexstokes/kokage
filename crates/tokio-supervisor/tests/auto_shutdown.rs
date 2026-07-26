@@ -66,9 +66,14 @@ async fn any_significant_clean_exit_stops_siblings_and_supervisor() {
         }
     }
     assert_eq!(sequence, ["exited", "auto_shutdown", "stopping", "stopped"]);
-    timeout(common::QUIET_TIMEOUT, events.recv())
-        .await
-        .expect_err("SupervisorStopped must be the final supervisor event");
+    let after_stopped = timeout(common::QUIET_TIMEOUT, events.recv()).await;
+    assert!(
+        matches!(
+            after_stopped,
+            Err(_) | Ok(Err(tokio::sync::broadcast::error::RecvError::Closed))
+        ),
+        "SupervisorStopped must be the final supervisor event: {after_stopped:?}"
+    );
 }
 
 #[tokio::test]

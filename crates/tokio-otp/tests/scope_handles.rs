@@ -214,11 +214,48 @@ async fn runtime_builders_reserve_handles_and_terminalize_when_dropped() {
     drop(builder);
     assert_snapshot_stream_closes(&handle).await;
 
+    let builder = Runtime::builder();
+    let handle = builder.handle();
+    let runtime = builder.build().expect("ordered runtime builds");
+    drop(runtime);
+    assert_snapshot_stream_closes(&handle).await;
+
     let builder = Runtime::dynamic();
     let handle = builder.handle();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
     drop(builder);
     assert_snapshot_stream_closes(&handle).await;
+}
+
+#[test]
+fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
+    let mut graph = GraphBuilder::new();
+    graph.actor("actor", || Idle);
+    let builder = Runtime::builder()
+        .child(ChildSpec::new("task", |_| async { Ok(()) }))
+        .graph(graph.build().expect("graph builds"));
+    let handle = builder.handle();
+    let declared_before = handle
+        .snapshot()
+        .children
+        .into_iter()
+        .map(|child| child.id)
+        .collect::<Vec<_>>();
+
+    let builder = builder.strategy(Strategy::RestForOne);
+    let after = handle.snapshot();
+
+    assert_eq!(after.strategy, Strategy::RestForOne);
+    assert_eq!(
+        after
+            .children
+            .into_iter()
+            .map(|child| child.id)
+            .collect::<Vec<_>>(),
+        declared_before
+    );
+    assert_eq!(declared_before, ["task", "actor"]);
+    drop(builder);
 }
 
 #[tokio::test]

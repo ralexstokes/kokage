@@ -101,6 +101,13 @@ impl ChildContext {
     /// remaining self-deadlock is awaiting removal of a sibling whose drain
     /// depends on this child draining its own input; pipeline that operation
     /// instead of awaiting it inline.
+    ///
+    /// A readiness-gated child must also not await
+    /// [`SupervisorHandle::wait_started`](crate::SupervisorHandle::wait_started)
+    /// on this enclosing scope before it calls [`mark_ready`](Self::mark_ready):
+    /// the child itself is preventing that scope from becoming ready. Launch
+    /// the wait as pipelined work, report readiness, and only then consume its
+    /// result.
     pub fn supervisor(&self) -> SupervisorHandle {
         self.scope.clone()
     }

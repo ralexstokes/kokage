@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 use crate::{
@@ -636,17 +636,23 @@ impl RuntimeHandle {
     }
 
     pub(crate) fn unavailable() -> Self {
-        let builder = tokio_supervisor::DynamicSupervisorBuilder::new();
-        let supervisor = builder.handle();
-        drop(builder);
-        Self::new(
-            supervisor,
-            Arc::new(ActorRuntimeState::new(
-                RunnableActorFactory::new(),
-                RestartPolicy::default(),
-                ShutdownPolicy::default(),
-            )),
-        )
+        static UNAVAILABLE: OnceLock<RuntimeHandle> = OnceLock::new();
+
+        UNAVAILABLE
+            .get_or_init(|| {
+                let builder = tokio_supervisor::DynamicSupervisorBuilder::new();
+                let supervisor = builder.handle();
+                drop(builder);
+                Self::new(
+                    supervisor,
+                    Arc::new(ActorRuntimeState::new(
+                        RunnableActorFactory::new(),
+                        RestartPolicy::default(),
+                        ShutdownPolicy::default(),
+                    )),
+                )
+            })
+            .clone()
     }
 
     /// Returns a clone of the underlying supervisor handle.
@@ -1039,6 +1045,14 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unavailable_runtime_handle_is_cached() {
+        let first = super::RuntimeHandle::unavailable();
+        let second = super::RuntimeHandle::unavailable();
+
+        assert!(std::sync::Arc::ptr_eq(&first.actors, &second.actors));
+    }
+
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
         let root = crate::Runtime::dynamic()

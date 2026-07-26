@@ -173,6 +173,7 @@ impl RuntimeBuilder {
     pub fn strategy(mut self, strategy: Strategy) -> Self {
         self.strategy = strategy;
         self.supervisor = std::mem::take(&mut self.supervisor).strategy(strategy);
+        self.refresh_snapshot();
         self
     }
 

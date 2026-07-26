@@ -2101,7 +2101,7 @@ mod tests {
     async fn readiness_wake_prioritizes_ready_over_nested_traffic() {
         let supervisor = empty_supervisor();
         let own_handle = supervisor.handle();
-        let config = supervisor.config;
+        let config = supervisor.config.clone();
         let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
@@ -2151,7 +2151,9 @@ mod tests {
 
     #[test]
     fn deadline_command_batch_preserves_shutdown_priority() {
-        let config = empty_supervisor().config;
+        let supervisor = empty_supervisor();
+        let own_handle = supervisor.handle();
+        let config = supervisor.config.clone();
         let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
@@ -2171,6 +2173,7 @@ mod tests {
             Vec::new(),
             None,
             false,
+            own_handle,
         );
         let (reply, _reply_rx) = oneshot::channel();
         command_tx
@@ -2197,7 +2200,8 @@ mod tests {
             .child(ChildSpec::new("removable", |_| async { Ok(()) }))
             .build()
             .expect("valid supervisor config");
-        let config = supervisor.config;
+        let own_handle = supervisor.handle();
+        let config = supervisor.config.clone();
         let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
@@ -2217,6 +2221,7 @@ mod tests {
             Vec::new(),
             None,
             false,
+            own_handle,
         );
         let key = runtime.child_order[0];
         let (reply, mut reply_rx) = oneshot::channel();
@@ -2249,7 +2254,7 @@ mod tests {
             .build()
             .expect("valid supervisor config");
         let own_handle = supervisor.handle();
-        let config = supervisor.config;
+        let config = supervisor.config.clone();
         let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
@@ -2342,7 +2347,8 @@ mod tests {
             .supervisor("collision", empty_supervisor())
             .build()
             .expect("valid supervisor config")
-            .config;
+            .config
+            .clone();
         let nested_channels = empty_nested_channels();
         let reused = empty_supervisor().stable_channels(true);
         let displaced = empty_supervisor().stable_channels(false);

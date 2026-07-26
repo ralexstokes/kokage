@@ -39,6 +39,10 @@ use crate::{
 pub struct Supervisor {
     pub(crate) config: SupervisorConfig,
     pub(crate) channels: Arc<StableSupervisorChannels>,
+    // A built declaration owns abandonment terminality until its channels are
+    // handed to a parent edge. Spawned roots terminalize through this guard
+    // when their owned runtime finishes.
+    terminalize_on_drop: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -102,14 +106,22 @@ impl ParentLink {
 impl Supervisor {
     pub(crate) fn new(config: SupervisorConfig) -> Self {
         let channels = stable_channels_for_config(&config, false);
-        Self { config, channels }
+        Self {
+            config,
+            channels,
+            terminalize_on_drop: AtomicBool::new(true),
+        }
     }
 
     pub(crate) fn with_channels(
         config: SupervisorConfig,
         channels: Arc<StableSupervisorChannels>,
     ) -> Self {
-        Self { config, channels }
+        Self {
+            config,
+            channels,
+            terminalize_on_drop: AtomicBool::new(true),
+        }
     }
 
     /// Returns this supervisor's immutable scope kind.
@@ -345,7 +357,7 @@ impl Supervisor {
         let supervisor_path = format_path(&path);
         let strategy = strategy_label(self.config.strategy);
         let mut runtime = SupervisorRuntime::new(
-            self.config,
+            self.config.clone(),
             shutdown_rx,
             events_tx,
             lifecycle,
@@ -376,13 +388,29 @@ impl Supervisor {
         statically_configured: bool,
     ) -> Arc<StableSupervisorChannels> {
         self.channels.claim_edge(statically_configured);
+        self.terminalize_on_drop.store(false, Ordering::Release);
         Arc::clone(&self.channels)
     }
 }
 
 impl Clone for Supervisor {
     fn clone(&self) -> Self {
-        Self::new(self.config.clone())
+        let mut config = self.config.clone();
+        config.children = self
+            .config
+            .children
+            .iter()
+            .map(|child| Arc::new((**child).clone()))
+            .collect();
+        Self::new(config)
+    }
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if self.terminalize_on_drop.swap(false, Ordering::AcqRel) {
+            self.channels.terminal();
+        }
     }
 }
 
