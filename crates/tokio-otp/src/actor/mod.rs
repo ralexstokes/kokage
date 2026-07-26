@@ -1,5 +1,4 @@
-//! Actor layer: typed actor graphs with restart-stable refs (formerly the
-//! `tokio-actor` crate).
+//! Actor layer: typed actor graphs with restart-stable refs.
 //!
 //! This module tree is private; its public API is re-exported flat from the
 //! crate root. The terminate-binding drop guard connecting the actor and

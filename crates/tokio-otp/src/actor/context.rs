@@ -340,15 +340,6 @@ impl<M> ActorRef<M> {
         }
     }
 
-    /// Waits until `stale` is replaced by another incarnation or the actor
-    /// permanently terminates. Returns whether a fresh incarnation appeared.
-    pub(crate) async fn wait_incarnation_changed(&self, stale: &MailboxRef<M>) -> bool {
-        let mut binding = self.binding.clone();
-        self.wait_for_rebind_or_termination(&mut binding, stale)
-            .await
-            .is_ok()
-    }
-
     /// Waits until the stale mailbox is unbound and a fresh one is bound.
     ///
     /// Waiting for the stale mailbox to clear first avoids busy-looping in

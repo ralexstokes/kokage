@@ -25,11 +25,8 @@ mod coverage_probe {
         };
     }
 
-    #[allow(deprecated)]
     mod otp {
-        use tokio_otp::prelude::{
-            LifecycleWatchGuard, RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle,
-        };
+        use tokio_otp::prelude::{LifecycleWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle};
     }
 
     mod advanced_root {

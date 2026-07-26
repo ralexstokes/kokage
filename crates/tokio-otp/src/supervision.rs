@@ -176,9 +176,6 @@ pub enum SupervisionTree {
     },
 }
 
-/// Backward-compatible name for one recursive child node.
-pub type SupervisionChild = SupervisionTree;
-
 /// A graph actor placed in a supervision tree with optional policy overrides.
 #[derive(Clone)]
 pub struct ActorSpec {
