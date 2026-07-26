@@ -4,38 +4,7 @@
 //! use tokio_supervisor::prelude::*;
 //! ```
 
-use tokio::sync::{broadcast, watch};
-
-/// Extension trait for `broadcast::Receiver<SupervisorEvent>` that adds a
-/// convenience method for waiting until a specific event arrives.
-#[allow(async_fn_in_trait)]
-pub trait SupervisorEventReceiverExt {
-    /// Receives events in a loop, returning the first one for which
-    /// `predicate` returns `true`. Intermediate events are discarded.
-    async fn wait_for_event<P>(
-        &mut self,
-        predicate: P,
-    ) -> Result<crate::SupervisorEvent, broadcast::error::RecvError>
-    where
-        P: FnMut(&crate::SupervisorEvent) -> bool;
-}
-
-impl SupervisorEventReceiverExt for broadcast::Receiver<crate::SupervisorEvent> {
-    async fn wait_for_event<P>(
-        &mut self,
-        mut predicate: P,
-    ) -> Result<crate::SupervisorEvent, broadcast::error::RecvError>
-    where
-        P: FnMut(&crate::SupervisorEvent) -> bool,
-    {
-        loop {
-            let event = self.recv().await?;
-            if predicate(&event) {
-                return Ok(event);
-            }
-        }
-    }
-}
+use tokio::sync::watch;
 
 /// Extension trait for `watch::Receiver<SupervisorSnapshot>` that adds a
 /// convenience method for waiting until the snapshot satisfies a condition.
@@ -78,9 +47,10 @@ impl SupervisorSnapshotReceiverExt for watch::Receiver<crate::SupervisorSnapshot
 pub use crate::{
     AttachedChild, AttachedChildIdentity, BackoffPolicy, BoxError, ChildContext,
     ChildMembershipView, ChildResult, ChildSnapshot, ChildSpec, ChildStateView, CompletionGuard,
-    CompletionOutcome, ControlError, ControlOperation, DynamicSupervisorBuilder, EventPathSegment,
-    ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity,
-    RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSpec, SupervisorStateView, SupervisorToken,
+    CompletionOutcome, ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView,
+    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
+    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
+    RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
+    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSpec, SupervisorStateView, SupervisorToken,
 };

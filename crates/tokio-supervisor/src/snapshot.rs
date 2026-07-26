@@ -14,9 +14,9 @@ use crate::{event::ExitStatusView, scope::ScopeKind, strategy::Strategy};
 /// child.
 ///
 /// Snapshots are published via a `tokio::sync::watch` channel. The supervisor
-/// updates the snapshot **before** broadcasting the corresponding
-/// [`SupervisorEvent`](crate::SupervisorEvent), so subscribers reading the
-/// snapshot from an event handler will see already-consistent state.
+/// updates the snapshot **before** staging the corresponding direct-child
+/// [`LifecycleEvent`](crate::LifecycleEvent), so watchers reading the snapshot
+/// from an event handler will see already-consistent state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -45,9 +45,8 @@ pub struct SupervisorSnapshot {
     ///
     /// Because snapshots are delivered over a `watch` channel (which conflates
     /// intermediate values but never lags), deltas of this counter are a
-    /// reliable way to observe restart activity — unlike counting
-    /// [`SupervisorEvent`](crate::SupervisorEvent)s from the lossy broadcast
-    /// channel. Lifecycle events carry this same counter at emission.
+    /// reliable way to observe restart activity. Lifecycle events carry this
+    /// same counter at emission.
     ///
     /// The counter only covers direct children. Restarts inside a nested
     /// supervisor are visible on that nested snapshot's own `total_restarts`.

@@ -15,8 +15,8 @@ use tokio::{
     sync::Notify,
 };
 use tokio_supervisor::{
-    BoxError, ChildSpec, DynamicSupervisorBuilder, RestartPolicy, Strategy, SupervisorBuilder,
-    SupervisorEvent,
+    BoxError, ChildSpec, DynamicSupervisorBuilder, LifecycleEventKind, LifecycleWatch,
+    RestartPolicy, Strategy, SupervisorBuilder,
 };
 
 const DEFAULT_WARMUP_ITERS: usize = 10;
@@ -112,7 +112,7 @@ async fn spawn_shutdown_flow(children: usize) {
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.watch_lifecycle();
     let started = wait_for_child_start_count(&mut events, children).await;
     black_box(started);
 
@@ -205,7 +205,7 @@ async fn one_for_all_restart_flow() {
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.watch_lifecycle();
     let restarted = wait_for_restart_count(&mut events, 4).await;
     black_box(restarted);
 
@@ -218,7 +218,7 @@ async fn dynamic_add_remove_flow() {
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.watch_lifecycle();
 
     handle
         .add_child(ChildSpec::new("seed", |ctx| async move {
@@ -249,57 +249,42 @@ async fn dynamic_add_remove_flow() {
     handle.wait().await.expect("shutdown should succeed");
 }
 
-async fn wait_for_child_start_count(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
-    expected: usize,
-) -> usize {
+async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize) -> usize {
     let mut started = 0;
     while started < expected {
-        if let SupervisorEvent::ChildStarted { .. } = events.recv().await.expect("event stream") {
+        let event = events.next().await.expect("lifecycle stream");
+        if matches!(event.kind, LifecycleEventKind::Started { .. }) {
             started += 1;
         }
     }
     started
 }
 
-async fn wait_for_restart_count(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
-    expected: usize,
-) -> usize {
+async fn wait_for_restart_count(events: &mut LifecycleWatch, expected: usize) -> usize {
     let mut restarted = 0;
     while restarted < expected {
-        if let SupervisorEvent::ChildRestarted {
-            old_generation: 0,
-            new_generation: 1,
-            ..
-        } = events.recv().await.expect("event stream")
-        {
+        let event = events.next().await.expect("lifecycle stream");
+        if matches!(event.kind, LifecycleEventKind::Started { generation: 1 }) {
             restarted += 1;
         }
     }
     restarted
 }
 
-async fn wait_for_named_child_started(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
-    id: &str,
-) {
+async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
     loop {
-        match events.recv().await.expect("event stream") {
-            SupervisorEvent::ChildStarted { id: started_id, .. } if started_id == id => return,
-            _ => {}
+        let event = events.next().await.expect("lifecycle stream");
+        if event.child_id == id && matches!(event.kind, LifecycleEventKind::Started { .. }) {
+            return;
         }
     }
 }
 
-async fn wait_for_named_child_removed(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
-    id: &str,
-) {
+async fn wait_for_named_child_removed(events: &mut LifecycleWatch, id: &str) {
     loop {
-        match events.recv().await.expect("event stream") {
-            SupervisorEvent::ChildRemoved { id: removed_id, .. } if removed_id == id => return,
-            _ => {}
+        let event = events.next().await.expect("lifecycle stream");
+        if event.child_id == id && matches!(event.kind, LifecycleEventKind::Removed) {
+            return;
         }
     }
 }

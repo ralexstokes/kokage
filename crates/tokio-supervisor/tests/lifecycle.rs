@@ -8,9 +8,10 @@ use std::{
 
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, CompletionGuard, DynamicSupervisorBuilder, LifecycleEvent,
-    LifecycleEventKind, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy,
-    SupervisorBuilder, SupervisorSpec,
+    BackoffPolicy, ChildSpec, ChildStateView, CompletionGuard, DynamicSupervisorBuilder,
+    LifecycleEvent, LifecycleEventKind, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
+    RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
+    Strategy, SupervisorBuilder, SupervisorSpec,
 };
 
 mod common;
@@ -35,6 +36,273 @@ async fn next_for(
             return event;
         }
     }
+}
+
+async fn next_recursive(watch: &mut RecursiveLifecycleWatch) -> RecursiveLifecycleEvent {
+    timeout(common::EVENT_TIMEOUT, watch.next())
+        .await
+        .expect("timed out waiting for recursive lifecycle event")
+        .expect("recursive lifecycle watch closed before the expected event")
+}
+
+async fn next_recursive_for(
+    watch: &mut RecursiveLifecycleWatch,
+    predicate: impl Fn(&RecursiveLifecycleEvent) -> bool,
+) -> RecursiveLifecycleEvent {
+    loop {
+        let event = next_recursive(watch).await;
+        if predicate(&event) {
+            return event;
+        }
+    }
+}
+
+#[tokio::test]
+async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
+    let crash = Arc::new(Notify::new());
+    let child_crash = Arc::clone(&crash);
+    let builder = SupervisorBuilder::new()
+        .restart_intensity(
+            RestartIntensity::new(5, Duration::from_secs(60))
+                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
+        )
+        .child(
+            ChildSpec::new("worker", move |ctx| {
+                let crash = Arc::clone(&child_crash);
+                async move {
+                    if ctx.generation() == 0 {
+                        crash.notified().await;
+                        return Err(common::test_error("boom"));
+                    }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            })
+            .restart(RestartPolicy::OnFailure),
+        );
+    let retained = builder.handle();
+    let mut tree = retained.watch_lifecycle_recursive();
+    let handle = builder.build().expect("valid supervisor").spawn();
+
+    let started = next_recursive_for(&mut tree, |event| {
+        event.supervisor_path.is_empty()
+            && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+    })
+    .await;
+    assert!(started.supervisor_path.is_empty());
+    handle.wait_started().await.expect("startup succeeds");
+
+    crash.notify_one();
+    let exited = next_recursive_for(&mut tree, |event| {
+        matches!(
+            &event.kind,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id,
+                kind: LifecycleEventKind::Exited { generation: 0, .. },
+                ..
+            }) if child_id == "worker"
+        )
+    })
+    .await;
+    assert!(exited.supervisor_path.is_empty());
+    let scheduled = next_recursive(&mut tree).await;
+    assert!(scheduled.supervisor_path.is_empty());
+    assert!(matches!(
+        scheduled.kind,
+        RecursiveLifecycleEventKind::RestartScheduled {
+            ref child_id,
+            membership_epoch: 0,
+            generation: 0,
+            delay,
+            total_restarts: 1,
+            child_restart_count: 1,
+        } if child_id == "worker" && delay == Duration::from_millis(40)
+    ));
+    let restarted = next_recursive_for(&mut tree, |event| {
+        matches!(
+            &event.kind,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id,
+                kind: LifecycleEventKind::Started { generation: 1 },
+                ..
+            }) if child_id == "worker"
+        )
+    })
+    .await;
+    assert!(restarted.supervisor_path.is_empty());
+
+    handle.shutdown();
+    next_recursive_for(&mut tree, |event| {
+        event.supervisor_path.is_empty()
+            && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStopping)
+    })
+    .await;
+    next_recursive_for(&mut tree, |event| {
+        event.supervisor_path.is_empty()
+            && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStopped)
+    })
+    .await;
+    handle.wait().await.expect("shutdown succeeds");
+    assert_eq!(tree.next().await, None);
+}
+
+#[tokio::test]
+async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
+    let crash_leaf = Arc::new(Notify::new());
+    let crash_middle = Arc::new(Notify::new());
+    let builder = SupervisorBuilder::new().supervisor(
+        SupervisorSpec::new("middle", middle_supervisor(&crash_leaf, &crash_middle))
+            .restart(RestartPolicy::OnFailure)
+            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+    );
+    let retained = builder.handle();
+    let mut tree = retained.watch_lifecycle_recursive();
+    let handle = builder.build().expect("valid supervisor").spawn();
+    handle.wait_started().await.expect("startup succeeds");
+
+    let initial = next_recursive_for(&mut tree, |event| {
+        matches!(
+            &event.kind,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id,
+                kind: LifecycleEventKind::Started { generation: 0 },
+                ..
+            }) if child_id == "worker"
+        )
+    })
+    .await;
+    assert_eq!(initial.supervisor_path.len(), 2);
+    assert_eq!(initial.supervisor_path[0].id, "middle");
+    assert_eq!(initial.supervisor_path[0].membership_epoch, 0);
+    assert_eq!(initial.supervisor_path[0].generation, 0);
+    assert_eq!(initial.supervisor_path[1].id, "leaf");
+    assert_eq!(initial.supervisor_path[1].generation, 0);
+
+    crash_middle.notify_one();
+    let recreated = next_recursive_for(&mut tree, |event| {
+        event
+            .supervisor_path
+            .first()
+            .is_some_and(|segment| segment.id == "middle" && segment.generation == 1)
+            && matches!(
+                &event.kind,
+                RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                    child_id,
+                    kind: LifecycleEventKind::Started { generation: 0 },
+                    ..
+                }) if child_id == "worker"
+            )
+    })
+    .await;
+    assert_eq!(recreated.supervisor_path.len(), 2);
+    assert_eq!(recreated.supervisor_path[0].membership_epoch, 0);
+    assert_eq!(recreated.supervisor_path[0].generation, 1);
+    assert_eq!(recreated.supervisor_path[1].id, "leaf");
+    assert!(
+        recreated.supervisor_path[1].membership_epoch > initial.supervisor_path[1].membership_epoch
+    );
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle.wait_started().await.expect("startup succeeds");
+    let mut tree = handle.watch_lifecycle_recursive();
+
+    let first_epoch = handle
+        .add_supervisor(SupervisorSpec::new("nested", idle_supervisor()))
+        .await
+        .expect("first nested supervisor added");
+    let first = next_recursive_for(&mut tree, |event| {
+        matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+            && event
+                .supervisor_path
+                .first()
+                .is_some_and(|segment| segment.id == "nested")
+    })
+    .await;
+    assert_eq!(first.supervisor_path.len(), 1);
+    assert_eq!(first.supervisor_path[0].membership_epoch, first_epoch);
+    assert_eq!(first.supervisor_path[0].generation, 0);
+
+    handle
+        .remove_child("nested")
+        .await
+        .expect("first nested supervisor removed");
+    let second_epoch = handle
+        .add_supervisor(SupervisorSpec::new("nested", idle_supervisor()))
+        .await
+        .expect("replacement nested supervisor added");
+    let second = next_recursive_for(&mut tree, |event| {
+        matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+            && event.supervisor_path.first().is_some_and(|segment| {
+                segment.id == "nested" && segment.membership_epoch == second_epoch
+            })
+    })
+    .await;
+    assert!(second_epoch > first_epoch);
+    assert_eq!(second.supervisor_path.len(), 1);
+    assert_eq!(second.supervisor_path[0].generation, 0);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
+    const RESTARTS: usize = 80;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let child_attempts = Arc::clone(&attempts);
+    let child = ChildSpec::new("storm", move |ctx| {
+        let attempts = Arc::clone(&child_attempts);
+        async move {
+            if attempts.fetch_add(1, Ordering::SeqCst) < RESTARTS {
+                return Err(common::test_error("again"));
+            }
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::OnFailure)
+    .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60)));
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut tree = handle.watch_lifecycle_recursive();
+    handle.add_child(child).await.expect("dynamic add succeeds");
+    let mut snapshots = handle.subscribe_snapshots();
+    wait_for_snapshot(&mut snapshots, |snapshot| {
+        snapshot
+            .child("storm")
+            .is_some_and(|child| child.generation == RESTARTS as u64 && child.started)
+    })
+    .await;
+
+    let lagged = next_recursive(&mut tree).await;
+    assert!(lagged.supervisor_path.is_empty());
+    assert!(matches!(
+        lagged.kind,
+        RecursiveLifecycleEventKind::Lagged { dropped } if dropped > 0
+    ));
+    let last_start = next_recursive_for(&mut tree, |event| {
+        matches!(
+            &event.kind,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id,
+                kind: LifecycleEventKind::Started { generation },
+                ..
+            }) if child_id == "storm" && *generation == RESTARTS as u64
+        )
+    })
+    .await;
+    assert!(last_start.supervisor_path.is_empty());
+
+    shutdown(handle).await;
 }
 
 #[tokio::test]

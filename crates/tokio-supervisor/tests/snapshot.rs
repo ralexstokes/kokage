@@ -13,12 +13,12 @@ use tokio::{
 use tokio_supervisor::{
     BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
     DynamicSupervisorBuilder, ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind,
-    SupervisorBuilder, SupervisorEvent, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
+    SupervisorBuilder, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
 };
 
 mod common;
 
-use common::wait_for_snapshot;
+use common::{ObservedEvent, wait_for_snapshot};
 
 #[test]
 fn snapshot_builder_sets_total_restarts() {
@@ -419,7 +419,7 @@ async fn events_observe_already_published_snapshot_state() {
         .expect("valid supervisor");
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     loop {
         match timeout(common::EVENT_TIMEOUT, events.recv())
@@ -427,7 +427,7 @@ async fn events_observe_already_published_snapshot_state() {
             .expect("timed out waiting for supervisor event")
             .expect("supervisor event stream should remain open")
         {
-            SupervisorEvent::ChildStarted { id, generation, .. }
+            ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "worker" && generation == 0 =>
             {
                 let snapshot = handle.snapshot();
@@ -448,7 +448,7 @@ async fn events_observe_already_published_snapshot_state() {
             .await
             .expect("timed out waiting for supervisor event")
             .expect("supervisor event stream should remain open")
-            == SupervisorEvent::SupervisorStopped
+            == ObservedEvent::SupervisorStopped
         {
             let snapshot = handle.snapshot();
             assert_eq!(snapshot.state, SupervisorStateView::Stopped);

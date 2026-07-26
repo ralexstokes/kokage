@@ -12,10 +12,10 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, SupervisorBuilder, SupervisorError,
-    SupervisorEvent,
 };
 
 mod common;
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn repeated_failures_can_exceed_restart_intensity() {
@@ -197,12 +197,12 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
         .expect("valid supervisor")
         .spawn();
 
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     release.notify_one();
 
     let mut delays = Vec::new();
     while delays.len() < 4 {
-        if let SupervisorEvent::ChildRestartScheduled { delay, .. } =
+        if let ObservedEvent::ChildRestartScheduled { delay, .. } =
             common::recv_supervisor_event(&mut events).await
         {
             delays.push(delay);

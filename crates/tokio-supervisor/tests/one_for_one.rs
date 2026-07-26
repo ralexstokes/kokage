@@ -9,10 +9,11 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-    Strategy, SupervisorBuilder, SupervisorEvent,
+    Strategy, SupervisorBuilder,
 };
 
 mod common;
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn sibling_restart_dispatches_during_another_childs_backoff() {
@@ -73,13 +74,13 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         .spawn();
     assert_eq!(common::recv_event(&mut slow_rx).await, 0);
     assert_eq!(common::recv_event(&mut fast_rx).await, 0);
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     slow_failure.notify_one();
     loop {
         if matches!(
             common::recv_supervisor_event(&mut events).await,
-            SupervisorEvent::ChildRestartScheduled { ref id, delay, .. }
+            ObservedEvent::ChildRestartScheduled { ref id, delay, .. }
                 if id == "slow" && delay == Duration::from_millis(500)
         ) {
             break;
@@ -346,19 +347,19 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
         .build()
         .expect("valid supervisor")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     let mut sequence = Vec::new();
     let mut saw_restart = false;
 
     while !saw_restart {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildExited { id, generation, .. }
+            ObservedEvent::ChildExited { id, generation, .. }
                 if id == "flaky" && generation == 0 =>
             {
                 sequence.push("exited");
             }
-            SupervisorEvent::ChildRestartScheduled {
+            ObservedEvent::ChildRestartScheduled {
                 id,
                 generation,
                 delay,
@@ -367,12 +368,12 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
                 assert_eq!(delay, Duration::from_millis(40));
                 sequence.push("scheduled");
             }
-            SupervisorEvent::ChildStarted { id, generation, .. }
+            ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "flaky" && generation == 1 =>
             {
                 sequence.push("started");
             }
-            SupervisorEvent::ChildRestarted {
+            ObservedEvent::ChildRestarted {
                 id,
                 old_generation,
                 new_generation,

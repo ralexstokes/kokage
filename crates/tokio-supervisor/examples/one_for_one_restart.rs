@@ -47,25 +47,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut lifecycle = handle.watch_lifecycle();
 
     loop {
-        let event = timeout(Duration::from_secs(2), events.recv()).await??;
+        let event = timeout(Duration::from_secs(2), lifecycle.next())
+            .await?
+            .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        if let SupervisorEvent::ChildRestarted {
-            id,
-            old_generation,
-            new_generation,
-            ..
-        } = event
+        if event.child_id == "flaky-worker"
+            && let LifecycleEventKind::Started { generation: 1 } = event.kind
         {
-            println!("child {} restarted", id);
-            if id == "flaky-worker" {
-                assert_eq!(old_generation, 0);
-                assert_eq!(new_generation, 1);
-                break;
-            }
+            println!("child {} restarted into generation 1", event.child_id);
+            break;
         }
     }
 

@@ -6,7 +6,7 @@ use std::{
 
 use slab::Slab;
 use tokio::{
-    sync::{broadcast, mpsc, oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     task::{Id, JoinError, JoinSet},
     time::Instant,
 };
@@ -17,12 +17,15 @@ use crate::{
     child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},
-    event::{ExitStatusView, NestedEventNotification, SupervisorEvent},
+    event::{ExitStatusView, RuntimeEvent},
     handle::{
         AttachedChildState, AttachedChildrenState, NestedChannels, PendingSupervisorSpec,
         StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
     },
-    lifecycle::{LifecycleEventDraft, LifecycleEventKind, LifecycleHub},
+    lifecycle::{
+        LifecycleEventDraft, LifecycleEventKind, LifecycleHub, LifecyclePathSegment,
+        LifecycleTreeSink, RecursiveLifecycleEventKind,
+    },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     scope::{ControlOperation, ScopeKind},
@@ -117,7 +120,6 @@ type JoinedChild = Result<(Id, ChildEnvelope), JoinError>;
 struct WakeOptions {
     commands: bool,
     nested_snapshots: bool,
-    nested_events: bool,
     readiness: bool,
     joins: bool,
     deadline: Option<Instant>,
@@ -128,7 +130,6 @@ impl WakeOptions {
         Self {
             commands: true,
             nested_snapshots: true,
-            nested_events: true,
             readiness: true,
             joins: true,
             deadline,
@@ -140,7 +141,6 @@ enum Wake {
     Shutdown,
     Command(Option<SupervisorCommand>),
     NestedSnapshot(Option<NestedSnapshotNotification>),
-    NestedEvent(Option<NestedEventNotification>),
     Ready(Option<ChildReady>),
     Joined(Option<JoinedChild>),
     Deadline,
@@ -341,16 +341,14 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) children_by_id: HashMap<String, ChildKey>,
     pub(crate) child_order: Vec<ChildKey>,
     pub(crate) live_tasks: usize,
-    pub(crate) events: broadcast::Sender<SupervisorEvent>,
     pub(crate) lifecycle: Arc<LifecycleHub>,
+    pub(crate) lifecycle_tree: LifecycleTreeSink,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) attached_children: AttachedChildrenState,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
     pub(crate) nested_channels: NestedChannels,
     pub(crate) own_handle: SupervisorHandle,
-    pub(crate) nested_event_tx: mpsc::Sender<NestedEventNotification>,
-    pub(crate) nested_event_rx: mpsc::Receiver<NestedEventNotification>,
     pub(crate) nested_snapshot_tx: mpsc::UnboundedSender<NestedSnapshotNotification>,
     pub(crate) nested_snapshot_rx: mpsc::UnboundedReceiver<NestedSnapshotNotification>,
     pub(crate) ready_tx: mpsc::UnboundedSender<ChildReady>,
@@ -370,7 +368,6 @@ impl SupervisorRuntime {
     pub(crate) fn new(
         config: SupervisorConfig,
         shutdown_rx: watch::Receiver<bool>,
-        events: broadcast::Sender<SupervisorEvent>,
         lifecycle: Arc<LifecycleHub>,
         snapshots: watch::Sender<SupervisorSnapshot>,
         attached_children: AttachedChildrenState,
@@ -384,6 +381,20 @@ impl SupervisorRuntime {
         let default_restart_intensity = config.restart_intensity;
         let kind = config.kind;
         let observability = SupervisorObservability::new(path_prefix.clone(), config.strategy);
+        let lifecycle_tree = parent_link.as_ref().map_or_else(
+            || LifecycleTreeSink::root(Arc::clone(&lifecycle)),
+            |link| {
+                LifecycleTreeSink::nested(
+                    Arc::clone(&lifecycle),
+                    link.lifecycle_tree.clone(),
+                    LifecyclePathSegment::new(
+                        link.id.clone(),
+                        link.membership_epoch,
+                        link.generation,
+                    ),
+                )
+            },
+        );
         let mut children = Slab::with_capacity(config.children.len());
         let mut children_by_id = HashMap::with_capacity(config.children.len());
         let mut child_order = Vec::with_capacity(config.children.len());
@@ -430,7 +441,6 @@ impl SupervisorRuntime {
         // At most one notification per nested child can be queued because
         // `NestedSnapshotState` coalesces updates behind an atomic flag.
         let (nested_snapshot_tx, nested_snapshot_rx) = mpsc::unbounded_channel();
-        let (nested_event_tx, nested_event_rx) = mpsc::channel(config.event_channel_capacity);
         let (ready_tx, ready_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -453,16 +463,14 @@ impl SupervisorRuntime {
             children_by_id,
             child_order,
             live_tasks: 0,
-            events,
             lifecycle,
+            lifecycle_tree,
             snapshots,
             attached_children,
             shutdown_rx,
             command_rx,
             nested_channels,
             own_handle,
-            nested_event_tx,
-            nested_event_rx,
             nested_snapshot_tx,
             nested_snapshot_rx,
             ready_tx,
@@ -528,7 +536,7 @@ impl SupervisorRuntime {
         startup_ready: Option<crate::context::ChildContext>,
     ) -> RuntimeResult<()> {
         self.publish_snapshot();
-        self.send_event(SupervisorEvent::SupervisorStarted);
+        self.send_event(RuntimeEvent::SupervisorStarted);
         let initial_children = self.child_order.clone();
         for &key in &initial_children {
             self.send_lifecycle(key, LifecycleEventKind::Added);
@@ -559,11 +567,6 @@ impl SupervisorRuntime {
                 Wake::NestedSnapshot(update) => {
                     if let Some(update) = update {
                         self.handle_nested_snapshot(update);
-                    }
-                }
-                Wake::NestedEvent(event) => {
-                    if let Some(event) = event {
-                        self.handle_nested_event(event);
                     }
                 }
                 Wake::Ready(ready) => {
@@ -638,9 +641,6 @@ impl SupervisorRuntime {
                 }
                 update = self.nested_snapshot_rx.recv(), if options.nested_snapshots => {
                     Some(Wake::NestedSnapshot(update))
-                }
-                event = self.nested_event_rx.recv(), if options.nested_events => {
-                    Some(Wake::NestedEvent(event))
                 }
                 _ = tokio::time::sleep_until(deadline), if options.deadline.is_some() => {
                     Some(Wake::Deadline)
@@ -870,7 +870,7 @@ impl SupervisorRuntime {
                 generation: ready.generation,
             },
         );
-        self.send_event(SupervisorEvent::ChildStarted {
+        self.send_event(RuntimeEvent::ChildStarted {
             id,
             generation: ready.generation,
         });
@@ -1054,7 +1054,7 @@ impl SupervisorRuntime {
 
     pub(crate) fn finish(&mut self) {
         self.state = SupervisorState::Stopped;
-        self.send_event(SupervisorEvent::SupervisorStopped);
+        self.send_event(RuntimeEvent::SupervisorStopped);
     }
 
     /// Called once the runtime loop has exited (graceful stop or fatal
@@ -1087,26 +1087,6 @@ impl SupervisorRuntime {
         state.mark_dequeued();
         entry.nested_snapshot = state.latest();
         self.publish_snapshot();
-    }
-
-    fn handle_nested_event(&mut self, notification: NestedEventNotification) {
-        let Some(entry) = self.children.get_mut(notification.parent_key) else {
-            return;
-        };
-        if entry.instance != notification.parent_instance
-            || entry.runtime.generation != notification.generation
-        {
-            return;
-        }
-
-        if let Some(state) = entry.nested_snapshot_state.as_ref() {
-            entry.nested_snapshot = state.latest();
-        }
-        self.send_event(SupervisorEvent::Nested {
-            id: notification.id,
-            generation: notification.generation,
-            event: Box::new(notification.event),
-        });
     }
 
     fn remove_child(
@@ -1286,7 +1266,7 @@ impl SupervisorRuntime {
         if let Some(lifecycle) = lifecycle {
             self.send_lifecycle_draft(lifecycle);
         }
-        self.send_event(SupervisorEvent::ChildRemoved { id: id.clone() });
+        self.send_event(RuntimeEvent::ChildRemoved { id: id.clone() });
 
         if let Some(pending) = pending_removal {
             let result = self.pending_removal_result(&id, &pending, check_elapsed_grace, None);
@@ -1390,7 +1370,7 @@ impl SupervisorRuntime {
         if allow_restart && restart_policy.should_restart(classified.status.is_failure()) {
             let previous_generation = self.children[classified.key].runtime.generation;
             let delay = self.schedule_restart(classified.key)?;
-            self.send_event(SupervisorEvent::ChildRestartScheduled {
+            self.send_event(RuntimeEvent::ChildRestartScheduled {
                 id: self.children[classified.key].id.clone(),
                 generation: previous_generation,
                 delay,
@@ -1550,7 +1530,7 @@ impl SupervisorRuntime {
                 cancelled,
             },
         );
-        self.send_event(SupervisorEvent::ChildExited {
+        self.send_event(RuntimeEvent::ChildExited {
             id,
             generation,
             status: status.view(),
@@ -1799,7 +1779,7 @@ impl SupervisorRuntime {
         };
 
         let Some(delay) = delay else {
-            self.send_event(SupervisorEvent::RestartIntensityExceeded);
+            self.send_event(RuntimeEvent::RestartIntensityExceeded);
             return Err(SupervisorError::RestartIntensityExceeded);
         };
 
@@ -1822,7 +1802,7 @@ impl SupervisorRuntime {
         if entry.runtime.generation != new_generation {
             return;
         }
-        self.send_event(SupervisorEvent::ChildRestarted {
+        self.send_event(RuntimeEvent::ChildRestarted {
             id: entry.id.clone(),
             old_generation,
             new_generation,
@@ -1852,10 +1832,13 @@ impl SupervisorRuntime {
 
     fn send_lifecycle_draft(&self, draft: LifecycleEventDraft) {
         let lifecycle = Arc::clone(&self.lifecycle);
-        lifecycle.emit(draft, || self.publish_snapshot());
+        if let Some(event) = lifecycle.emit(draft, || self.publish_snapshot()) {
+            self.lifecycle_tree
+                .emit(RecursiveLifecycleEventKind::Child(event));
+        }
     }
 
-    pub(crate) fn send_event(&self, event: SupervisorEvent) {
+    pub(crate) fn send_event(&self, event: RuntimeEvent) {
         if event_updates_snapshot(&event) {
             self.publish_snapshot();
         }
@@ -1865,9 +1848,40 @@ impl SupervisorRuntime {
         self.meta
             .observability
             .emit_event(&event, self.running_child_count(), child_path);
-        let _ = self.events.send(event.clone());
-        if let Some(parent_link) = self.meta.parent_link.as_ref() {
-            parent_link.forward_event(event);
+        let recursive = match &event {
+            RuntimeEvent::SupervisorStarted => Some(RecursiveLifecycleEventKind::SupervisorStarted),
+            RuntimeEvent::SupervisorStopping => {
+                Some(RecursiveLifecycleEventKind::SupervisorStopping)
+            }
+            RuntimeEvent::SupervisorStopped => Some(RecursiveLifecycleEventKind::SupervisorStopped),
+            RuntimeEvent::ChildRestartScheduled {
+                id,
+                generation,
+                delay,
+            } => self
+                .children_by_id
+                .get(id)
+                .and_then(|&key| self.children.get(key))
+                .map(|entry| RecursiveLifecycleEventKind::RestartScheduled {
+                    child_id: id.clone(),
+                    membership_epoch: entry.instance,
+                    generation: *generation,
+                    delay: *delay,
+                    total_restarts: self.total_restarts,
+                    child_restart_count: entry.runtime.restart_tracker.total_restarts(),
+                }),
+            RuntimeEvent::RestartIntensityExceeded => {
+                Some(RecursiveLifecycleEventKind::RestartIntensityExceeded {
+                    total_restarts: self.total_restarts,
+                })
+            }
+            RuntimeEvent::ChildStarted { .. }
+            | RuntimeEvent::ChildRemoved { .. }
+            | RuntimeEvent::ChildExited { .. }
+            | RuntimeEvent::ChildRestarted { .. } => None,
+        };
+        if let Some(recursive) = recursive {
+            self.lifecycle_tree.emit(recursive);
         }
     }
 
@@ -2075,25 +2089,24 @@ fn counts_as_running(membership: MembershipState, state: RuntimeChildState) -> b
         )
 }
 
-fn event_updates_snapshot(event: &SupervisorEvent) -> bool {
+fn event_updates_snapshot(event: &RuntimeEvent) -> bool {
     !matches!(
         event,
-        SupervisorEvent::SupervisorStarted | SupervisorEvent::ChildRestarted { .. }
+        RuntimeEvent::SupervisorStarted | RuntimeEvent::ChildRestarted { .. }
     )
 }
 
-fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
+fn event_child_id(event: &RuntimeEvent) -> Option<&str> {
     match event {
-        SupervisorEvent::ChildStarted { id, .. }
-        | SupervisorEvent::ChildExited { id, .. }
-        | SupervisorEvent::ChildRestartScheduled { id, .. }
-        | SupervisorEvent::ChildRestarted { id, .. }
-        | SupervisorEvent::ChildRemoved { id }
-        | SupervisorEvent::Nested { id, .. } => Some(id),
-        SupervisorEvent::SupervisorStarted
-        | SupervisorEvent::SupervisorStopping
-        | SupervisorEvent::SupervisorStopped
-        | SupervisorEvent::RestartIntensityExceeded => None,
+        RuntimeEvent::ChildStarted { id, .. }
+        | RuntimeEvent::ChildExited { id, .. }
+        | RuntimeEvent::ChildRestartScheduled { id, .. }
+        | RuntimeEvent::ChildRestarted { id, .. }
+        | RuntimeEvent::ChildRemoved { id } => Some(id),
+        RuntimeEvent::SupervisorStarted
+        | RuntimeEvent::SupervisorStopping
+        | RuntimeEvent::SupervisorStopped
+        | RuntimeEvent::RestartIntensityExceeded => None,
     }
 }
 
@@ -2121,17 +2134,14 @@ mod tests {
             .expect("valid supervisor config");
         let own_handle = supervisor.handle();
         let config = supervisor.config.clone();
-        let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (events_tx, _) = broadcast::channel(event_capacity);
         let (snapshots_tx, _) = watch::channel(initial_snapshot);
         let (_command_tx, command_rx) = mpsc::channel(control_capacity);
         SupervisorRuntime::new(
             config,
             shutdown_rx,
-            events_tx,
             LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
@@ -2145,21 +2155,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readiness_wake_prioritizes_ready_over_nested_traffic() {
+    async fn readiness_wake_prioritizes_ready_over_nested_snapshot_traffic() {
         let supervisor = empty_supervisor();
         let own_handle = supervisor.handle();
         let config = supervisor.config.clone();
-        let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (events_tx, _) = broadcast::channel(event_capacity);
         let (snapshots_tx, _) = watch::channel(initial_snapshot);
         let (_command_tx, command_rx) = mpsc::channel(control_capacity);
         let mut runtime = SupervisorRuntime::new(
             config,
             shutdown_rx,
-            events_tx,
             LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
@@ -2172,15 +2179,13 @@ mod tests {
         );
 
         runtime
-            .nested_event_tx
-            .try_send(NestedEventNotification {
+            .nested_snapshot_tx
+            .send(NestedSnapshotNotification {
                 parent_key: 0,
                 parent_instance: 0,
-                id: "noisy".to_owned(),
                 generation: 0,
-                event: SupervisorEvent::SupervisorStarted,
             })
-            .expect("nested event channel should have capacity");
+            .expect("nested snapshot channel should remain open");
         runtime
             .ready_tx
             .send(ChildReady {
@@ -2201,17 +2206,14 @@ mod tests {
         let supervisor = empty_supervisor();
         let own_handle = supervisor.handle();
         let config = supervisor.config.clone();
-        let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (events_tx, _) = broadcast::channel(event_capacity);
         let (snapshots_tx, _) = watch::channel(initial_snapshot);
         let (command_tx, command_rx) = mpsc::channel(control_capacity);
         let mut runtime = SupervisorRuntime::new(
             config,
             shutdown_rx,
-            events_tx,
             LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
@@ -2348,7 +2350,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gated_group_restarts_emit_each_generation_before_readiness() {
+    async fn gated_group_restarts_emit_started_only_after_readiness() {
         let supervisor = SupervisorBuilder::new()
             .child(
                 ChildSpec::new("gated", |ctx| async move {
@@ -2361,18 +2363,17 @@ mod tests {
             .expect("valid supervisor config");
         let own_handle = supervisor.handle();
         let config = supervisor.config.clone();
-        let event_capacity = config.event_channel_capacity;
         let control_capacity = config.control_channel_capacity;
         let initial_snapshot = initial_snapshot(&config);
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (events_tx, mut events_rx) = broadcast::channel(event_capacity);
+        let lifecycle_hub = LifecycleHub::new();
+        let mut lifecycle = lifecycle_hub.watch();
         let (snapshots_tx, _) = watch::channel(initial_snapshot);
         let (_command_tx, command_rx) = mpsc::channel(control_capacity);
         let mut runtime = SupervisorRuntime::new(
             config,
             shutdown_rx,
-            events_tx,
-            LifecycleHub::new(),
+            lifecycle_hub,
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,
@@ -2396,14 +2397,11 @@ mod tests {
                 })
                 .is_ok()
         );
-        assert!(matches!(
-            events_rx.try_recv(),
-            Ok(SupervisorEvent::ChildRestarted {
-                old_generation: 0,
-                new_generation: 1,
-                ..
-            })
-        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), lifecycle.next())
+                .await
+                .is_err()
+        );
 
         {
             let child = &mut runtime.children[key].runtime;
@@ -2418,14 +2416,11 @@ mod tests {
             .and_then(|sequence| sequence.gate.as_ref())
             .expect("replacement generation remains readiness-gated");
         assert_eq!(gate.generation, 2);
-        assert!(matches!(
-            events_rx.try_recv(),
-            Ok(SupervisorEvent::ChildRestarted {
-                old_generation: 1,
-                new_generation: 2,
-                ..
-            })
-        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), lifecycle.next())
+                .await
+                .is_err()
+        );
 
         assert!(
             runtime
@@ -2436,13 +2431,13 @@ mod tests {
                 })
                 .is_ok()
         );
+        let started = tokio::time::timeout(Duration::from_secs(1), lifecycle.next())
+            .await
+            .expect("started event arrives")
+            .expect("lifecycle remains open");
         assert!(matches!(
-            events_rx.try_recv(),
-            Ok(SupervisorEvent::ChildStarted { generation: 2, .. })
-        ));
-        assert!(matches!(
-            events_rx.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
+            started.kind,
+            LifecycleEventKind::Started { generation: 2 }
         ));
     }
 

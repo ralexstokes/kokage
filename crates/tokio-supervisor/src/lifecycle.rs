@@ -5,6 +5,7 @@ use std::{
         Arc, Mutex, MutexGuard, PoisonError, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use tokio::sync::{Notify, futures::Notified};
@@ -90,6 +91,103 @@ pub enum LifecycleEventKind {
     },
 }
 
+/// One nested-supervisor edge in a recursive lifecycle event's path.
+///
+/// The tuple `(id, membership_epoch, generation)` identifies the exact
+/// supervisor incarnation that forwarded the event. In particular,
+/// `membership_epoch` distinguishes a removed subtree from a later subtree
+/// inserted under the same id.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct LifecyclePathSegment {
+    /// Child id of the nested supervisor.
+    pub id: String,
+    /// Identity of that child membership in its parent scope.
+    pub membership_epoch: u64,
+    /// Generation of the nested supervisor child.
+    pub generation: u64,
+}
+
+impl LifecyclePathSegment {
+    pub(crate) fn new(id: String, membership_epoch: u64, generation: u64) -> Self {
+        Self {
+            id,
+            membership_epoch,
+            generation,
+        }
+    }
+}
+
+/// One event in a supervisor tree's recursive lifecycle stream.
+///
+/// `supervisor_path` is relative to the handle that created the watch. It is
+/// empty for events emitted by that scope, contains one segment for a direct
+/// nested supervisor, and so on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct RecursiveLifecycleEvent {
+    /// Nested-supervisor path from the watched scope to the emitting scope.
+    pub supervisor_path: Vec<LifecyclePathSegment>,
+    /// Transition that occurred in the emitting scope.
+    pub kind: RecursiveLifecycleEventKind,
+}
+
+impl RecursiveLifecycleEvent {
+    fn local(kind: RecursiveLifecycleEventKind) -> Self {
+        Self {
+            supervisor_path: Vec::new(),
+            kind,
+        }
+    }
+}
+
+/// A transition visible in a recursive supervisor lifecycle stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum RecursiveLifecycleEventKind {
+    /// The emitting supervisor incarnation started.
+    SupervisorStarted,
+    /// The emitting supervisor entered its shutdown sequence.
+    SupervisorStopping,
+    /// The emitting supervisor fully stopped.
+    SupervisorStopped,
+    /// A direct-child lifecycle transition in the emitting scope.
+    Child(LifecycleEvent),
+    /// A restart was scheduled after a backoff delay.
+    RestartScheduled {
+        /// Child identifier.
+        child_id: String,
+        /// Identity of the child membership in the emitting scope.
+        membership_epoch: u64,
+        /// Generation that exited and will be replaced.
+        generation: u64,
+        /// Time before the replacement is spawned.
+        delay: Duration,
+        /// Stable-scope cumulative restart count at emission.
+        total_restarts: u64,
+        /// Subject child's cumulative restart count at emission.
+        child_restart_count: u64,
+    },
+    /// The emitting scope exceeded its restart intensity and will stop.
+    RestartIntensityExceeded {
+        /// Stable-scope cumulative restart count at emission.
+        total_restarts: u64,
+    },
+    /// Older tree transitions were discarded because this watch fell behind.
+    ///
+    /// A recursive watch owns one buffer for the whole watched tree. This
+    /// marker therefore invalidates edge-derived state for the whole tree;
+    /// resynchronize from the recursive [`SupervisorSnapshot`](crate::SupervisorSnapshot).
+    Lagged {
+        /// Number of tree transitions discarded since the preceding delivered
+        /// event.
+        dropped: u64,
+    },
+}
+
 /// Ordered, reliable lifecycle stream created by
 /// [`SupervisorHandle::watch_lifecycle`](crate::SupervisorHandle::watch_lifecycle).
 ///
@@ -98,6 +196,61 @@ pub enum LifecycleEventKind {
 /// [`LifecycleEventKind::Lagged`] marker; loss is never silent.
 pub struct LifecycleWatch {
     queue: Arc<LifecycleQueue>,
+}
+
+/// Ordered recursive lifecycle stream created by
+/// [`SupervisorHandle::watch_lifecycle_recursive`](crate::SupervisorHandle::watch_lifecycle_recursive).
+///
+/// Each watch has one bounded buffer for the entire watched tree. Events from
+/// every scope retain their per-scope [`LifecycleEvent::seq`] inside
+/// [`RecursiveLifecycleEventKind::Child`]. Sustained overflow replaces the
+/// oldest events with one tree-wide [`RecursiveLifecycleEventKind::Lagged`]
+/// marker; loss is never silent.
+pub struct RecursiveLifecycleWatch {
+    queue: Arc<RecursiveLifecycleQueue>,
+}
+
+impl RecursiveLifecycleWatch {
+    fn new(queue: Arc<RecursiveLifecycleQueue>) -> Self {
+        Self { queue }
+    }
+
+    /// Returns the next staged tree event.
+    ///
+    /// Returns `None` after all staged events have been delivered and the
+    /// watched stable supervisor identity can never run again.
+    pub async fn next(&mut self) -> Option<RecursiveLifecycleEvent> {
+        loop {
+            let notified = self.queue.waiter();
+            if let Some(event) = self.queue.pop() {
+                return Some(event);
+            }
+            if self.queue.is_terminal() {
+                return None;
+            }
+            notified.await;
+        }
+    }
+
+    /// Waits until the watched stable supervisor identity becomes terminal
+    /// without consuming staged events.
+    pub async fn closed(&self) {
+        loop {
+            let notified = self.queue.waiter();
+            if self.queue.is_terminal() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl fmt::Debug for RecursiveLifecycleWatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecursiveLifecycleWatch")
+            .field("terminal", &self.queue.is_terminal())
+            .finish_non_exhaustive()
+    }
 }
 
 impl LifecycleWatch {
@@ -189,6 +342,74 @@ struct LifecycleQueue {
     terminal: AtomicBool,
 }
 
+struct RecursiveLifecycleQueue {
+    events: Mutex<VecDeque<RecursiveLifecycleEvent>>,
+    notify: Notify,
+    terminal: AtomicBool,
+}
+
+impl RecursiveLifecycleQueue {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            events: Mutex::new(VecDeque::new()),
+            notify: Notify::new(),
+            terminal: AtomicBool::new(false),
+        })
+    }
+
+    fn events(&self) -> MutexGuard<'_, VecDeque<RecursiveLifecycleEvent>> {
+        self.events.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn push(&self, event: RecursiveLifecycleEvent) {
+        {
+            let mut events = self.events();
+            while events.len() >= LIFECYCLE_BUFFER_CAPACITY {
+                Self::record_drop(&mut events);
+            }
+            events.push_back(event);
+        }
+        self.notify.notify_one();
+    }
+
+    fn record_drop(events: &mut VecDeque<RecursiveLifecycleEvent>) {
+        if matches!(
+            events.front().map(|event| &event.kind),
+            Some(RecursiveLifecycleEventKind::Lagged { .. })
+        ) {
+            events.remove(1);
+            if let Some(RecursiveLifecycleEvent {
+                kind: RecursiveLifecycleEventKind::Lagged { dropped },
+                ..
+            }) = events.front_mut()
+            {
+                *dropped = dropped.saturating_add(1);
+            }
+        } else if events.pop_front().is_some() {
+            events.push_front(RecursiveLifecycleEvent::local(
+                RecursiveLifecycleEventKind::Lagged { dropped: 1 },
+            ));
+        }
+    }
+
+    fn pop(&self) -> Option<RecursiveLifecycleEvent> {
+        self.events().pop_front()
+    }
+
+    fn waiter(&self) -> Notified<'_> {
+        self.notify.notified()
+    }
+
+    fn mark_terminal(&self) {
+        self.terminal.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.terminal.load(Ordering::Acquire)
+    }
+}
+
 impl LifecycleQueue {
     fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -272,6 +493,7 @@ pub(crate) struct LifecycleHub {
 struct LifecycleHubState {
     terminal: bool,
     watchers: Vec<Weak<LifecycleQueue>>,
+    recursive_watchers: Vec<Weak<RecursiveLifecycleQueue>>,
 }
 
 impl LifecycleHub {
@@ -282,6 +504,7 @@ impl LifecycleHub {
             state: Mutex::new(LifecycleHubState {
                 terminal: false,
                 watchers: Vec::new(),
+                recursive_watchers: Vec::new(),
             }),
         })
     }
@@ -329,12 +552,30 @@ impl LifecycleHub {
         LifecycleWatch::new(queue)
     }
 
+    pub(crate) fn watch_recursive(&self) -> RecursiveLifecycleWatch {
+        let queue = RecursiveLifecycleQueue::new();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .recursive_watchers
+            .retain(|watcher| watcher.strong_count() > 0);
+        if state.terminal {
+            queue.mark_terminal();
+        } else {
+            state.recursive_watchers.push(Arc::downgrade(&queue));
+        }
+        RecursiveLifecycleWatch::new(queue)
+    }
+
     /// Assigns a sequence, publishes the aligned snapshot, then stages the
     /// event while registration is excluded by the same hub lock.
-    pub(crate) fn emit(&self, draft: LifecycleEventDraft, publish_aligned_snapshot: impl FnOnce()) {
+    pub(crate) fn emit(
+        &self,
+        draft: LifecycleEventDraft,
+        publish_aligned_snapshot: impl FnOnce(),
+    ) -> Option<LifecycleEvent> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.terminal {
-            return;
+            return None;
         }
         let seq = self
             .seq
@@ -359,6 +600,21 @@ impl LifecycleHub {
             queue.push(event.clone());
             true
         });
+        Some(event)
+    }
+
+    fn emit_recursive(&self, event: RecursiveLifecycleEvent) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.terminal {
+            return;
+        }
+        state.recursive_watchers.retain(|watcher| {
+            let Some(queue) = watcher.upgrade() else {
+                return false;
+            };
+            queue.push(event.clone());
+            true
+        });
     }
 
     pub(crate) fn terminal(&self) {
@@ -371,6 +627,49 @@ impl LifecycleHub {
             if let Some(queue) = watcher.upgrade() {
                 queue.mark_terminal();
             }
+        }
+        for watcher in state.recursive_watchers.drain(..) {
+            if let Some(queue) = watcher.upgrade() {
+                queue.mark_terminal();
+            }
+        }
+    }
+}
+
+/// One incarnation's route into every recursive watch rooted at or above it.
+#[derive(Clone)]
+pub(crate) struct LifecycleTreeSink(Arc<LifecycleTreeSinkInner>);
+
+struct LifecycleTreeSinkInner {
+    hub: Arc<LifecycleHub>,
+    parent: Option<(LifecycleTreeSink, LifecyclePathSegment)>,
+}
+
+impl LifecycleTreeSink {
+    pub(crate) fn root(hub: Arc<LifecycleHub>) -> Self {
+        Self(Arc::new(LifecycleTreeSinkInner { hub, parent: None }))
+    }
+
+    pub(crate) fn nested(
+        hub: Arc<LifecycleHub>,
+        parent: Self,
+        segment: LifecyclePathSegment,
+    ) -> Self {
+        Self(Arc::new(LifecycleTreeSinkInner {
+            hub,
+            parent: Some((parent, segment)),
+        }))
+    }
+
+    pub(crate) fn emit(&self, kind: RecursiveLifecycleEventKind) {
+        self.forward(RecursiveLifecycleEvent::local(kind));
+    }
+
+    fn forward(&self, mut event: RecursiveLifecycleEvent) {
+        self.0.hub.emit_recursive(event.clone());
+        if let Some((parent, segment)) = &self.0.parent {
+            event.supervisor_path.insert(0, segment.clone());
+            parent.forward(event);
         }
     }
 }

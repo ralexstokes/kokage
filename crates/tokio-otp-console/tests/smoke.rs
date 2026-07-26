@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{broadcast, watch},
+    sync::watch,
     time::{sleep, timeout},
 };
 use tokio_otp::{
@@ -17,8 +17,8 @@ use tokio_otp::{
 };
 use tokio_otp_console::{ActorStatsView, Console, ConsoleHandle};
 use tokio_supervisor::{
-    ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, Strategy, SupervisorEvent,
-    SupervisorSnapshot, SupervisorStateView,
+    ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder,
+    Strategy, SupervisorHandle, SupervisorSnapshot, SupervisorStateView,
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
@@ -75,13 +75,17 @@ async fn spawn_console_with_stats(
 ) -> (
     ConsoleHandle,
     watch::Sender<SupervisorSnapshot>,
-    broadcast::Sender<SupervisorEvent>,
+    SupervisorHandle,
 ) {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let (event_tx, _) = broadcast::channel(16);
+    let lifecycle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("test lifecycle supervisor builds")
+        .spawn();
+    let lifecycle_source = lifecycle.clone();
     let handle = Console::builder()
         .snapshots(snapshot_rx)
-        .events(event_tx.clone())
+        .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
         .actor_stats(stats)
         .bind(([127, 0, 0, 1], 0))
         .build()
@@ -89,13 +93,13 @@ async fn spawn_console_with_stats(
         .await
         .expect("failed to spawn console");
 
-    (handle, snapshot_tx, event_tx)
+    (handle, snapshot_tx, lifecycle)
 }
 
 async fn spawn_console() -> (
     ConsoleHandle,
     watch::Sender<SupervisorSnapshot>,
-    broadcast::Sender<SupervisorEvent>,
+    SupervisorHandle,
 ) {
     spawn_console_with_stats(actor_stats).await
 }
@@ -221,10 +225,14 @@ async fn accepts_matching_browser_websocket_origin() {
 #[tokio::test]
 async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let (event_tx, _) = broadcast::channel(16);
+    let lifecycle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("test lifecycle supervisor builds")
+        .spawn();
+    let lifecycle_source = lifecycle.clone();
     let handle = Console::builder()
         .snapshots(snapshot_rx)
-        .events(event_tx)
+        .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
         .access_token("test-token")
         .bind(([127, 0, 0, 1], 0))
         .build()
@@ -306,10 +314,14 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
 #[tokio::test]
 async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let (event_tx, _) = broadcast::channel(16);
+    let lifecycle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("test lifecycle supervisor builds")
+        .spawn();
+    let lifecycle_source = lifecycle.clone();
     let handle = Console::builder()
         .snapshots(snapshot_rx)
-        .events(event_tx)
+        .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
         .allowed_host("console.example:80")
         .bind(([127, 0, 0, 1], 0))
         .build()
@@ -326,10 +338,11 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 #[should_panic(expected = "access_token required for non-loopback binds")]
 fn non_loopback_bind_requires_token() {
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let (event_tx, _) = broadcast::channel(16);
+    let lifecycle = DynamicSupervisorBuilder::new();
+    let lifecycle_handle = lifecycle.handle();
     let _console = Console::builder()
         .snapshots(snapshot_rx)
-        .events(event_tx)
+        .lifecycle(move || lifecycle_handle.watch_lifecycle_recursive())
         .bind(([0, 0, 0, 0], 9100))
         .build();
 }
@@ -411,24 +424,26 @@ async fn ws_streams_snapshot_updates() {
 
 #[tokio::test]
 async fn ws_streams_events() {
-    let (handle, _snapshot_tx, event_tx) = spawn_console().await;
+    let (handle, _snapshot_tx, lifecycle) = spawn_console().await;
     let mut socket = connect(handle.local_addr()).await;
     read_handshake(&mut socket).await;
 
-    event_tx
-        .send(SupervisorEvent::child_started("worker", 1))
-        .expect("failed to broadcast supervisor event");
+    lifecycle
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("failed to add lifecycle child");
 
+    let _added = read_non_stats_json(&mut socket).await;
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
+    assert_eq!(frame["data"]["supervisor_path"], json!([]));
+    assert_eq!(frame["data"]["kind"]["Child"]["child_id"], "worker");
     assert_eq!(
-        frame["data"],
-        json!({
-            "ChildStarted": {
-                "id": "worker",
-                "generation": 1,
-            }
-        })
+        frame["data"]["kind"]["Child"]["kind"]["Started"]["generation"],
+        0
     );
 }
 

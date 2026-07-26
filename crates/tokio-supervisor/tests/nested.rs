@@ -7,17 +7,17 @@ use std::{
 };
 
 use tokio::{
-    sync::{Notify, broadcast, mpsc},
+    sync::{Notify, mpsc},
     time::timeout,
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, ControlError, ControlOperation,
-    DynamicSupervisorBuilder, EventPathSegment, ExitStatusView, RestartIntensity, RestartPolicy,
-    ScopeKind, ShutdownPolicy, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorSpec,
-    SupervisorStateView,
+    DynamicSupervisorBuilder, ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind,
+    ShutdownPolicy, SupervisorBuilder, SupervisorError, SupervisorSpec, SupervisorStateView,
 };
 
 mod common;
+use common::{ObservedEvent, ObservedPathSegment};
 
 #[tokio::test]
 async fn nested_supervisor_completes_as_a_clean_child_exit() {
@@ -172,7 +172,7 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
         .expect("valid outer supervisor");
 
     let handle = outer.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     let membership_epoch = handle
         .add_supervisor(SupervisorSpec::new("nested", nested))
@@ -199,29 +199,29 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
 
     while !(saw_nested_supervisor_started && saw_nested_leaf_started && saw_removed) {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::SupervisorStarted) =>
+                && matches!(*event, ObservedEvent::SupervisorStarted) =>
             {
                 saw_nested_supervisor_started = true;
             }
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::ChildStarted { ref id, generation: 0 , .. } if id == "leaf") =>
+                && matches!(*event, ObservedEvent::ChildStarted { ref id, generation: 0 , .. } if id == "leaf") =>
             {
                 saw_nested_leaf_started = true;
             }
-            SupervisorEvent::ChildRemoved { id, .. } if id == "nested" => {
+            ObservedEvent::ChildRemoved { id, .. } if id == "nested" => {
                 saw_removed = true;
             }
             _ => {}
@@ -257,7 +257,7 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
         .expect("valid outer supervisor");
 
     let handle = outer.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     handle
         .add_supervisor(SupervisorSpec::new("nested", nested))
@@ -267,14 +267,14 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
     let mut saw_nested_supervisor_started = false;
     while !saw_nested_supervisor_started {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::SupervisorStarted) =>
+                && matches!(*event, ObservedEvent::SupervisorStarted) =>
             {
                 saw_nested_supervisor_started = true;
             }
@@ -317,25 +317,25 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
 
     while !(saw_nested_dynamic_started && saw_nested_removed) {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::ChildStarted { ref id, generation: 0 , .. } if id == "dynamic") =>
+                && matches!(*event, ObservedEvent::ChildStarted { ref id, generation: 0 , .. } if id == "dynamic") =>
             {
                 saw_nested_dynamic_started = true;
             }
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::ChildRemoved { ref id , .. } if id == "dynamic") =>
+                && matches!(*event, ObservedEvent::ChildRemoved { ref id , .. } if id == "dynamic") =>
             {
                 saw_nested_removed = true;
             }
@@ -362,7 +362,7 @@ async fn parent_event_stream_includes_forwarded_nested_events() {
         .expect("valid outer supervisor");
 
     let handle = outer.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     let mut saw_nested_supervisor_started = false;
     let mut saw_nested_leaf_started = false;
@@ -371,40 +371,40 @@ async fn parent_event_stream_includes_forwarded_nested_events() {
     loop {
         let event = common::recv_supervisor_event(&mut events).await;
         match event {
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::SupervisorStarted) =>
+                && matches!(*event, ObservedEvent::SupervisorStarted) =>
             {
                 saw_nested_supervisor_started = true;
             }
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::ChildStarted { ref id, generation: 0 , .. } if id == "leaf") =>
+                && matches!(*event, ObservedEvent::ChildStarted { ref id, generation: 0 , .. } if id == "leaf") =>
             {
                 saw_nested_leaf_started = true;
             }
-            SupervisorEvent::Nested {
+            ObservedEvent::Nested {
                 id,
                 generation,
                 event,
                 ..
             } if id == "nested"
                 && generation == 0
-                && matches!(*event, SupervisorEvent::ChildExited { ref id, generation: 0, status: ExitStatusView::Completed , .. } if id == "leaf") =>
+                && matches!(*event, ObservedEvent::ChildExited { ref id, generation: 0, status: ExitStatusView::Completed , .. } if id == "leaf") =>
             {
                 saw_nested_leaf_exit = true;
             }
-            SupervisorEvent::SupervisorStopped => break,
+            ObservedEvent::SupervisorStopped => break,
             _ => {}
         }
 
@@ -437,18 +437,18 @@ async fn nested_events_preserve_the_full_tree_path() {
         .expect("valid outer supervisor");
 
     let handle = outer.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     loop {
         let event = common::recv_supervisor_event(&mut events).await;
-        if let SupervisorEvent::Nested { .. } = &event
-            && matches!(event.leaf(), SupervisorEvent::ChildStarted { id, generation: 0 , .. } if id == "leaf")
+        if let ObservedEvent::Nested { .. } = &event
+            && matches!(event.leaf(), ObservedEvent::ChildStarted { id, generation: 0 , .. } if id == "leaf")
         {
             assert_eq!(
                 event.path(),
                 vec![
-                    EventPathSegment::new("outer", 0),
-                    EventPathSegment::new("middle", 0),
+                    ObservedPathSegment::new("outer", 0),
+                    ObservedPathSegment::new("middle", 0),
                 ]
             );
             break;
@@ -552,18 +552,8 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .expect("stable nested handle should exist before the first incarnation starts");
     let initial_kind = nested_handle.snapshot().kind;
     assert_eq!(initial_kind, ScopeKind::Ordered);
-    let mut nested_events = nested_handle.subscribe();
-
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
-    loop {
-        match nested_events.try_recv() {
-            Ok(_) | Err(broadcast::error::TryRecvError::Lagged(_)) => {}
-            Err(broadcast::error::TryRecvError::Empty) => break,
-            Err(broadcast::error::TryRecvError::Closed) => {
-                panic!("stable nested event channel closed between incarnations")
-            }
-        }
-    }
+    let mut nested_events = common::event_watch(&nested_handle);
 
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
@@ -582,7 +572,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
     loop {
         if matches!(
             common::recv_supervisor_event(&mut nested_events).await,
-            SupervisorEvent::SupervisorStarted
+            ObservedEvent::SupervisorStarted
         ) {
             break;
         }
@@ -695,12 +685,12 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let nested_handle = handle
         .supervisor("nested")
         .expect("stable nested handle should exist");
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
 
     fail.notify_one();
     loop {
-        if let SupervisorEvent::ChildExited { id, status, .. } =
+        if let ObservedEvent::ChildExited { id, status, .. } =
             common::recv_supervisor_event(&mut events).await
             && id == "nested"
         {
@@ -783,7 +773,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .expect("stable grandchild handle reachable through the mid handle");
     let baseline_seq = grand_handle.snapshot().lifecycle_seq;
     let mut grand_snapshots = grand_handle.subscribe_snapshots();
-    let mut grand_events = grand_handle.subscribe();
+    let mut grand_events = common::event_watch(&grand_handle);
 
     common::recv_event(&mut starts_rx).await;
     fail.notify_one();
@@ -794,7 +784,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     loop {
         if matches!(
             common::recv_supervisor_event(&mut grand_events).await,
-            SupervisorEvent::SupervisorStopped
+            ObservedEvent::SupervisorStopped
         ) {
             break;
         }
@@ -802,7 +792,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     loop {
         if matches!(
             common::recv_supervisor_event(&mut grand_events).await,
-            SupervisorEvent::SupervisorStarted
+            ObservedEvent::SupervisorStarted
         ) {
             break;
         }

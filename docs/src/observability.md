@@ -3,10 +3,10 @@
 The supervisor layer has two observation primitives:
 
 1. `snapshot()` / `subscribe_snapshots()` for current state
-2. `watch_lifecycle()` for ordered transitions
+2. `watch_lifecycle()` / `watch_lifecycle_recursive()` for ordered transitions
 
-`tracing`, pull-based actor stats, optional metrics, the event broadcast, and
-`tokio-otp-console` are projections for diagnostics and dashboards.
+`tracing`, pull-based actor stats, optional metrics, and `tokio-otp-console`
+are projections for diagnostics and dashboards.
 
 ## Snapshots: Current State
 
@@ -137,21 +137,43 @@ the pump, as does permanent target termination. Watched-scope terminality
 closes the pump after its staged events have drained. If the live target's
 mailbox remains full, cancellation or target termination is the escape hatch.
 
-Lifecycle scope is not recursive. Watch each nested runtime handle
-(`handle.subtree(id)`) or raw supervisor handle
-(`handle.supervisor_handle().supervisor(id)`) separately. The
-`trading_engine` example's breaker consumes `event.total_restarts` this way.
-That counter records scheduled restarts — the same occurrences as the
-restart-intensity window, including clean exits restarted under
-`RestartPolicy::Always`; group-strategy sibling respawns do not increment it.
+### Recursive tree watching
 
-## Event Broadcast
+`watch_lifecycle_recursive()` yields one ordered stream for the watched scope
+and every nested supervisor. Each event carries a `supervisor_path` relative
+to the watched handle. Every path segment includes the nested supervisor's id,
+membership epoch, and generation, so consumers can distinguish both a restarted
+incarnation and a removed-then-reinserted subtree.
 
-`SupervisorHandle::subscribe()` is a lossy broadcast for logging and console
-integrations. A slow receiver gets `RecvError::Lagged`, and nested forwarding
-can drop events before they reach that receiver without an additional marker.
-Do not use this surface for safety or control logic; use lifecycle watches or
-snapshots.
+The recursive event kind includes supervisor `Started`, `Stopping`, and
+`Stopped` transitions, direct-child lifecycle events, restart scheduling with
+its backoff delay, and restart-intensity failure. Direct-child events retain
+their emitting scope's sequence and cumulative restart counters. A nested
+scope's stable identity is reattached automatically when an ancestor recreates
+it; the path then reflects the new ancestor generation.
+
+```rust,ignore
+let mut tree = handle.watch_lifecycle_recursive();
+
+while let Some(event) = tree.next().await {
+    render(event.supervisor_path, event.kind);
+}
+```
+
+Each recursive watch has one bounded buffer for the whole watched tree. On
+overflow, the oldest details collapse into an in-band, tree-wide
+`Lagged { dropped }` marker. Consumers maintaining derived tree state must
+read a fresh recursive snapshot and realign the whole tree. Stream closure
+means that the watched stable identity is terminal, after all staged events
+have drained.
+
+Use a direct watch when per-scope sequence alignment or `wait_started` is the
+goal. Use a recursive watch for diagnostics, dashboards, and any observer that
+needs a single tree feed. The `trading_engine` example's breaker consumes
+direct `event.total_restarts`; that counter records scheduled restarts — the
+same occurrences as the restart-intensity window, including clean exits
+restarted under `RestartPolicy::Always`. Group-strategy sibling respawns do not
+increment it.
 
 ## Tracing And Stats
 

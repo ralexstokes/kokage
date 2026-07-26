@@ -18,10 +18,11 @@ mod coverage_probe {
         use tokio_otp::prelude::{
             AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView,
             ChildSnapshot, ChildStateView, CompletionGuard, CompletionOutcome, ControlOperation,
-            ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity,
-            RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorEvent,
-            SupervisorEventReceiverExt as _, SupervisorSnapshot,
-            SupervisorSnapshotReceiverExt as _, SupervisorStateView,
+            ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
+            LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
+            RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
+            ShutdownPolicy, Strategy, SupervisorSnapshot, SupervisorSnapshotReceiverExt as _,
+            SupervisorStateView,
         };
     }
 
@@ -31,8 +32,9 @@ mod coverage_probe {
 
     mod advanced_root {
         use tokio_otp::{
-            ChildContext, ChildResult, ChildSpec, ControlError, EventPathSegment, LifecycleEvent,
-            LifecycleEventKind, LifecycleWatch, Supervisor, SupervisorBuildError,
+            ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind,
+            LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent,
+            RecursiveLifecycleEventKind, RecursiveLifecycleWatch, Supervisor, SupervisorBuildError,
             SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec, SupervisorToken,
         };
     }
@@ -74,7 +76,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
-    let mut events = handle.supervisor_handle().subscribe();
+    let mut events = handle.watch_lifecycle_recursive();
     let mut snapshots = handle.subscribe_snapshots();
 
     worker.send(()).await.expect("worker accepts message");
@@ -84,25 +86,30 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .expect("blocking task reported completion");
     assert_eq!(observed, "worker");
 
-    let started = timeout(
-        EVENT_TIMEOUT,
-        events.wait_for_event(|event| {
-            matches!(
-                event,
-                SupervisorEvent::ChildStarted { id, generation: 0 , .. } if id == "worker"
-            )
-        }),
-    )
+    let started = timeout(EVENT_TIMEOUT, async {
+        loop {
+            let event = events.next().await.expect("lifecycle remains open");
+            if matches!(
+                event.kind,
+                RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                    ref child_id,
+                    kind: LifecycleEventKind::Started { generation: 0 },
+                    ..
+                }) if child_id == "worker"
+            ) {
+                break event;
+            }
+        }
+    })
     .await
-    .expect("timed out waiting for started event")
-    .expect("event stream should remain open");
+    .expect("timed out waiting for started event");
     assert!(matches!(
-        started,
-        SupervisorEvent::ChildStarted {
-            ref id,
-            generation: 0,
+        started.kind,
+        RecursiveLifecycleEventKind::Child(LifecycleEvent {
+            ref child_id,
+            kind: LifecycleEventKind::Started { generation: 0 },
             ..
-        } if id == "worker"
+        }) if child_id == "worker"
     ));
 
     let snapshot = timeout(

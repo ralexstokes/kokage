@@ -268,10 +268,10 @@ pub mod prelude {
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView, ChildSnapshot,
         ChildStateView, CompletionGuard, CompletionOutcome, ControlOperation, ExitStatusView,
-        LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy,
-        ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorEvent, SupervisorSnapshot,
-        SupervisorStateView,
-        prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
+        LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
+        RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
+        RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy,
+        SupervisorSnapshot, SupervisorStateView, prelude::SupervisorSnapshotReceiverExt,
     };
 }
 
@@ -295,11 +295,11 @@ pub use supervision::{
 pub use tokio_supervisor::{
     AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildContext, ChildMembershipView,
     ChildResult, ChildSnapshot, ChildSpec, ChildStateView, CompletionGuard, CompletionOutcome,
-    ControlError, ControlOperation, DynamicSupervisorBuilder, EventPathSegment, ExitStatusView,
-    LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind,
-    ShutdownMode, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder,
-    SupervisorError, SupervisorEvent, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
-    SupervisorStateView, SupervisorToken,
-    prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
+    ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView, LifecycleEvent,
+    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent,
+    RecursiveLifecycleEventKind, RecursiveLifecycleWatch, RestartIntensity, RestartPolicy,
+    ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
+    SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
+    SupervisorStateView, SupervisorToken, prelude::SupervisorSnapshotReceiverExt,
 };
 pub use tokio_util::sync::CancellationToken;

@@ -11,8 +11,9 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
     AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
-    LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
-    SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
+    LifecycleEvent, LifecycleWatch, RecursiveLifecycleWatch, RestartIntensity, RestartPolicy,
+    ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSpec,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -776,6 +777,16 @@ impl RuntimeHandle {
     /// [`subtree`](Self::subtree) handle for nested scopes.
     pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()
+    }
+
+    /// Returns the ordered lifecycle stream for this runtime's entire
+    /// supervisor tree.
+    ///
+    /// Events from nested scopes carry a stable supervisor path relative to
+    /// this runtime. The stream also includes supervisor start/stop
+    /// transitions and scheduled-restart delays.
+    pub fn watch_lifecycle_recursive(&self) -> RecursiveLifecycleWatch {
+        self.supervisor.watch_lifecycle_recursive()
     }
 
     /// Pumps lifecycle events into `target` using its ordinary mailbox policy.

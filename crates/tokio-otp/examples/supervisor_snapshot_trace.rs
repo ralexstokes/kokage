@@ -82,11 +82,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .build()?;
     let handle = runtime.spawn();
-    let mut events = handle.supervisor_handle().subscribe();
+    let mut events = handle.watch_lifecycle_recursive();
     let mut snapshots = handle.subscribe_snapshots();
 
     let event_task = tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
+        while let Some(event) = events.next().await {
             println!("event: {event:?}");
         }
     });

@@ -8,7 +8,7 @@ use std::{
 };
 
 use tokio::{
-    sync::{broadcast, mpsc, oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
@@ -16,8 +16,7 @@ use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
     error::{ControlError, SupervisorError},
-    event::SupervisorEvent,
-    lifecycle::{LifecycleHub, LifecycleWatch},
+    lifecycle::{LifecycleHub, LifecycleWatch, RecursiveLifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
     },
@@ -121,22 +120,6 @@ struct SnapshotSlot {
     rx: watch::Receiver<SupervisorSnapshot>,
 }
 
-/// Stable event channel for a supervisor identity.
-///
-/// Mirrors [`SnapshotSlot`]: the sender is dropped when the identity becomes
-/// terminal so watch-style consumers observe closure, and the retained
-/// receiver keeps `subscribe` working afterwards by resubscribing from it.
-///
-/// The retained receiver is also the reason
-/// [`StableSupervisorChannels::reset_declared_capacities`] can detect whether
-/// anyone outside these channels is listening: a `receiver_count` of exactly
-/// one means only `rx` is attached, so the channel can be replaced to honour a
-/// new capacity without orphaning a subscriber.
-struct EventSlot {
-    tx: Option<broadcast::Sender<SupervisorEvent>>,
-    rx: broadcast::Receiver<SupervisorEvent>,
-}
-
 struct StableBindingState {
     current: Option<IncarnationBinding>,
     /// Monotonic identity for bindings to these stable channels. Child
@@ -213,7 +196,6 @@ pub(crate) struct StableSupervisorChannels {
     binding: Mutex<StableBindingState>,
     binding_revision: watch::Sender<u64>,
     initial_incarnation: Mutex<Option<InitialIncarnationChannels>>,
-    events: Mutex<EventSlot>,
     lifecycle: Arc<LifecycleHub>,
     snapshots: Mutex<SnapshotSlot>,
     attached_children: AttachedChildrenState,
@@ -242,11 +224,9 @@ impl StableSupervisorChannels {
     pub(crate) fn new(
         initial_snapshot: SupervisorSnapshot,
         control_capacity: usize,
-        event_capacity: usize,
         nested_channels: NestedChannels,
         attached_children: Vec<AttachedChildState>,
     ) -> Arc<Self> {
-        let (events_tx, events_rx) = broadcast::channel(event_capacity);
         let (snapshots_tx, snapshots_rx) = watch::channel(initial_snapshot);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::channel(control_capacity.max(1));
@@ -268,10 +248,6 @@ impl StableSupervisorChannels {
                 done_tx,
                 done_rx,
             })),
-            events: Mutex::new(EventSlot {
-                tx: Some(events_tx),
-                rx: events_rx,
-            }),
             lifecycle: LifecycleHub::new(),
             snapshots: Mutex::new(SnapshotSlot {
                 tx: Some(snapshots_tx),
@@ -347,33 +323,12 @@ impl StableSupervisorChannels {
         };
     }
 
-    /// Sizes this identity's channels from the finished configuration.
+    /// Sizes this identity's control channel from the finished configuration.
     ///
-    /// Called once, when a reserved identity is built, because capacities are
+    /// Called once, when a reserved identity is built, because capacity is
     /// only observable from the first incarnation onwards.
-    ///
-    /// The event channel is replaced only when the retained [`EventSlot::rx`]
-    /// is its sole receiver. A subscriber created from a pre-build handle
-    /// therefore pins the capacity in force when it subscribed: replacing the
-    /// channel under it would leave it permanently closed rather than merely
-    /// resized. [`event_channel_capacity`](crate::SupervisorBuilder::event_channel_capacity)
-    /// documents that ordering requirement.
-    pub(crate) fn reset_declared_capacities(&self, control_capacity: usize, event_capacity: usize) {
+    pub(crate) fn reset_declared_capacities(&self, control_capacity: usize) {
         self.assert_reconfigurable();
-
-        let mut events = self.events.lock().expect("stable event slot poisoned");
-        if events
-            .tx
-            .as_ref()
-            .is_some_and(|events_tx| events_tx.receiver_count() == 1)
-        {
-            let (events_tx, events_rx) = broadcast::channel(event_capacity.max(1));
-            *events = EventSlot {
-                tx: Some(events_tx),
-                rx: events_rx,
-            };
-        }
-        drop(events);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (command_tx, command_rx) = mpsc::channel(control_capacity.max(1));
@@ -504,7 +459,6 @@ impl StableSupervisorChannels {
         // `run_as_child` never has to reopen the terminalization race after
         // binding.
         let snapshots = self.snapshots();
-        let events = self.events();
         let lifecycle = self.lifecycle();
         // Membership epochs belong to the stable supervisor identity, not an
         // individual incarnation. Assign the new static memberships before
@@ -569,7 +523,6 @@ impl StableSupervisorChannels {
                 binding_epoch,
             },
             snapshots,
-            events,
             lifecycle,
         })
     }
@@ -653,24 +606,6 @@ impl StableSupervisorChannels {
         self.binding_revision.subscribe()
     }
 
-    pub(crate) fn events(&self) -> broadcast::Sender<SupervisorEvent> {
-        self.events
-            .lock()
-            .expect("stable event slot poisoned")
-            .tx
-            .as_ref()
-            .expect("event sender requested after stable channels became terminal")
-            .clone()
-    }
-
-    pub(crate) fn events_rx(&self) -> broadcast::Receiver<SupervisorEvent> {
-        let slot = self.events.lock().expect("stable event slot poisoned");
-        match &slot.tx {
-            Some(tx) => tx.subscribe(),
-            None => slot.rx.resubscribe(),
-        }
-    }
-
     pub(crate) fn snapshots(&self) -> watch::Sender<SupervisorSnapshot> {
         let slot = self
             .snapshots
@@ -736,13 +671,6 @@ impl StableSupervisorChannels {
             .tx
             .take();
         drop(tx);
-        let events_tx = self
-            .events
-            .lock()
-            .expect("stable event slot poisoned")
-            .tx
-            .take();
-        drop(events_tx);
         self.lifecycle.terminal();
 
         let descendants: Vec<_> = self
@@ -822,13 +750,8 @@ mod tests {
             )],
         );
         let expected_snapshot = initial_snapshot.clone().total_restarts(7);
-        let channels = StableSupervisorChannels::new(
-            stale_snapshot,
-            8,
-            8,
-            empty_nested_channels(),
-            Vec::new(),
-        );
+        let channels =
+            StableSupervisorChannels::new(stale_snapshot, 8, empty_nested_channels(), Vec::new());
         let handle = channels.handle();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         let (command_tx, _command_rx) = mpsc::channel(1);
@@ -861,7 +784,6 @@ mod tests {
         );
         let channels = StableSupervisorChannels::new(
             initial_snapshot.clone(),
-            8,
             8,
             empty_nested_channels(),
             Vec::new(),
@@ -900,7 +822,6 @@ mod tests {
                 Strategy::OneForOne,
                 Vec::new(),
             ),
-            8,
             8,
             empty_nested_channels(),
             Vec::new(),
@@ -948,7 +869,6 @@ mod tests {
         );
         let channels = StableSupervisorChannels::new(
             ready_snapshot.clone(),
-            8,
             8,
             empty_nested_channels(),
             Vec::new(),
@@ -1012,7 +932,6 @@ mod tests {
         let descendant = StableSupervisorChannels::new(
             empty_snapshot.clone(),
             8,
-            8,
             empty_nested_channels(),
             vec![AttachedChildState {
                 identity: AttachedChildIdentity {
@@ -1031,7 +950,6 @@ mod tests {
         );
         let ancestor = StableSupervisorChannels::new(
             ancestor_snapshot.clone(),
-            8,
             8,
             empty_nested_channels(),
             Vec::new(),
@@ -1072,13 +990,8 @@ mod tests {
             Strategy::OneForOne,
             Vec::new(),
         );
-        let channels = StableSupervisorChannels::new(
-            snapshot.clone(),
-            8,
-            8,
-            empty_nested_channels(),
-            Vec::new(),
-        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), Vec::new());
         let (first_shutdown_tx, _first_shutdown_rx) = watch::channel(false);
         let (first_command_tx, _first_command_rx) = mpsc::channel(1);
         let (_first_done_tx, first_done_rx) = watch::channel(None);
@@ -1128,13 +1041,8 @@ mod tests {
             Strategy::OneForOne,
             Vec::new(),
         );
-        let channels = StableSupervisorChannels::new(
-            snapshot.clone(),
-            8,
-            8,
-            empty_nested_channels(),
-            Vec::new(),
-        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), Vec::new());
         let handle = channels.handle();
         channels.mark_root();
         let initial = channels
@@ -1201,7 +1109,7 @@ mod tests {
             Vec::new(),
         );
         let channels =
-            StableSupervisorChannels::new(snapshot.clone(), 8, 8, empty_nested_channels(), vec![]);
+            StableSupervisorChannels::new(snapshot.clone(), 8, empty_nested_channels(), vec![]);
         let released = channels.handle();
         channels.mark_root();
         let initial = channels
@@ -1245,47 +1153,6 @@ mod tests {
     }
 
     #[test]
-    fn terminalization_after_bind_uses_the_atomically_acquired_event_sender() {
-        let initial_snapshot = SupervisorSnapshot::new(
-            SupervisorStateView::Running,
-            Strategy::OneForOne,
-            Vec::new(),
-        );
-        let channels = StableSupervisorChannels::new(
-            initial_snapshot.clone(),
-            8,
-            8,
-            empty_nested_channels(),
-            Vec::new(),
-        );
-        let mut events = channels.events_rx();
-        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
-        let (command_tx, _command_rx) = mpsc::channel(1);
-        let (_done_tx, done_rx) = watch::channel(None);
-
-        let bound = channels
-            .bind(
-                0,
-                shutdown_tx,
-                command_tx,
-                done_rx,
-                initial_snapshot,
-                Vec::new(),
-            )
-            .expect("live stable channels bind and acquire event resources");
-        channels.terminal();
-
-        bound
-            .events
-            .send(SupervisorEvent::SupervisorStarted)
-            .expect("bound incarnation retains its event sender");
-        assert!(matches!(
-            events.try_recv(),
-            Ok(SupervisorEvent::SupervisorStarted)
-        ));
-    }
-
-    #[test]
     fn terminalization_during_initial_handoff_rejects_binding_without_panicking() {
         let initial_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
@@ -1294,7 +1161,6 @@ mod tests {
         );
         let channels = StableSupervisorChannels::new(
             initial_snapshot.clone(),
-            8,
             8,
             empty_nested_channels(),
             Vec::new(),
@@ -1335,7 +1201,6 @@ pub(crate) struct StableBindingGuard {
 pub(crate) struct BoundIncarnation {
     pub(crate) guard: StableBindingGuard,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
-    pub(crate) events: broadcast::Sender<SupervisorEvent>,
     pub(crate) lifecycle: Arc<LifecycleHub>,
 }
 
@@ -1410,10 +1275,11 @@ pub(crate) enum SupervisorCommand {
 /// - **Dynamic children**: [`add_child`](Self::add_child) /
 ///   [`remove_child`](Self::remove_child). Use [`supervisor`](Self::supervisor)
 ///   to obtain a scoped handle before changing a nested supervisor.
-/// - **Observability**: [`subscribe`](Self::subscribe) for (lossy) events,
-///   [`snapshot`](Self::snapshot) / [`subscribe_snapshots`](Self::subscribe_snapshots)
-///   for state, and [`watch_lifecycle`](Self::watch_lifecycle) for ordered,
-///   reliable transitions.
+/// - **Observability**: [`snapshot`](Self::snapshot) /
+///   [`subscribe_snapshots`](Self::subscribe_snapshots) for state,
+///   [`watch_lifecycle`](Self::watch_lifecycle) for direct-child transitions,
+///   and [`watch_lifecycle_recursive`](Self::watch_lifecycle_recursive) for
+///   the whole tree.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
 /// For a spawned root, dropping the last public handle clone requests graceful
@@ -1764,36 +1630,6 @@ impl SupervisorHandle {
         }
     }
 
-    /// Returns a new receiver for supervisor lifecycle events.
-    ///
-    /// # Events are lossy observability, not durable control
-    ///
-    /// The receiver is backed by a bounded broadcast channel. If the receiver
-    /// falls behind by more than the configured
-    /// [`event_channel_capacity`](crate::SupervisorBuilder::event_channel_capacity),
-    /// it receives a `Lagged` error and skips the missed events. Events
-    /// forwarded from nested supervisors cross an additional bounded internal
-    /// channel and can be dropped there without a `Lagged` marker on this
-    /// receiver.
-    ///
-    /// This contract makes the event stream suitable for logging, tracing,
-    /// and dashboards, but **not** for driving safety or control logic: a
-    /// consumer that counts events can silently under-count. Consumers that
-    /// nevertheless gate decisions on events must fail closed on `Lagged`
-    /// (treat the gap as if the guarded condition occurred), or better, use a
-    /// cumulative source that cannot miss occurrences:
-    ///
-    /// - [`watch_lifecycle`](Self::watch_lifecycle) for ordered transitions, or
-    /// - [`subscribe_snapshots`](Self::subscribe_snapshots) with the
-    ///   monotonic [`SupervisorSnapshot::total_restarts`] and per-child
-    ///   [`ChildSnapshot::restart_count`](crate::ChildSnapshot::restart_count)
-    ///   counters. Snapshots are delivered over a `watch` channel, which
-    ///   conflates intermediate values but never lags, so counter deltas
-    ///   account for every restart.
-    pub fn subscribe(&self) -> broadcast::Receiver<SupervisorEvent> {
-        self.channels.events_rx()
-    }
-
     /// Returns an ordered, reliable stream of lifecycle transitions among
     /// this supervisor's direct children.
     ///
@@ -1813,6 +1649,23 @@ impl SupervisorHandle {
     /// separately.
     pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch()
+    }
+
+    /// Returns an ordered lifecycle stream for this entire supervisor tree.
+    ///
+    /// Each event carries a path relative to this handle. Direct-child
+    /// transitions retain the source scope's monotonic lifecycle sequence;
+    /// supervisor start/stop transitions and pending restart delays are also
+    /// represented. A nested supervisor's stable identity remains attached
+    /// across its own restarts and ancestor-driven recreation.
+    ///
+    /// Each watch owns one bounded buffer for the whole tree. Sustained
+    /// overflow is represented by a tree-wide
+    /// [`RecursiveLifecycleEventKind::Lagged`](crate::RecursiveLifecycleEventKind::Lagged)
+    /// marker. Consumers maintaining derived state should then resynchronize
+    /// from [`snapshot`](Self::snapshot).
+    pub fn watch_lifecycle_recursive(&self) -> RecursiveLifecycleWatch {
+        self.lifecycle_hub().watch_recursive()
     }
 
     /// Returns a clone of the latest [`SupervisorSnapshot`].
