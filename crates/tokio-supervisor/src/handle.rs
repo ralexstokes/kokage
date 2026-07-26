@@ -63,7 +63,7 @@ impl ControlEndpoint {
 
 #[derive(Clone)]
 struct IncarnationBinding {
-    generation: u64,
+    binding_epoch: u64,
     shutdown_tx: watch::Sender<bool>,
     control: ControlEndpoint,
     done_rx: DoneReceiver,
@@ -83,8 +83,9 @@ pub(crate) type AttachedChildrenState = Arc<Mutex<AttachedChildrenView>>;
 
 #[derive(Clone)]
 pub(crate) struct AttachedChildrenView {
-    /// `None` identifies the root supervisor. Nested views are bound to the
-    /// generation of the supervisor child incarnation that owns them.
+    /// `None` identifies the root supervisor or an invalidated nested view.
+    /// Bound nested views carry the generation of the supervisor child
+    /// incarnation that owns them.
     pub(crate) generation: Option<u64>,
     pub(crate) terminal: bool,
     pub(crate) children: Vec<AttachedChildState>,
@@ -138,6 +139,10 @@ struct EventSlot {
 
 struct StableBindingState {
     current: Option<IncarnationBinding>,
+    /// Monotonic identity for bindings to these stable channels. Child
+    /// generations can repeat when an ancestor reincarnates, so they cannot
+    /// distinguish an old guard from its replacement.
+    next_binding_epoch: u64,
     /// Whether any incarnation has ever bound to this identity. Distinguishes
     /// a scope that has not started yet from one resting between
     /// incarnations, which [`SupervisorHandle::wait`] treats differently.
@@ -250,6 +255,7 @@ impl StableSupervisorChannels {
         Arc::new(Self {
             binding: Mutex::new(StableBindingState {
                 current: None,
+                next_binding_epoch: 0,
                 bound_once: false,
                 terminal: false,
             }),
@@ -489,6 +495,8 @@ impl StableSupervisorChannels {
         if binding.terminal {
             return None;
         }
+        let binding_epoch = binding.next_binding_epoch;
+        binding.next_binding_epoch = binding.next_binding_epoch.wrapping_add(1);
 
         // Keep terminalization excluded through snapshot/attachment reset and
         // publication of the new control binding. Every sender needed by the
@@ -510,6 +518,17 @@ impl StableSupervisorChannels {
                 .find(|attached| attached.identity.id == child.id)
             {
                 attached.identity.membership_epoch = membership_epoch;
+            }
+        }
+        // A retained static descendant can still be finishing under the old
+        // ancestor incarnation. Its local generation restarts from zero when
+        // this incarnation recreates it, so a generation-only recursive walk
+        // cannot distinguish that stale view from the replacement. Hide each
+        // direct descendant before publishing the new ancestor view; its own
+        // bind will publish the replacement membership atomically.
+        for child in &initial_attached_children {
+            if let Some(supervisor) = &child.supervisor {
+                supervisor.channels.invalidate_attachment_view();
             }
         }
         // The children belong to the new incarnation, but the aggregate
@@ -537,7 +556,7 @@ impl StableSupervisorChannels {
             children: initial_attached_children,
         };
         binding.current = Some(IncarnationBinding {
-            generation,
+            binding_epoch,
             shutdown_tx,
             control: ControlEndpoint { command_tx },
             done_rx,
@@ -547,7 +566,7 @@ impl StableSupervisorChannels {
         Some(BoundIncarnation {
             guard: StableBindingGuard {
                 channels: Arc::clone(self),
-                generation,
+                binding_epoch,
             },
             snapshots,
             events,
@@ -744,6 +763,18 @@ impl StableSupervisorChannels {
 
     pub(crate) fn attached_children(&self) -> AttachedChildrenState {
         Arc::clone(&self.attached_children)
+    }
+
+    fn invalidate_attachment_view(&self) {
+        let mut attached_children = self
+            .attached_children
+            .lock()
+            .expect("attached child view poisoned");
+        if attached_children.terminal {
+            return;
+        }
+        attached_children.generation = None;
+        attached_children.children.clear();
     }
 
     pub(crate) fn mark_root(&self) {
@@ -971,6 +1002,123 @@ mod tests {
         assert!(!observed.children[0].started);
     }
 
+    #[test]
+    fn binding_an_ancestor_invalidates_stale_descendant_attachments() {
+        let empty_snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let descendant = StableSupervisorChannels::new(
+            empty_snapshot.clone(),
+            8,
+            8,
+            empty_nested_channels(),
+            vec![AttachedChildState {
+                identity: AttachedChildIdentity {
+                    id: "dynamic-worker".to_owned(),
+                    membership_epoch: 0,
+                    generation: 0,
+                },
+                attachment: Some(Arc::new("stale".to_owned()) as OpaqueAttachment),
+                supervisor: None,
+            }],
+        );
+        let ancestor_snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            vec![ChildSnapshot::new("dynamic", 0, ChildStateView::Starting)],
+        );
+        let ancestor = StableSupervisorChannels::new(
+            ancestor_snapshot.clone(),
+            8,
+            8,
+            empty_nested_channels(),
+            Vec::new(),
+        );
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (_done_tx, done_rx) = watch::channel(None);
+
+        let _bound = ancestor
+            .bind(
+                1,
+                shutdown_tx,
+                command_tx,
+                done_rx,
+                ancestor_snapshot,
+                vec![AttachedChildState {
+                    identity: AttachedChildIdentity {
+                        id: "dynamic".to_owned(),
+                        membership_epoch: 0,
+                        generation: 0,
+                    },
+                    attachment: None,
+                    supervisor: Some(descendant.internal_handle()),
+                }],
+            )
+            .expect("replacement ancestor binds");
+
+        assert!(
+            ancestor.handle().attached_children::<String>().is_empty(),
+            "a replacement ancestor must not expose an old descendant view whose local generation was reused"
+        );
+    }
+
+    #[test]
+    fn displaced_same_generation_guard_does_not_clear_replacement_binding() {
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels = StableSupervisorChannels::new(
+            snapshot.clone(),
+            8,
+            8,
+            empty_nested_channels(),
+            Vec::new(),
+        );
+        let (first_shutdown_tx, _first_shutdown_rx) = watch::channel(false);
+        let (first_command_tx, _first_command_rx) = mpsc::channel(1);
+        let (_first_done_tx, first_done_rx) = watch::channel(None);
+        let first = channels
+            .bind(
+                0,
+                first_shutdown_tx,
+                first_command_tx,
+                first_done_rx,
+                snapshot.clone(),
+                Vec::new(),
+            )
+            .expect("first incarnation binds");
+
+        let (replacement_shutdown_tx, mut replacement_shutdown_rx) = watch::channel(false);
+        let (replacement_command_tx, _replacement_command_rx) = mpsc::channel(1);
+        let (_replacement_done_tx, replacement_done_rx) = watch::channel(None);
+        let _replacement = channels
+            .bind(
+                0,
+                replacement_shutdown_tx,
+                replacement_command_tx,
+                replacement_done_rx,
+                snapshot,
+                Vec::new(),
+            )
+            .expect("replacement incarnation binds with a reused local generation");
+
+        drop(first);
+
+        assert!(
+            !*replacement_shutdown_rx.borrow_and_update(),
+            "the displaced guard must not signal the replacement binding"
+        );
+        assert!(
+            channels.current_binding().is_some(),
+            "the displaced guard must not clear the replacement binding"
+        );
+    }
+
     #[tokio::test]
     async fn root_wait_during_extra_handoff_claims_the_join_handle() {
         use std::time::Duration;
@@ -1181,7 +1329,7 @@ mod tests {
 
 pub(crate) struct StableBindingGuard {
     channels: Arc<StableSupervisorChannels>,
-    generation: u64,
+    binding_epoch: u64,
 }
 
 pub(crate) struct BoundIncarnation {
@@ -1201,7 +1349,7 @@ impl Drop for StableBindingGuard {
         if binding
             .current
             .as_ref()
-            .is_some_and(|binding| binding.generation == self.generation)
+            .is_some_and(|binding| binding.binding_epoch == self.binding_epoch)
             && let Some(binding) = binding.current.take()
         {
             let _ = binding.shutdown_tx.send(true);
@@ -1210,15 +1358,7 @@ impl Drop for StableBindingGuard {
             // so an ancestor rebinding cannot traverse stale descendants
             // before this supervisor binds and publishes its replacement
             // membership view.
-            *self
-                .channels
-                .attached_children
-                .lock()
-                .expect("attached child view poisoned") = AttachedChildrenView {
-                generation: None,
-                terminal: false,
-                children: Vec::new(),
-            };
+            self.channels.invalidate_attachment_view();
             self.channels.bump_binding_revision();
         }
     }
