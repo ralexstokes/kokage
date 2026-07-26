@@ -11,8 +11,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LifecycleWatch, RawActor, Reply,
-    RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
+    LifecycleWatch, RawActor, Reply, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -266,7 +266,7 @@ async fn constructor_panic_uses_the_actor_panic_path() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     })

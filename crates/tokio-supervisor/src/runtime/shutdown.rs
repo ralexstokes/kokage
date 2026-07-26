@@ -14,7 +14,7 @@ use crate::{
         },
     },
     scope::ScopeKind,
-    shutdown::{ShutdownMode, TIDY_ABORT_BEAT},
+    shutdown::{ShutdownMode, tidy_abort_beat},
 };
 
 use super::supervision::SupervisorRuntime;
@@ -217,7 +217,7 @@ impl SupervisorRuntime {
                 let hard_abort_needed = self
                     .wait_for_ordered_child(
                         key,
-                        Some(Instant::now() + TIDY_ABORT_BEAT),
+                        Some(Instant::now() + tidy_abort_beat(policy.grace)),
                         scope,
                         &mut deferred,
                     )
@@ -443,13 +443,16 @@ impl SupervisorRuntime {
                         {
                             timed_out.push(child.id.clone());
                         }
+                        let beat = tidy_abort_beat(
+                            child.runtime.definition.shutdown_policy.grace,
+                        );
                         self.escalate_child(key);
                         if let Some(deadline) = deadlines
                             .iter_mut()
                             .find(|deadline| deadline.key == key)
                         {
                             deadline.phase = DrainDeadlinePhase::HardAbort;
-                            deadline.at = now + TIDY_ABORT_BEAT;
+                            deadline.at = now + beat;
                         }
                     }
 

@@ -5,9 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, CancellationHandle, Down, DownReason, DynamicActorOptions,
-    MonitorEvent, RawActor, RestartPolicy, RunnableActor, RunnableActorFactory, Runtime,
-    prelude::Continue,
+    ActorContext, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down,
+    DownReason, DynamicActorOptions, MonitorEvent, RawActor, RestartPolicy, RunnableActor,
+    RunnableActorFactory, Runtime, prelude::Continue,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -177,7 +177,7 @@ async fn watch_reports_panicked_peer_as_failure() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -189,7 +189,7 @@ async fn watch_reports_panicked_peer_as_failure() {
             .run_until(
                 stop.cancelled(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -228,7 +228,7 @@ async fn watch_reports_clean_stop_as_normal() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -240,7 +240,7 @@ async fn watch_reports_clean_stop_as_normal() {
             .run_until(
                 stop.cancelled(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -281,7 +281,7 @@ async fn cancelled_watch_suppresses_delivery() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -291,7 +291,7 @@ async fn cancelled_watch_suppresses_delivery() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -316,7 +316,7 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -328,7 +328,7 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::OnFailure,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -364,7 +364,7 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -450,7 +450,7 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -460,7 +460,7 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::OnFailure,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -486,7 +486,7 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -598,7 +598,7 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -608,7 +608,7 @@ async fn repeated_watch_calls_alias_until_cancelled() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -704,7 +704,7 @@ async fn observer_membership_removal_cancels_its_watches() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -713,7 +713,7 @@ async fn observer_membership_removal_cancels_its_watches() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -757,7 +757,7 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -766,7 +766,7 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -805,7 +805,7 @@ async fn watching_terminated_peer_delivers_immediate_terminated() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -842,7 +842,7 @@ async fn watching_detached_peer_delivers_immediate_terminated() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -864,7 +864,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -874,7 +874,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::OnFailure,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -902,7 +902,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -937,7 +937,7 @@ async fn watch_registered_between_incarnations_waits_for_next_up() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::OnFailure,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -960,7 +960,7 @@ async fn watch_registered_between_incarnations_waits_for_next_up() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -973,7 +973,7 @@ async fn watch_registered_between_incarnations_waits_for_next_up() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -997,7 +997,7 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1009,7 +1009,7 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -1041,7 +1041,7 @@ async fn shutdown_request_reports_normal_exit() {
         peer.run_until(
             stop.cancelled(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -1051,7 +1051,7 @@ async fn shutdown_request_reports_normal_exit() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1096,7 +1096,7 @@ async fn two_observers_receive_the_same_events() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1105,7 +1105,7 @@ async fn two_observers_receive_the_same_events() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1114,7 +1114,7 @@ async fn two_observers_receive_the_same_events() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -1191,7 +1191,7 @@ async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -1200,7 +1200,7 @@ async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1373,7 +1373,7 @@ async fn mapping_panic_does_not_change_target_exit() {
         peer.run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
     });
@@ -1382,7 +1382,7 @@ async fn mapping_panic_does_not_change_target_exit() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1423,7 +1423,7 @@ async fn pending_target_can_be_dropped_from_non_runtime_thread() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });

@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, Graph,
-    GraphBuildError, GraphBuilder, MailboxMode, MessageSize, RawActor, RestartPolicy, SendError,
-    Topology, prelude::Continue,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError,
+    DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize,
+    RawActor, RestartPolicy, SendError, Topology, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -26,7 +24,7 @@ fn start_graph(
                     .run_until(
                         stop.cancelled(),
                         RestartPolicy::Never,
-                        Duration::from_secs(5),
+                        DEFAULT_SHUTDOWN_BOUND,
                     )
                     .await
             })

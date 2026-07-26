@@ -191,8 +191,9 @@ first.
 Ordered shutdown latency is also cumulative: each cooperative child receives
 its own grace before the cursor moves to the previous declaration, so the
 worst-case grace budget is their sum (with the default, up to 5 seconds × the
-number of children). Dynamic scopes cancel siblings together and wait under
-one shared maximum-grace deadline.
+number of children). Dynamic scopes cancel siblings together and run every
+child's grace concurrently, so their budget is the longest single grace rather
+than the sum.
 
 ### One shutdown clock per child
 
@@ -205,21 +206,25 @@ When a cooperative grace expires, the supervisor records a
 `ShutdownTimedOut` exit and signals the actor wrapper's tidy-abort path. The
 wrapper aborts and joins the inner actor task, terminates its mailbox binding,
 and publishes actor observability before returning. If the wrapper does not
-finish within a short fixed accounting beat, the supervisor hard-aborts it.
+finish within a short accounting beat — a tenth of the child's own grace,
+clamped to between 1 ms and 10 ms — the supervisor hard-aborts it.
 `cooperative_then_abort` still lets the enclosing shutdown operation succeed;
 `cooperative_strict` also returns a timeout error. Both modes expose the same
 truthful `ShutdownTimedOut` reason in snapshots and lifecycle streams.
 
 Ordered scopes stop children in reverse declaration order and give each child
-its complete grace. Dynamic scopes start every clock together and stop
-children concurrently, but each child escalates when its own grace expires;
-a short-grace child cannot borrow a longer-grace sibling's budget.
+its complete grace, plus that child's accounting beat if it times out. Dynamic
+scopes start every clock together and stop children concurrently, but each
+child escalates when its own grace expires; a short-grace child cannot borrow a
+longer-grace sibling's budget.
 
-Standalone hosts pass an explicit shutdown bound to `RunnableActor::run_until`.
-That bound provides the same inner-task backstop without storing execution
-policy on the graph. As with every Tokio abort, code that never reaches a poll
-boundary, and blocking work already running on the blocking pool, can continue
-outside the actor task.
+Standalone hosts pass an explicit shutdown bound to `RunnableActor::run_until`
+(`DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
+provides the same inner-task backstop without storing execution policy on the
+graph, and an actor that overruns it resolves the run to
+`ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
+abort, code that never reaches a poll boundary, and blocking work already
+running on the blocking pool, can continue outside the actor task.
 
 ## Automatic shutdown for finite work
 

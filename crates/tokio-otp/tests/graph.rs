@@ -15,9 +15,9 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError, DrainPolicy,
-    Graph, GraphBuildError, GraphBuilder, RawActor, Reply, RestartPolicy, RunnableActor, SendError,
-    TryRecvError, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
+    DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, RawActor, Reply,
+    RestartPolicy, RunnableActor, SendError, TryRecvError, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -71,7 +71,7 @@ fn start_graph(
                     .run_until(
                         stop.cancelled(),
                         RestartPolicy::Never,
-                        Duration::from_secs(5),
+                        DEFAULT_SHUTDOWN_BOUND,
                     )
                     .await
             })
@@ -444,7 +444,7 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
         .run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await;
     assert!(matches!(
@@ -484,7 +484,7 @@ async fn handler_error_fails_the_actor_run() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -583,7 +583,7 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -629,7 +629,7 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
             .run_until(
                 pending::<()>(),
                 RestartPolicy::Never,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
     });
@@ -1011,7 +1011,7 @@ async fn actor_error_fails_its_run() {
         .run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await;
     assert!(matches!(
@@ -1041,7 +1041,7 @@ async fn early_clean_exit_is_a_clean_actor_run() {
         .run_until(
             pending::<()>(),
             RestartPolicy::Never,
-            Duration::from_secs(5),
+            DEFAULT_SHUTDOWN_BOUND,
         )
         .await
         .expect("clean early exit is ordinary completion");
@@ -1159,9 +1159,9 @@ mod runnable_actor {
     };
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
-        ControlError, DrainPolicy, DynamicActorOptions, Graph, GraphBuilder, MessageSize, RawActor,
-        RestartPolicy, RunnableActor, RunnableActorFactory, SendError, SupervisionTree,
-        prelude::Continue,
+        ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
+        GraphBuilder, MessageSize, RawActor, RestartPolicy, RunnableActor, RunnableActorFactory,
+        SendError, SupervisionTree, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1303,7 +1303,7 @@ mod runnable_actor {
             let stop = stop.clone();
             async move {
                 actor
-                    .run_until(stop.cancelled(), restart, Duration::from_secs(5))
+                    .run_until(stop.cancelled(), restart, DEFAULT_SHUTDOWN_BOUND)
                     .await
             }
         });
@@ -1616,7 +1616,7 @@ mod runnable_actor {
                 .run_until(
                     pending::<()>(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await,
             Err(ActorRunError::AlreadyRunning { actor_id , .. }) if actor_id == "worker"
@@ -1649,7 +1649,7 @@ mod runnable_actor {
         let worker = single_actor(&graph, "worker");
         let task = tokio::spawn(async move {
             worker
-                .run_until(pending::<()>(), Default::default(), Duration::from_secs(5))
+                .run_until(pending::<()>(), Default::default(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         });
 
@@ -1678,7 +1678,7 @@ mod runnable_actor {
             let worker = single_actor(&graph, "worker");
             let task = tokio::spawn(async move {
                 worker
-                    .run_until(pending::<()>(), policy, Duration::from_secs(5))
+                    .run_until(pending::<()>(), policy, DEFAULT_SHUTDOWN_BOUND)
                     .await
             });
 

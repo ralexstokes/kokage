@@ -1,9 +1,9 @@
-use std::{error::Error, future::pending, marker::PhantomData, time::Duration};
+use std::{error::Error, future::pending, marker::PhantomData};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorResult, CancellationToken, GraphBuilder, RestartPolicy,
-    prelude::Continue,
+    Actor, ActorContext, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
+    RestartPolicy, prelude::Continue,
 };
 
 enum Command<M> {
@@ -72,7 +72,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .run_until(
                     pending::<()>(),
                     RestartPolicy::OnFailure,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -92,7 +92,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::OnFailure,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }

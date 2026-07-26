@@ -11,8 +11,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorResult, CallError, Graph, GraphBuilder, RawActor, Reply, RestartPolicy,
-    RunnableActor, prelude::Continue,
+    ActorContext, ActorResult, CallError, DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuilder, RawActor,
+    Reply, RestartPolicy, RunnableActor, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -36,7 +36,7 @@ fn start(actor: RunnableActor) -> (CancellationToken, tokio::task::JoinHandle<()
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
                 .expect("actor run succeeds");

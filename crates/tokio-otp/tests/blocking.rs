@@ -14,8 +14,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorResult, ActorRunError, Graph, GraphBuilder, RawActor, RestartPolicy,
-    prelude::Continue,
+    ActorContext, ActorResult, ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuilder,
+    RawActor, RestartPolicy, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -41,7 +41,7 @@ fn start_graph(graph: &Graph) -> (CancellationToken, JoinHandle<Result<(), Actor
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -306,7 +306,7 @@ async fn blocking_panic_propagates_as_actor_panic() {
                 .run_until(
                     pending::<()>(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }),

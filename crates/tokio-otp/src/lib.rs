@@ -117,7 +117,8 @@
 //!
 //! ```
 //! use tokio_otp::{
-//!     Actor, ActorContext, ActorResult, CancellationToken, GraphBuilder, Reply, RestartPolicy,
+//!     Actor, ActorContext, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
+//!     Reply, RestartPolicy,
 //! };
 //! use tokio_otp::prelude::Continue;
 //!
@@ -159,11 +160,7 @@
 //!     let stop = stop.clone();
 //!     async move {
 //!         actor
-//!             .run_until(
-//!                 stop.cancelled(),
-//!                 RestartPolicy::Never,
-//!                 std::time::Duration::from_secs(5),
-//!             )
+//!             .run_until(stop.cancelled(), RestartPolicy::Never, DEFAULT_SHUTDOWN_BOUND)
 //!             .await
 //!     }
 //! });
@@ -282,10 +279,10 @@ pub use tokio_otp_derive::{ActorFactory, Topology};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, BoxError, CallError, CancellationHandle, Down, DownReason, DrainPolicy,
-    Flow, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor,
-    Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline, StepHandle,
-    SupervisorPathSegment, TryRecvError,
+    ActorSlot, ActorStats, BoxError, CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down,
+    DownReason, DrainPolicy, Flow, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize,
+    MonitorEvent, RawActor, Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline,
+    StepHandle, SupervisorPathSegment, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 #[allow(deprecated)]

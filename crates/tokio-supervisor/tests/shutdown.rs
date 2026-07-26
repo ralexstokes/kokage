@@ -389,6 +389,66 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
 }
 
 #[tokio::test]
+async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
+    const GRACE: Duration = Duration::from_millis(20);
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (finished_tx, mut finished_rx) = mpsc::unbounded_channel();
+    let live_flag = common::LiveFlag::new();
+    let live = live_flag.clone();
+    let handle = SupervisorBuilder::new()
+        .child(
+            ChildSpec::new("slow-wrapper", move |ctx| {
+                let started_tx = started_tx.clone();
+                let finished_tx = finished_tx.clone();
+                let live = live.clone();
+                async move {
+                    let _guard = live.guard();
+                    started_tx.send(()).expect("test receiver dropped");
+                    ctx.abort_token().cancelled().await;
+                    // Far longer than any tidy beat the grace can buy.
+                    sleep(Duration::from_secs(30)).await;
+                    finished_tx.send(()).expect("test receiver dropped");
+                    Ok(())
+                }
+            })
+            .shutdown(ShutdownPolicy::cooperative_strict(GRACE)),
+        )
+        .build()
+        .expect("supervisor builds")
+        .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
+    common::recv_event(&mut started_rx).await;
+
+    let started_at = Instant::now();
+    assert_eq!(
+        handle.shutdown_and_wait().await,
+        Err(SupervisorError::ShutdownTimedOut("slow-wrapper".to_owned()))
+    );
+    let elapsed = started_at.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "hard abort must not wait out the wrapper's own work: {elapsed:?}"
+    );
+    assert!(
+        !live_flag.is_live(),
+        "an overrunning wrapper is aborted rather than left running"
+    );
+    assert!(
+        finished_rx.try_recv().is_err(),
+        "the wrapper never completed its post-escalation work"
+    );
+
+    while let Some(event) = lifecycle.next().await {
+        if let LifecycleEventKind::Exited { reason, .. } = event.kind {
+            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            return;
+        }
+    }
+    panic!("hard-aborted wrapper did not publish a timeout exit");
+}
+
+#[tokio::test]
 async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (short_escalated_tx, mut short_escalated_rx) = mpsc::unbounded_channel();

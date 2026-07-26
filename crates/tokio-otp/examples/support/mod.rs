@@ -1,7 +1,7 @@
-use std::{error::Error, time::Duration};
+use std::error::Error;
 
 use tokio::task::JoinHandle;
-use tokio_otp::{ActorRunError, CancellationToken, Graph, RestartPolicy};
+use tokio_otp::{ActorRunError, CancellationToken, DEFAULT_SHUTDOWN_BOUND, Graph, RestartPolicy};
 
 pub struct ActorTasks {
     stop: CancellationToken,
@@ -22,7 +22,7 @@ impl ActorTasks {
                         .run_until(
                             stop.cancelled(),
                             RestartPolicy::Never,
-                            Duration::from_secs(5),
+                            DEFAULT_SHUTDOWN_BOUND,
                         )
                         .await
                 })

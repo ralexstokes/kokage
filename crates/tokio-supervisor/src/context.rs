@@ -99,8 +99,10 @@ impl ChildContext {
     /// [`shutdown_token`](Self::shutdown_token). If the child is still running
     /// when its grace period expires, it triggers this token and records the
     /// exit as [`ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut).
-    /// The child wrapper then has a short, fixed window to finish local
-    /// accounting before the supervisor hard-aborts the task.
+    /// The child wrapper then has a short window to finish local accounting
+    /// before the supervisor hard-aborts the task: a tenth of this child's own
+    /// grace, clamped to between 1 ms and 10 ms. Work that cannot finish in
+    /// that window belongs before the grace expires, not after it.
     ///
     /// Most child tasks only need `shutdown_token`. Wrappers that own inner
     /// tasks can select on this token to abort and join those tasks tidily.

@@ -154,6 +154,14 @@ pub enum ActorRunError {
     },
 }
 
+/// The shutdown bound a standalone host should pass to
+/// [`RunnableActor::run_until`] when it has no deadline of its own.
+///
+/// This matches the default grace of
+/// [`ShutdownPolicy`](crate::ShutdownPolicy), so an actor behaves the same
+/// whether it is hosted by hand or by [`Runtime`](crate::Runtime).
+pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
+
 /// An actor graph containing wiring and independently runnable actors.
 ///
 /// Stable typed refs remain functional across independent actor restarts.
@@ -284,6 +292,14 @@ impl RunnableActor {
     /// `shutdown_bound` limits the whole drain and stop-hook path for this
     /// standalone host. Supervised runtimes use each child specification's
     /// [`ShutdownPolicy`](crate::ShutdownPolicy) grace instead.
+    /// [`DEFAULT_SHUTDOWN_BOUND`] is a reasonable bound for a host without a
+    /// deadline of its own.
+    ///
+    /// When `shutdown_bound` expires before the actor finishes draining, the
+    /// inner task is aborted and the run resolves to
+    /// [`ActorRunError::ShutdownTimedOut`] — a timeout is reported rather than
+    /// laundered into a clean exit, so `.expect(..)` on the result will panic
+    /// for an actor that overruns its bound.
     ///
     /// - A clean exit leaves the binding rebindable only for
     ///   [`Always`](RestartPolicy::Always).

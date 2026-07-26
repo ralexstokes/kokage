@@ -1569,14 +1569,18 @@ impl SupervisorRuntime {
         }
     }
 
+    /// Relabels an exit that the supervisor already escalated past its grace.
+    ///
+    /// Both conditions are latched decisions rather than clock reads: a child
+    /// that finished inside its grace keeps its real exit status even when the
+    /// join is dequeued after the deadline has passed.
     fn classify_child_exit(&self, meta: &TaskMeta, status: ExitStatus) -> ExitStatus {
         if self.children.get(meta.key).is_some_and(|entry| {
             entry.instance == meta.instance
                 && entry.runtime.generation == meta.generation
                 && (entry.runtime.shutdown_timed_out
                     || entry.pending_removal.as_ref().is_some_and(|pending| {
-                        !matches!(pending.mode, ShutdownMode::Abort)
-                            && Instant::now() >= pending.grace_deadline
+                        !matches!(pending.mode, ShutdownMode::Abort) && pending.grace_expired
                     }))
         }) {
             ExitStatus::ShutdownTimedOut
@@ -1657,12 +1661,15 @@ impl SupervisorRuntime {
         for key in expired_removals {
             let id = {
                 let entry = &mut self.children[key];
+                let beat = crate::shutdown::tidy_abort_beat(
+                    entry.runtime.definition.shutdown_policy.grace,
+                );
                 let pending = entry
                     .pending_removal
                     .as_mut()
                     .expect("expired removal retained its pending state");
                 pending.grace_expired = true;
-                pending.hard_abort_deadline = Some(now + crate::shutdown::TIDY_ABORT_BEAT);
+                pending.hard_abort_deadline = Some(now + beat);
                 entry.id.clone()
             };
             self.meta

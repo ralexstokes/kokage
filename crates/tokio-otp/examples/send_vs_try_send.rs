@@ -8,7 +8,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorResult, GraphBuilder, RawActor, RestartPolicy, SendError, prelude::Continue,
+    ActorContext, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, RawActor, RestartPolicy,
+    SendError, prelude::Continue,
 };
 
 #[derive(Clone)]
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             sink.run_until(
                 pending::<()>(),
                 RestartPolicy::Always,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
         }
@@ -83,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             sink.run_until(
                 pending::<()>(),
                 RestartPolicy::Always,
-                Duration::from_secs(5),
+                DEFAULT_SHUTDOWN_BOUND,
             )
             .await
         }

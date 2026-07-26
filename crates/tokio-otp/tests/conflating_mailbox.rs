@@ -9,8 +9,8 @@ use std::{
 
 use tokio::sync::{Notify, mpsc};
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorResult, CallError, DrainPolicy, GraphBuilder,
-    MailboxMode, MessageSize, RawActor, Reply, RestartPolicy, prelude::Continue,
+    Actor, ActorContext, ActorOptions, ActorResult, CallError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy,
+    GraphBuilder, MailboxMode, MessageSize, RawActor, Reply, RestartPolicy, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -73,7 +73,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -135,7 +135,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -205,7 +205,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -268,7 +268,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -360,7 +360,7 @@ async fn replaced_call_reports_reply_dropped() {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -458,7 +458,7 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
@@ -514,7 +514,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
                 .run_until(
                     stop.cancelled(),
                     RestartPolicy::Never,
-                    Duration::from_secs(5),
+                    DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
         }
