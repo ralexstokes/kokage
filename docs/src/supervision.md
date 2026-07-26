@@ -301,7 +301,6 @@ caller next samples the tree. The reply schedules immediate startup;
 Dynamic supervisors start empty and can have their last child removed. At zero
 children they keep serving control commands and wait for the next `add_child`
 or an explicit shutdown.
-
 We will use a higher-level version of this API in the [Dynamic
 actors](dynamic-actors.md) chapter.
 
