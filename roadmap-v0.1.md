@@ -35,15 +35,14 @@ application surfaced friction that was resolved in the runtime rather than
 hidden in example scaffolding, per the Milestone 2 rule:
 
 - **Factory-first actor construction.** `ActorFactory::build` constructs each
-  incarnation; factory fields are durable configuration, and actors no longer
-  need to implement `Clone`. This replaces the wiring-time-clone restart model.
-- **Persistent watches.** The incarnation-scoped monitor was replaced with a
-  persistent `ctx.watch` that spans incarnations, emitting `Up`/`Down` events
-  with bounded per-watch buffering and an explicit `Overflowed` signal.
+  incarnation; factory fields are durable configuration, and actors do not
+  need to implement `Clone`.
+- **Persistent watches.** `ctx.watch` spans incarnations, emitting `Up`/`Down`
+  events with bounded per-watch buffering and an explicit `Overflowed` signal.
 - **Reliable supervisor lifecycle streams.** `watch_lifecycle` on runtime and
   supervisor handles provides ordered child transitions with cumulative
   restart counters — the supported primitive for application-owned
-  correlated-failure detection. The older `RestartWatch` view is deprecated.
+  correlated-failure detection.
 - **Recursive runtime subtrees.** `RuntimeBuilder::subtree` composes nested
   runtime graphs with reconciled recursive actor stats. Static subtrees and
   runtime-added `RuntimeHandle::add_subtree` memberships now share the same
@@ -222,11 +221,9 @@ runtime tests.
   method-specific result that can evolve independently of Tokio.
 - Document deliberate public coupling to `tokio_util::sync::CancellationToken`
   where it remains in signatures.
-- The former graph-wide actor timeout was later folded into each child's
-  `ShutdownPolicy`; standalone `RunnableActor` hosts pass an explicit bound.
-
-The two-clock review exposed that correctness defect: the inner graph timeout
-could launder a drain timeout into a clean supervisor exit.
+- Each child's `ShutdownPolicy` owns its shutdown clock; standalone
+  `RunnableActor` hosts pass an explicit bound. A second, graph-wide timeout
+  would launder a drain timeout into a clean supervisor exit.
 
 ## Milestone 2: prove the design with a trading-engine example — complete
 
@@ -365,8 +362,7 @@ The crate rustdoc and book must both cover:
 - separate urgent-control paths; and
 - which performance metrics are runtime-provided versus application-owned.
 
-Keep intra-doc links warning-free; the previously broken `on_start` link in
-the `DrainPolicy` documentation has been resolved.
+Keep intra-doc links warning-free.
 
 ### 3.3 Define compatibility expectations
 

@@ -312,9 +312,8 @@ impl RunnableActor {
     ///
     /// [`RestartPolicy::default()`] is `OnFailure`, so
     /// `run_until(shutdown, Default::default(), shutdown_bound)` leaves a
-    /// failed run rebindable.
-    /// Callers migrating code that expected a default policy to terminate
-    /// after every exit must pass [`RestartPolicy::Never`] explicitly.
+    /// failed run rebindable. Pass [`RestartPolicy::Never`] explicitly for a
+    /// binding that terminates after every exit.
     ///
     /// A hand-written host must call
     /// [`terminate_binding`](Self::terminate_binding) when it gives up after a

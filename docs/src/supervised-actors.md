@@ -127,8 +127,7 @@ A worker gets a fresh mailbox on restart; anything queued behind the crashing
 `origami` order would be dropped with the old mailbox. `send` waits while the
 actor is unbound, but it cannot recover messages already accepted by the
 failed run. Waiting for `Started` with a generation above the captured
-baseline preserves the old one-shot recovery boundary without a separate
-monitor type.
+baseline gives a one-shot recovery boundary without a separate monitor type.
 
 Per-actor policies — say a tighter restart budget for the press alone — stay
 on the same builder. Overrides are keyed by the actor's typed ref, so a typo'd

@@ -82,10 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `DynamicActorOptions` carries the new child's restart policy, shutdown policy,
 optional restart intensity, and terminal-removal behavior. A
 runtime's restart and shutdown defaults are inherited unless the options use
-the `restart(...)` or `shutdown(...)` builder methods to override them. A
-caller migrating from direct `options.restart` or `options.shutdown` field
-assignment should use those methods so the runtime can distinguish an explicit
-override from an inherited default.
+the `restart(...)` or `shutdown(...)` builder methods to override them. Those
+methods are how the runtime distinguishes an explicit override from an
+inherited default.
 
 A `RestartPolicy::Never` actor is removed automatically after either a clean or
 failed exit, matching OTP temporary-child semantics; other restart policies

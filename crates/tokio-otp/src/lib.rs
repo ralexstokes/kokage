@@ -251,7 +251,6 @@ mod supervision;
 /// path. Common send/call errors are included; other error types and advanced
 /// composition surfaces remain available at the crate root without being
 /// injected by a glob import.
-#[allow(deprecated)]
 pub mod prelude {
     #[cfg(feature = "derive")]
     pub use crate::Topology;
@@ -261,8 +260,8 @@ pub mod prelude {
         DynamicRuntimeBuilder, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, MailboxMode, MessageSize, MonitorEvent, RawActor,
-        Reply, RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StepDeadline,
-        StepHandle, SupervisionTree,
+        Reply, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StepDeadline, StepHandle,
+        SupervisionTree,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView, ChildSnapshot,
@@ -285,17 +284,12 @@ pub use actor::{
     StepHandle, SupervisorPathSegment, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
-#[allow(deprecated)]
-pub use runtime::RestartWatchGuard;
 pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
 };
 pub use supervision::{
-    ActorSpec, ChildOutline, SupervisionChild, SupervisionOutline, SupervisionScope,
-    SupervisionTree,
+    ActorSpec, ChildOutline, SupervisionOutline, SupervisionScope, SupervisionTree,
 };
-#[allow(deprecated)]
-pub use tokio_supervisor::RestartWatch;
 pub use tokio_supervisor::{
     AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildContext, ChildMembershipView,
     ChildResult, ChildSnapshot, ChildSpec, ChildStateView, CompletionGuard, CompletionOutcome,

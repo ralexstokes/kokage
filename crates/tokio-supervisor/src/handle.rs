@@ -23,9 +23,6 @@ use crate::{
     },
 };
 
-#[allow(deprecated)]
-use crate::monitor::RestartWatch;
-
 type SupervisorJoinHandle = JoinHandle<Result<(), SupervisorError>>;
 type DoneSender = watch::Sender<Option<Result<(), SupervisorError>>>;
 type DoneReceiver = watch::Receiver<Option<Result<(), SupervisorError>>>;
@@ -115,7 +112,7 @@ pub(crate) fn attached_children_state(
 ///
 /// The sender is dropped when the supervisor child becomes terminal (it can
 /// never run again), which closes the channel for watch-style consumers such
-/// as [`LifecycleWatch`] and [`RestartWatch`]. The retained receiver keeps
+/// as [`LifecycleWatch`]. The retained receiver keeps
 /// serving the final snapshot to [`SupervisorHandle::snapshot`] /
 /// `subscribe_snapshots` afterwards.
 struct SnapshotSlot {
@@ -1676,41 +1673,6 @@ impl SupervisorHandle {
     /// separately.
     pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch()
-    }
-
-    /// Returns a [`RestartWatch`] that reliably reports this supervisor's
-    /// restart activity as it happens.
-    ///
-    /// The watch observes the monotonic
-    /// [`SupervisorSnapshot::total_restarts`] counter over the lossless
-    /// snapshot `watch` channel, so unlike counting [`subscribe`](Self::subscribe)
-    /// events it can never silently miss a restart the counter covers —
-    /// conflated updates are reported as one delta covering every restart in
-    /// the batch. Use it for control logic such as aggregate restart
-    /// breakers.
-    ///
-    /// The counter covers this supervisor's **direct children** only. To
-    /// observe a nested subtree, watch each nested supervisor's own handle
-    /// ([`supervisor`](Self::supervisor)) — `total_restarts` does not
-    /// aggregate across depth, and under group strategies sibling respawns
-    /// are not counted. See [`SupervisorSnapshot::total_restarts`] for the
-    /// exact contract.
-    ///
-    /// The baseline is captured here, synchronously: only restarts recorded
-    /// after this call are reported.
-    ///
-    /// ```no_run
-    /// # async fn example(handle: tokio_supervisor::SupervisorHandle) {
-    /// let mut restarts = handle.watch_restarts();
-    /// while let Some(newly_recorded) = restarts.next().await {
-    ///     // Feed `newly_recorded` into a sliding-window breaker.
-    /// }
-    /// # }
-    /// ```
-    #[deprecated(note = "use watch_lifecycle and LifecycleEvent restart counters instead")]
-    #[allow(deprecated)]
-    pub fn watch_restarts(&self) -> RestartWatch {
-        RestartWatch::new(self.snapshots_rx())
     }
 
     /// Returns a clone of the latest [`SupervisorSnapshot`].

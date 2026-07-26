@@ -5,9 +5,8 @@ The supervisor layer has two observation primitives:
 1. `snapshot()` / `subscribe_snapshots()` for current state
 2. `watch_lifecycle()` for ordered transitions
 
-`tracing`, pull-based actor stats, optional metrics, the legacy event
-broadcast, and `tokio-otp-console` are projections for diagnostics and
-dashboards.
+`tracing`, pull-based actor stats, optional metrics, the event broadcast, and
+`tokio-otp-console` are projections for diagnostics and dashboards.
 
 ## Snapshots: Current State
 
@@ -146,17 +145,13 @@ That counter records scheduled restarts — the same occurrences as the
 restart-intensity window, including clean exits restarted under
 `RestartPolicy::Always`; group-strategy sibling respawns do not increment it.
 
-`watch_restarts`, `watch_restarts_to`, `RestartWatch`, and
-`RestartWatchGuard` remain deprecated snapshot-counter views for one migration
-cycle. New code should use the lifecycle stream and its counter envelope.
+## Event Broadcast
 
-## Legacy Event Broadcast
-
-`SupervisorHandle::subscribe()` remains the lossy broadcast used by existing
-logging and console integrations. A slow receiver gets `RecvError::Lagged`,
-and nested forwarding can drop events before they reach that receiver without
-an additional marker. Do not use this surface for safety or control logic;
-use lifecycle watches or snapshots.
+`SupervisorHandle::subscribe()` is a lossy broadcast for logging and console
+integrations. A slow receiver gets `RecvError::Lagged`, and nested forwarding
+can drop events before they reach that receiver without an additional marker.
+Do not use this surface for safety or control logic; use lifecycle watches or
+snapshots.
 
 ## Tracing And Stats
 
