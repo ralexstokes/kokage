@@ -154,3 +154,71 @@ and travels by clone or by message.
 
 Use `Strategy::OneForAll` when a group of actor children should share fate,
 or configure them as a runtime subtree for a scoped restart boundary.
+
+## Declaring a Tree with the Derive
+
+`Runtime::builder` reconciles a flat graph with a hierarchical tree by hand.
+When the shape is static, `#[derive(Topology)]` can declare both at once:
+struct nesting is scope nesting.
+
+```rust,ignore
+use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Topology};
+
+#[derive(Topology)]
+#[topology(strategy = Strategy::OneForAll)]
+struct Workers {
+    parse: Parser,
+    render: Renderer,
+}
+
+#[derive(Topology)]
+#[topology(strategy = Strategy::OneForOne)]
+struct App {
+    #[topology(restart = RestartPolicy::Never)]
+    ingest: Ingest,
+    #[topology(scope)]
+    workers: Workers,
+    #[topology(dynamic)]
+    sessions: DynamicScope,
+}
+
+let (runtime, refs) = App::runtime_with_refs(|_refs| AppFactories {
+    ingest: || Ingest::new(),
+    workers: WorkersFactories {
+        parse: || Parser::new(),
+        render: || Renderer::new(),
+    },
+})?;
+let handle = runtime.spawn();
+```
+
+All three actors join **one** graph, so refs cross scope boundaries freely and
+cyclic wiring keeps working exactly as it does for a graph alone. Only
+supervision placement is hierarchical. Actor labels are qualified by the scope
+path, so the graph above contains `ingest`, `workers.parse`, and
+`workers.render`.
+
+Field order is semantic here in a way it is not for a graph alone: an ordered
+scope starts children in declaration order, and `Strategy::RestForOne` restarts
+the ones that follow. Reordering fields changes restart behaviour.
+
+Three field attributes select what a field is:
+
+- `#[topology(scope)]` — a nested derived topology, becoming a named child
+  scope.
+- `#[topology(dynamic)]` — an empty scope whose membership is written at
+  runtime through `handle.subtree("sessions")`. The field type is the
+  `DynamicScope` marker, which is never constructed.
+- `#[topology(leader)]` — an actor started before, and owning, the scope formed
+  by the struct's remaining fields. It must be the first field, and relates to
+  its scope by `leader_strategy` (`Strategy::RestForOne` by default). A
+  topology with a leader is a fragment rather than an application root, so it
+  generates no constructors of its own; use it as a `scope` field.
+
+Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
+field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
+the `SupervisionTree` declaration without building it, which is useful for
+asserting shape in tests through `outline()`.
+
+Reach for `Runtime::builder` instead when the shape is not static — actors
+created in a loop, ids chosen at runtime, or subtrees assembled conditionally.

@@ -1,0 +1,5 @@
+error: `leader_strategy` requires a `#[topology(leader)]` field
+  --> tests/ui/topology/leader_strategy_without_leader.rs:14:30
+   |
+14 | #[topology(leader_strategy = tokio_otp::Strategy::OneForAll)]
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -192,12 +192,16 @@ custom synchronous construction rather than `Default`.
 ## Struct Topologies
 
 `#[derive(Topology)]` supports named-field structs whose fields implement
-`RawActor`. Field names become actor labels verbatim, so supervisor child
-ids, tracing fields, and stats stay human-readable without participating in
-type checking or message routing. The generated `graph_with_refs` returns both
-the graph and its cloneable typed refs. The generated `graph` preserves the
-graph-only API, and `graph_with` accepts a preconfigured `GraphBuilder` for
-graph name and mailbox capacity.
+`RawActor`. Field names become actor labels, qualified by the path of any
+enclosing scopes, so supervisor child ids, tracing fields, and stats stay
+human-readable without participating in type checking or message routing.
+Rename a node with `#[topology(label = "...")]`. The generated
+`graph_with_refs` returns both the graph and its cloneable typed refs. The
+generated `graph` preserves the graph-only API, and `graph_with` accepts a
+preconfigured `GraphBuilder` for graph name and mailbox capacity.
+
+The same derive can declare the supervision tree that runs those actors — see
+[Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
 
 The derive keeps topology shape in the type system:
 

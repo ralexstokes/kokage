@@ -379,6 +379,23 @@ impl SupervisionTree {
         self.child(Self::Child(child))
     }
 
+    /// Names this scope node for use as a child of another scope.
+    ///
+    /// [`subtree`](Self::subtree) names a scope while appending it. Use this
+    /// when a node is built separately from the scope that will adopt it and
+    /// appended with [`child`](Self::child).
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on a leaf child node.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.scope_mut()
+            .expect("an id applies only to scope nodes")
+            .id = Some(id.into());
+        self
+    }
+
     /// Appends a named nested ordered or dynamic scope.
     #[must_use]
     pub fn subtree(mut self, id: impl Into<String>, tree: impl Into<SupervisionTree>) -> Self {
@@ -433,12 +450,27 @@ impl SupervisionTree {
         children: impl Into<SupervisionTree>,
         strategy: Strategy,
     ) -> Self {
-        self.child(Self::ActorWithScope {
+        self.child(Self::leader(id, actor, children, strategy))
+    }
+
+    /// Creates a standalone actor-with-scope node.
+    ///
+    /// This is [`actor_with_scope_strategy`](Self::actor_with_scope_strategy)
+    /// without the parent: the node carries its own `id` and is appended with
+    /// [`child`](Self::child). See that method for how `strategy` relates the
+    /// leader to the scope it owns.
+    pub fn leader(
+        id: impl Into<String>,
+        actor: impl Into<ActorSpec>,
+        children: impl Into<SupervisionTree>,
+        strategy: Strategy,
+    ) -> Self {
+        Self::ActorWithScope {
             id: id.into(),
             actor: actor.into(),
             children: Box::new(children.into()),
             strategy,
-        })
+        }
     }
 
     /// Appends an already constructed recursive child node.

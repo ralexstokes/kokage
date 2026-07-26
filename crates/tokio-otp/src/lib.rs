@@ -247,6 +247,7 @@ mod actor;
 mod builder;
 mod runtime;
 mod supervision;
+mod topology;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -256,17 +257,18 @@ mod supervision;
 /// composition surfaces remain available at the crate root without being
 /// injected by a glob import.
 pub mod prelude {
-    #[cfg(feature = "derive")]
-    pub use crate::Topology;
+    // Resolves the `Topology` trait, and additionally the derive macro of the
+    // same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
         BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken, Down,
-        DownReason, DrainPolicy, DynamicRuntimeBuilder, Flow,
+        DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, LiveContext, MailboxMode, MessageContext,
         MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, Runtime,
         RuntimeBuilder, RuntimeHandle, SendError, StartContext, StartingScope, StateTimeoutSlot,
-        StopContext, StoppingScope, SupervisionTree,
+        StopContext, StoppingScope, SupervisionTree, Topology, TopologyBuildError,
+        TopologyFactories,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView, ChildSnapshot,
@@ -308,3 +310,6 @@ pub use tokio_supervisor::{
     SupervisorStateView, SupervisorToken, prelude::SupervisorSnapshotReceiverExt,
 };
 pub use tokio_util::sync::CancellationToken;
+#[doc(hidden)]
+pub use topology::qualified_label;
+pub use topology::{DynamicScope, Topology, TopologyBuildError, TopologyFactories};

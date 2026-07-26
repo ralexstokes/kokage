@@ -1,0 +1,5 @@
+error: label must not contain `.`, which separates path components
+  --> tests/ui/topology/label_with_dot.rs:15:24
+   |
+15 |     #[topology(label = "workers.manager")]
+   |                        ^^^^^^^^^^^^^^^^^

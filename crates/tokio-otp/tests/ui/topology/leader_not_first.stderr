@@ -1,0 +1,6 @@
+error: the `leader` field must come first: it is started before the scope it owns
+  --> tests/ui/topology/leader_not_first.rs:16:5
+   |
+16 | /     #[topology(leader)]
+17 | |     manager: Worker,
+   | |___________________^
