@@ -15,10 +15,7 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
         .expect("nested supervisor builds");
     let root = SupervisorBuilder::new()
         .child(waiting_child("worker").attachment("worker metadata".to_owned()))
-        .supervisor(
-            "branch",
-            SupervisorSpec::new(nested).attachment("branch metadata".to_owned()),
-        )
+        .supervisor(SupervisorSpec::new("branch", nested).attachment("branch metadata".to_owned()))
         .build()
         .expect("root supervisor builds")
         .spawn();

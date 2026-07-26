@@ -7,7 +7,7 @@ use tokio::{
 use tokio_supervisor::{
     ChildSpec, ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView,
     RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, SupervisorBuilder,
-    SupervisorError, SupervisorEvent, SupervisorHandle,
+    SupervisorError, SupervisorEvent, SupervisorHandle, SupervisorSpec,
 };
 
 mod common;
@@ -63,7 +63,7 @@ async fn ordered_membership_operations_name_the_rejected_operation_and_kind() {
         .build()
         .expect("nested supervisor builds");
     let add_supervisor = handle
-        .add_supervisor("runtime-scope", nested)
+        .add_supervisor(SupervisorSpec::new("runtime-scope", nested))
         .await
         .expect_err("ordered add_supervisor is rejected");
     assert_eq!(
@@ -918,12 +918,12 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
 
     timeout(
         common::QUIET_TIMEOUT,
-        handle.add_supervisor(
+        handle.add_supervisor(SupervisorSpec::new(
             "replacement",
             DynamicSupervisorBuilder::new()
                 .build()
                 .expect("empty supervisor"),
-        ),
+        )),
     )
     .await
     .expect("distinct-id add should not queue behind the drain")

@@ -171,19 +171,13 @@ impl SupervisorBuilder {
 
     /// Appends a nested supervisor child.
     ///
-    /// Pass a [`Supervisor`](crate::Supervisor) for the standard policies, or
-    /// a [`SupervisorSpec`] to customize its restart, shutdown, or restart
-    /// intensity policy.
+    /// [`SupervisorSpec::new`] pairs the supervisor with its child id under
+    /// the standard policies; the spec's builder methods customize the
+    /// restart, shutdown, or restart intensity policy.
     #[must_use]
-    pub fn supervisor(
-        mut self,
-        id: impl Into<String>,
-        supervisor: impl Into<SupervisorSpec>,
-    ) -> Self {
-        self.children.push(Arc::new(ChildDefinition::supervisor(
-            id.into(),
-            supervisor.into(),
-        )));
+    pub fn supervisor(mut self, supervisor: SupervisorSpec) -> Self {
+        self.children
+            .push(Arc::new(ChildDefinition::supervisor(supervisor)));
         self.refresh_declaration();
         self
     }

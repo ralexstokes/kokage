@@ -400,8 +400,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .expect("valid middle supervisor");
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "middle",
-            SupervisorSpec::new(middle)
+            SupervisorSpec::new("middle", middle)
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
         )
@@ -469,7 +468,7 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
         .expect("valid nested supervisor");
     let handle = SupervisorBuilder::new()
         .child(gate)
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -547,7 +546,7 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
         .expect("valid supervisor")
         .spawn();
     handle
-        .add_supervisor("nested", nested)
+        .add_supervisor(SupervisorSpec::new("nested", nested))
         .await
         .expect("nested supervisor added");
     handle.wait_started().await.expect("startup succeeds");
@@ -589,10 +588,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let sibling_crash = Arc::clone(&crash_sibling);
     let handle = SupervisorBuilder::new()
         .strategy(tokio_supervisor::Strategy::OneForAll)
-        .supervisor(
-            "leaf",
-            SupervisorSpec::new(leaf).restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("leaf", leaf).restart(RestartPolicy::OnFailure))
         .child(
             ChildSpec::new("sibling", move |_ctx| {
                 let crash = Arc::clone(&sibling_crash);
@@ -655,10 +651,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
         .build()
         .expect("valid nested supervisor");
     let handle = SupervisorBuilder::new()
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -681,7 +674,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
 #[tokio::test]
 async fn parent_stop_closes_watch_while_stable_handle_is_retained() {
     let handle = SupervisorBuilder::new()
-        .supervisor("nested", idle_supervisor())
+        .supervisor(SupervisorSpec::new("nested", idle_supervisor()))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -702,8 +695,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
     let crash_middle = Arc::new(Notify::new());
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "middle",
-            SupervisorSpec::new(middle_supervisor(&crash_leaf, &crash_middle))
+            SupervisorSpec::new("middle", middle_supervisor(&crash_leaf, &crash_middle))
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
         )
@@ -758,8 +750,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .expect("valid dynamic middle supervisor");
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "middle",
-            SupervisorSpec::new(middle)
+            SupervisorSpec::new("middle", middle)
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
         )
@@ -785,7 +776,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .await
         .expect("bomb added");
     middle
-        .add_supervisor("orphan", idle_supervisor())
+        .add_supervisor(SupervisorSpec::new("orphan", idle_supervisor()))
         .await
         .expect("dynamic descendant added");
     let orphan = middle.supervisor("orphan").expect("orphan handle");
@@ -811,13 +802,11 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::RestForOne)
         .supervisor(
-            "head",
-            SupervisorSpec::new(completing_supervisor(&complete_head))
+            SupervisorSpec::new("head", completing_supervisor(&complete_head))
                 .restart(RestartPolicy::OnFailure),
         )
         .supervisor(
-            "tail",
-            SupervisorSpec::new(completing_supervisor(&complete_tail))
+            SupervisorSpec::new("tail", completing_supervisor(&complete_tail))
                 .restart(RestartPolicy::OnFailure),
         )
         .build()
@@ -888,10 +877,7 @@ fn middle_supervisor(
         .expect("valid leaf supervisor");
     let middle_crash = Arc::clone(crash_middle);
     SupervisorBuilder::new()
-        .supervisor(
-            "leaf",
-            SupervisorSpec::new(leaf).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("leaf", leaf).restart(RestartPolicy::Never))
         .child(
             ChildSpec::new("bomb", move |_ctx| {
                 let crash = Arc::clone(&middle_crash);

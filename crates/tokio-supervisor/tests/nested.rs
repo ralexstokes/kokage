@@ -27,10 +27,7 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         .expect("valid nested supervisor");
 
     let outer = SupervisorBuilder::new()
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
         .build()
         .expect("valid outer supervisor");
 
@@ -86,10 +83,7 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         .expect("valid nested supervisor");
 
     let outer = SupervisorBuilder::new()
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid outer supervisor");
 
@@ -141,7 +135,7 @@ async fn parent_shutdown_propagates_into_nested_supervisor() {
         .expect("valid nested supervisor");
 
     let outer = SupervisorBuilder::new()
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid outer supervisor");
 
@@ -181,7 +175,7 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
     let mut events = handle.subscribe();
 
     let membership_epoch = handle
-        .add_supervisor("nested", nested)
+        .add_supervisor(SupervisorSpec::new("nested", nested))
         .await
         .expect("dynamic nested child should be accepted");
     assert_eq!(
@@ -266,7 +260,7 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
     let mut events = handle.subscribe();
 
     handle
-        .add_supervisor("nested", nested)
+        .add_supervisor(SupervisorSpec::new("nested", nested))
         .await
         .expect("dynamic nested child should be accepted");
 
@@ -363,10 +357,7 @@ async fn parent_event_stream_includes_forwarded_nested_events() {
         .expect("valid nested supervisor");
 
     let outer = SupervisorBuilder::new()
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
         .build()
         .expect("valid outer supervisor");
 
@@ -436,18 +427,12 @@ async fn nested_events_preserve_the_full_tree_path() {
         .expect("valid deepest supervisor");
 
     let middle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(deepest).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("middle", deepest).restart(RestartPolicy::Never))
         .build()
         .expect("valid middle supervisor");
 
     let outer = SupervisorBuilder::new()
-        .supervisor(
-            "outer",
-            SupervisorSpec::new(middle).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("outer", middle).restart(RestartPolicy::Never))
         .build()
         .expect("valid outer supervisor");
 
@@ -496,7 +481,7 @@ async fn removing_nested_supervisor_unregisters_its_control_endpoint() {
         .spawn();
 
     handle
-        .add_supervisor("nested", nested)
+        .add_supervisor(SupervisorSpec::new("nested", nested))
         .await
         .expect("nested child should be accepted");
     common::recv_event(&mut started_rx).await;
@@ -558,7 +543,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .expect("valid nested supervisor");
 
     let handle = SupervisorBuilder::new()
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -644,10 +629,7 @@ async fn abort_mode_hard_cascades_through_a_nested_supervisor() {
         .expect("valid outer supervisor")
         .spawn();
     handle
-        .add_supervisor(
-            "nested",
-            SupervisorSpec::new(nested).shutdown(ShutdownPolicy::abort()),
-        )
+        .add_supervisor(SupervisorSpec::new("nested", nested).shutdown(ShutdownPolicy::abort()))
         .await
         .expect("nested child should be accepted");
     common::recv_event(&mut started_rx).await;
@@ -701,8 +683,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
 
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart_intensity(
+            SupervisorSpec::new("nested", nested).restart_intensity(
                 RestartIntensity::new(5, Duration::from_secs(30))
                     .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(500))),
             ),
@@ -786,12 +767,12 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
                 }
             }
         }))
-        .supervisor("leafsup", leafsup)
+        .supervisor(SupervisorSpec::new("leafsup", leafsup))
         .build()
         .expect("valid middle supervisor");
 
     let handle = SupervisorBuilder::new()
-        .supervisor("mid", mid)
+        .supervisor(SupervisorSpec::new("mid", mid))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -871,7 +852,7 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .build()
         .expect("valid nested supervisor");
     let root = SupervisorBuilder::new()
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .child(
             ChildSpec::new("fatal", |_| async { Err(common::test_error("fatal")) })
                 .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
@@ -905,7 +886,7 @@ async fn nested_supervisor_view_reaches_the_parent_without_diverging_from_its_ba
         .expect("valid nested supervisor");
 
     let outer = SupervisorBuilder::new()
-        .supervisor("nested", SupervisorSpec::new(nested))
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid outer supervisor");
 

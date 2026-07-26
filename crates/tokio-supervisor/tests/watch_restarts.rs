@@ -228,7 +228,7 @@ async fn nested_counter_is_monotonic_across_incarnations() {
         .build()
         .expect("valid nested supervisor");
     let handle = SupervisorBuilder::new()
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -286,7 +286,7 @@ async fn watch_restarts_ends_when_nested_child_is_removed() {
         .expect("valid supervisor")
         .spawn();
     handle
-        .add_supervisor("nested", idle_supervisor())
+        .add_supervisor(SupervisorSpec::new("nested", idle_supervisor()))
         .await
         .expect("nested supervisor added");
 
@@ -309,7 +309,7 @@ async fn watch_restarts_ends_when_nested_child_is_removed() {
 #[tokio::test]
 async fn watch_restarts_ends_when_parent_stops_while_stable_handle_is_held() {
     let handle = SupervisorBuilder::new()
-        .supervisor("nested", idle_supervisor())
+        .supervisor(SupervisorSpec::new("nested", idle_supervisor()))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -348,8 +348,7 @@ async fn watch_restarts_ends_when_nested_child_stops_without_restart() {
         .expect("valid nested supervisor");
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "nested",
-            tokio_supervisor::SupervisorSpec::new(nested).restart(RestartPolicy::Never),
+            tokio_supervisor::SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never),
         )
         .build()
         .expect("valid supervisor")
@@ -384,8 +383,7 @@ async fn watch_survives_ancestor_reincarnation() {
 
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "middle",
-            SupervisorSpec::new(middle_supervisor(&crash_leaf, &crash_middle))
+            SupervisorSpec::new("middle", middle_supervisor(&crash_leaf, &crash_middle))
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
         )
@@ -452,8 +450,7 @@ async fn orphaned_dynamic_child_watch_ends_after_ancestor_reincarnation() {
         .expect("valid dynamic supervisor");
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "middle",
-            SupervisorSpec::new(middle)
+            SupervisorSpec::new("middle", middle)
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
         )
@@ -471,7 +468,7 @@ async fn orphaned_dynamic_child_watch_ends_after_ancestor_reincarnation() {
         .await
         .expect("dynamic bomb should be added");
     middle_handle
-        .add_supervisor("dyn", idle_supervisor())
+        .add_supervisor(SupervisorSpec::new("dyn", idle_supervisor()))
         .await
         .expect("dynamic add should succeed");
     let dyn_handle = middle_handle.supervisor("dyn").expect("dynamic supervisor");
@@ -508,17 +505,11 @@ async fn never_chain_terminates_without_root_shutdown() {
         .build()
         .expect("valid leaf supervisor");
     let middle = SupervisorBuilder::new()
-        .supervisor(
-            "leaf",
-            SupervisorSpec::new(leaf).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("leaf", leaf).restart(RestartPolicy::Never))
         .build()
         .expect("valid middle supervisor");
     let handle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(middle).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("middle", middle).restart(RestartPolicy::Never))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -572,10 +563,7 @@ async fn group_restart_revives_cleanly_exited_supervisor_child() {
     let crash_for_sibling = crash_sibling.clone();
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::OneForAll)
-        .supervisor(
-            "leaf",
-            SupervisorSpec::new(leaf).restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("leaf", leaf).restart(RestartPolicy::OnFailure))
         .child(
             ChildSpec::new("sibling", move |_ctx| {
                 let crash_sibling = crash_for_sibling.clone();
@@ -642,20 +630,14 @@ async fn dynamic_never_supervisor_breaks_the_revival_chain() {
         .build()
         .expect("valid leaf supervisor");
     let dynamic = SupervisorBuilder::new()
-        .supervisor(
-            "leaf",
-            SupervisorSpec::new(leaf).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("leaf", leaf).restart(RestartPolicy::Never))
         .build()
         .expect("valid dynamic supervisor");
     let middle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid dynamic supervisor");
     let handle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(middle).restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("middle", middle).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -666,10 +648,7 @@ async fn dynamic_never_supervisor_breaks_the_revival_chain() {
         .expect("startup should succeed");
     let middle_handle = handle.supervisor("middle").expect("middle supervisor");
     middle_handle
-        .add_supervisor(
-            "dyn",
-            SupervisorSpec::new(dynamic).restart(RestartPolicy::Never),
-        )
+        .add_supervisor(SupervisorSpec::new("dyn", dynamic).restart(RestartPolicy::Never))
         .await
         .expect("dynamic add should succeed");
 
@@ -707,13 +686,11 @@ async fn rest_for_one_first_child_stop_is_final() {
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::RestForOne)
         .supervisor(
-            "head",
-            SupervisorSpec::new(completing_supervisor(&complete_head))
+            SupervisorSpec::new("head", completing_supervisor(&complete_head))
                 .restart(RestartPolicy::OnFailure),
         )
         .supervisor(
-            "tail",
-            SupervisorSpec::new(completing_supervisor(&complete_tail))
+            SupervisorSpec::new("tail", completing_supervisor(&complete_tail))
                 .restart(RestartPolicy::OnFailure),
         )
         .build()
@@ -794,10 +771,7 @@ fn middle_supervisor(
         .expect("valid leaf supervisor");
 
     SupervisorBuilder::new()
-        .supervisor(
-            "leaf",
-            SupervisorSpec::new(leaf).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("leaf", leaf).restart(RestartPolicy::Never))
         .child(failing_child("bomb", crash_middle, "middle boom"))
         .build()
         .expect("valid middle supervisor")

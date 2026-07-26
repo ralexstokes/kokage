@@ -949,11 +949,9 @@ impl SupervisorRuntime {
                 complete_command(reply, self.add_child(child))
             }
             SupervisorCommand::RemoveChild { id, reply } => self.remove_child(id, reply),
-            SupervisorCommand::AddSupervisor {
-                id,
-                supervisor,
-                reply,
-            } => complete_command(reply, self.add_supervisor(id, supervisor)),
+            SupervisorCommand::AddSupervisor { supervisor, reply } => {
+                complete_command(reply, self.add_supervisor(supervisor))
+            }
         }
     }
 
@@ -1017,11 +1015,7 @@ impl SupervisorRuntime {
         Ok(membership_epoch)
     }
 
-    fn add_supervisor(
-        &mut self,
-        id: String,
-        mut pending: PendingSupervisorSpec,
-    ) -> CommandResult<u64> {
+    fn add_supervisor(&mut self, mut pending: PendingSupervisorSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
@@ -1042,6 +1036,7 @@ impl SupervisorRuntime {
             .into());
         }
         spec.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        let id = spec.id.clone();
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
         }
@@ -1061,7 +1056,7 @@ impl SupervisorRuntime {
 
         let stable = pending.spec_mut().supervisor.stable_channels(false);
         let supervisor = pending.accept();
-        let definition = Arc::new(ChildDefinition::supervisor(id.clone(), supervisor));
+        let definition = Arc::new(ChildDefinition::supervisor(supervisor));
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
         let membership_epoch = self.lifecycle.next_membership_epoch();
         let key = self.children.insert(ChildEntry::new(
@@ -2162,7 +2157,7 @@ fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::{
-        ChildSpec, Supervisor, SupervisorBuilder,
+        ChildSpec, Supervisor, SupervisorBuilder, SupervisorSpec,
         handle::{attached_children_state, empty_nested_channels},
         supervisor::initial_snapshot,
     };
@@ -2420,8 +2415,8 @@ mod tests {
     #[test]
     fn stable_identity_reconciliation_reuses_static_and_closes_stale_channels() {
         let config = SupervisorBuilder::new()
-            .supervisor("reused", empty_supervisor())
-            .supervisor("collision", empty_supervisor())
+            .supervisor(SupervisorSpec::new("reused", empty_supervisor()))
+            .supervisor(SupervisorSpec::new("collision", empty_supervisor()))
             .build()
             .expect("valid supervisor config")
             .config

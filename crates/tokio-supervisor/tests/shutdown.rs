@@ -895,8 +895,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .expect("nested ordered supervisor builds");
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "nested",
-            tokio_supervisor::SupervisorSpec::new(nested)
+            tokio_supervisor::SupervisorSpec::new("nested", nested)
                 .shutdown(ShutdownPolicy::cooperative_then_abort(common::SHORT_GRACE)),
         )
         .build()
@@ -951,8 +950,7 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .expect("inner supervisor builds");
     let middle = SupervisorBuilder::new()
         .supervisor(
-            "inner",
-            tokio_supervisor::SupervisorSpec::new(inner).shutdown(
+            tokio_supervisor::SupervisorSpec::new("inner", inner).shutdown(
                 ShutdownPolicy::cooperative_then_abort(Duration::from_secs(5)),
             ),
         )
@@ -960,8 +958,7 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .expect("middle supervisor builds");
     let handle = SupervisorBuilder::new()
         .supervisor(
-            "middle",
-            tokio_supervisor::SupervisorSpec::new(middle)
+            tokio_supervisor::SupervisorSpec::new("middle", middle)
                 .shutdown(ShutdownPolicy::cooperative_then_abort(common::SHORT_GRACE)),
         )
         .build()

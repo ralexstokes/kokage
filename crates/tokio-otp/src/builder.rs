@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ActorChild, ActorRef, Graph, RunnableActorFactory, RuntimeHandle, SupervisionTree};
+use crate::{ActorRef, ActorSpec, Graph, RunnableActorBuilder, RuntimeHandle, SupervisionTree};
 use std::sync::Arc;
 use tokio_supervisor::{
     ChildSpec, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy,
@@ -79,7 +79,7 @@ pub struct RuntimeBuilder {
 impl Default for RuntimeBuilder {
     fn default() -> Self {
         let actors = Arc::new(ActorRuntimeState::new(
-            RunnableActorFactory::new(),
+            RunnableActorBuilder::new(),
             RestartPolicy::default(),
             ShutdownPolicy::default(),
         ));
@@ -121,7 +121,7 @@ impl RuntimeBuilder {
         self.actors.configure(
             self.graph
                 .as_ref()
-                .map_or_else(RunnableActorFactory::new, Graph::dynamic_factory),
+                .map_or_else(RunnableActorBuilder::new, Graph::dynamic_builder),
             self.restart,
             self.shutdown,
         );
@@ -293,7 +293,7 @@ impl RuntimeBuilder {
                     .get(actor.label())
                     .copied()
                     .unwrap_or_default();
-                let mut child = ActorChild::new(actor.clone());
+                let mut child = ActorSpec::new(actor.clone());
                 if let Some(restart) = overrides.restart {
                     child = child.restart(restart);
                 }
@@ -336,7 +336,7 @@ pub struct DynamicRuntimeBuilder {
 impl Default for DynamicRuntimeBuilder {
     fn default() -> Self {
         let actors = Arc::new(ActorRuntimeState::new(
-            RunnableActorFactory::new(),
+            RunnableActorBuilder::new(),
             RestartPolicy::default(),
             ShutdownPolicy::default(),
         ));
@@ -363,7 +363,7 @@ impl DynamicRuntimeBuilder {
 
     fn refresh_runtime_state(&self) {
         self.actors
-            .configure(RunnableActorFactory::new(), self.restart, self.shutdown);
+            .configure(RunnableActorBuilder::new(), self.restart, self.shutdown);
     }
 
     /// Sets the default supervisor restart intensity.

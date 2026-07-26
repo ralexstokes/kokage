@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()?;
 
     let handle = supervisor.spawn();

@@ -281,7 +281,7 @@ pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, BoxError, CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down,
     DownReason, DrainPolicy, Flow, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize,
-    MonitorEvent, RawActor, Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline,
+    MonitorEvent, RawActor, Reply, RunnableActor, RunnableActorBuilder, SendError, StepDeadline,
     StepHandle, SupervisorPathSegment, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
@@ -291,7 +291,7 @@ pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
 };
 pub use supervision::{
-    ActorChild, ChildOutline, SupervisionChild, SupervisionOutline, SupervisionScope,
+    ActorSpec, ChildOutline, SupervisionChild, SupervisionOutline, SupervisionScope,
     SupervisionTree,
 };
 #[allow(deprecated)]

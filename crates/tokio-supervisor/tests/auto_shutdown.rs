@@ -161,10 +161,7 @@ async fn nested_auto_shutdown_is_a_clean_child_exit_to_parent() {
         .build()
         .expect("valid inner supervisor");
     let parent = SupervisorBuilder::new()
-        .supervisor(
-            "job",
-            SupervisorSpec::new(inner).restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("job", inner).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid parent supervisor");
 
@@ -203,7 +200,7 @@ async fn significant_nested_supervisor_triggers_parent_auto_shutdown() {
         .expect("valid inner supervisor");
     let parent = SupervisorBuilder::new()
         .auto_shutdown(AutoShutdown::AnySignificant)
-        .supervisor("job", SupervisorSpec::new(inner).significant())
+        .supervisor(SupervisorSpec::new("job", inner).significant())
         .build()
         .expect("valid parent supervisor");
 
@@ -233,7 +230,7 @@ async fn dynamic_significant_children_report_an_accurate_invalid_config() {
         .build()
         .expect("valid nested supervisor");
     let err = handle
-        .add_supervisor("nested", SupervisorSpec::new(nested).significant())
+        .add_supervisor(SupervisorSpec::new("nested", nested).significant())
         .await
         .expect_err("dynamic scopes reject significant nested supervisors");
     assert_eq!(

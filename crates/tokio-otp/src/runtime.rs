@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     ActorFactory, ActorOptions, ActorRef, ActorStats, MailboxMode, MessageSize, RawActor,
-    RunnableActor, RunnableActorFactory, SupervisorPathSegment,
+    RunnableActor, RunnableActorBuilder, SupervisorPathSegment,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -26,20 +26,20 @@ pub(crate) struct ActorRuntimeState {
 
 #[derive(Debug)]
 struct ActorRuntimeConfig {
-    actor_factory: RunnableActorFactory,
+    actor_builder: RunnableActorBuilder,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
 }
 
 impl ActorRuntimeState {
     pub(crate) fn new(
-        actor_factory: RunnableActorFactory,
+        actor_builder: RunnableActorBuilder,
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
     ) -> Self {
         Self {
             config: Mutex::new(ActorRuntimeConfig {
-                actor_factory,
+                actor_builder,
                 default_restart,
                 default_shutdown,
             }),
@@ -48,12 +48,12 @@ impl ActorRuntimeState {
 
     pub(crate) fn configure(
         &self,
-        actor_factory: RunnableActorFactory,
+        actor_builder: RunnableActorBuilder,
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
     ) {
         *self.config.lock().expect("actor runtime config poisoned") = ActorRuntimeConfig {
-            actor_factory,
+            actor_builder,
             default_restart,
             default_shutdown,
         };
@@ -76,13 +76,13 @@ impl ActorRuntimeState {
         // Construction runs the caller's factory, which may reach back into
         // this runtime. Release the config lock first so that re-entry cannot
         // deadlock on a non-reentrant mutex.
-        let actor_factory = self
+        let actor_builder = self
             .config
             .lock()
             .expect("actor runtime config poisoned")
-            .actor_factory
+            .actor_builder
             .clone();
-        actor_factory.actor_with_options(label, factory, options)
+        actor_builder.actor_with_options(label, factory, options)
     }
 }
 
@@ -539,7 +539,7 @@ impl Runtime {
         Self {
             supervisor,
             actors: Arc::new(ActorRuntimeState::new(
-                RunnableActorFactory::new(),
+                RunnableActorBuilder::new(),
                 default_restart,
                 default_shutdown,
             )),
@@ -569,7 +569,7 @@ impl Runtime {
     /// ```no_run
     /// use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, Runtime};
     /// use tokio_otp::prelude::Continue;
-    /// use tokio_supervisor::SupervisorBuilder;
+    /// use tokio_supervisor::{SupervisorBuilder, SupervisorSpec};
     ///
     /// struct Worker;
     ///
@@ -589,7 +589,7 @@ impl Runtime {
     ///     .build()?
     ///     .into_supervisor();
     /// let root = SupervisorBuilder::new()
-    ///     .supervisor("actors", actor_subtree)
+    ///     .supervisor(SupervisorSpec::new("actors", actor_subtree))
     ///     .build()?;
     /// # let _ = root;
     /// # Ok(())
@@ -651,7 +651,7 @@ impl RuntimeHandle {
                 Self::new(
                     supervisor,
                     Arc::new(ActorRuntimeState::new(
-                        RunnableActorFactory::new(),
+                        RunnableActorBuilder::new(),
                         RestartPolicy::default(),
                         ShutdownPolicy::default(),
                     )),
@@ -710,11 +710,9 @@ impl RuntimeHandle {
         let membership_epoch = self
             .supervisor
             .add_supervisor(
-                id.clone(),
-                SupervisorSpec::new(nested_supervisor).attachment(RuntimeAttachment::subtree(
-                    &self.actors,
-                    Arc::clone(&nested_actors),
-                )),
+                SupervisorSpec::new(id.clone(), nested_supervisor).attachment(
+                    RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
+                ),
             )
             .await?;
         self.subtree_membership(&id, Some(membership_epoch))
@@ -791,7 +789,7 @@ impl RuntimeHandle {
         let child = actor_child_spec(
             actor.clone(),
             &self.actors,
-            ActorChildSpec::new(options.restart, options.shutdown)
+            ActorChildOptions::new(options.restart, options.shutdown)
                 .restart_intensity(options.restart_intensity)
                 .remove_on_exit(options.remove_on_exit),
         );
@@ -995,7 +993,7 @@ pub(crate) struct ActorOverrides {
 }
 
 /// How one actor is supervised as a child of its enclosing scope.
-pub(crate) struct ActorChildSpec {
+pub(crate) struct ActorChildOptions {
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: ShutdownPolicy,
     pub(crate) restart_intensity: Option<RestartIntensity>,
@@ -1007,7 +1005,7 @@ pub(crate) struct ActorChildSpec {
     pub(crate) children: Option<RuntimeHandle>,
 }
 
-impl ActorChildSpec {
+impl ActorChildOptions {
     pub(crate) fn new(restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
         Self {
             restart,
@@ -1037,15 +1035,15 @@ impl ActorChildSpec {
 pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     owner: &Arc<ActorRuntimeState>,
-    spec: ActorChildSpec,
+    options: ActorChildOptions,
 ) -> ChildSpec {
-    let ActorChildSpec {
+    let ActorChildOptions {
         restart,
         shutdown,
         restart_intensity,
         remove_on_exit,
         children,
-    } = spec;
+    } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));

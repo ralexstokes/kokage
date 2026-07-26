@@ -65,15 +65,17 @@ pub struct ChildSpec {
     pub(crate) inner: Arc<ChildDefinition>,
 }
 
-/// Policies for a nested supervisor child.
+/// Specification for a nested supervisor child.
 ///
-/// Passing a [`Supervisor`] directly to
-/// [`SupervisorBuilder::supervisor`](crate::SupervisorBuilder::supervisor) or
-/// [`SupervisorHandle::add_supervisor`](crate::SupervisorHandle::add_supervisor)
-/// uses these defaults. Wrap it in `SupervisorSpec` to customize the same
-/// restart, shutdown, and intensity policies available on [`ChildSpec`].
+/// A `SupervisorSpec` pairs an already built [`Supervisor`] with the child id
+/// it takes in its parent and the same restart, shutdown, and intensity
+/// policies available on [`ChildSpec`]. It is the supervisor-shaped peer of
+/// `ChildSpec`: both are complete, self-describing declarations accepted by
+/// [`SupervisorBuilder::supervisor`](crate::SupervisorBuilder::supervisor) and
+/// [`SupervisorHandle::add_supervisor`](crate::SupervisorHandle::add_supervisor).
 #[derive(Clone)]
 pub struct SupervisorSpec {
+    pub(crate) id: String,
     pub(crate) supervisor: Supervisor,
     pub(crate) restart: RestartPolicy,
     restart_is_default: bool,
@@ -85,9 +87,13 @@ pub struct SupervisorSpec {
 }
 
 impl SupervisorSpec {
-    /// Creates nested-supervisor policies with the standard defaults.
-    pub fn new(supervisor: Supervisor) -> Self {
+    /// Creates a new nested-supervisor specification with the standard
+    /// policy defaults.
+    ///
+    /// `id` must be unique among siblings within the same parent supervisor.
+    pub fn new(id: impl Into<String>, supervisor: Supervisor) -> Self {
         Self {
+            id: id.into(),
             supervisor,
             restart: RestartPolicy::default(),
             restart_is_default: true,
@@ -146,11 +152,10 @@ impl SupervisorSpec {
         self.attachment = Some(Arc::new(attachment));
         self
     }
-}
 
-impl From<Supervisor> for SupervisorSpec {
-    fn from(supervisor: Supervisor) -> Self {
-        Self::new(supervisor)
+    /// Returns the nested supervisor's unique identifier in its parent.
+    pub fn id(&self) -> &str {
+        &self.id
     }
 }
 
@@ -347,9 +352,9 @@ impl ChildDefinition {
         }
     }
 
-    pub(crate) fn supervisor(id: String, spec: SupervisorSpec) -> Self {
+    pub(crate) fn supervisor(spec: SupervisorSpec) -> Self {
         Self {
-            id,
+            id: spec.id,
             restart: spec.restart,
             restart_is_default: spec.restart_is_default,
             remove_on_exit: false,

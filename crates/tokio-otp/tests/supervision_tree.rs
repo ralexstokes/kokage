@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use tokio_otp::{ActorChild, ChildOutline, ChildSpec, ScopeKind, SupervisionTree, prelude::*};
+use tokio_otp::{ActorSpec, ChildOutline, ChildSpec, ScopeKind, SupervisionTree, prelude::*};
 
 struct Worker;
 
@@ -91,7 +91,7 @@ async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
     let (ingest_actor, parse_actor) = (graph.actors()[0].clone(), graph.actors()[1].clone());
     let runtime = SupervisionTree::new()
         .dynamic_defaults(&graph)
-        .actor(ActorChild::new(ingest_actor).restart(RestartPolicy::Never))
+        .actor(ActorSpec::new(ingest_actor).restart(RestartPolicy::Never))
         .subtree(
             "workers",
             SupervisionTree::new()

@@ -54,7 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .build()?;
 
-    handle.add_supervisor("nested", nested).await?;
+    handle
+        .add_supervisor(SupervisorSpec::new("nested", nested))
+        .await?;
     wait_for_nested_supervisor_started(&mut events, "nested").await?;
     wait_for_nested_child_started(&mut events, "nested", "seed").await?;
     println!("nested supervisor added at runtime");

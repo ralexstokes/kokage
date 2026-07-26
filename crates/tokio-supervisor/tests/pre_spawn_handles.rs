@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEventKind,
-    Strategy, SupervisorBuilder, SupervisorError,
+    Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
 };
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -160,7 +160,9 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
     let nested = nested_builder.build().expect("nested scope builds");
 
     assert!(matches!(
-        parent.add_supervisor("nested", nested).await,
+        parent
+            .add_supervisor(SupervisorSpec::new("nested", nested))
+            .await,
         Err(ControlError::UnsupportedByScopeKind { .. })
     ));
     assert!(snapshots.changed().await.is_err());
@@ -197,7 +199,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
     let retained = nested_builder.handle();
     let nested = nested_builder.build().expect("nested scope builds");
     parent
-        .add_supervisor("nested", nested)
+        .add_supervisor(SupervisorSpec::new("nested", nested))
         .await
         .expect("nested scope inserts");
     retained.wait_started().await.expect("nested scope starts");
@@ -236,11 +238,11 @@ async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
         .build()
         .expect("leaf supervisor builds");
     let middle = SupervisorBuilder::new()
-        .supervisor("leaf", leaf)
+        .supervisor(SupervisorSpec::new("leaf", leaf))
         .build()
         .expect("middle supervisor builds");
     let original = SupervisorBuilder::new()
-        .supervisor("middle", middle)
+        .supervisor(SupervisorSpec::new("middle", middle))
         .build()
         .expect("supervisor builds");
     let original_pre_spawn = original.handle();

@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let handle = supervisor.spawn();
     handle
-        .add_supervisor("nested-pipeline", nested_supervisor)
+        .add_supervisor(SupervisorSpec::new("nested-pipeline", nested_supervisor))
         .await?;
     let nested_handle = handle
         .supervisor("nested-pipeline")
