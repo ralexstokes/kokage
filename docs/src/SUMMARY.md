@@ -10,6 +10,7 @@
 - [Bounded request/reply](request-reply.md)
 - [Bounded actor steps](actor-steps.md)
 - [Supervised actors](supervised-actors.md)
+- [Inspectable supervision trees](supervision-trees.md)
 - [Actor timers](actor-timers.md)
 - [Watching actors](actor-monitors.md)
 - [Dynamic actors](dynamic-actors.md)

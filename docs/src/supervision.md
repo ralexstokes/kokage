@@ -283,8 +283,10 @@ let shop = SupervisorBuilder::new()
 ```
 
 The nested supervisor forwards its lifecycle events to the parent and shows up
-inside the parent's snapshots, so observability (chapter 6) sees the whole
-tree.
+inside the parent's snapshots, so [Observability](observability.md) sees the
+whole tree. The actor layer exposes its executable declaration as data; see
+[Inspectable supervision trees](supervision-trees.md) when you need to inspect,
+compare, or assemble that shape directly.
 
 ## Dynamic children
 
