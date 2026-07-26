@@ -40,7 +40,7 @@ impl Actor for ToolHost {
                             output: format!("{name} effect complete"),
                         }
                     })
-                    .await;
+                    .await?;
                 self.effects.insert(key.clone(), outcome.clone());
                 *self.counts.entry(key).or_default() += 1;
                 reply.send(outcome);

@@ -1,5 +1,11 @@
 use thiserror::Error;
 
+/// Indicates that Tokio cancelled queued blocking work during runtime
+/// shutdown before it could return a value.
+#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+#[error("blocking task was cancelled during runtime shutdown")]
+pub struct BlockingCancelled;
+
 /// Indicates that an [`ActorContext::offload`](crate::ActorContext::offload)
 /// future did not complete before its required deadline.
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]

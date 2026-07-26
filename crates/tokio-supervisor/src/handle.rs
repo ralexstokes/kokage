@@ -2,7 +2,7 @@ use std::{
     any::Any,
     collections::HashMap,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Mutex, PoisonError, Weak,
         atomic::{AtomicU8, Ordering},
     },
 };
@@ -275,7 +275,7 @@ impl StableSupervisorChannels {
     }
 
     fn assert_reconfigurable(&self) {
-        let binding = self.binding.lock().expect("stable control slot poisoned");
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         assert!(
             binding.current.is_none() && !binding.terminal,
             "a bound or terminal supervisor identity cannot be reconfigured"
@@ -309,14 +309,14 @@ impl StableSupervisorChannels {
         *self
             .nested_channels
             .lock()
-            .expect("nested channel map poisoned") = nested_channels
+            .unwrap_or_else(PoisonError::into_inner) = nested_channels
             .lock()
-            .expect("replacement nested channel map poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
         *self
             .attached_children
             .lock()
-            .expect("attached child view poisoned") = AttachedChildrenView {
+            .unwrap_or_else(PoisonError::into_inner) = AttachedChildrenView {
             generation: Some(0),
             terminal: false,
             children: attached_children,
@@ -336,7 +336,7 @@ impl StableSupervisorChannels {
         *self
             .initial_incarnation
             .lock()
-            .expect("initial incarnation slot poisoned") = Some(InitialIncarnationChannels {
+            .unwrap_or_else(PoisonError::into_inner) = Some(InitialIncarnationChannels {
             shutdown_tx,
             shutdown_rx,
             command_tx,
@@ -392,7 +392,7 @@ impl StableSupervisorChannels {
             let mut slot = self
                 .handle_lease
                 .lock()
-                .expect("handle lease slot poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
             slot.upgrade().unwrap_or_else(|| {
                 let lease = Arc::new(HandleLease {
                     channels: Arc::downgrade(self),
@@ -415,7 +415,10 @@ impl StableSupervisorChannels {
     }
 
     pub(crate) fn install_root_extra(&self, root_extra: RootExtra) {
-        let mut slot = self.root_extra.lock().expect("root extra slot poisoned");
+        let mut slot = self
+            .root_extra
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         assert!(
             matches!(*slot, RootExtraSlot::Pending),
             "root extra must be installed exactly once after root classification"
@@ -428,7 +431,7 @@ impl StableSupervisorChannels {
     fn root_extra(&self) -> RootExtraSlot {
         self.root_extra
             .lock()
-            .expect("root extra slot poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
@@ -446,7 +449,7 @@ impl StableSupervisorChannels {
         mut initial_snapshot: SupervisorSnapshot,
         mut initial_attached_children: Vec<AttachedChildState>,
     ) -> Option<BoundIncarnation> {
-        let mut binding = self.binding.lock().expect("stable control slot poisoned");
+        let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
             return None;
         }
@@ -496,7 +499,10 @@ impl StableSupervisorChannels {
             *current = initial_snapshot;
             true
         });
-        let attachment_generation = match *self.root_extra.lock().expect("root extra slot poisoned")
+        let attachment_generation = match *self
+            .root_extra
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
         {
             RootExtraSlot::NotRoot => Some(generation),
             RootExtraSlot::Pending | RootExtraSlot::Ready(_) => None,
@@ -504,7 +510,7 @@ impl StableSupervisorChannels {
         *self
             .attached_children
             .lock()
-            .expect("attached child view poisoned") = AttachedChildrenView {
+            .unwrap_or_else(PoisonError::into_inner) = AttachedChildrenView {
             generation: attachment_generation,
             terminal: false,
             children: initial_attached_children,
@@ -528,7 +534,7 @@ impl StableSupervisorChannels {
     }
 
     fn current_binding(&self) -> Option<IncarnationBinding> {
-        let binding = self.binding.lock().expect("stable control slot poisoned");
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
             return None;
         }
@@ -538,7 +544,7 @@ impl StableSupervisorChannels {
     /// Classifies what a non-root [`SupervisorHandle::wait`] should do, at one
     /// binding-serialized point.
     fn wait_target(&self) -> WaitTarget {
-        let binding = self.binding.lock().expect("stable control slot poisoned");
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
             WaitTarget::Terminal
         } else if let Some(current) = binding.current.as_ref() {
@@ -561,7 +567,7 @@ impl StableSupervisorChannels {
         &self,
         snapshots: &mut watch::Receiver<SupervisorSnapshot>,
     ) -> StartupSnapshot {
-        let binding = self.binding.lock().expect("stable control slot poisoned");
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
             StartupSnapshot::Terminal
         } else if binding.current.is_none() {
@@ -583,14 +589,14 @@ impl StableSupervisorChannels {
         // control endpoint yet. `bind` is the point at which an incarnation
         // becomes visible; publishing here would let an empty scope appear
         // started during the synchronous handoff into `bind`.
-        let binding = self.binding.lock().expect("stable control slot poisoned");
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
             return None;
         }
         let mut initial = self
             .initial_incarnation
             .lock()
-            .expect("initial incarnation slot poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         let channels = initial.take()?;
         drop(binding);
         Some(channels)
@@ -610,7 +616,7 @@ impl StableSupervisorChannels {
         let slot = self
             .snapshots
             .lock()
-            .expect("stable snapshot slot poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         slot.tx
             .as_ref()
             .expect("snapshot sender requested after stable channels became terminal")
@@ -621,7 +627,7 @@ impl StableSupervisorChannels {
         let slot = self
             .snapshots
             .lock()
-            .expect("stable snapshot slot poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         match &slot.tx {
             Some(tx) => tx.subscribe(),
             None => slot.rx.clone(),
@@ -644,7 +650,7 @@ impl StableSupervisorChannels {
     /// incarnation will spawn again.
     pub(crate) fn terminal(&self) {
         let active = {
-            let mut binding = self.binding.lock().expect("stable control slot poisoned");
+            let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             binding.terminal = true;
             binding.current.take()
         };
@@ -654,20 +660,20 @@ impl StableSupervisorChannels {
         self.bump_binding_revision();
         self.initial_incarnation
             .lock()
-            .expect("initial incarnation slot poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .take();
         {
             let mut attached_children = self
                 .attached_children
                 .lock()
-                .expect("attached child view poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
             attached_children.terminal = true;
             attached_children.children.clear();
         }
         let tx = self
             .snapshots
             .lock()
-            .expect("stable snapshot slot poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .tx
             .take();
         drop(tx);
@@ -676,7 +682,7 @@ impl StableSupervisorChannels {
         let descendants: Vec<_> = self
             .nested_channels
             .lock()
-            .expect("nested channel map poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .values()
             .cloned()
             .collect();
@@ -697,7 +703,7 @@ impl StableSupervisorChannels {
         let mut attached_children = self
             .attached_children
             .lock()
-            .expect("attached child view poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         if attached_children.terminal {
             return;
         }
@@ -706,7 +712,10 @@ impl StableSupervisorChannels {
     }
 
     pub(crate) fn mark_root(&self) {
-        let mut root_extra = self.root_extra.lock().expect("root extra slot poisoned");
+        let mut root_extra = self
+            .root_extra
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         assert!(
             matches!(*root_extra, RootExtraSlot::NotRoot),
             "supervisor identity was classified as root more than once"
@@ -715,7 +724,7 @@ impl StableSupervisorChannels {
         drop(root_extra);
         self.attached_children
             .lock()
-            .expect("attached child view poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .generation = None;
     }
 }
@@ -1136,7 +1145,7 @@ mod tests {
         *channels
             .handle_lease
             .lock()
-            .expect("handle lease slot poisoned") = Arc::downgrade(&replacement);
+            .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(&replacement);
 
         drop(released);
 
@@ -1210,7 +1219,7 @@ impl Drop for StableBindingGuard {
             .channels
             .binding
             .lock()
-            .expect("stable control slot poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         if binding
             .current
             .as_ref()
@@ -1315,7 +1324,7 @@ impl Drop for HandleLease {
             let slot = channels
                 .handle_lease
                 .lock()
-                .expect("handle lease slot poisoned");
+                .unwrap_or_else(PoisonError::into_inner);
             if !std::ptr::eq(slot.as_ptr(), self) {
                 return;
             }
@@ -1409,7 +1418,7 @@ impl SupervisorHandle {
     pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
         self.nested_channels()
             .lock()
-            .expect("nested channel map poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(id)
             .map(StableSupervisorChannels::handle)
     }
@@ -1441,7 +1450,7 @@ impl SupervisorHandle {
         let view = self
             .attached_children_state()
             .lock()
-            .expect("attached child view poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone();
         if view.terminal
             || expected_generation.is_some_and(|generation| view.generation != Some(generation))
@@ -1491,7 +1500,7 @@ impl SupervisorHandle {
                     let join = root
                         .join_state
                         .lock()
-                        .expect("join_state mutex poisoned")
+                        .unwrap_or_else(PoisonError::into_inner)
                         .take();
                     break (root.done_rx.clone(), join);
                 }

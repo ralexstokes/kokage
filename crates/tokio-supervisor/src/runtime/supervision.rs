@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, PoisonError},
     time::{Duration, Instant as StdInstant},
 };
 
@@ -243,7 +243,9 @@ pub(crate) fn reconcile_stable_identities(
 ) -> HashMap<String, Arc<StableSupervisorChannels>> {
     let mut identities = HashMap::new();
     let mut displaced = Vec::new();
-    let mut channel_map = nested_channels.lock().expect("nested channel map poisoned");
+    let mut channel_map = nested_channels
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
 
     for child in children {
         let ChildKind::Supervisor(supervisor) = &child.kind else {
@@ -1043,7 +1045,7 @@ impl SupervisorRuntime {
         self.child_order.push(key);
         self.nested_channels
             .lock()
-            .expect("nested channel map poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(id.clone(), stable);
         self.send_lifecycle(key, LifecycleEventKind::Added);
 
@@ -1252,7 +1254,7 @@ impl SupervisorRuntime {
         if matches!(&entry.runtime.definition.kind, ChildKind::Supervisor(_)) {
             self.nested_channels
                 .lock()
-                .expect("nested channel map poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .remove(&entry.id);
             if let Some(channels) = entry.nested_channels.as_ref() {
                 channels.terminal();
@@ -1891,7 +1893,7 @@ impl SupervisorRuntime {
         let mut attached_children = self
             .attached_children
             .lock()
-            .expect("attached child view poisoned");
+            .unwrap_or_else(PoisonError::into_inner);
         let generation = self.meta.parent_link.as_ref().map(|link| link.generation);
         if !attached_children.terminal && attached_children.generation == generation {
             attached_children.children = self.attached_children_view();

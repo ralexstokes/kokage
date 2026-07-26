@@ -165,12 +165,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build()?;
     let handle = runtime.spawn();
 
-    let console = match Console::for_runtime(&handle)
+    let console = Console::for_runtime(&handle)
         .bind(([127, 0, 0, 1], 0))
-        .build()
-        .spawn()
-        .await
-    {
+        .build()?;
+    let console = match console.spawn().await {
         Ok(console) => {
             println!("console available at http://{}", console.local_addr());
             Some(console)

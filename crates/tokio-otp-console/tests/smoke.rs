@@ -15,7 +15,7 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorContext, ActorResult, DynamicActorOptions, Runtime, prelude::Continue,
 };
-use tokio_otp_console::{ActorStatsView, Console, ConsoleHandle};
+use tokio_otp_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use tokio_supervisor::{
     ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder,
     Strategy, SupervisorHandle, SupervisorSnapshot, SupervisorStateView,
@@ -89,6 +89,7 @@ async fn spawn_console_with_stats(
         .actor_stats(stats)
         .bind(([127, 0, 0, 1], 0))
         .build()
+        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn console");
@@ -236,6 +237,7 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
         .access_token("test-token")
         .bind(([127, 0, 0, 1], 0))
         .build()
+        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn token-protected console");
@@ -325,6 +327,7 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
         .allowed_host("console.example:80")
         .bind(([127, 0, 0, 1], 0))
         .build()
+        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn allowlisted console");
@@ -335,16 +338,47 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 }
 
 #[test]
-#[should_panic(expected = "access_token required for non-loopback binds")]
 fn non_loopback_bind_requires_token() {
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
     let lifecycle = DynamicSupervisorBuilder::new();
     let lifecycle_handle = lifecycle.handle();
-    let _console = Console::builder()
+    let error = Console::builder()
         .snapshots(snapshot_rx)
         .lifecycle(move || lifecycle_handle.watch_lifecycle_recursive())
         .bind(([0, 0, 0, 0], 9100))
-        .build();
+        .build()
+        .err()
+        .expect("non-loopback bind must require a token");
+    assert_eq!(error, ConsoleBuildError::AccessTokenRequired);
+}
+
+#[test]
+fn builder_reports_missing_observability_sources() {
+    let missing_snapshots = Console::builder()
+        .build()
+        .err()
+        .expect("snapshots must be required");
+    assert_eq!(missing_snapshots, ConsoleBuildError::MissingSnapshots);
+
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
+    let missing_lifecycle = Console::builder()
+        .snapshots(snapshot_rx)
+        .build()
+        .err()
+        .expect("lifecycle source must be required");
+    assert_eq!(missing_lifecycle, ConsoleBuildError::MissingLifecycle);
+}
+
+#[test]
+fn builder_rejects_invalid_access_tokens() {
+    for token in ["", "contains a space", "not-ascii-é"] {
+        let error = Console::builder()
+            .access_token(token)
+            .build()
+            .err()
+            .expect("invalid token must be rejected");
+        assert_eq!(error, ConsoleBuildError::InvalidAccessToken);
+    }
 }
 
 #[tokio::test]
@@ -456,6 +490,7 @@ async fn runtime_convenience_wires_public_observability() {
     let console = Console::for_runtime(&runtime)
         .bind(([127, 0, 0, 1], 0))
         .build()
+        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn console");

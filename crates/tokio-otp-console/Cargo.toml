@@ -18,6 +18,7 @@ tokio = { workspace = true, features = ["net"] }
 tokio-otp = { path = "../tokio-otp", default-features = false }
 tokio-supervisor = { workspace = true, features = ["serde"] }
 tracing.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true

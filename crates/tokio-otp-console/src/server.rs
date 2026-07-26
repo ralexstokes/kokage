@@ -138,18 +138,17 @@ async fn security(
         && token_matches(token_from_query(&request), expected)
     {
         let mut response = (StatusCode::SEE_OTHER, [(header::LOCATION, "/")]).into_response();
-        let session = state
-            .session
-            .as_ref()
-            .expect("access token must have a browser session");
+        let Some(session) = state.session.as_ref() else {
+            return next.run(request).await;
+        };
         let cookie = format!(
             "{}={}; HttpOnly; SameSite=Lax; Path=/",
             session.cookie_name, session.value
         );
-        response.headers_mut().insert(
-            header::SET_COOKIE,
-            HeaderValue::from_str(&cookie).expect("validated access token produced invalid cookie"),
-        );
+        let Ok(cookie) = HeaderValue::from_str(&cookie) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
         response.headers_mut().insert(
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),

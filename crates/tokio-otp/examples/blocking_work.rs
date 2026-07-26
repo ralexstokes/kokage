@@ -28,7 +28,7 @@ impl Actor for Worker {
                         }
                         Some(input.to_uppercase())
                     })
-                    .await;
+                    .await?;
                 if let Some(output) = output {
                     ctx.myself().try_send(WorkMsg::Finished(output))?;
                 }

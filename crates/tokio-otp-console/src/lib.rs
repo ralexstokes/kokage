@@ -14,7 +14,7 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let handle = Runtime::builder().build()?.spawn();
 //! let console = Console::for_runtime(&handle)
-//!     .build()
+//!     .build()?
 //!     .spawn()
 //!     .await
 //!     .expect("failed to start console");
@@ -38,6 +38,7 @@ mod ws;
 
 use std::{net::SocketAddr, sync::Arc};
 
+use thiserror::Error;
 use tokio::sync::watch;
 use tokio_otp::{ActorStats, RuntimeHandle};
 use tokio_supervisor::{RecursiveLifecycleWatch, SupervisorSnapshot};
@@ -97,6 +98,24 @@ impl From<ActorStats> for ActorStatsView {
 
 type StatsSource = Arc<dyn Fn() -> Vec<ActorStatsView> + Send + Sync>;
 type LifecycleSource = Arc<dyn Fn() -> RecursiveLifecycleWatch + Send + Sync>;
+
+/// Errors returned while validating console configuration.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
+pub enum ConsoleBuildError {
+    /// No supervisor snapshot receiver was configured.
+    #[error("console snapshots are required")]
+    MissingSnapshots,
+    /// No recursive lifecycle-watch source was configured.
+    #[error("console lifecycle source is required")]
+    MissingLifecycle,
+    /// A non-loopback listener was configured without an access token.
+    #[error("an access token is required for non-loopback console binds")]
+    AccessTokenRequired,
+    /// The access token was empty or contained a byte that is not URL-safe.
+    #[error("the console access token must be non-empty URL-safe ASCII")]
+    InvalidAccessToken,
+}
 
 /// Builder for configuring a [`Console`] server.
 pub struct ConsoleBuilder {
@@ -176,34 +195,27 @@ impl ConsoleBuilder {
     }
 
     /// Validates the builder and returns a [`Console`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `snapshots` or `lifecycle` have not been set, a non-loopback
-    /// bind has no access token, or the access token contains non-URL-safe
-    /// bytes.
-    pub fn build(self) -> Console {
-        assert!(
-            self.bind.ip().is_loopback() || self.access_token.is_some(),
-            "ConsoleBuilder: access_token required for non-loopback binds"
-        );
-        if let Some(token) = &self.access_token {
-            assert!(
-                !token.is_empty()
-                    && token
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte)),
-                "ConsoleBuilder: access_token must be non-empty URL-safe ASCII"
-            );
+    pub fn build(self) -> Result<Console, ConsoleBuildError> {
+        if !self.bind.ip().is_loopback() && self.access_token.is_none() {
+            return Err(ConsoleBuildError::AccessTokenRequired);
         }
-        Console {
-            snapshots: self.snapshots.expect("ConsoleBuilder: snapshots required"),
-            lifecycle: self.lifecycle.expect("ConsoleBuilder: lifecycle required"),
+        if let Some(token) = &self.access_token {
+            let valid = !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte));
+            if !valid {
+                return Err(ConsoleBuildError::InvalidAccessToken);
+            }
+        }
+        Ok(Console {
+            snapshots: self.snapshots.ok_or(ConsoleBuildError::MissingSnapshots)?,
+            lifecycle: self.lifecycle.ok_or(ConsoleBuildError::MissingLifecycle)?,
             stats: self.stats,
             bind: self.bind,
             access_token: self.access_token,
             allowed_hosts: self.allowed_hosts,
-        }
+        })
     }
 }
 

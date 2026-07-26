@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
+        Arc, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -448,7 +448,7 @@ fn prepare_nested_channels(config: &SupervisorConfig) -> NestedChannels {
         }
     }
 
-    *channels.lock().expect("nested channel map poisoned") = prepared_channels;
+    *channels.lock().unwrap_or_else(PoisonError::into_inner) = prepared_channels;
     channels
 }
 
@@ -517,7 +517,9 @@ fn initial_attached_children(
     config: &SupervisorConfig,
     nested_channels: &NestedChannels,
 ) -> Vec<AttachedChildState> {
-    let nested_channels = nested_channels.lock().expect("nested channel map poisoned");
+    let nested_channels = nested_channels
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     config
         .children
         .iter()

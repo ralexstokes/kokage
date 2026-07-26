@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{Arc, Mutex, OnceLock, PoisonError, Weak},
 };
 
 use crate::{
@@ -51,7 +51,7 @@ impl ActorRuntimeState {
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
     ) {
-        *self.config.lock().expect("actor runtime config poisoned") = ActorRuntimeConfig {
+        *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
             actor_builder,
             default_restart,
             default_shutdown,
@@ -59,7 +59,7 @@ impl ActorRuntimeState {
     }
 
     fn actor_defaults(&self) -> (RestartPolicy, ShutdownPolicy) {
-        let config = self.config.lock().expect("actor runtime config poisoned");
+        let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
         (config.default_restart, config.default_shutdown)
     }
 
@@ -78,7 +78,7 @@ impl ActorRuntimeState {
         let actor_builder = self
             .config
             .lock()
-            .expect("actor runtime config poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .actor_builder
             .clone();
         actor_builder.actor_with_options(label, factory, options)

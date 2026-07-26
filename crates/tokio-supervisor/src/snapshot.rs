@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -350,18 +350,12 @@ pub(crate) struct NestedSnapshotState {
 
 impl NestedSnapshotState {
     pub(crate) fn clear(&self) {
-        *self
-            .latest
-            .lock()
-            .expect("nested snapshot state mutex poisoned") = None;
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = None;
         self.queued.store(false, Ordering::Release);
     }
 
     pub(crate) fn replace_if_changed(&self, snapshot: SupervisorSnapshot) -> bool {
-        let mut latest = self
-            .latest
-            .lock()
-            .expect("nested snapshot state mutex poisoned");
+        let mut latest = self.latest.lock().unwrap_or_else(PoisonError::into_inner);
         if latest.as_ref() == Some(&snapshot) {
             return false;
         }
@@ -372,7 +366,7 @@ impl NestedSnapshotState {
     pub(crate) fn latest(&self) -> Option<SupervisorSnapshot> {
         self.latest
             .lock()
-            .expect("nested snapshot state mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
@@ -432,12 +426,29 @@ impl SnapshotCell {
     }
 }
 
-#[cfg(all(test, feature = "serde"))]
+#[cfg(test)]
 mod tests {
-    use super::{ChildSnapshot, ChildStateView};
+    use std::sync::Arc;
+
+    use super::NestedSnapshotState;
 
     #[test]
+    fn nested_snapshot_state_recovers_after_mutex_poisoning() {
+        let state = NestedSnapshotState::default();
+        let latest = Arc::clone(&state.latest);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = latest.lock().expect("fresh mutex locks");
+            panic!("poison the nested snapshot state");
+        });
+
+        assert_eq!(state.latest(), None);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
     fn membership_epoch_is_required_when_deserializing() {
+        use super::{ChildSnapshot, ChildStateView};
+
         let mut value =
             serde_json::to_value(ChildSnapshot::new("worker", 0, ChildStateView::Running))
                 .expect("child snapshot serializes");

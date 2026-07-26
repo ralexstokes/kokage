@@ -350,7 +350,7 @@ fn exit_status_label(status: &ExitStatusView) -> &'static str {
 mod tests {
     use std::{
         io::{self, Write},
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, PoisonError},
         time::Duration,
     };
 
@@ -646,8 +646,13 @@ mod tests {
 
     impl SharedBuffer {
         fn to_string_output(&self) -> String {
-            String::from_utf8(self.inner.lock().expect("buffer poisoned").clone())
-                .expect("tracing output should be utf-8")
+            String::from_utf8(
+                self.inner
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+            )
+            .expect("tracing output should be utf-8")
         }
     }
 
@@ -669,7 +674,7 @@ mod tests {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.inner
                 .lock()
-                .expect("buffer poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .extend_from_slice(buf);
             Ok(buf.len())
         }

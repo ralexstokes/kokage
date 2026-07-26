@@ -20,7 +20,9 @@ pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::CancellationHandle;
 pub use context::{ActorContext, ActorRef, OffloadHandle, Reply};
-pub use error::{CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError};
+pub use error::{
+    BlockingCancelled, CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError,
+};
 pub use factory::ActorFactory;
 pub use graph::{
     ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor, RunnableActorBuilder,

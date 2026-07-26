@@ -14,7 +14,7 @@ let tree = Runtime::builder()
     .subtree("storage", storage_runtime)
     .into_tree();
 
-println!("{:#?}", tree.outline());
+println!("{:#?}", tree.outline()?);
 let runtime = tree.build()?;
 ```
 
@@ -132,7 +132,7 @@ let outline = Runtime::builder()
     .restart(RestartPolicy::Always)
     .actor_restart(&ingest_ref, RestartPolicy::Never)
     .into_tree()
-    .outline();
+    .outline()?;
 
 assert_eq!(outline.child_ids(), ["ingest", "parse"]);
 let ChildOutline::Actor { restart, .. } = outline.child("ingest").unwrap()

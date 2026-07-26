@@ -57,7 +57,7 @@ impl Actor for BlockingWorker {
             assert!(!token.is_cancelled());
             observed.send(actor_id).expect("test receiver dropped");
         })
-        .await;
+        .await?;
         Ok(Continue)
     }
 }
