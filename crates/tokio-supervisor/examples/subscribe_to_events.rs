@@ -88,9 +88,6 @@ fn print_event(event: &SupervisorEvent, depth: usize) {
             }
             _ => println!("{indent}child exited: {id} generation={generation}"),
         },
-        SupervisorEvent::AutoShutdownTriggered { id, mode, .. } => {
-            println!("{indent}automatic shutdown triggered by {id}: {mode:?}");
-        }
         SupervisorEvent::ChildRestartScheduled {
             id,
             generation,

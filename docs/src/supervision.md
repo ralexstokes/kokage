@@ -226,35 +226,45 @@ graph, and an actor that overruns it resolves the run to
 abort, code that never reaches a poll boundary, and blocking work already
 running on the blocking pool, can continue outside the actor task.
 
-## Automatic shutdown for finite work
+## Stopping a scope when its finite work is done
 
-Pipeline and batch subtrees often have a natural completion point. Mark those
-children with `ChildSpec::significant()` and select an [`AutoShutdown`] mode on
-the supervisor:
+Pipeline and batch subtrees often have a natural completion point. Name those
+children in [`shutdown_on_completion`], taken from a pre-spawn handle so a child
+that finishes immediately is still observed:
 
 ```rust,ignore
-let batch = SupervisorBuilder::new()
-    .auto_shutdown(AutoShutdown::AllSignificant)
-    .child(source.restart(RestartPolicy::OnFailure).significant())
-    .child(indexer.restart(RestartPolicy::Never).significant())
-    .child(metrics_reporter)
-    .build()?;
+let builder = SupervisorBuilder::new()
+    .child(source.restart(RestartPolicy::OnFailure))
+    .child(indexer.restart(RestartPolicy::Never))
+    .child(metrics_reporter);
+
+// Retain the guard: dropping it cancels the watch.
+let _finished = builder.handle().shutdown_on_completion(["source", "indexer"]);
+let batch = builder.build()?;
 ```
 
-`AnySignificant` stops the remaining children after the first significant
-child returns `Ok(())`; `AllSignificant` waits until every significant child
-has returned `Ok(())`. Failures still follow the normal restart policy and do
-not trigger automatic shutdown. Consequently, a significant `Never` child
-that fails cannot later satisfy `AllSignificant`; the supervisor continues
-until explicitly stopped. The same applies when a significant `Never` child is
-cancelled as part of a sibling-driven `OneForAll` or `RestForOne` restart: it
-does not count as a natural clean completion and cannot run again.
+The scope stops once every named child is *simultaneously* in a completed
+state, so `["source"]` alone gives you "stop as soon as the source is done".
+[`wait_completed`] is the same rule as a plain `await` when you would rather
+decide for yourself what to do next.
 
-Significant children must use `OnFailure` or `Never`, and a supervisor with
-significant children must select a non-`Never` automatic shutdown mode. Nested
-supervisors can be marked significant through `SupervisorSpec::significant()`,
-so a completed subtree is observed by its parent as an ordinary clean child
-exit.
+A child counts as completed once its current generation has returned `Ok(())`
+of its own accord and no restart is pending for it. Three consequences follow:
+
+- Failures still follow the normal restart policy. A `Never` child that fails
+  can never complete, and the scope runs until explicitly stopped.
+- A later start un-completes a child, so one cancelled as part of a
+  sibling-driven `OneForAll` or `RestForOne` restart must complete again on its
+  new generation.
+- A child cancelled by shutdown, removal, or a group restart can still return
+  `Ok(())`. That is not finished work, and it does not count.
+  [`LifecycleEventKind::Exited`] reports it as `cancelled`.
+
+Nested supervisors need nothing special: a scope that stops itself this way is
+observed by its parent as an ordinary clean child exit, so a parent can name it
+in its own completion set. Unlike the `AutoShutdown` configuration this
+replaced, it also works on dynamic scopes — an id that is not a member yet stays
+pending until it is added.
 
 ## Supervision trees
 
@@ -310,5 +320,7 @@ actors](dynamic-actors.md) chapter.
 [`BackoffPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.BackoffPolicy.html
 [`Strategy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.Strategy.html
 [`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ShutdownPolicy.html
-[`AutoShutdown`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.AutoShutdown.html
+[`shutdown_on_completion`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
+[`wait_completed`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.wait_completed
+[`LifecycleEventKind::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.LifecycleEventKind.html#variant.Exited
 [`agent_control` example]: https://github.com/ralexstokes/tokio-otp/tree/main/crates/tokio-otp/examples/agent_control

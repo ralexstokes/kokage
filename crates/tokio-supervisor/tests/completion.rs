@@ -1,3 +1,9 @@
+//! Stopping a scope once its finite work is done.
+//!
+//! These cover `SupervisorHandle::wait_completed` and
+//! `SupervisorHandle::shutdown_on_completion`, which replaced the supervisor's
+//! `AutoShutdown` configuration and the `significant` child flag.
+
 use std::{
     future::pending,
     sync::{
@@ -12,9 +18,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    AutoShutdown, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
-    RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError,
-    SupervisorEvent, SupervisorSpec,
+    ChildSpec, CompletionOutcome, DynamicSupervisorBuilder, ExitStatusView, RestartIntensity,
+    RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorEvent,
+    SupervisorSpec,
 };
 
 mod common;
@@ -28,11 +34,10 @@ impl Drop for NotifyOnDrop {
 }
 
 #[tokio::test]
-async fn any_significant_clean_exit_stops_siblings_and_supervisor() {
+async fn a_completed_child_stops_siblings_and_supervisor() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let supervisor = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .child(ChildSpec::new("trigger", |_| async { Ok(()) }).significant())
+    let builder = SupervisorBuilder::new()
+        .child(ChildSpec::new("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
         .child(ChildSpec::new("sibling", move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             async move {
@@ -40,13 +45,13 @@ async fn any_significant_clean_exit_stops_siblings_and_supervisor() {
                 cancelled_tx.send(()).expect("test receiver dropped");
                 Ok(())
             }
-        }))
-        .build()
-        .expect("valid supervisor");
+        }));
+    let _finished = builder.handle().shutdown_on_completion(["trigger"]);
+    let supervisor = builder.build().expect("valid supervisor");
 
     let handle = supervisor.spawn();
     let mut events = handle.subscribe();
-    handle.wait().await.expect("auto-shutdown should be clean");
+    handle.wait().await.expect("completion should stop cleanly");
     common::recv_event(&mut cancelled_rx).await;
 
     let mut sequence = Vec::new();
@@ -55,17 +60,12 @@ async fn any_significant_clean_exit_stops_siblings_and_supervisor() {
             SupervisorEvent::ChildExited { id, .. } if id == "trigger" => {
                 sequence.push("exited");
             }
-            SupervisorEvent::AutoShutdownTriggered { id, mode, .. }
-                if id == "trigger" && mode == AutoShutdown::AnySignificant =>
-            {
-                sequence.push("auto_shutdown");
-            }
             SupervisorEvent::SupervisorStopping => sequence.push("stopping"),
             SupervisorEvent::SupervisorStopped => sequence.push("stopped"),
             _ => {}
         }
     }
-    assert_eq!(sequence, ["exited", "auto_shutdown", "stopping", "stopped"]);
+    assert_eq!(sequence, ["exited", "stopping", "stopped"]);
     let after_stopped = timeout(common::QUIET_TIMEOUT, events.recv()).await;
     assert!(
         matches!(
@@ -77,14 +77,13 @@ async fn any_significant_clean_exit_stops_siblings_and_supervisor() {
 }
 
 #[tokio::test]
-async fn all_significant_waits_for_last_clean_exit() {
+async fn a_completion_set_waits_for_its_last_child() {
     let (first_tx, first_rx) = oneshot::channel::<()>();
     let first_rx = Arc::new(std::sync::Mutex::new(Some(first_rx)));
     let (second_tx, second_rx) = oneshot::channel::<()>();
     let second_rx = Arc::new(std::sync::Mutex::new(Some(second_rx)));
 
-    let supervisor = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AllSignificant)
+    let builder = SupervisorBuilder::new()
         .child(
             ChildSpec::new("first", move |_| {
                 let rx = first_rx.lock().expect("lock poisoned").take().unwrap();
@@ -93,8 +92,7 @@ async fn all_significant_waits_for_last_clean_exit() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::Never)
-            .significant(),
+            .restart(RestartPolicy::Never),
         )
         .child(
             ChildSpec::new("second", move |_| {
@@ -104,48 +102,43 @@ async fn all_significant_waits_for_last_clean_exit() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::Never)
-            .significant(),
-        )
-        .build()
-        .expect("valid supervisor");
+            .restart(RestartPolicy::Never),
+        );
+    let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
+    let supervisor = builder.build().expect("valid supervisor");
 
     let handle = supervisor.spawn();
     first_tx.send(()).expect("first child dropped");
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
-        "one significant child must not be enough"
+        "one completed child must not be enough"
     );
     second_tx.send(()).expect("second child dropped");
     handle
         .wait()
         .await
-        .expect("last significant exit should stop cleanly");
+        .expect("the last completion should stop cleanly");
 }
 
 #[tokio::test]
-async fn significant_failure_restarts_before_clean_exit_triggers_shutdown() {
+async fn a_failure_restarts_before_a_clean_exit_completes() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_child = attempts.clone();
-    let supervisor = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .child(
-            ChildSpec::new("trigger", move |_| {
-                let attempt = attempts_for_child.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    if attempt == 0 {
-                        Err("first attempt fails".into())
-                    } else {
-                        Ok(())
-                    }
-                }
-            })
-            .significant(),
-        )
-        .build()
-        .expect("valid supervisor");
+    let builder = SupervisorBuilder::new().child(ChildSpec::new("trigger", move |_| {
+        let attempt = attempts_for_child.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if attempt == 0 {
+                Err("first attempt fails".into())
+            } else {
+                Ok(())
+            }
+        }
+    }));
+    let _finished = builder.handle().shutdown_on_completion(["trigger"]);
 
-    supervisor
+    builder
+        .build()
+        .expect("valid supervisor")
         .spawn()
         .wait()
         .await
@@ -154,12 +147,56 @@ async fn significant_failure_restarts_before_clean_exit_triggers_shutdown() {
 }
 
 #[tokio::test]
-async fn nested_auto_shutdown_is_a_clean_child_exit_to_parent() {
-    let inner = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .child(ChildSpec::new("done", |_| async { Ok(()) }).significant())
-        .build()
-        .expect("valid inner supervisor");
+async fn wait_completed_reports_a_supervisor_that_stopped_first() {
+    let builder = SupervisorBuilder::new().child(ChildSpec::new("worker", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let handle = builder.handle();
+    let spawned = builder.build().expect("valid supervisor").spawn();
+
+    let waiter = tokio::spawn(async move { handle.wait_completed(["worker"]).await });
+    spawned
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown succeeds");
+
+    let outcome = timeout(common::EVENT_TIMEOUT, waiter)
+        .await
+        .expect("the wait must resolve once the identity is terminal")
+        .expect("waiter task panicked");
+    assert_eq!(outcome, CompletionOutcome::Closed);
+}
+
+#[tokio::test]
+async fn an_empty_completion_set_is_already_satisfied() {
+    let builder = SupervisorBuilder::new().child(ChildSpec::new("worker", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let handle = builder.handle();
+    let spawned = builder.build().expect("valid supervisor").spawn();
+
+    let outcome = timeout(
+        common::EVENT_TIMEOUT,
+        handle.wait_completed(Vec::<String>::new()),
+    )
+    .await
+    .expect("an empty set must not block");
+    assert_eq!(outcome, CompletionOutcome::Completed);
+    spawned
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
+    let inner_builder =
+        SupervisorBuilder::new().child(ChildSpec::new("done", |_| async { Ok(()) }));
+    let _finished = inner_builder.handle().shutdown_on_completion(["done"]);
+    let inner = inner_builder.build().expect("valid inner supervisor");
+
     let parent = SupervisorBuilder::new()
         .supervisor(
             "job",
@@ -195,78 +232,81 @@ async fn nested_auto_shutdown_is_a_clean_child_exit_to_parent() {
 }
 
 #[tokio::test]
-async fn significant_nested_supervisor_triggers_parent_auto_shutdown() {
-    let inner = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .child(ChildSpec::new("done", |_| async { Ok(()) }).significant())
-        .build()
-        .expect("valid inner supervisor");
-    let parent = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .supervisor("job", SupervisorSpec::new(inner).significant())
-        .build()
-        .expect("valid parent supervisor");
+async fn a_completed_nested_scope_can_complete_its_parent() {
+    let inner_builder =
+        SupervisorBuilder::new().child(ChildSpec::new("done", |_| async { Ok(()) }));
+    let _inner_finished = inner_builder.handle().shutdown_on_completion(["done"]);
+    let inner = inner_builder.build().expect("valid inner supervisor");
 
-    parent
+    let parent_builder = SupervisorBuilder::new().supervisor("job", SupervisorSpec::new(inner));
+    let _parent_finished = parent_builder.handle().shutdown_on_completion(["job"]);
+
+    parent_builder
+        .build()
+        .expect("valid parent supervisor")
         .spawn()
         .wait()
         .await
-        .expect("significant nested completion should stop parent");
+        .expect("nested completion should stop the parent");
 }
 
 #[tokio::test]
-async fn dynamic_significant_children_report_an_accurate_invalid_config() {
-    let handle = DynamicSupervisorBuilder::new()
-        .restart(RestartPolicy::Always)
-        .build()
-        .expect("valid dynamic supervisor")
-        .spawn();
-    let err = handle
-        .add_child(ChildSpec::new("invalid", |_| async { Ok(()) }).significant())
+async fn a_dynamic_scope_can_await_completion() {
+    let builder = DynamicSupervisorBuilder::new().restart(RestartPolicy::Never);
+    // Armed before the children exist: an id that is not yet a member stays
+    // pending rather than counting as already gone.
+    let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
+    let spawned = builder.build().expect("valid dynamic supervisor").spawn();
+
+    let gate = Arc::new(Notify::new());
+    spawned
+        .add_child(ChildSpec::new("first", |_| async { Ok(()) }))
         .await
-        .expect_err("dynamic scopes reject significant children");
-    assert_eq!(
-        err,
-        ControlError::InvalidConfig("dynamic scopes do not support significant children")
+        .expect("first added");
+    spawned
+        .add_child(ChildSpec::new("second", {
+            let gate = gate.clone();
+            move |_| {
+                let gate = gate.clone();
+                async move {
+                    gate.notified().await;
+                    Ok(())
+                }
+            }
+        }))
+        .await
+        .expect("second added");
+
+    assert!(
+        timeout(common::QUIET_TIMEOUT, spawned.wait())
+            .await
+            .is_err(),
+        "the dynamic scope must wait for its second child"
     );
-    let nested = SupervisorBuilder::new()
-        .build()
-        .expect("valid nested supervisor");
-    let err = handle
-        .add_supervisor("nested", SupervisorSpec::new(nested).significant())
+    gate.notify_one();
+    spawned
+        .wait()
         .await
-        .expect_err("dynamic scopes reject significant nested supervisors");
-    assert_eq!(
-        err,
-        ControlError::InvalidConfig("dynamic scopes do not support significant children")
-    );
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("dynamic supervisor shuts down");
+        .expect("both dynamic children completed");
 }
 
 #[tokio::test]
-async fn failed_never_child_does_not_satisfy_all_significant() {
-    let supervisor = SupervisorBuilder::new()
-        .auto_shutdown(AutoShutdown::AllSignificant)
+async fn a_failed_never_child_never_completes() {
+    let builder = SupervisorBuilder::new()
         .child(
             ChildSpec::new("failed", |_| async { Err(common::test_error("failed")) })
-                .restart(RestartPolicy::Never)
-                .significant(),
+                .restart(RestartPolicy::Never),
         )
-        .child(
-            ChildSpec::new("completed", |_| async { Ok(()) })
-                .restart(RestartPolicy::Never)
-                .significant(),
-        )
-        .build()
-        .expect("valid supervisor");
+        .child(ChildSpec::new("completed", |_| async { Ok(()) }).restart(RestartPolicy::Never));
+    let _finished = builder
+        .handle()
+        .shutdown_on_completion(["failed", "completed"]);
+    let supervisor = builder.build().expect("valid supervisor");
 
     let handle = supervisor.spawn();
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
-        "a failed Never child must not count as a clean completion"
+        "a failed Never child must not count as finished work"
     );
     handle
         .shutdown_and_wait()
@@ -275,7 +315,7 @@ async fn failed_never_child_does_not_satisfy_all_significant() {
 }
 
 #[tokio::test]
-async fn all_significant_ignores_stale_completion_after_group_restart() {
+async fn a_group_restart_invalidates_a_stale_completion() {
     let fail_group = Arc::new(Notify::new());
     let finish_a = Arc::new(Notify::new());
     let finish_b = Arc::new(Notify::new());
@@ -296,8 +336,7 @@ async fn all_significant_ignores_stale_completion_after_group_restart() {
                 Ok(())
             }
         }
-    })
-    .significant();
+    });
     let b = ChildSpec::new("b", {
         let finish_b = finish_b.clone();
         let restarted_tx = restarted_tx.clone();
@@ -314,8 +353,7 @@ async fn all_significant_ignores_stale_completion_after_group_restart() {
                 Ok(())
             }
         }
-    })
-    .significant();
+    });
     let failing = ChildSpec::new("failing", {
         let fail_group = fail_group.clone();
         move |ctx| {
@@ -331,15 +369,13 @@ async fn all_significant_ignores_stale_completion_after_group_restart() {
         }
     });
 
-    let handle = SupervisorBuilder::new()
+    let builder = SupervisorBuilder::new()
         .strategy(Strategy::OneForAll)
-        .auto_shutdown(AutoShutdown::AllSignificant)
         .child(a)
         .child(b)
-        .child(failing)
-        .build()
-        .expect("valid supervisor")
-        .spawn();
+        .child(failing);
+    let _finished = builder.handle().shutdown_on_completion(["a", "b"]);
+    let handle = builder.build().expect("valid supervisor").spawn();
 
     fail_group.notify_one();
     let mut restarted = common::recv_n(&mut restarted_rx, 2).await;
@@ -349,7 +385,7 @@ async fn all_significant_ignores_stale_completion_after_group_restart() {
     finish_b.notify_one();
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
-        "a running significant child with a stale completed exit must not count"
+        "a restarted child's earlier completion must not still count"
     );
     finish_a.notify_one();
     handle
@@ -359,49 +395,7 @@ async fn all_significant_ignores_stale_completion_after_group_restart() {
 }
 
 #[tokio::test]
-async fn natural_significant_completion_during_group_drain_still_triggers() {
-    let finish_significant = Arc::new(Notify::new());
-    let significant = ChildSpec::new("significant", {
-        let finish_significant = finish_significant.clone();
-        move |_| {
-            let finish_significant = finish_significant.clone();
-            async move {
-                finish_significant.notified().await;
-                Ok(())
-            }
-        }
-    })
-    .restart(RestartPolicy::Never)
-    .significant();
-    let failing = ChildSpec::new("failing", move |ctx| {
-        let finish_significant = finish_significant.clone();
-        async move {
-            if ctx.generation() == 0 {
-                finish_significant.notify_one();
-                return Err(common::test_error("restart group"));
-            }
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }
-    });
-
-    let handle = SupervisorBuilder::new()
-        .strategy(Strategy::OneForAll)
-        .auto_shutdown(AutoShutdown::AnySignificant)
-        .child(significant)
-        .child(failing)
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-
-    timeout(common::EVENT_TIMEOUT, handle.wait())
-        .await
-        .expect("natural completion must not be lost to the group drain")
-        .expect("auto-shutdown should be clean");
-}
-
-#[tokio::test]
-async fn group_cancellation_does_not_count_as_all_significant_completion() {
+async fn a_group_cancelled_clean_exit_does_not_complete() {
     let finish_natural = Arc::new(Notify::new());
     let finish_restarted = Arc::new(Notify::new());
     let finish_restarted_for_child = finish_restarted.clone();
@@ -417,8 +411,9 @@ async fn group_cancellation_does_not_count_as_all_significant_completion() {
             }
         }
     })
-    .restart(RestartPolicy::Never)
-    .significant();
+    .restart(RestartPolicy::Never);
+    // Returns `Ok(())` because the supervisor cancelled it, not because its
+    // work finished. That must not satisfy the completion set.
     let restarted = ChildSpec::new("restarted", move |ctx| {
         let finish_restarted = finish_restarted_for_child.clone();
         let restarted_tx = restarted_tx.clone();
@@ -431,8 +426,7 @@ async fn group_cancellation_does_not_count_as_all_significant_completion() {
             finish_restarted.notified().await;
             Ok(())
         }
-    })
-    .significant();
+    });
     let failing = ChildSpec::new("failing", move |ctx| {
         let finish_natural = finish_natural.clone();
         async move {
@@ -445,26 +439,26 @@ async fn group_cancellation_does_not_count_as_all_significant_completion() {
         }
     });
 
-    let handle = SupervisorBuilder::new()
+    let builder = SupervisorBuilder::new()
         .strategy(Strategy::OneForAll)
-        .auto_shutdown(AutoShutdown::AllSignificant)
         .child(natural)
         .child(restarted)
-        .child(failing)
-        .build()
-        .expect("valid supervisor")
-        .spawn();
+        .child(failing);
+    let _finished = builder
+        .handle()
+        .shutdown_on_completion(["natural", "restarted"]);
+    let handle = builder.build().expect("valid supervisor").spawn();
 
     common::recv_event(&mut restarted_rx).await;
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
-        "a cancellation-driven clean exit must not satisfy AllSignificant"
+        "a cancellation-driven clean exit must not complete the set"
     );
     finish_restarted.notify_one();
     handle
         .wait()
         .await
-        .expect("the restarted significant child completed naturally");
+        .expect("the restarted child then completed on its own");
 }
 
 #[tokio::test]
@@ -516,6 +510,47 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
         .shutdown_and_wait()
         .await
         .expect("single restarted generation should shut down cleanly");
+}
+
+#[tokio::test]
+async fn a_dropped_guard_leaves_the_supervisor_running() {
+    let builder = SupervisorBuilder::new()
+        .child(ChildSpec::new("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }));
+    let guard = builder.handle().shutdown_on_completion(["trigger"]);
+    drop(guard);
+    let handle = builder.build().expect("valid supervisor").spawn();
+
+    assert!(
+        timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
+        "a cancelled completion watch must not stop the supervisor"
+    );
+    handle
+        .shutdown_and_wait()
+        .await
+        .expect("explicit shutdown succeeds");
+}
+
+#[tokio::test]
+async fn a_retained_guard_does_not_keep_a_root_alive() {
+    let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
+    let builder = SupervisorBuilder::new().child(ChildSpec::new("worker", move |ctx| {
+        let cancelled_tx = cancelled_tx.clone();
+        async move {
+            ctx.shutdown_token().cancelled().await;
+            cancelled_tx.send(()).expect("test receiver dropped");
+            Ok(())
+        }
+    }));
+    // The watch task holds no lifecycle lease, so dropping every public handle
+    // must still request shutdown even while the guard is retained.
+    let _finished = builder.handle().shutdown_on_completion(["worker"]);
+    drop(builder.build().expect("valid supervisor").spawn());
+
+    common::recv_event(&mut cancelled_rx).await;
 }
 
 #[tokio::test]
