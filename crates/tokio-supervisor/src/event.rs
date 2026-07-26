@@ -21,6 +21,10 @@ pub enum ExitStatusView {
     /// The child task was aborted by the supervisor (e.g. after a grace-period
     /// timeout).
     Aborted,
+    /// The child's cooperative shutdown grace expired. The supervisor first
+    /// offered the child wrapper a tidy-abort accounting beat and then
+    /// hard-aborted it if necessary.
+    ShutdownTimedOut,
 }
 
 /// One segment of a [`SupervisorEvent::Nested`] path, identifying which child

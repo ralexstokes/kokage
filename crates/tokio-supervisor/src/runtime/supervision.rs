@@ -177,6 +177,7 @@ struct PendingRemoval {
     grace_deadline: Instant,
     initiated_at: StdInstant,
     grace_expired: bool,
+    hard_abort_deadline: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -641,11 +642,11 @@ impl SupervisorRuntime {
                 event = self.nested_event_rx.recv(), if options.nested_events => {
                     Some(Wake::NestedEvent(event))
                 }
-                joined = self.join_set.join_next_with_id(), if wait_for_join => {
-                    Some(Wake::Joined(joined))
-                }
                 _ = tokio::time::sleep_until(deadline), if options.deadline.is_some() => {
                     Some(Wake::Deadline)
+                }
+                joined = self.join_set.join_next_with_id(), if wait_for_join => {
+                    Some(Wake::Joined(joined))
                 }
             };
             if let Some(wake) = wake {
@@ -1183,6 +1184,7 @@ impl SupervisorRuntime {
                 grace_deadline,
                 initiated_at: StdInstant::now(),
                 grace_expired: false,
+                hard_abort_deadline: None,
             });
             (entry.instance, mode, active)
         };
@@ -1255,6 +1257,15 @@ impl SupervisorRuntime {
             .store(true, std::sync::atomic::Ordering::Release);
         if let Some(abort_handle) = child.abort_handle.as_ref() {
             abort_handle.abort();
+        }
+    }
+
+    pub(crate) fn escalate_child(&mut self, key: ChildKey) {
+        let child = &mut self.children[key].runtime;
+        child.completion.mark_cancelled();
+        child.shutdown_timed_out = true;
+        if let Some(token) = child.active_abort_token.as_ref() {
+            token.cancel();
         }
     }
 
@@ -1536,7 +1547,8 @@ impl SupervisorRuntime {
                     key: meta.key,
                     instance: meta.instance,
                     generation: meta.generation,
-                    status: ExitStatus::from_child_result(envelope.result),
+                    status: self
+                        .classify_child_exit(&meta, ExitStatus::from_child_result(envelope.result)),
                 })
             }
             Err(err) => {
@@ -1546,7 +1558,7 @@ impl SupervisorRuntime {
                         "missing task metadata for failed join: {err}"
                     )));
                 };
-                let status = classify_join_error(err);
+                let status = self.classify_child_exit(&meta, classify_join_error(err));
                 Ok(ClassifiedExit {
                     key: meta.key,
                     instance: meta.instance,
@@ -1557,14 +1569,36 @@ impl SupervisorRuntime {
         }
     }
 
+    /// Relabels an exit that the supervisor already escalated past its grace.
+    ///
+    /// Both conditions are latched decisions rather than clock reads: a child
+    /// that finished inside its grace keeps its real exit status even when the
+    /// join is dequeued after the deadline has passed.
+    fn classify_child_exit(&self, meta: &TaskMeta, status: ExitStatus) -> ExitStatus {
+        if self.children.get(meta.key).is_some_and(|entry| {
+            entry.instance == meta.instance
+                && entry.runtime.generation == meta.generation
+                && (entry.runtime.shutdown_timed_out
+                    || entry.pending_removal.as_ref().is_some_and(|pending| {
+                        !matches!(pending.mode, ShutdownMode::Abort) && pending.grace_expired
+                    }))
+        }) {
+            ExitStatus::ShutdownTimedOut
+        } else {
+            status
+        }
+    }
+
     pub(crate) fn record_exit(&mut self, key: ChildKey, generation: u64, status: &ExitStatus) {
         let id = {
             let entry = &mut self.children[key];
             entry.runtime.restart_tracker.record_exit(Instant::now());
             entry.runtime.state = RuntimeChildState::Stopped;
             entry.runtime.active_token = None;
+            entry.runtime.active_abort_token = None;
             entry.runtime.abort_handle = None;
             entry.runtime.next_restart_deadline = None;
+            entry.runtime.shutdown_timed_out = false;
             entry.last_exit = Some(status.view());
             entry.nested_snapshot = None;
             entry.nested_snapshot_state = None;
@@ -1589,8 +1623,11 @@ impl SupervisorRuntime {
             .iter()
             .flat_map(|(_, entry)| {
                 let removal = entry.pending_removal.as_ref().and_then(|pending| {
-                    (!pending.grace_expired && !matches!(pending.mode, ShutdownMode::Abort))
-                        .then_some(pending.grace_deadline)
+                    if !pending.grace_expired && !matches!(pending.mode, ShutdownMode::Abort) {
+                        Some(pending.grace_deadline)
+                    } else {
+                        pending.hard_abort_deadline
+                    }
                 });
                 [removal, entry.runtime.next_restart_deadline]
             })
@@ -1624,16 +1661,43 @@ impl SupervisorRuntime {
         for key in expired_removals {
             let id = {
                 let entry = &mut self.children[key];
+                let beat = crate::shutdown::tidy_abort_beat(
+                    entry.runtime.definition.shutdown_policy.grace,
+                );
                 let pending = entry
                     .pending_removal
                     .as_mut()
                     .expect("expired removal retained its pending state");
                 pending.grace_expired = true;
+                pending.hard_abort_deadline = Some(now + beat);
                 entry.id.clone()
             };
             self.meta
                 .observability
                 .record_shutdown_timeout("remove_child", Some(&id));
+            self.escalate_child(key);
+        }
+
+        let hard_abort_removals: Vec<_> = self
+            .child_order
+            .iter()
+            .copied()
+            .filter(|&key| {
+                self.children.get(key).is_some_and(|entry| {
+                    entry.pending_removal.as_ref().is_some_and(|pending| {
+                        pending
+                            .hard_abort_deadline
+                            .is_some_and(|deadline| deadline <= now)
+                    })
+                })
+            })
+            .collect();
+        for key in hard_abort_removals {
+            self.children[key]
+                .pending_removal
+                .as_mut()
+                .expect("hard-abort removal retained its pending state")
+                .hard_abort_deadline = None;
             self.abort_child(key);
         }
 
@@ -2243,6 +2307,7 @@ mod tests {
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
+            hard_abort_deadline: None,
         });
 
         runtime.resolve_pending_removals(None);

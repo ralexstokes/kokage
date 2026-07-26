@@ -96,8 +96,8 @@ do not change this decision.
 
 Ordered scopes stop siblings in reverse declaration order, waiting within each
 child's own grace before advancing. Dynamic scopes retain concurrent shutdown
-under one shared maximum-grace deadline. Applications choose the scope kind
-that matches their ownership and dependency structure.
+while escalating each child at its own grace deadline. Applications choose the
+scope kind that matches their ownership and dependency structure.
 
 ### Urgent control traffic uses a separate path
 
@@ -222,12 +222,11 @@ runtime tests.
   method-specific result that can evolve independently of Tokio.
 - Document deliberate public coupling to `tokio_util::sync::CancellationToken`
   where it remains in signatures.
-- Document how `GraphBuilder::actor_shutdown_timeout` and supervisor
-  `ShutdownPolicy` interact. In supervised hosting, state which deadline can
-  abort which layer and what completion guarantees remain.
+- The former graph-wide actor timeout was later folded into each child's
+  `ShutdownPolicy`; standalone `RunnableActor` hosts pass an explicit bound.
 
-Do not redesign shutdown timeouts unless documenting and testing the current
-behavior exposes an actual correctness defect.
+The two-clock review exposed that correctness defect: the inner graph timeout
+could launder a drain timeout into a clean supervisor exit.
 
 ## Milestone 2: prove the design with a trading-engine example — complete
 

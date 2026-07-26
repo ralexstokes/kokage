@@ -15,9 +15,9 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError, DrainPolicy,
-    Graph, GraphBuildError, GraphBuilder, RawActor, Reply, RestartPolicy, RunnableActor, SendError,
-    TryRecvError, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
+    DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, RawActor, Reply,
+    RestartPolicy, RunnableActor, SendError, TryRecvError, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -68,7 +68,11 @@ fn start_graph(
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(stop.cancelled(), RestartPolicy::Never)
+                    .run_until(
+                        stop.cancelled(),
+                        RestartPolicy::Never,
+                        DEFAULT_SHUTDOWN_BOUND,
+                    )
                     .await
             })
         })
@@ -437,7 +441,11 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let graph = builder.build().expect("valid graph");
 
     let result = runnable(&graph, "worker")
-        .run_until(pending::<()>(), RestartPolicy::Never)
+        .run_until(
+            pending::<()>(),
+            RestartPolicy::Never,
+            DEFAULT_SHUTDOWN_BOUND,
+        )
         .await;
     assert!(matches!(
         result,
@@ -473,7 +481,11 @@ async fn handler_error_fails_the_actor_run() {
     let worker = runnable(&graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(pending::<()>(), RestartPolicy::Never)
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
             .await
     });
     actor.send(()).await.expect("message sent");
@@ -568,7 +580,11 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
     let worker = runnable(&graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(pending::<()>(), RestartPolicy::Never)
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
             .await
     });
 
@@ -610,7 +626,11 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     let worker = runnable(&graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(pending::<()>(), RestartPolicy::Never)
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
             .await
     });
 
@@ -988,7 +1008,11 @@ async fn actor_error_fails_its_run() {
     let graph = builder.build().expect("valid graph");
 
     let result = runnable(&graph, "bad")
-        .run_until(pending::<()>(), RestartPolicy::Never)
+        .run_until(
+            pending::<()>(),
+            RestartPolicy::Never,
+            DEFAULT_SHUTDOWN_BOUND,
+        )
         .await;
     assert!(matches!(
         result,
@@ -1014,13 +1038,17 @@ async fn early_clean_exit_is_a_clean_actor_run() {
     let graph = builder.build().expect("valid graph");
 
     runnable(&graph, "quitter")
-        .run_until(pending::<()>(), RestartPolicy::Never)
+        .run_until(
+            pending::<()>(),
+            RestartPolicy::Never,
+            DEFAULT_SHUTDOWN_BOUND,
+        )
         .await
         .expect("clean early exit is ordinary completion");
 }
 
 #[tokio::test]
-async fn graph_shutdown_aborts_uncooperative_actor_after_timeout() {
+async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
     struct LiveGuard(Arc<AtomicBool>);
 
     impl Drop for LiveGuard {
@@ -1050,7 +1078,6 @@ async fn graph_shutdown_aborts_uncooperative_actor_after_timeout() {
     let started = Arc::new(Notify::new());
     let live = Arc::new(AtomicBool::new(false));
     let mut builder = GraphBuilder::new();
-    builder.actor_shutdown_timeout(Duration::from_millis(50));
     builder.actor("worker", {
         let started = started.clone();
         let live = live.clone();
@@ -1060,10 +1087,27 @@ async fn graph_shutdown_aborts_uncooperative_actor_after_timeout() {
         }
     });
     let graph = builder.build().expect("valid graph");
+    let worker = runnable(&graph, "worker");
+    let stop = CancellationToken::new();
+    let task = tokio::spawn({
+        let stop = stop.clone();
+        async move {
+            worker
+                .run_until(
+                    stop.cancelled(),
+                    RestartPolicy::Never,
+                    Duration::from_millis(50),
+                )
+                .await
+        }
+    });
 
-    let (stop, task) = start_graph(&graph);
     started.notified().await;
-    stop_graph(stop, task).await;
+    stop.cancel();
+    assert!(matches!(
+        task.await.expect("actor task joined"),
+        Err(ActorRunError::ShutdownTimedOut { actor_id, .. }) if actor_id == "worker"
+    ));
     assert!(
         !live.load(Ordering::Acquire),
         "uncooperative actor should be aborted before graph shutdown returns"
@@ -1115,9 +1159,9 @@ mod runnable_actor {
     };
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
-        DrainPolicy, DynamicActorOptions, Graph, GraphBuilder, MessageSize, RawActor,
-        RestartPolicy, RunnableActor, RunnableActorFactory, SendError, SupervisionTree,
-        prelude::Continue,
+        ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
+        GraphBuilder, MessageSize, RawActor, RestartPolicy, RunnableActor, RunnableActorFactory,
+        SendError, SupervisionTree, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1257,7 +1301,11 @@ mod runnable_actor {
         let stop = CancellationToken::new();
         let task = tokio::spawn({
             let stop = stop.clone();
-            async move { actor.run_until(stop.cancelled(), restart).await }
+            async move {
+                actor
+                    .run_until(stop.cancelled(), restart, DEFAULT_SHUTDOWN_BOUND)
+                    .await
+            }
         });
         (stop, task)
     }
@@ -1376,37 +1424,40 @@ mod runnable_actor {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn runnable_actor_shutdown_timeout_aborts_uncooperative_actor_cleanly() {
+    async fn standalone_shutdown_timeout_is_reported_as_an_error() {
         let mut builder = GraphBuilder::new();
-        builder.actor_shutdown_timeout(Duration::from_millis(100));
         builder.actor("worker", || NeverStops);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
 
-        worker
-            .run_until(async {}, RestartPolicy::Never)
-            .await
-            .expect("timeout abort is a clean requested shutdown");
+        assert!(matches!(
+            worker
+                .run_until(
+                    async {},
+                    RestartPolicy::Never,
+                    Duration::from_millis(100),
+                )
+                .await,
+            Err(ActorRunError::ShutdownTimedOut { actor_id, .. }) if actor_id == "worker"
+        ));
     }
 
     #[tokio::test(start_paused = true)]
-    async fn runnable_actor_shutdown_timeout_leaves_cooperative_actor_clean() {
+    async fn standalone_shutdown_bound_leaves_cooperative_actor_clean() {
         let mut builder = GraphBuilder::new();
-        builder.actor_shutdown_timeout(Duration::from_secs(30));
         builder.actor("worker", || StopsOnShutdown);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
 
         worker
-            .run_until(async {}, RestartPolicy::Never)
+            .run_until(async {}, RestartPolicy::Never, Duration::from_secs(30))
             .await
             .expect("cooperative shutdown completes cleanly");
     }
 
     #[tokio::test(start_paused = true)]
-    async fn dynamic_factory_actor_inherits_shutdown_timeout() {
+    async fn dynamic_actor_uses_its_supervisor_child_shutdown_grace() {
         let mut builder = GraphBuilder::new();
-        builder.actor_shutdown_timeout(Duration::from_millis(100));
         builder.actor("factory-template", Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
         let handle = SupervisionTree::dynamic()
@@ -1415,14 +1466,22 @@ mod runnable_actor {
             .expect("dynamic runtime builds")
             .spawn();
         handle
-            .add_actor("worker", || NeverStops, DynamicActorOptions::default())
+            .add_actor(
+                "worker",
+                || NeverStops,
+                DynamicActorOptions::default().shutdown(
+                    tokio_supervisor::ShutdownPolicy::cooperative_strict(Duration::from_millis(
+                        100,
+                    )),
+                ),
+            )
             .await
             .expect("dynamic actor added");
         handle.wait_started().await.expect("dynamic actor started");
-        handle
-            .remove_child("worker")
-            .await
-            .expect("dynamic actor uses inherited shutdown timeout");
+        assert!(matches!(
+            handle.remove_child("worker").await,
+            Err(ControlError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
+        ));
         handle.shutdown_and_wait().await.expect("clean shutdown");
     }
 
@@ -1554,7 +1613,11 @@ mod runnable_actor {
 
         assert!(matches!(
             worker
-                .run_until(pending::<()>(), RestartPolicy::Never)
+                .run_until(
+                    pending::<()>(),
+                    RestartPolicy::Never,
+                    DEFAULT_SHUTDOWN_BOUND,
+                )
                 .await,
             Err(ActorRunError::AlreadyRunning { actor_id , .. }) if actor_id == "worker"
         ));
@@ -1584,10 +1647,11 @@ mod runnable_actor {
         let worker_ref = builder.actor("worker", || FailsOnMessage);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
-        let task =
-            tokio::spawn(
-                async move { worker.run_until(pending::<()>(), Default::default()).await },
-            );
+        let task = tokio::spawn(async move {
+            worker
+                .run_until(pending::<()>(), Default::default(), DEFAULT_SHUTDOWN_BOUND)
+                .await
+        });
 
         worker_ref.send(()).await.expect("send accepted");
         let result = timeout(Duration::from_secs(1), task)
@@ -1612,7 +1676,11 @@ mod runnable_actor {
             let worker_ref = builder.actor("worker", Drain::<()>::new);
             let graph = builder.build().expect("valid graph");
             let worker = single_actor(&graph, "worker");
-            let task = tokio::spawn(async move { worker.run_until(pending::<()>(), policy).await });
+            let task = tokio::spawn(async move {
+                worker
+                    .run_until(pending::<()>(), policy, DEFAULT_SHUTDOWN_BOUND)
+                    .await
+            });
 
             worker_ref.send(()).await.expect("run bound its mailbox");
             task.abort();

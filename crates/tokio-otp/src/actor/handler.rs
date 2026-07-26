@@ -37,11 +37,11 @@ pub enum DrainPolicy {
     /// closed mailbox and an awaited `send` waits for the binding's final
     /// lifecycle state. There is no separate sender-visible `Draining` state.
     ///
-    /// The drain is not separately time-bounded; the surrounding shutdown
-    /// backstop applies:
-    /// [`GraphBuilder::actor_shutdown_timeout`](crate::GraphBuilder::actor_shutdown_timeout)
-    /// for the actor run itself, and the supervisor child shutdown policy
-    /// when the actor is hosted under `tokio-supervisor`.
+    /// The drain is not separately time-bounded; the surrounding host's
+    /// shutdown backstop applies: the explicit bound passed to
+    /// [`RunnableActor::run_until`](crate::RunnableActor::run_until) for a
+    /// standalone actor, or the child [`ShutdownPolicy`](crate::ShutdownPolicy)
+    /// under a runtime.
     Drain,
 }
 

@@ -10,10 +10,7 @@ use std::{
 };
 
 use thiserror::Error;
-use tokio::{
-    sync::oneshot,
-    time::{Instant as TokioInstant, sleep_until},
-};
+use tokio::{sync::oneshot, time::sleep};
 use tokio_supervisor::RestartPolicy;
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::Instrument;
@@ -25,7 +22,7 @@ use crate::{
             ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
             mailbox,
         },
-        builder::{ActorOptions, DEFAULT_ACTOR_SHUTDOWN_TIMEOUT, DEFAULT_MAILBOX_CAPACITY},
+        builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
         context::{ActorContext, ActorRef, ActorSteps, ActorTimers},
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
@@ -147,7 +144,23 @@ pub enum ActorRunError {
         #[source]
         source: BoxError,
     },
+    /// The actor did not finish its drain and stop hooks within the host's
+    /// shutdown bound.
+    #[error("actor `{actor_id}` shutdown timed out")]
+    #[non_exhaustive]
+    ShutdownTimedOut {
+        /// Stable id of the actor whose shutdown timed out.
+        actor_id: String,
+    },
 }
+
+/// The shutdown bound a standalone host should pass to
+/// [`RunnableActor::run_until`] when it has no deadline of its own.
+///
+/// This matches the default grace of
+/// [`ShutdownPolicy`](crate::ShutdownPolicy), so an actor behaves the same
+/// whether it is hosted by hand or by [`Runtime`](crate::Runtime).
+pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
 /// An actor graph containing wiring and independently runnable actors.
 ///
@@ -164,7 +177,6 @@ struct GraphInner {
     actors: Vec<RunnableActor>,
     observability: GraphObservability,
     mailbox_capacity: usize,
-    actor_shutdown_timeout: Duration,
 }
 
 impl Graph {
@@ -173,7 +185,6 @@ impl Graph {
         actors: Vec<RunnableActor>,
         observability: GraphObservability,
         mailbox_capacity: usize,
-        actor_shutdown_timeout: Duration,
     ) -> Self {
         Self {
             inner: Arc::new(GraphInner {
@@ -181,7 +192,6 @@ impl Graph {
                 actors,
                 observability,
                 mailbox_capacity,
-                actor_shutdown_timeout,
             }),
         }
     }
@@ -205,7 +215,6 @@ impl Graph {
         RunnableActorFactory {
             observability: self.inner.observability.clone(),
             mailbox_capacity: self.inner.mailbox_capacity,
-            actor_shutdown_timeout: self.inner.actor_shutdown_timeout,
         }
     }
 }
@@ -233,7 +242,6 @@ struct RunnableActorInner {
     binding_lifecycle: Arc<dyn BindingLifecycle>,
     runner: Arc<dyn ErasedRunner>,
     mailbox_capacity: usize,
-    actor_shutdown_timeout: Duration,
     observability: GraphObservability,
     running: AtomicBool,
 }
@@ -243,7 +251,6 @@ pub(crate) struct RunnableActorParts {
     pub(crate) binding_lifecycle: Arc<dyn BindingLifecycle>,
     pub(crate) runner: Arc<dyn ErasedRunner>,
     pub(crate) mailbox_capacity: usize,
-    pub(crate) actor_shutdown_timeout: Duration,
     pub(crate) observability: GraphObservability,
 }
 
@@ -255,7 +262,6 @@ impl RunnableActor {
                 binding_lifecycle: parts.binding_lifecycle,
                 runner: parts.runner,
                 mailbox_capacity: parts.mailbox_capacity,
-                actor_shutdown_timeout: parts.actor_shutdown_timeout,
                 observability: parts.observability,
                 running: AtomicBool::new(false),
             }),
@@ -282,7 +288,18 @@ impl RunnableActor {
 
     /// Runs this actor with a fresh mailbox until shutdown resolves.
     ///
-    /// `restart` controls the binding disposition after the run:
+    /// `restart` controls the binding disposition after the run, while
+    /// `shutdown_bound` limits the whole drain and stop-hook path for this
+    /// standalone host. Supervised runtimes use each child specification's
+    /// [`ShutdownPolicy`](crate::ShutdownPolicy) grace instead.
+    /// [`DEFAULT_SHUTDOWN_BOUND`] is a reasonable bound for a host without a
+    /// deadline of its own.
+    ///
+    /// When `shutdown_bound` expires before the actor finishes draining, the
+    /// inner task is aborted and the run resolves to
+    /// [`ActorRunError::ShutdownTimedOut`] — a timeout is reported rather than
+    /// laundered into a clean exit, so `.expect(..)` on the result will panic
+    /// for an actor that overruns its bound.
     ///
     /// - A clean exit leaves the binding rebindable only for
     ///   [`Always`](RestartPolicy::Always).
@@ -294,7 +311,8 @@ impl RunnableActor {
     ///   binding rebindable for `Always` and `OnFailure`; `Never` terminates it.
     ///
     /// [`RestartPolicy::default()`] is `OnFailure`, so
-    /// `run_until(shutdown, Default::default())` leaves a failed run rebindable.
+    /// `run_until(shutdown, Default::default(), shutdown_bound)` leaves a
+    /// failed run rebindable.
     /// Callers migrating code that expected a default policy to terminate
     /// after every exit must pass [`RestartPolicy::Never`] explicitly.
     ///
@@ -311,17 +329,36 @@ impl RunnableActor {
         &self,
         shutdown: F,
         restart: RestartPolicy,
+        shutdown_bound: Duration,
     ) -> Result<(), ActorRunError>
     where
         F: Future<Output = ()>,
     {
-        self.run_until_ready(shutdown, restart, RuntimeHandle::unavailable(), None, || {})
-            .await
+        let shutdown_observed = CancellationToken::new();
+        let deadline_start = shutdown_observed.clone();
+        let bounded_shutdown = async move {
+            shutdown.await;
+            shutdown_observed.cancel();
+        };
+        let abort = async move {
+            deadline_start.cancelled().await;
+            sleep(shutdown_bound).await;
+        };
+        self.run_until_ready(
+            bounded_shutdown,
+            abort,
+            restart,
+            RuntimeHandle::unavailable(),
+            None,
+            || {},
+        )
+        .await
     }
 
-    pub(crate) async fn run_until_ready<F, R>(
+    pub(crate) async fn run_until_ready<F, A, R>(
         &self,
         shutdown: F,
+        abort: A,
         restart: RestartPolicy,
         supervisor: RuntimeHandle,
         children: Option<RuntimeHandle>,
@@ -329,12 +366,14 @@ impl RunnableActor {
     ) -> Result<(), ActorRunError>
     where
         F: Future<Output = ()>,
+        A: Future<Output = ()>,
         R: FnOnce(),
     {
         let _active_run = ActiveActorRun::start(&self.inner)?;
         let actor_id = self.inner.actor_id.clone();
         let actor_shutdown = CancellationToken::new();
         let mut shutdown = std::pin::pin!(shutdown);
+        let mut abort = std::pin::pin!(abort);
         let actor_span = self.inner.observability.actor_span(&actor_id);
         let (ready_tx, mut ready_rx) = oneshot::channel();
         let mut actor_task = AbortOnDropHandle::new(tokio::spawn(
@@ -356,8 +395,7 @@ impl RunnableActor {
         self.inner.observability.emit_actor_started(&actor_id);
 
         let mut shutdown_requested = false;
-        let mut shutdown_deadline = None;
-        let mut aborted_after_timeout = false;
+        let mut shutdown_timed_out = false;
         let mut ready = Some(ready);
         let result = loop {
             tokio::select! {
@@ -368,20 +406,16 @@ impl RunnableActor {
                         ready();
                     }
                 }
+                _ = abort.as_mut(), if !shutdown_timed_out => {
+                    shutdown_requested = true;
+                    shutdown_timed_out = true;
+                    actor_shutdown.cancel();
+                    actor_task.abort();
+                }
                 joined = &mut actor_task => break joined,
                 _ = shutdown.as_mut(), if !shutdown_requested => {
                     shutdown_requested = true;
                     actor_shutdown.cancel();
-                    set_shutdown_deadline(
-                        &mut shutdown_deadline,
-                        self.inner.actor_shutdown_timeout,
-                    );
-                }
-                _ = wait_for_shutdown_deadline(shutdown_deadline),
-                    if shutdown_deadline.is_some() && !aborted_after_timeout =>
-                {
-                    aborted_after_timeout = true;
-                    actor_task.abort();
                 }
             }
         };
@@ -429,18 +463,21 @@ impl RunnableActor {
                 );
                 std::panic::resume_unwind(err.into_panic());
             }
-            Err(_err) if aborted_after_timeout => {
+            Err(_err) if shutdown_timed_out => {
+                let error = ActorRunError::ShutdownTimedOut {
+                    actor_id: actor_id.to_string(),
+                };
                 self.apply_run_disposition(run_disposition(
                     restart,
                     shutdown_requested,
-                    ActorExitStatus::Cancelled,
+                    ActorExitStatus::ShutdownTimedOut,
                 ));
                 self.inner.observability.emit_actor_exited(
                     &actor_id,
-                    ActorExitStatus::Cancelled,
-                    None,
+                    ActorExitStatus::ShutdownTimedOut,
+                    Some(&error.to_string()),
                 );
-                Ok(())
+                Err(error)
             }
             Err(_err) => {
                 let source: BoxError = Box::new(IoError::other(format!(
@@ -492,7 +529,8 @@ fn run_disposition(
         (RestartPolicy::Always, ActorExitStatus::Stopped) => RunDisposition::ExpectRebind,
         (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Failed)
         | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Panicked)
-        | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Cancelled) => {
+        | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Cancelled)
+        | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::ShutdownTimedOut) => {
             RunDisposition::ExpectRebind
         }
         (RestartPolicy::Never, _)
@@ -534,6 +572,7 @@ mod tests {
             ActorExitStatus::Failed,
             ActorExitStatus::Panicked,
             ActorExitStatus::Cancelled,
+            ActorExitStatus::ShutdownTimedOut,
         ] {
             for policy in [RestartPolicy::Always, RestartPolicy::OnFailure] {
                 assert_eq!(
@@ -581,7 +620,6 @@ impl std::fmt::Debug for RunnableActor {
 pub struct RunnableActorFactory {
     observability: GraphObservability,
     mailbox_capacity: usize,
-    actor_shutdown_timeout: Duration,
 }
 
 impl RunnableActorFactory {
@@ -591,7 +629,6 @@ impl RunnableActorFactory {
         Self {
             observability: GraphObservability::new(anonymous_graph_name()),
             mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
-            actor_shutdown_timeout: DEFAULT_ACTOR_SHUTDOWN_TIMEOUT,
         }
     }
 
@@ -654,7 +691,6 @@ impl RunnableActorFactory {
                 mailbox_mode,
             }),
             mailbox_capacity: self.mailbox_capacity,
-            actor_shutdown_timeout: self.actor_shutdown_timeout,
             observability: self.observability.clone(),
         });
         (runnable, actor_ref)
@@ -692,16 +728,5 @@ impl ActiveActorRun {
 impl Drop for ActiveActorRun {
     fn drop(&mut self) {
         self.inner.running.store(false, Ordering::Release);
-    }
-}
-
-fn set_shutdown_deadline(deadline: &mut Option<TokioInstant>, timeout: Duration) {
-    deadline.get_or_insert_with(|| TokioInstant::now() + timeout);
-}
-
-async fn wait_for_shutdown_deadline(deadline: Option<TokioInstant>) {
-    match deadline {
-        Some(deadline) => sleep_until(deadline).await,
-        None => std::future::pending::<()>().await,
     }
 }

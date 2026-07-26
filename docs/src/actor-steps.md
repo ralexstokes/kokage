@@ -87,8 +87,9 @@ Steps follow handler actors' `DrainPolicy`:
 Draining must interleave messages and completions. Waiting for all steps first
 would deadlock when a full FIFO mailbox backpressures a completion that needs
 the actor to receive one queued message before capacity becomes available.
-Each step future is still bounded by its own required deadline; the actor and
-supervisor shutdown timeouts remain the outer backstops for slow handlers.
+Each step future is still bounded by its own required deadline; the standalone
+host bound or supervised child grace remains the outer backstop for slow
+handlers.
 
 `ActorStats::outstanding_steps` exposes the current number of owned steps.
 The method lives on the shared `ActorContext` type, but automatic shutdown and

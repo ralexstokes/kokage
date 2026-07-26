@@ -47,6 +47,7 @@ pub struct ChildContext {
     id: String,
     generation: u64,
     token: CancellationToken,
+    abort_token: CancellationToken,
     supervisor: SupervisorToken,
     scope: SupervisorHandle,
     ready: Option<ReadySignal>,
@@ -57,6 +58,7 @@ impl ChildContext {
         id: String,
         generation: u64,
         token: CancellationToken,
+        abort_token: CancellationToken,
         supervisor: SupervisorToken,
         scope: SupervisorHandle,
         ready: Option<ReadySignal>,
@@ -65,6 +67,7 @@ impl ChildContext {
             id,
             generation,
             token,
+            abort_token,
             supervisor,
             scope,
             ready,
@@ -88,6 +91,23 @@ impl ChildContext {
     /// to compose it directly with existing cancellation trees.
     pub fn shutdown_token(&self) -> &CancellationToken {
         &self.token
+    }
+
+    /// Returns the escalation token for this child instance.
+    ///
+    /// For cooperative shutdown modes the supervisor first triggers
+    /// [`shutdown_token`](Self::shutdown_token). If the child is still running
+    /// when its grace period expires, it triggers this token and records the
+    /// exit as [`ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut).
+    /// The child wrapper then has a short window to finish local accounting
+    /// before the supervisor hard-aborts the task: a tenth of this child's own
+    /// grace, clamped to between 1 ms and 10 ms. Work that cannot finish in
+    /// that window belongs before the grace expires, not after it.
+    ///
+    /// Most child tasks only need `shutdown_token`. Wrappers that own inner
+    /// tasks can select on this token to abort and join those tasks tidily.
+    pub fn abort_token(&self) -> &CancellationToken {
+        &self.abort_token
     }
 
     /// Returns a read-only view of the supervisor's cancellation state.

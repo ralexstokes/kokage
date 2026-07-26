@@ -6,7 +6,6 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use crate::actor::{
@@ -158,7 +157,6 @@ pub struct GraphBuilder {
     index: HashMap<Arc<str>, usize>,
     errors: Vec<GraphBuildError>,
     mailbox_capacity: usize,
-    actor_shutdown_timeout: Duration,
 }
 
 struct Slot {
@@ -168,7 +166,6 @@ struct Slot {
 }
 
 pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
-pub(crate) const DEFAULT_ACTOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl Default for GraphBuilder {
     fn default() -> Self {
@@ -187,7 +184,6 @@ impl GraphBuilder {
             index: HashMap::new(),
             errors: Vec::new(),
             mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
-            actor_shutdown_timeout: DEFAULT_ACTOR_SHUTDOWN_TIMEOUT,
         }
     }
 
@@ -207,28 +203,6 @@ impl GraphBuilder {
     /// capacity 1 and ignores this setting.
     pub fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
         self.mailbox_capacity = capacity;
-        self
-    }
-
-    /// Sets how long shutdown waits for an actor task to stop after
-    /// cancellation is requested.
-    ///
-    /// This applies to each
-    /// [`RunnableActor::run_until`](crate::RunnableActor::run_until). The
-    /// default timeout is 5 seconds. Any actor task still running after the
-    /// timeout is aborted; when this happens during a requested shutdown it is
-    /// reported as a clean shutdown with a `Cancelled` actor exit.
-    ///
-    /// Under [`Runtime`](crate::Runtime), the actor is itself hosted by a
-    /// supervisor child with an independent
-    /// [`ShutdownPolicy`](crate::ShutdownPolicy) deadline. This timeout aborts
-    /// the inner actor task; the supervisor policy can abort the outer child
-    /// task. Set this timeout no longer than the supervisor grace period when
-    /// the supervisor must wait for the actor layer's clean completion path.
-    /// See the [shutdown policy guide](https://stokes.io/tokio-otp/supervision.html#actor-and-supervisor-deadlines)
-    /// for the completion guarantees of each ordering.
-    pub fn actor_shutdown_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.actor_shutdown_timeout = timeout;
         self
     }
 
@@ -410,7 +384,6 @@ impl GraphBuilder {
                 binding_lifecycle: slot.binding_lifecycle,
                 runner,
                 mailbox_capacity: self.mailbox_capacity,
-                actor_shutdown_timeout: self.actor_shutdown_timeout,
                 observability: observability.clone(),
             }));
         }
@@ -420,7 +393,6 @@ impl GraphBuilder {
             actors,
             observability,
             self.mailbox_capacity,
-            self.actor_shutdown_timeout,
         ))
     }
 

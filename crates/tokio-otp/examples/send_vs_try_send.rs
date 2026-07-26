@@ -8,7 +8,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorResult, GraphBuilder, RawActor, RestartPolicy, SendError, prelude::Continue,
+    ActorContext, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, RawActor, RestartPolicy,
+    SendError, prelude::Continue,
 };
 
 #[derive(Clone)]
@@ -39,7 +40,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let first_run = tokio::spawn({
         let sink = sink.clone();
-        async move { sink.run_until(pending::<()>(), RestartPolicy::Always).await }
+        async move {
+            sink.run_until(
+                pending::<()>(),
+                RestartPolicy::Always,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
+            .await
+        }
     });
     sink_ref.send("first run".to_owned()).await?;
     println!(
@@ -72,7 +80,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let second_run = tokio::spawn({
         let sink = sink.clone();
-        async move { sink.run_until(pending::<()>(), RestartPolicy::Always).await }
+        async move {
+            sink.run_until(
+                pending::<()>(),
+                RestartPolicy::Always,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
+            .await
+        }
     });
     println!(
         "sink observed `{}`",
