@@ -56,7 +56,7 @@ pub struct ActorStatsView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_bytes_accepted: Option<u64>,
     pub sends_rejected: u64,
-    pub outstanding_steps: u64,
+    pub outstanding_offloads: u64,
     pub mailbox_depth: usize,
     pub mailbox_capacity: usize,
 }
@@ -88,7 +88,7 @@ impl From<ActorStats> for ActorStatsView {
             messages_conflated: stats.messages_conflated,
             message_bytes_accepted: stats.message_bytes_accepted,
             sends_rejected: stats.sends_rejected,
-            outstanding_steps: stats.outstanding_steps,
+            outstanding_offloads: stats.outstanding_offloads,
             mailbox_depth: stats.mailbox_depth,
             mailbox_capacity: stats.mailbox_capacity,
         }

@@ -22,7 +22,7 @@
 //! | `tool_host` | idempotent-by-key effect execution under `run_blocking`    |
 //! | `router`    | single writer of session membership; mounts one subtree    |
 //! |             | per conversation, never awaits the control plane, buffers  |
-//! |             | only while a mount or removal step is in flight            |
+//! |             | only while a mount or removal offload is in flight            |
 //! | `session`   | per-chat orchestrator (static in its subtree's builder);   |
 //! |             | owns its transient run children                            |
 //! | `run`       | one role run: mailbox-driven state machine, never restarted|
@@ -63,7 +63,7 @@
 //!    │                                                │ add/watch/remove
 //!    │                                                ▼
 //!    │                                    run:<chat>:<task>:<role>
-//!    │                                     │ model turn in bounded step
+//!    │                                     │ model turn in bounded offload
 //!    │                                     │ tool calls: ToolIntent journaled,
 //!    │                                     ▼ then Execute under deadline
 //!    │                                  tool_host ──(timeout? Query key)──▶ run
@@ -91,7 +91,7 @@
 //!
 //! run:<task>:<role>:<attempt>   (transient child, restart = Never)
 //!   add_actor ─▶ continue_with(Step)
-//!     ─▶ model turn in a context-owned step (cancel token + deadline) ─▶ ModelResult
+//!     ─▶ model turn in a context-owned offload (cancel token + deadline) ─▶ ModelResult
 //!     ─▶ tool loop: journal ToolIntent ─▶ Execute (bounded) ─▶ ToolResult,
 //!         reconciling an unknown outcome through an idempotency-key Query
 //!     ─▶ RunFinished{output} to the session + Ok(Stop); Never auto-removes
@@ -662,7 +662,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     // in flight to the router. Whichever side wins, the message must be
     // answered with replayed context: the router forwards it to the retiring
     // session (whose bounce lands behind the Evict), buffers it while the
-    // removal step is in flight, or finds no slot and mints the replacement
+    // removal offload is in flight, or finds no slot and mints the replacement
     // directly.
     let evicted_count = |report: &JournalReport| {
         report

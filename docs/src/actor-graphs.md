@@ -332,7 +332,7 @@ the queued prefix, not just one message.
 
 If an actor should instead stop at once and drop what is queued, return
 `DrainPolicy::Discard` from `drain_policy`; queued `call` requests then see
-`CallError::ReplyDropped`, and outstanding steps are aborted rather than
+`CallError::ReplyDropped`, and outstanding offloads are aborted rather than
 awaited. That is the right choice when queued work is replaceable — recomputed
 next run, conflated into a later snapshot, or retried by the sender.
 

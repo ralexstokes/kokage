@@ -65,7 +65,7 @@ The protocol has five parts:
    grace period can skip remaining drain work.
 
 The runnable `agent_control` example implements a conservative version of this
-recipe. Its step-based router retains symmetric `Mounting` and `Removing`
+recipe. Its offload-based router retains symmetric `Mounting` and `Removing`
 states, although only the removal must be pipelined for control-plane safety.
 The slot machine and epoch-minted `add_subtree` membership live in
 `crates/tokio-otp/examples/agent_control/router.rs`; the

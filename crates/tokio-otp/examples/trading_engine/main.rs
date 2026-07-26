@@ -88,7 +88,7 @@
 //! 2. Orders: `RouterMsg::Submit` records a pending intent and spawns a
 //!    deadline-bounded `Place` call to a gateway, which acks to the ledger
 //!    and schedules a delayed fill that reports `LedgerMsg::Fill` if the
-//!    order was not cancelled in the interim. The context-owned step answers the
+//!    order was not cancelled in the interim. The context-owned offload answers the
 //!    submitter and sends `SubmitResolved` back to the router; a timed-out
 //!    call marks the intent unknown until `ReconcileAll` resolves it
 //!    against the exchange.

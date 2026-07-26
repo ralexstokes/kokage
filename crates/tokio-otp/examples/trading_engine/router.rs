@@ -105,7 +105,7 @@ impl Actor for OrderRouter {
                 );
                 let gateway = self.gateways.get(venue).expect("known venue").clone();
                 let message_key = key.clone();
-                ctx.step_or(
+                ctx.offload_or(
                     CALL_DEADLINE,
                     async move {
                         let result = gateway
@@ -178,7 +178,7 @@ impl Actor for OrderRouter {
                     .get(intent.venue)
                     .expect("known venue")
                     .clone();
-                ctx.step_or(
+                ctx.offload_or(
                     CALL_DEADLINE,
                     async move {
                         match gateway
