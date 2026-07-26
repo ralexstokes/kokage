@@ -84,110 +84,12 @@ is the actor-model equivalent of blocking inside an Erlang `gen_server`
 callback: one slow callee becomes head-of-line blocking for everything
 routed through the intermediary.
 
-For fan-out and routing actors, pipeline the request instead of awaiting it.
-The handler validates and records intent, then starts a bounded
-`ActorContext::step`. Its continuation maps the outcome back to an ordinary
-message, so state updates and the original caller's reply still happen on the
-actor's serial handle loop:
+Not every handler needs to avoid it. A serial batch operation that mutates
+actor state between calls — a reconciliation sweep run while intake is quiet,
+for example — can reasonably stay inline, provided blocking the mailbox for
+its duration is an explicit, accepted trade-off.
 
-```rust,no_run
-use std::{collections::HashMap, time::Duration};
-use tokio_otp::prelude::*;
-
-enum VenueMsg {
-    Place { order: u64, reply: Reply<bool> },
-}
-
-enum RouterMsg {
-    Submit {
-        venue: &'static str,
-        order: u64,
-        reply: Reply<bool>,
-    },
-    // Internal: the pipelined call's outcome.
-    Resolved {
-        order: u64,
-        accepted: bool,
-        reply: Reply<bool>,
-    },
-}
-
-struct Router {
-    venues: HashMap<&'static str, ActorRef<VenueMsg>>,
-    in_flight: HashMap<u64, &'static str>,
-}
-
-impl Actor for Router {
-    type Msg = RouterMsg;
-
-    async fn handle(
-        &mut self,
-        message: RouterMsg,
-        ctx: &mut ActorContext<RouterMsg>,
-    ) -> ActorResult {
-        match message {
-            RouterMsg::Submit { venue, order, reply } => {
-                // Validate and record intent on the handle loop...
-                self.in_flight.insert(order, venue);
-                let gateway = self.venues[venue].clone();
-                // ...then move the slow call off it.
-                ctx.step_or(
-                    Duration::from_millis(250),
-                    async move {
-                        matches!(
-                            gateway
-                                .call(Duration::from_millis(250), |reply| {
-                                    VenueMsg::Place { order, reply }
-                                })
-                                .await,
-                            Ok(true)
-                        )
-                    },
-                    false,
-                    move |accepted| RouterMsg::Resolved {
-                        order,
-                        accepted,
-                        reply,
-                    },
-                );
-            }
-            RouterMsg::Resolved { order, accepted, reply } => {
-                // Back on the handle loop: apply the outcome to actor state.
-                self.in_flight.remove(&order);
-                if !accepted {
-                    // schedule reconciliation, raise an alert, ...
-                }
-                reply.send(accepted);
-            }
-        }
-        Ok(tokio_otp::prelude::Continue)
-    }
-}
-```
-
-Three properties make the pattern work:
-
-- **Reply ownership.** `Reply` moves into the continuation message, so the
-  actor applies its state update before answering. A caller follow-up is
-  therefore ordered after that update in the actor's FIFO mailbox.
-- **Incarnation ownership.** A step is aborted when its actor incarnation
-  dies, and a racing postback is dropped instead of reaching a fresh
-  incarnation through the restart-stable ref.
-- **Same-incarnation correlation.** The order id still identifies which of
-  several concurrent steps completed. `step` removes the need for a separate
-  hand-written restart generation; it does not replace domain request ids.
-
-An outcome that must survive the actor still needs durable state or a
-reconciliation path: abort and timeout abandon the wait, not a remote request
-already accepted. When per-callee state outgrows what a resolution message can
-carry, promote the callee to a dedicated child actor and let supervision
-manage its lifecycle instead.
-
-Not every handler needs this treatment. A serial batch operation that
-mutates actor state between calls — a reconciliation sweep run while
-intake is quiet, for example — can reasonably stay inline, provided
-blocking the mailbox for its duration is an explicit, accepted trade-off.
-
-The `trading_engine` example's order router demonstrates the full pattern,
-including a phase that proves an order for a healthy venue completes while
-another venue's call is still waiting out its timeout.
+For fan-out and routing actors it rarely is. Pipeline the request off the
+handler loop instead of awaiting it, so the mailbox keeps moving while the
+call is outstanding: [Bounded actor steps](actor-steps.md) covers the
+mechanism and works the routing case end to end.
