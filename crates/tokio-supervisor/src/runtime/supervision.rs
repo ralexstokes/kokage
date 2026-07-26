@@ -188,7 +188,6 @@ struct StartGate {
     key: ChildKey,
     instance: u64,
     generation: u64,
-    restart_event: Option<(u64, u64)>,
 }
 
 #[derive(Default)]
@@ -456,13 +455,24 @@ impl SupervisorRuntime {
         startup_ready: Option<crate::context::ChildContext>,
     ) -> Result<(), SupervisorError> {
         match self.run_until_exit(startup_ready).await {
-            Ok(()) => Ok(()),
-            Err(ExitReason::Shutdown) => self.shutdown_all().await,
+            Ok(()) => {
+                self.resolve_pending_removals(None);
+                Ok(())
+            }
+            Err(ExitReason::Shutdown) => {
+                let result = self.shutdown_all().await;
+                self.resolve_pending_removals(None);
+                result
+            }
             Err(ExitReason::Failure(error @ SupervisorError::StartupAborted(_))) => {
                 let _ = self.shutdown_all().await;
+                self.resolve_pending_removals(Some(&error));
                 Err(error)
             }
-            Err(ExitReason::Failure(error)) => Err(error),
+            Err(ExitReason::Failure(error)) => {
+                self.resolve_pending_removals(Some(&error));
+                Err(error)
+            }
         }
     }
 
@@ -522,20 +532,30 @@ impl SupervisorRuntime {
                     // then give the whole queued batch priority over an
                     // already-due restart.
                     tokio::task::yield_now().await;
-                    loop {
-                        match self.command_rx.try_recv() {
-                            Ok(command) => self.handle_command(command)?,
-                            Err(mpsc::error::TryRecvError::Disconnected) => {
-                                // `try_recv` reports disconnection only after
-                                // every buffered command has been consumed.
-                                self.commands_open = false;
-                                break;
-                            }
-                            Err(mpsc::error::TryRecvError::Empty) => break,
-                        }
-                    }
+                    self.drain_deadline_command_batch()?;
                     self.handle_deadlines().await?;
                 }
+            }
+        }
+    }
+
+    fn drain_deadline_command_batch(&mut self) -> RuntimeResult<()> {
+        loop {
+            // The batch preserves command ordering relative to the due
+            // restart, but shutdown retains the select loop's higher priority
+            // between every pair of commands.
+            if self.shutdown_rx.has_changed().is_err() || *self.shutdown_rx.borrow() {
+                return Err(ExitReason::Shutdown);
+            }
+            match self.command_rx.try_recv() {
+                Ok(command) => self.handle_command(command)?,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // `try_recv` reports disconnection only after every
+                    // buffered command has been consumed.
+                    self.commands_open = false;
+                    return Ok(());
+                }
+                Err(mpsc::error::TryRecvError::Empty) => return Ok(()),
             }
         }
     }
@@ -668,28 +688,23 @@ impl SupervisorRuntime {
         let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
         let (old_generation, new_generation) = self.spawn_child(item.key)?;
         if self.meta.start_mode == StartMode::Sequential && readiness_gated {
-            let restart_event = if item.emit_restart_event {
-                old_generation.map(|old_generation| (old_generation, new_generation))
-            } else {
-                None
-            };
             self.start_sequence
                 .get_or_insert_with(StartSequence::default)
                 .gate = Some(StartGate {
                 key: item.key,
                 instance: item.instance,
                 generation: new_generation,
-                restart_event,
             });
-        } else {
-            if item.emit_restart_event
-                && let Some(old_generation) = old_generation
-            {
-                self.send_restart_event(item.key, old_generation, new_generation);
-            }
-            if !readiness_gated {
-                self.startup_member_ready(item.key, item.instance);
-            }
+        } else if !readiness_gated {
+            self.startup_member_ready(item.key, item.instance);
+        }
+        if item.emit_restart_event
+            && let Some(old_generation) = old_generation
+        {
+            // Group-restart transitions are emitted when the replacement is
+            // spawned, matching one-for-one restarts and preserving the full
+            // generation chain even if readiness is never reported.
+            self.send_restart_event(item.key, old_generation, new_generation);
         }
         Ok(())
     }
@@ -712,14 +727,10 @@ impl SupervisorRuntime {
                     Some((RuntimeChildState::Starting | RuntimeChildState::Stopping, _))
                     | Some((RuntimeChildState::Stopped, Some(_))) => return Ok(()),
                     Some((RuntimeChildState::Running, _)) => {
-                        let gate = self
-                            .start_sequence
+                        self.start_sequence
                             .as_mut()
                             .and_then(|sequence| sequence.gate.take())
                             .expect("start gate was present");
-                        if let Some((old_generation, new_generation)) = gate.restart_event {
-                            self.send_restart_event(key, old_generation, new_generation);
-                        }
                         self.startup_member_ready(key, instance);
                     }
                     Some((RuntimeChildState::Stopped, None)) => {
@@ -829,14 +840,10 @@ impl SupervisorRuntime {
             })
         });
         if matches_gate {
-            let gate = self
-                .start_sequence
+            self.start_sequence
                 .as_mut()
                 .and_then(|sequence| sequence.gate.take())
                 .expect("matching start gate was present");
-            if let Some((old_generation, new_generation)) = gate.restart_event {
-                self.send_restart_event(ready.key, old_generation, new_generation);
-            }
             self.advance_start_sequence()?;
         }
         Ok(())
@@ -1224,29 +1231,60 @@ impl SupervisorRuntime {
         self.send_event(SupervisorEvent::ChildRemoved { id: id.clone() });
 
         if let Some(pending) = pending_removal {
-            let grace_expired = pending.grace_expired
-                || (check_elapsed_grace
-                    && !matches!(pending.mode, ShutdownMode::Abort)
-                    && Instant::now() >= pending.grace_deadline);
-            if grace_expired && !pending.grace_expired {
-                self.meta
-                    .observability
-                    .record_shutdown_timeout("remove_child", Some(&id));
-            }
-            self.meta.observability.record_shutdown_duration(
-                "remove_child",
-                pending.initiated_at.elapsed(),
-                Some(&id),
-            );
-            let result = if grace_expired && matches!(pending.mode, ShutdownMode::CooperativeStrict)
-            {
-                Err(ControlError::ShutdownTimedOut(id))
-            } else {
-                Ok(())
-            };
+            let result = self.pending_removal_result(&id, &pending, check_elapsed_grace, None);
             // Removal completion is deliberately last: terminality, the
             // membership drop, and ChildRemoved are all observable first.
             let _ = pending.reply.send(result);
+        }
+    }
+
+    /// Resolves every accepted removal whose ordinary child-exit path did not
+    /// run before the supervisor loop exited. Keeping this epilogue on every
+    /// exit prevents reply senders from being dropped as `Unavailable`.
+    fn resolve_pending_removals(&mut self, failure: Option<&SupervisorError>) {
+        let pending: Vec<_> = self
+            .children
+            .iter_mut()
+            .filter_map(|(_, entry)| {
+                entry
+                    .pending_removal
+                    .take()
+                    .map(|pending| (entry.id.clone(), pending))
+            })
+            .collect();
+        for (id, pending) in pending {
+            let result = self.pending_removal_result(&id, &pending, true, failure);
+            let _ = pending.reply.send(result);
+        }
+    }
+
+    fn pending_removal_result(
+        &self,
+        id: &str,
+        pending: &PendingRemoval,
+        check_elapsed_grace: bool,
+        failure: Option<&SupervisorError>,
+    ) -> Result<(), ControlError> {
+        let grace_expired = pending.grace_expired
+            || (check_elapsed_grace
+                && !matches!(pending.mode, ShutdownMode::Abort)
+                && Instant::now() >= pending.grace_deadline);
+        if grace_expired && !pending.grace_expired {
+            self.meta
+                .observability
+                .record_shutdown_timeout("remove_child", Some(id));
+        }
+        self.meta.observability.record_shutdown_duration(
+            "remove_child",
+            pending.initiated_at.elapsed(),
+            Some(id),
+        );
+        if let Some(error) = failure {
+            Err(map_supervisor_error_to_control(error.clone()))
+        } else if grace_expired && matches!(pending.mode, ShutdownMode::CooperativeStrict) {
+            Err(ControlError::ShutdownTimedOut(id.to_owned()))
+        } else {
+            Ok(())
         }
     }
 
@@ -1575,10 +1613,6 @@ impl SupervisorRuntime {
             .and_then(|sequence| sequence.gate.as_mut())
             .filter(|gate| gate.key == key && gate.instance == instance)
         {
-            // This restart supersedes the gated generation before it became
-            // ready. Its deferred group-restart event must not survive to be
-            // observed after the newer restart transition.
-            gate.restart_event = None;
             gate.generation = new_generation;
         }
         if let Some(old_generation) = old_generation {
@@ -1988,8 +2022,93 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn deadline_command_batch_preserves_shutdown_priority() {
+        let config = empty_supervisor().config;
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, _) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (command_tx, command_rx) = mpsc::channel(control_capacity);
+        let mut runtime = SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+        );
+        let (reply, _reply_rx) = oneshot::channel();
+        command_tx
+            .try_send(SupervisorCommand::AddChild {
+                child: ChildSpec::new("late", |_| async { Ok(()) }),
+                reply,
+            })
+            .expect("command channel should have capacity");
+        shutdown_tx.send(true).expect("runtime retains receiver");
+
+        assert!(matches!(
+            runtime.drain_deadline_command_batch(),
+            Err(ExitReason::Shutdown)
+        ));
+        assert!(
+            !runtime.children_by_id.contains_key("late"),
+            "queued commands must not be accepted after shutdown wins"
+        );
+    }
+
+    #[test]
+    fn pending_removal_epilogue_preserves_strict_grace_timeout() {
+        let supervisor = SupervisorBuilder::new()
+            .child(ChildSpec::new("removable", |_| async { Ok(()) }))
+            .build()
+            .expect("valid supervisor config");
+        let config = supervisor.config;
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, _) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (_command_tx, command_rx) = mpsc::channel(control_capacity);
+        let mut runtime = SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+        );
+        let key = runtime.child_order[0];
+        let (reply, mut reply_rx) = oneshot::channel();
+        runtime.children[key].pending_removal = Some(PendingRemoval {
+            reply,
+            mode: ShutdownMode::CooperativeStrict,
+            grace_deadline: Instant::now(),
+            initiated_at: StdInstant::now(),
+            grace_expired: true,
+        });
+
+        runtime.resolve_pending_removals(None);
+
+        assert_eq!(
+            reply_rx.try_recv(),
+            Ok(Err(ControlError::ShutdownTimedOut("removable".to_owned())))
+        );
+    }
+
     #[tokio::test]
-    async fn gate_restart_discards_the_failed_generations_deferred_event() {
+    async fn gated_group_restarts_emit_each_generation_before_readiness() {
         let supervisor = SupervisorBuilder::new()
             .start_mode(StartMode::Sequential)
             .child(
@@ -2023,22 +2142,32 @@ mod tests {
         );
         let key = runtime.child_order[0];
         let instance = runtime.children[key].instance;
+        runtime.children[key].runtime.has_started = true;
+        runtime.start_sequence = Some(StartSequence::default());
+
+        assert!(
+            runtime
+                .spawn_start_item(StartItem {
+                    key,
+                    instance,
+                    emit_restart_event: true,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(SupervisorEvent::ChildRestarted {
+                old_generation: 0,
+                new_generation: 1,
+                ..
+            })
+        ));
+
         {
             let child = &mut runtime.children[key].runtime;
-            child.has_started = true;
-            child.generation = 1;
             child.state = RuntimeChildState::Stopped;
             child.next_restart_deadline = Some(Instant::now());
         }
-        runtime.start_sequence = Some(StartSequence {
-            queue: VecDeque::new(),
-            gate: Some(StartGate {
-                key,
-                instance,
-                generation: 1,
-                restart_event: Some((0, 1)),
-            }),
-        });
 
         assert!(runtime.restart_one(key).is_ok());
         let gate = runtime
@@ -2047,10 +2176,6 @@ mod tests {
             .and_then(|sequence| sequence.gate.as_ref())
             .expect("replacement generation remains readiness-gated");
         assert_eq!(gate.generation, 2);
-        assert!(
-            gate.restart_event.is_none(),
-            "the failed generation's deferred restart event must be consumed"
-        );
         assert!(matches!(
             events_rx.try_recv(),
             Ok(SupervisorEvent::ChildRestarted {
