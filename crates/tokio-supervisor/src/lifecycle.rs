@@ -63,6 +63,17 @@ pub enum LifecycleEventKind {
         generation: u64,
         /// Public classification of the exit.
         reason: ExitStatusView,
+        /// Whether the supervisor stopped this generation rather than letting
+        /// it reach its own conclusion.
+        ///
+        /// A child cancelled by shutdown, removal, or a sibling-driven group
+        /// restart can still return `Ok(())` and so be classified as
+        /// [`ExitStatusView::Completed`]. Such an exit is not finished work,
+        /// and consumers deciding whether finite work is done — as
+        /// [`wait_completed`](crate::SupervisorHandle::wait_completed) does —
+        /// must exclude it. A child that failed or panicked on its own is not
+        /// cancelled.
+        cancelled: bool,
     },
     /// The membership ended.
     Removed,

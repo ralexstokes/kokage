@@ -422,6 +422,7 @@ impl StableSupervisorChannels {
                     state: ChildStateView::Starting,
                     membership: ChildMembershipView::Active,
                     last_exit: None,
+                    last_exit_cancelled: false,
                     restart_count: 0,
                     next_restart_in: None,
                     supervisor: None,
@@ -1359,6 +1360,19 @@ impl SupervisorHandle {
     pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.shutdown();
         self.wait().await
+    }
+
+    /// Returns a clone that observes and controls this supervisor without
+    /// holding its lifecycle lease.
+    ///
+    /// Background tasks owned by the supervision machinery use this so that
+    /// retaining one does not, by itself, keep a spawned root alive: dropping
+    /// the last *public* handle clone must still request shutdown.
+    pub(crate) fn observer(&self) -> Self {
+        Self {
+            channels: Arc::clone(&self.channels),
+            _lease: None,
+        }
     }
 
     /// Adds a new child to the supervisor at runtime.

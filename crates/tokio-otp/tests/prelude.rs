@@ -16,10 +16,10 @@ mod coverage_probe {
 
     mod supervisor {
         use tokio_otp::prelude::{
-            AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildMembershipView,
-            ChildSnapshot, ChildStateView, ControlOperation, ExitStatusView, LifecycleEvent,
-            LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind,
-            ShutdownMode, ShutdownPolicy, Strategy, SupervisorEvent,
+            AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView,
+            ChildSnapshot, ChildStateView, CompletionGuard, CompletionOutcome, ControlOperation,
+            ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity,
+            RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorEvent,
             SupervisorEventReceiverExt as _, SupervisorSnapshot,
             SupervisorSnapshotReceiverExt as _, SupervisorStateView,
         };

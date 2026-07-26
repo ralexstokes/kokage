@@ -26,7 +26,7 @@ use crate::{
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     scope::{ControlOperation, ScopeKind},
-    shutdown::{AutoShutdown, ShutdownMode, ShutdownPolicy},
+    shutdown::{ShutdownMode, ShutdownPolicy},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, NestedSnapshotNotification,
         NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
@@ -164,6 +164,7 @@ pub(crate) struct ChildEntry {
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) runtime: ChildRuntime,
     last_exit: Option<ExitStatusView>,
+    last_exit_cancelled: bool,
     pub(crate) nested_snapshot: Option<SupervisorSnapshot>,
     pub(crate) nested_snapshot_state: Option<NestedSnapshotState>,
     pub(crate) nested_channels: Option<Arc<StableSupervisorChannels>>,
@@ -220,6 +221,7 @@ impl ChildEntry {
             attachment: definition.attachment.clone(),
             runtime: ChildRuntime::new(definition, default_restart_intensity),
             last_exit: None,
+            last_exit_cancelled: false,
             nested_snapshot: None,
             nested_snapshot_state: None,
             nested_channels,
@@ -294,7 +296,6 @@ pub(crate) fn reconcile_stable_identities(
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
     pub(crate) kind: ScopeKind,
-    pub(crate) auto_shutdown: AutoShutdown,
     pub(crate) default_restart_intensity: RestartIntensity,
     pub(crate) default_restart: RestartPolicy,
     pub(crate) default_shutdown: ShutdownPolicy,
@@ -436,7 +437,6 @@ impl SupervisorRuntime {
             meta: RuntimeMeta {
                 strategy: config.strategy,
                 kind,
-                auto_shutdown: config.auto_shutdown,
                 default_restart_intensity,
                 default_restart: config.default_restart,
                 default_shutdown: config.default_shutdown,
@@ -955,12 +955,6 @@ impl SupervisorRuntime {
             }
             .into());
         }
-        if child.is_significant() {
-            return Err(ControlError::InvalidConfig(
-                "dynamic scopes do not support significant children",
-            )
-            .into());
-        }
 
         Arc::make_mut(&mut child.inner)
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
@@ -1019,12 +1013,6 @@ impl SupervisorRuntime {
         // Every early return from here on drops `pending`, which terminalizes
         // the identity its caller reserved.
         let spec = pending.spec_mut();
-        if spec.significant {
-            return Err(ControlError::InvalidConfig(
-                "dynamic scopes do not support significant children",
-            )
-            .into());
-        }
         spec.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
@@ -1276,6 +1264,7 @@ impl SupervisorRuntime {
         let pending_removal = entry.pending_removal.take();
         entry.membership = MembershipState::Removed;
         entry.last_exit = None;
+        entry.last_exit_cancelled = false;
         entry.nested_snapshot = None;
         if let Some(state) = entry.nested_snapshot_state.as_ref() {
             state.clear();
@@ -1401,15 +1390,6 @@ impl SupervisorRuntime {
             return Ok(());
         }
 
-        if self.auto_shutdown_triggered(classified.key, &classified.status) {
-            let id = self.children[classified.key].id.clone();
-            self.send_event(SupervisorEvent::AutoShutdownTriggered {
-                id,
-                mode: self.meta.auto_shutdown,
-            });
-            return Err(ExitReason::Shutdown);
-        }
-
         let restart_policy = self.children[classified.key].runtime.definition.restart;
 
         if allow_restart && restart_policy.should_restart(classified.status.is_failure()) {
@@ -1491,29 +1471,6 @@ impl SupervisorRuntime {
         channels.terminal();
     }
 
-    fn auto_shutdown_triggered(&self, exited_key: ChildKey, status: &ExitStatus) -> bool {
-        if !matches!(status, ExitStatus::Completed)
-            || !self.children[exited_key].runtime.definition.significant
-        {
-            return false;
-        }
-
-        match self.meta.auto_shutdown {
-            AutoShutdown::Never => false,
-            AutoShutdown::AnySignificant => true,
-            AutoShutdown::AllSignificant => self.children.iter().all(|(_, child)| {
-                if child.membership != MembershipState::Active
-                    || !child.runtime.definition.significant
-                {
-                    return true;
-                }
-                !child.runtime.state.is_active()
-                    && child.runtime.completion.is_clean()
-                    && matches!(child.last_exit, Some(ExitStatusView::Completed))
-            }),
-        }
-    }
-
     fn classify_join(
         &mut self,
         joined: Result<(Id, ChildEnvelope), JoinError>,
@@ -1572,6 +1529,9 @@ impl SupervisorRuntime {
     }
 
     pub(crate) fn record_exit(&mut self, key: ChildKey, generation: u64, status: &ExitStatus) {
+        // Read before the entry is mutated: the flag belongs to the generation
+        // that just exited, and a respawn installs a fresh one.
+        let cancelled = self.children[key].runtime.completion.is_cancelled();
         let id = {
             let entry = &mut self.children[key];
             entry.runtime.restart_tracker.record_exit(Instant::now());
@@ -1582,6 +1542,7 @@ impl SupervisorRuntime {
             entry.runtime.next_restart_deadline = None;
             entry.runtime.shutdown_timed_out = false;
             entry.last_exit = Some(status.view());
+            entry.last_exit_cancelled = cancelled;
             entry.nested_snapshot = None;
             entry.nested_snapshot_state = None;
             entry.id.clone()
@@ -1591,6 +1552,7 @@ impl SupervisorRuntime {
             LifecycleEventKind::Exited {
                 generation,
                 reason: status.view(),
+                cancelled,
             },
         );
         self.send_event(SupervisorEvent::ChildExited {
@@ -1995,6 +1957,7 @@ impl SupervisorRuntime {
                     MembershipState::Removed => unreachable!("removed children filtered"),
                 },
                 last_exit: entry.last_exit.clone(),
+                last_exit_cancelled: entry.last_exit_cancelled,
                 restart_count: entry.runtime.restart_tracker.total_restarts(),
                 next_restart_in: entry
                     .runtime
@@ -2128,7 +2091,6 @@ fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
     match event {
         SupervisorEvent::ChildStarted { id, .. }
         | SupervisorEvent::ChildExited { id, .. }
-        | SupervisorEvent::AutoShutdownTriggered { id, .. }
         | SupervisorEvent::ChildRestartScheduled { id, .. }
         | SupervisorEvent::ChildRestarted { id, .. }
         | SupervisorEvent::ChildRemoved { id }

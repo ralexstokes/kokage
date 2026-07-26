@@ -46,6 +46,15 @@ impl CompletionFlag {
     pub(crate) fn is_clean(&self) -> bool {
         self.0.load(Ordering::Acquire) == COMPLETION_CLEAN
     }
+
+    /// Whether the supervisor asked this generation to stop before it reached
+    /// its own conclusion.
+    ///
+    /// Distinct from `!is_clean()`: a child that failed or panicked on its own
+    /// leaves the flag pending, so it is neither clean nor cancelled.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == COMPLETION_CANCELLED
+    }
 }
 
 /// Mutable per-child state managed by the supervisor runtime.

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use tokio_supervisor::{
-    AutoShutdown, ChildSpec, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, ScopeKind,
+    ChildSpec, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, ScopeKind,
     ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder, SupervisorSpec,
 };
 
@@ -22,8 +22,6 @@ pub struct SupervisionScope {
     pub id: Option<String>,
     /// Restart strategy. Dynamic scopes require [`Strategy::OneForOne`].
     pub strategy: Strategy,
-    /// Automatic-shutdown policy. Dynamic scopes require [`AutoShutdown::Never`].
-    pub auto_shutdown: AutoShutdown,
     /// Optional scope-level restart-intensity default.
     pub restart_intensity: Option<RestartIntensity>,
     /// Default restart policy inherited by actor nodes.
@@ -56,7 +54,6 @@ impl Clone for SupervisionScope {
         Self {
             id: self.id.clone(),
             strategy: self.strategy,
-            auto_shutdown: self.auto_shutdown,
             restart_intensity: self.restart_intensity,
             default_restart: self.default_restart,
             default_shutdown: self.default_shutdown,
@@ -73,7 +70,6 @@ impl SupervisionScope {
         Self {
             id: None,
             strategy: Strategy::default(),
-            auto_shutdown: AutoShutdown::default(),
             restart_intensity: None,
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
@@ -289,15 +285,6 @@ impl SupervisionTree {
         self
     }
 
-    /// Sets automatic shutdown for a scope node.
-    #[must_use]
-    pub fn auto_shutdown(mut self, auto_shutdown: AutoShutdown) -> Self {
-        self.scope_mut()
-            .expect("automatic shutdown applies only to scope nodes")
-            .auto_shutdown = auto_shutdown;
-        self
-    }
-
     /// Sets this scope's default restart intensity.
     #[must_use]
     pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
@@ -420,7 +407,6 @@ impl SupervisionTree {
         SupervisionOutline {
             kind: self.kind(),
             strategy: scope.strategy,
-            auto_shutdown: scope.auto_shutdown,
             default_restart: scope.default_restart,
             default_shutdown: scope.default_shutdown,
             restart_intensity: scope.restart_intensity.unwrap_or_default(),
@@ -448,7 +434,6 @@ impl SupervisionTree {
                 id: spec.id().to_owned(),
                 restart: spec.restart_policy(),
                 shutdown: spec.shutdown_policy(),
-                significant: spec.is_significant(),
             },
             Self::Ordered { scope } | Self::Dynamic { scope } => ChildOutline::Scope {
                 id: scope.id.clone().unwrap_or_else(|| "<unnamed>".to_owned()),
@@ -502,11 +487,6 @@ impl SupervisionTree {
                     "dynamic scopes require Strategy::OneForOne",
                 ));
             }
-            if scope.auto_shutdown != AutoShutdown::Never {
-                return Err(SupervisorBuildError::InvalidConfig(
-                    "dynamic scopes do not support automatic shutdown",
-                ));
-            }
             if !scope.children.is_empty() {
                 return Err(SupervisorBuildError::InvalidConfig(
                     "dynamic scopes cannot have declared children",
@@ -533,9 +513,7 @@ impl SupervisionTree {
             Some(ReservedScopeBuilder::Dynamic(_)) => unreachable!("scope builder kind matches"),
             None => SupervisorBuilder::new(),
         };
-        let mut builder = builder
-            .strategy(scope.strategy)
-            .auto_shutdown(scope.auto_shutdown);
+        let mut builder = builder.strategy(scope.strategy);
         if let Some(intensity) = scope.restart_intensity {
             builder = builder.restart_intensity(intensity);
         }
@@ -634,8 +612,6 @@ pub struct SupervisionOutline {
     pub kind: ScopeKind,
     /// Restart strategy.
     pub strategy: Strategy,
-    /// Automatic-shutdown policy.
-    pub auto_shutdown: AutoShutdown,
     /// Restart policy inherited by children without an explicit override.
     #[cfg_attr(feature = "serde", serde(default))]
     pub default_restart: RestartPolicy,
@@ -672,8 +648,6 @@ pub enum ChildOutline {
         restart: RestartPolicy,
         /// Shutdown policy.
         shutdown: ShutdownPolicy,
-        /// Whether the child is significant.
-        significant: bool,
     },
     /// A nested ordered or dynamic scope.
     Scope {

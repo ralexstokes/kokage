@@ -32,7 +32,6 @@ pub(crate) struct ChildDefinition {
     pub(crate) restart_intensity: Option<RestartIntensity>,
     pub(crate) shutdown_policy: ShutdownPolicy,
     shutdown_is_default: bool,
-    pub(crate) significant: bool,
     pub(crate) readiness: ChildReadiness,
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) kind: ChildKind,
@@ -80,7 +79,6 @@ pub struct SupervisorSpec {
     pub(crate) restart_intensity: Option<RestartIntensity>,
     pub(crate) shutdown_policy: ShutdownPolicy,
     shutdown_is_default: bool,
-    pub(crate) significant: bool,
     pub(crate) attachment: Option<OpaqueAttachment>,
 }
 
@@ -94,7 +92,6 @@ impl SupervisorSpec {
             restart_intensity: None,
             shutdown_policy: ShutdownPolicy::default(),
             shutdown_is_default: true,
-            significant: false,
             attachment: None,
         }
     }
@@ -119,17 +116,6 @@ impl SupervisorSpec {
     #[must_use]
     pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
         self.restart_intensity = Some(intensity);
-        self
-    }
-
-    /// Marks this nested supervisor as significant to its parent.
-    ///
-    /// A clean exit can trigger the parent's configured
-    /// [`AutoShutdown`](crate::AutoShutdown) mode. Significant children cannot
-    /// use [`RestartPolicy::Always`].
-    #[must_use]
-    pub fn significant(mut self) -> Self {
-        self.significant = true;
         self
     }
 
@@ -208,7 +194,6 @@ impl ChildSpec {
                 restart_intensity: None,
                 shutdown_policy: ShutdownPolicy::default(),
                 shutdown_is_default: true,
-                significant: false,
                 readiness: ChildReadiness::Immediate,
                 attachment: None,
                 kind: ChildKind::Task(make_child_factory(f)),
@@ -241,12 +226,10 @@ impl ChildSpec {
     /// draining that child, it is part of the restart cycle and the child is
     /// respawned rather than removed.
     ///
-    /// Removing a significant child also removes its exit status from
-    /// supervisor snapshots and from
-    /// [`AutoShutdown::AllSignificant`](crate::AutoShutdown::AllSignificant)
-    /// accounting. In particular, a removed significant child's failed exit
-    /// cannot block auto-shutdown after the remaining significant children
-    /// complete.
+    /// Removing a child also removes its exit status from supervisor
+    /// snapshots, and so from any
+    /// [`wait_completed`](crate::SupervisorHandle::wait_completed) set that
+    /// awaits it.
     #[must_use]
     pub fn remove_on_exit(self, remove_on_exit: bool) -> Self {
         self.map_inner(|inner| inner.remove_on_exit = remove_on_exit)
@@ -269,17 +252,6 @@ impl ChildSpec {
     #[must_use]
     pub fn restart_intensity(self, intensity: RestartIntensity) -> Self {
         self.map_inner(|inner| inner.restart_intensity = Some(intensity))
-    }
-
-    /// Marks this child as significant to its supervisor.
-    ///
-    /// A clean exit can trigger the supervisor's configured
-    /// [`AutoShutdown`](crate::AutoShutdown) mode. Significant children cannot
-    /// use [`RestartPolicy::Always`], because a clean exit must be final before
-    /// it can complete the supervisor's purpose.
-    #[must_use]
-    pub fn significant(self) -> Self {
-        self.map_inner(|inner| inner.significant = true)
     }
 
     /// Attaches process-local metadata to this supervised child.
@@ -330,11 +302,6 @@ impl ChildSpec {
     pub fn shutdown_policy(&self) -> ShutdownPolicy {
         self.inner.shutdown_policy
     }
-
-    /// Returns whether this child is significant to its supervisor.
-    pub fn is_significant(&self) -> bool {
-        self.inner.significant
-    }
 }
 
 impl ChildDefinition {
@@ -356,7 +323,6 @@ impl ChildDefinition {
             restart_intensity: spec.restart_intensity,
             shutdown_policy: spec.shutdown_policy,
             shutdown_is_default: spec.shutdown_is_default,
-            significant: spec.significant,
             readiness: ChildReadiness::Explicit,
             attachment: spec.attachment,
             kind: ChildKind::Supervisor(spec.supervisor),

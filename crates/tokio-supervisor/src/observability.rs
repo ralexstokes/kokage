@@ -226,15 +226,6 @@ impl SupervisorObservability {
                     ),
                 }
             }
-            SupervisorEvent::AutoShutdownTriggered { id, mode } => info!(
-                supervisor_name = %self.supervisor_name,
-                supervisor_path = %self.supervisor_path,
-                child_id = %id,
-                child_path = %self.resolve_child_path(id, child_path),
-                mode = ?mode,
-                strategy = self.strategy_label,
-                "automatic supervisor shutdown triggered"
-            ),
             SupervisorEvent::ChildRestartScheduled {
                 id,
                 generation,
@@ -328,17 +319,6 @@ impl SupervisorObservability {
                 )
                 .increment(1);
             }
-            SupervisorEvent::AutoShutdownTriggered { id, mode } => {
-                counter!(
-                    "supervisor.auto_shutdowns",
-                    "supervisor" => self.supervisor_name.clone(),
-                    "path" => self.supervisor_path.clone(),
-                    "child_id" => id.clone(),
-                    "mode" => auto_shutdown_label(*mode),
-                    "strategy" => self.strategy_label,
-                )
-                .increment(1);
-            }
             SupervisorEvent::SupervisorStarted
             | SupervisorEvent::SupervisorStopping
             | SupervisorEvent::SupervisorStopped
@@ -406,19 +386,9 @@ fn event_kind(event: &SupervisorEvent) -> &'static str {
         SupervisorEvent::ChildStarted { .. } => "child_started",
         SupervisorEvent::ChildRemoved { .. } => "child_removed",
         SupervisorEvent::ChildExited { .. } => "child_exited",
-        SupervisorEvent::AutoShutdownTriggered { .. } => "auto_shutdown_triggered",
         SupervisorEvent::ChildRestartScheduled { .. } => "child_restart_scheduled",
         SupervisorEvent::ChildRestarted { .. } => "child_restarted",
         SupervisorEvent::RestartIntensityExceeded => "restart_intensity_exceeded",
-    }
-}
-
-#[cfg(feature = "metrics")]
-fn auto_shutdown_label(mode: crate::AutoShutdown) -> &'static str {
-    match mode {
-        crate::AutoShutdown::Never => "never",
-        crate::AutoShutdown::AnySignificant => "any_significant",
-        crate::AutoShutdown::AllSignificant => "all_significant",
     }
 }
 
