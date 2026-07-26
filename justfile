@@ -1,14 +1,16 @@
 # The recipes used by `ci` mirror the checks defined in nix/crane-checks.nix
 # and flake.nix (the authoritative CI definitions) — keep them in sync.
 
+nightly_cargo := env_var_or_default("NIGHTLY_CARGO", "cargo +nightly")
+
 default:
     @just --list
 
 fmt:
-    cargo +nightly fmt --all --check
+    {{nightly_cargo}} fmt --all --check
 
 lint:
-    cargo +nightly clippy --locked --workspace --all-targets --all-features -- -D warnings
+    {{nightly_cargo}} clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 check:
     cargo check --locked --workspace --all-targets --all-features
