@@ -73,8 +73,8 @@
 //!
 //! safety
 //! ------
-//!    venue-subtree restarts
-//!         | supervisor restart counter (lossless watch)
+//!    venue-subtree lifecycle
+//!         | ordered lifecycle stream (cumulative restart counters)
 //!         v
 //!    event pump --RestartsObserved--> Health
 //!                                       | KillSwitch (breaker trips)
@@ -92,9 +92,10 @@
 //!    submitter and sends `SubmitResolved` back to the router; a timed-out
 //!    call marks the intent unknown until `ReconcileAll` resolves it
 //!    against the exchange.
-//! 3. Safety: venue restarts flow from the supervisor's lossless restart
-//!    counter (deliberately not the lossy event broadcast) through an event
-//!    pump into `Health`, whose breaker trips `Control`'s kill switch:
+//! 3. Safety: venue transitions flow from the supervisor's reliable lifecycle
+//!    stream (deliberately not the lossy event broadcast) through a mailbox
+//!    pump into `Health`; cumulative event counters drive the breaker, which
+//!    trips `Control`'s kill switch:
 //!    intake closes and open orders are cancelled.
 //!
 //! Telemetry sits across all of it: actors stamp `enqueued_at` on messages
@@ -169,7 +170,7 @@ struct App {
     intake_gate: Arc<AtomicBool>,
     background_stop: CancellationToken,
     sampler: tokio::task::JoinHandle<()>,
-    restart_watch: RestartWatchGuard,
+    lifecycle_watch: LifecycleWatchGuard,
 }
 
 #[tokio::main]
@@ -316,21 +317,18 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 
     let background_stop = CancellationToken::new();
     let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));
-    // The aggregate restart breaker is a safety mechanism, so it must not be
-    // fed from the lossy event broadcast
-    // (`handle.supervisor_handle().subscribe()`), which can drop
-    // `ChildRestarted` events under load. Instead it watches the venues
-    // supervisor's cumulative `total_restarts` counter over the lossless
-    // snapshot watch channel: conflated updates still arrive as one delta
-    // covering every restart, so the breaker can never silently under-count.
-    // The counter covers the venues supervisor's direct children — exactly
-    // the flat venue actor set built above. If venues ever gains nested
-    // per-venue supervisors, watch each nested handle as well:
-    // `total_restarts` does not aggregate across depth.
-    let restart_watch = handle
+    // The aggregate restart breaker is a safety mechanism, so it is fed from
+    // the reliable lifecycle stream rather than the lossy event broadcast.
+    // Every event carries the venues supervisor's cumulative restart counter;
+    // even a `Lagged` gap loses transition detail but not the next count. The
+    // scope is direct children, so nested per-venue supervisors would each
+    // need their own lifecycle pump.
+    let lifecycle_watch = handle
         .subtree("venues")
         .expect("venues runtime subtree")
-        .watch_restarts_to(&health, |total| HealthMsg::RestartsObserved { total });
+        .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
+            total: event.total_restarts,
+        });
 
     Ok(App {
         handle,
@@ -346,7 +344,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         intake_gate,
         background_stop,
         sampler,
-        restart_watch,
+        lifecycle_watch,
     })
 }
 
@@ -433,9 +431,13 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree")
         .supervisor_handle();
-    let restarted = venues.monitor_restart("venue-a-feed")?;
+    let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
     app.venue_a_feed.send(FeedMsg::Crash).await?;
-    tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
+    tokio::time::timeout(
+        PHASE_TIMEOUT,
+        await_restart(lifecycle, "venue-a-feed", baseline),
+    )
+    .await?;
     await_until(|| async {
         status(&app.reconciler).await.is_some_and(|status| {
             status
@@ -651,9 +653,9 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
         ("venue-a-feed", &app.venue_a_feed),
         ("venue-b-feed", &app.venue_b_feed),
     ] {
-        let restarted = venues.monitor_restart(id)?;
+        let (lifecycle, baseline) = restart_observer(&venues, id);
         feed.send(FeedMsg::Crash).await?;
-        tokio::time::timeout(PHASE_TIMEOUT, restarted).await??;
+        tokio::time::timeout(PHASE_TIMEOUT, await_restart(lifecycle, id, baseline)).await?;
     }
     await_until(|| async {
         bounded_call(&app.health, |reply| HealthMsg::Tripped { reply })
@@ -693,7 +695,7 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
     // and support actors stopped. DrainPolicy alone does not order siblings.
     app.background_stop.cancel();
     app.sampler.await?;
-    drop(app.restart_watch);
+    drop(app.lifecycle_watch);
     tokio::time::timeout(Duration::from_secs(5), app.handle.shutdown_and_wait()).await??;
 
     let latency = latency.snapshot();
@@ -740,6 +742,23 @@ where
     T: Send + 'static,
 {
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
+}
+
+fn restart_observer(handle: &tokio_otp::SupervisorHandle, id: &str) -> (LifecycleWatch, u64) {
+    let lifecycle = handle.watch_lifecycle();
+    let generation = handle
+        .snapshot()
+        .child(id)
+        .unwrap_or_else(|| panic!("{id} is supervised"))
+        .generation;
+    (lifecycle, generation)
+}
+
+async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
+    lifecycle
+        .wait_started(id, baseline)
+        .await
+        .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
 }
 
 async fn await_until<F, Fut>(mut predicate: F) -> Result<(), AnyError>

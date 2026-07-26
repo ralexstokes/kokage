@@ -73,9 +73,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.spawn();
 
     orders.send("business cards x100".into()).await?;
-    let restart = handle.supervisor_handle().monitor_restart("press")?;
+    let mut lifecycle = handle.watch_lifecycle();
+    let baseline = handle.snapshot().child("press").unwrap().generation;
     orders.send("origami cranes x1000".into()).await?;
-    restart.await?;
+    lifecycle
+        .wait_started("press", baseline)
+        .await
+        .expect("press restart is observed");
     orders.send("flyers x500".into()).await?;
 
     handle.shutdown_and_wait().await?;
@@ -114,17 +118,19 @@ control when needed.
 
 Actor children use `on_start` as their readiness boundary. Even with the
 default concurrent start mode, snapshots remain `Starting`, `ChildStarted`
-events are delayed, and restart monitors remain pending until `on_start`
+events and lifecycle `Started` transitions are delayed until `on_start`
 succeeds. Select `StartMode::Sequential` to additionally prevent the next
 actor from spawning until that boundary is crossed. Code outside the tree can
 await `RuntimeHandle::wait_started`; readiness is latched for a completed
 generation and resets on restart.
 
-The restart monitor before sending `origami cranes x1000` is still deliberate.
+The lifecycle watch before sending `origami cranes x1000` is deliberate.
 A worker gets a fresh mailbox on restart; anything queued behind the crashing
 `origami` order would be dropped with the old mailbox. `send` waits while the
 actor is unbound, but it cannot recover messages already accepted by the
-failed run.
+failed run. Waiting for `Started` with a generation above the captured
+baseline preserves the old one-shot recovery boundary without a separate
+monitor type.
 
 Per-actor policies — say a tighter restart budget for the press alone — stay
 on the same builder. Overrides are keyed by the actor's typed ref, so a typo'd

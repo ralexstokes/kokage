@@ -1,50 +1,23 @@
 # Observability
 
-The crates expose four views into a running system:
+The supervisor layer has two observation primitives:
 
-1. supervisor events
-2. supervisor snapshots
-3. `tracing`, pull-based actor stats, and optional metrics
-4. the `tokio-otp-console` web UI
+1. `snapshot()` / `subscribe_snapshots()` for current state
+2. `watch_lifecycle()` for ordered transitions
 
-## Events And Snapshots
+`tracing`, pull-based actor stats, optional metrics, the legacy event
+broadcast, and `tokio-otp-console` are projections for diagnostics and
+dashboards.
 
-`RuntimeHandle::supervisor_handle()` exposes the lower-level supervisor
-control surface. Subscribe there for lossy lifecycle events used by logging,
-tracing, and dashboards:
-
-```rust,ignore
-let mut events = handle.supervisor_handle().subscribe();
-tokio::spawn(async move {
-    loop {
-        match events.recv().await {
-            Ok(event) => println!("event: {event:?}"),
-            // The broadcast channel is bounded: a slow subscriber skips
-            // missed events and observes the gap as `Lagged`.
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                println!("missed {skipped} events");
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
-        }
-    }
-});
-```
-
-**Events are lossy observability, not durable control.** The subscription is a
-bounded broadcast channel, and events forwarded from nested supervisors can
-additionally be dropped without a `Lagged` marker on your receiver. Never
-build safety logic by counting events: it can silently under-count. If a
-consumer must gate a decision on events anyway, it has to fail closed on
-`Lagged` — treat the gap as if the guarded condition occurred.
+## Snapshots: Current State
 
 `RuntimeHandle::snapshot()` returns the current tree state, and
-`subscribe_snapshots()` returns a `watch::Receiver` that updates when the
-snapshot changes. The watch channel conflates intermediate snapshots but never
-lags, and snapshots carry cumulative counters — the per-child
-`ChildSnapshot::restart_count` and the supervisor-level
+`subscribe_snapshots()` returns a `watch::Receiver` that updates when it
+changes. The watch channel conflates intermediate snapshots but never lags.
+Snapshots carry cumulative counters — per-child
+`ChildSnapshot::restart_count` and supervisor-level
 `SupervisorSnapshot::total_restarts` — so counter deltas account for every
-restart even when updates are conflated. This is the reliable source to drive
-control logic from.
+restart even when updates are conflated.
 
 Every `ChildSnapshot` also carries a `membership_epoch`. A restart increments
 `generation` but retains the membership epoch; removing a child and adding a
@@ -61,51 +34,129 @@ same epoch that the supervisor assigned while inserting the child. Consumers
 that need to associate their own state with that exact membership should retain
 the returned value rather than performing a later id-based snapshot lookup.
 
-## Reliable Restart Counting
+## Lifecycle Streams: Ordered Transitions
 
-For control logic that reacts to restart activity — an aggregate restart
-breaker, for example — pump the reliable counts directly into its actor:
+`watch_lifecycle()` observes `Added`, `Started`, `Exited`, and `Removed`
+transitions among the watched supervisor's direct children. Readiness-gated
+children emit `Started` only after `on_start` succeeds. A restart is the
+ordered pair `Exited` then `Started` for the same membership; count restarts
+from the event envelope's cumulative counters, not by inferring event pairs.
+
+Each event carries a monotonic `seq`, child id and membership epoch,
+`total_restarts`, and the child's `child_restart_count`. A nested supervisor's
+sequence and total counter continue across its own incarnations, including
+recreation by an ancestor. `next()` returns `None` only after staged events
+are drained and the stable supervisor identity can never run again.
+
+### Gap-free snapshot alignment
+
+Register the watch **before** reading the snapshot, then discard events already
+represented by that snapshot:
 
 ```rust,ignore
-let restart_watch = handle
+let mut lifecycle = handle.watch_lifecycle();
+let snapshot = handle.snapshot();
+
+while let Some(event) = lifecycle.next().await {
+    if event.seq <= snapshot.lifecycle_seq {
+        continue;
+    }
+    apply(event);
+}
+```
+
+The supervisor assigns the event sequence, publishes the aligned snapshot,
+and stages the event as one ordered transition. The recipe therefore misses
+no transition with `seq > snapshot.lifecycle_seq` and does not reapply an
+event with `seq <= snapshot.lifecycle_seq`.
+
+A stable nested handle can be watched before that scope first spawns. Its
+initial snapshot already projects statically configured children as `Starting`,
+while the first later `Added` event records installation of that membership
+into the running supervisor incarnation and `Started` records readiness. An
+edge reducer seeded from the snapshot must therefore treat `Added` as an
+idempotent upsert/activation keyed by `(id, membership_epoch)`, rather than an
+unchecked row insertion. This preserves the watch-before-spawn guarantee
+without pretending configured state and runtime installation are different
+child identities.
+
+Every watch has a bounded 128-event buffer. Sustained overload drops the
+oldest details and collapses the loss into one `Lagged { dropped }` marker at
+the front. Consumers that derive state from edges must fetch a fresh snapshot
+and realign. The marker carries the newest dropped transition's sequence and
+cumulative counters, so filtering it against a snapshot is sound and restart
+counts resynchronize at the marker. Stream closure is terminality, not an
+event, and is never dropped.
+
+Note that a marker's `child_id` and `membership_epoch` describe the newest
+discarded transition, so a marker can be stamped with one child while standing
+for another child's loss. Filter on `seq`, not on the marker's identity fields.
+
+### Waiting for one restart
+
+`LifecycleWatch::wait_started(id, after_generation)` collapses the common
+one-shot wait into a single call, returning the generation that started:
+
+```rust,ignore
+let mut lifecycle = handle.watch_lifecycle();
+let baseline = handle.snapshot().child("press").unwrap().generation;
+
+lifecycle.wait_started("press", baseline).await;
+```
+
+It returns `None` once that start can no longer be observed on this watch —
+the membership was removed, the scope became terminal, or a `Lagged` marker
+discarded a prefix that may have carried it. `None` means waiting longer is
+futile, not which of the three happened; realign from a snapshot to tell them
+apart. Consumers maintaining derived state should drive `next()` directly.
+
+### Pumping transitions into an actor
+
+Route library transitions and application-semantic signals into one observer
+actor when its mailbox should be the linearization point:
+
+```rust,ignore
+let lifecycle_guard = handle
     .subtree("venues")
     .unwrap()
-    .watch_restarts_to(&breaker, |total| {
-        HealthMsg::RestartsObserved { total }
+    .watch_lifecycle_to(&breaker, |event| {
+        HealthMsg::Lifecycle(event)
     });
 ```
 
-`watch_restarts_to` drives a `RestartWatch` over the monotonic
-`total_restarts` counter and sends a cumulative total (starting at zero when
-the pump is created) through the target's ordinary mailbox policy. Treat the
-value as idempotent state, not an additive delta. That contract survives both
-snapshot conflation and a latest-wins target mailbox: a newer message already
-contains every restart represented by the older one. After a target restart,
-the pump sends the latest total again so the fresh incarnation can restore its
-state. As with every actor send, acceptance is not an acknowledgement that the
-handler processed the message; use an application-level acknowledgement when
-processing itself must be confirmed.
+The pump follows ordinary target actor restarts and applies the target's usual
+mailbox policy. It deliberately **does not replay** discrete events to a fresh
+target incarnation: replay would fabricate history. A restarted consumer
+rehydrates in `on_start` with the watch-then-snapshot alignment recipe. Use a
+FIFO mailbox when every transition matters; a conflating mailbox may replace
+intermediate lifecycle messages even though the watch buffer itself reports
+lag explicitly. As with every actor send, acceptance is not acknowledgement
+that the handler processed the message.
 
-Keep the returned `RestartWatchGuard` alive for as long as the pump is needed.
-Dropping or cancelling it stops the pump; it also stops when the target
-permanently terminates or the watched supervisor reaches a terminal state,
-even if delivery is currently waiting for mailbox capacity. An actor restart
-is not terminal, so the pump follows the stable ref into the next incarnation.
+Keep the returned `LifecycleWatchGuard` alive. Dropping or cancelling it stops
+the pump, as does permanent target termination. Watched-scope terminality
+closes the pump after its staged events have drained. If the live target's
+mailbox remains full, cancellation or target termination is the escape hatch.
 
-Its scope is the watched supervisor's **direct children**: to cover a nested
-subtree, watch each nested runtime handle (`handle.subtree(id)`) —
-`total_restarts` does not aggregate across depth, whereas an event subscription
-forwards nested events (lossily). For a raw supervisor, navigate explicitly
-through `handle.supervisor_handle().supervisor(id)`. Call `watch_restarts()`
-directly when a non-actor consumer needs to await the counts itself.
-Nested supervisors carry the counter across their own incarnations, so a watch
-on a restart-stable handle keeps working through restarts of the watched
-supervisor itself, and `next()` returns `None` once the supervisor can never
-restart a child again. The `trading_engine` example's phase-7 breaker is built
-this way. Note that the counter records scheduled restarts — the same
-occurrences the restart-intensity window records, including clean exits
-restarted under `RestartPolicy::Always`; under `OneForAll`, sibling respawns
-caused by another child's exit do not increment it.
+Lifecycle scope is not recursive. Watch each nested runtime handle
+(`handle.subtree(id)`) or raw supervisor handle
+(`handle.supervisor_handle().supervisor(id)`) separately. The
+`trading_engine` example's breaker consumes `event.total_restarts` this way.
+That counter records scheduled restarts — the same occurrences as the
+restart-intensity window, including clean exits restarted under
+`RestartPolicy::Always`; group-strategy sibling respawns do not increment it.
+
+`watch_restarts`, `watch_restarts_to`, `RestartWatch`, and
+`RestartWatchGuard` remain deprecated snapshot-counter views for one migration
+cycle. New code should use the lifecycle stream and its counter envelope.
+
+## Legacy Event Broadcast
+
+`SupervisorHandle::subscribe()` remains the lossy broadcast used by existing
+logging and console integrations. A slow receiver gets `RecvError::Lagged`,
+and nested forwarding can drop events before they reach that receiver without
+an additional marker. Do not use this surface for safety or control logic;
+use lifecycle watches or snapshots.
 
 ## Tracing And Stats
 

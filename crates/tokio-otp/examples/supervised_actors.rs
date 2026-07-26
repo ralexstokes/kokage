@@ -84,9 +84,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Crash the worker. Each run gets a fresh mailbox, so an order queued
     // behind the jam would be lost with it — wait for the supervisor to
     // restart the worker before sending more.
-    let restart = handle.supervisor_handle().monitor_restart("worker")?;
+    let mut lifecycle = handle.watch_lifecycle();
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .generation;
     orders.send("jam".to_owned()).await?;
-    restart.await?;
+    lifecycle
+        .wait_started("worker", baseline)
+        .await
+        .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
 
     orders.send("flyers x500".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));

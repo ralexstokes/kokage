@@ -23,6 +23,7 @@ use crate::{
         AttachedChildState, AttachedChildrenState, NestedChannels, StableSupervisorChannels,
         SupervisorCommand,
     },
+    lifecycle::{LifecycleEventDraft, LifecycleEventKind, LifecycleHub},
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     shutdown::{AutoShutdown, ShutdownMode},
@@ -148,8 +149,9 @@ enum Wake {
 /// Per-child bookkeeping entry stored in the supervisor's slab.
 ///
 /// `instance` is a monotonically increasing identifier that distinguishes
-/// different slab occupants at the same key (e.g. after a child is removed and
-/// a new one is inserted at the recycled key). Combined with `generation`
+/// different memberships in one restart-stable supervisor identity (e.g.
+/// after a child is removed and a new one is inserted at the recycled key, or
+/// after the supervisor itself is reincarnated). Combined with `generation`
 /// (which counts restarts of the *same* child spec), this pair identifies every
 /// task the supervisor has spawned unless the counter reaches its saturating
 /// `u64::MAX` limit. The instance is exposed to observers as
@@ -330,8 +332,8 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) children_by_id: HashMap<String, ChildKey>,
     pub(crate) child_order: Vec<ChildKey>,
     pub(crate) live_tasks: usize,
-    pub(crate) next_child_instance: u64,
     pub(crate) events: broadcast::Sender<SupervisorEvent>,
+    pub(crate) lifecycle: Arc<LifecycleHub>,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) attached_children: AttachedChildrenState,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
@@ -359,6 +361,7 @@ impl SupervisorRuntime {
         config: SupervisorConfig,
         shutdown_rx: watch::Receiver<bool>,
         events: broadcast::Sender<SupervisorEvent>,
+        lifecycle: Arc<LifecycleHub>,
         snapshots: watch::Sender<SupervisorSnapshot>,
         attached_children: AttachedChildrenState,
         command_rx: mpsc::Receiver<SupervisorCommand>,
@@ -373,7 +376,12 @@ impl SupervisorRuntime {
         let mut children = Slab::with_capacity(config.children.len());
         let mut children_by_id = HashMap::with_capacity(config.children.len());
         let mut child_order = Vec::with_capacity(config.children.len());
-        let mut next_child_instance = 0u64;
+        let declared_membership_epochs: HashMap<_, _> = snapshots
+            .borrow()
+            .children
+            .iter()
+            .map(|child| (child.id.clone(), child.membership_epoch))
+            .collect();
         let mut stable_identities = reconcile_stable_identities(&config.children, &nested_channels);
 
         for spec in config.children {
@@ -387,15 +395,18 @@ impl SupervisorRuntime {
                 ),
                 ChildKind::Task(_) => None,
             };
+            let membership_epoch = *declared_membership_epochs
+                .get(&id)
+                .expect("initial snapshot contains every static child");
+            lifecycle.observe_membership_epoch(membership_epoch);
             let key = children.insert(ChildEntry::new(
                 id.clone(),
                 formatted_path,
                 spec,
                 child_nested_channels,
                 default_restart_intensity,
-                next_child_instance,
+                membership_epoch,
             ));
-            next_child_instance = next_child_instance.saturating_add(1);
             children_by_id.insert(id.clone(), key);
             child_order.push(key);
         }
@@ -429,8 +440,8 @@ impl SupervisorRuntime {
             children_by_id,
             child_order,
             live_tasks: 0,
-            next_child_instance,
             events,
+            lifecycle,
             snapshots,
             attached_children,
             shutdown_rx,
@@ -483,6 +494,9 @@ impl SupervisorRuntime {
         self.publish_snapshot();
         self.send_event(SupervisorEvent::SupervisorStarted);
         let initial_children = self.child_order.clone();
+        for &key in &initial_children {
+            self.send_lifecycle(key, LifecycleEventKind::Added);
+        }
         let initial_instances: Vec<_> = initial_children
             .iter()
             .filter_map(|&key| self.children.get(key).map(|entry| (key, entry.instance)))
@@ -826,6 +840,12 @@ impl SupervisorRuntime {
         entry.runtime.state = RuntimeChildState::Running;
         entry.runtime.has_reported_ready = true;
         let id = entry.id.clone();
+        self.send_lifecycle(
+            ready.key,
+            LifecycleEventKind::Started {
+                generation: ready.generation,
+            },
+        );
         self.send_event(SupervisorEvent::ChildStarted {
             id,
             generation: ready.generation,
@@ -940,7 +960,7 @@ impl SupervisorRuntime {
 
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
         let definition = child.inner;
-        let membership_epoch = self.next_child_instance;
+        let membership_epoch = self.lifecycle.next_membership_epoch();
         let key = self.children.insert(ChildEntry::new(
             id.clone(),
             formatted_path,
@@ -949,9 +969,9 @@ impl SupervisorRuntime {
             self.meta.default_restart_intensity,
             membership_epoch,
         ));
-        self.next_child_instance = self.next_child_instance.saturating_add(1);
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
+        self.send_lifecycle(key, LifecycleEventKind::Added);
 
         self.start_children(vec![key])?;
 
@@ -994,7 +1014,7 @@ impl SupervisorRuntime {
         let stable = supervisor.supervisor.stable_channels(false);
         let definition = Arc::new(ChildDefinition::supervisor(id.clone(), supervisor));
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
-        let membership_epoch = self.next_child_instance;
+        let membership_epoch = self.lifecycle.next_membership_epoch();
         let key = self.children.insert(ChildEntry::new(
             id.clone(),
             formatted_path,
@@ -1003,13 +1023,13 @@ impl SupervisorRuntime {
             self.meta.default_restart_intensity,
             membership_epoch,
         ));
-        self.next_child_instance = self.next_child_instance.saturating_add(1);
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
         self.nested_channels
             .lock()
             .expect("nested channel map poisoned")
             .insert(id.clone(), stable);
+        self.send_lifecycle(key, LifecycleEventKind::Added);
 
         self.start_children(vec![key])?;
 
@@ -1200,6 +1220,7 @@ impl SupervisorRuntime {
             return;
         }
 
+        let lifecycle = self.lifecycle_draft(key, LifecycleEventKind::Removed);
         let had_live_task = self.children[key].runtime.abort_handle.is_some();
         let mut entry = self.children.remove(key);
         let pending_removal = entry.pending_removal.take();
@@ -1228,6 +1249,9 @@ impl SupervisorRuntime {
         // Do that before publishing removal so watches observe terminality
         // before the child disappears from membership.
         drop(entry);
+        if let Some(lifecycle) = lifecycle {
+            self.send_lifecycle_draft(lifecycle);
+        }
         self.send_event(SupervisorEvent::ChildRemoved { id: id.clone() });
 
         if let Some(pending) = pending_removal {
@@ -1487,6 +1511,13 @@ impl SupervisorRuntime {
             entry.nested_snapshot_state = None;
             entry.id.clone()
         };
+        self.send_lifecycle(
+            key,
+            LifecycleEventKind::Exited {
+                generation,
+                reason: status.view(),
+            },
+        );
         self.send_event(SupervisorEvent::ChildExited {
             id,
             generation,
@@ -1736,6 +1767,32 @@ impl SupervisorRuntime {
         });
     }
 
+    pub(crate) fn send_lifecycle(&self, key: ChildKey, kind: LifecycleEventKind) {
+        if let Some(draft) = self.lifecycle_draft(key, kind) {
+            self.send_lifecycle_draft(draft);
+        }
+    }
+
+    fn lifecycle_draft(
+        &self,
+        key: ChildKey,
+        kind: LifecycleEventKind,
+    ) -> Option<LifecycleEventDraft> {
+        let entry = self.children.get(key)?;
+        Some(LifecycleEventDraft {
+            child_id: entry.id.clone(),
+            membership_epoch: entry.instance,
+            total_restarts: self.total_restarts,
+            child_restart_count: entry.runtime.restart_tracker.total_restarts(),
+            kind,
+        })
+    }
+
+    fn send_lifecycle_draft(&self, draft: LifecycleEventDraft) {
+        let lifecycle = Arc::clone(&self.lifecycle);
+        lifecycle.emit(draft, || self.publish_snapshot());
+    }
+
     pub(crate) fn send_event(&self, event: SupervisorEvent) {
         if event_updates_snapshot(&event) {
             self.publish_snapshot();
@@ -1763,7 +1820,21 @@ impl SupervisorRuntime {
         }
         drop(attached_children);
         let snapshot = self.snapshot_view();
-        let _ = self.snapshots.send_replace(snapshot.clone());
+        // Suppressing an unchanged local publication halves the wake-ups that
+        // every transition would otherwise deliver to snapshot subscribers,
+        // because the aligned lifecycle publication is immediately followed by
+        // the event-driven one. The parent forward is not conditional on that:
+        // a parent learns a nested snapshot only by being pushed one, so an
+        // incarnation whose first view matches its bind baseline would
+        // otherwise never populate the parent's cell. Redundant forwards are
+        // already coalesced by `NestedSnapshotState::try_queue`.
+        self.snapshots.send_if_modified(|current| {
+            if *current == snapshot {
+                return false;
+            }
+            current.clone_from(&snapshot);
+            true
+        });
         if let Some(parent_link) = self.meta.parent_link.as_ref() {
             parent_link.publish_snapshot(snapshot);
         }
@@ -1833,6 +1904,7 @@ impl SupervisorRuntime {
             },
             strategy: self.meta.strategy,
             total_restarts: self.total_restarts,
+            lifecycle_seq: self.lifecycle.seq(),
             children,
         }
     }
@@ -1988,6 +2060,7 @@ mod tests {
             config,
             shutdown_rx,
             events_tx,
+            LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,
@@ -2036,6 +2109,7 @@ mod tests {
             config,
             shutdown_rx,
             events_tx,
+            LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,
@@ -2081,6 +2155,7 @@ mod tests {
             config,
             shutdown_rx,
             events_tx,
+            LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,
@@ -2132,6 +2207,7 @@ mod tests {
             config,
             shutdown_rx,
             events_tx,
+            LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,

@@ -41,12 +41,14 @@ impl Actor for Health {
                 self.observed_restart_total = self.observed_restart_total.max(total);
                 tracing::warn!(total, count, "venue subtree restarts observed");
                 let now = Instant::now();
-                // The bridge sends an idempotent cumulative total, including
-                // after a target restart. Count only the newly represented
-                // restarts. They all carry this observation's timestamp
-                // rather than their own arrival times, which can only widen
-                // the window's view (trip earlier) — the fail-closed direction
-                // for a breaker.
+                // Each lifecycle envelope carries an idempotent cumulative
+                // total. The pump never replays an event after a Health
+                // restart; the next new event instead lets fresh state resync
+                // from its full total. Count only newly represented restarts.
+                // They all carry this observation's timestamp rather than
+                // their own arrival times, which can only widen the window's
+                // view (trip earlier) — the fail-closed direction for a
+                // breaker.
                 for _ in 0..count {
                     self.restarts.push_back(now);
                 }

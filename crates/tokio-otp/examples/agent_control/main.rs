@@ -165,7 +165,7 @@ struct App {
     tool_host: ActorRef<ToolHostMsg>,
     proof: Proof,
     gate: Arc<AtomicBool>,
-    restart_watch: RestartWatchGuard,
+    lifecycle_watch: LifecycleWatchGuard,
 }
 
 #[tokio::main]
@@ -298,8 +298,9 @@ async fn build_app() -> Result<App, AnyError> {
         .expect("dynamic sessions mount point");
     assert!(sessions_mount.set(sessions.clone()).is_ok());
 
-    let restart_watch =
-        gateway.watch_restarts_to(&guard, |total| GuardMsg::BridgeRestarts { total });
+    let lifecycle_watch = gateway.watch_lifecycle_to(&guard, |event| GuardMsg::BridgeRestarts {
+        total: event.total_restarts,
+    });
 
     Ok(App {
         handle,
@@ -315,7 +316,7 @@ async fn build_app() -> Result<App, AnyError> {
         tool_host,
         proof,
         gate,
-        restart_watch,
+        lifecycle_watch,
     })
 }
 
@@ -738,7 +739,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
     let recursive_stats = app.handle.actor_stats();
     let session_stats = app.sessions.actor_stats();
     let final_snapshot = app.handle.snapshot();
-    drop(app.restart_watch);
+    drop(app.lifecycle_watch);
     tokio::time::timeout(Duration::from_secs(5), app.handle.shutdown_and_wait()).await??;
     let latency = latency.snapshot();
     assert!(

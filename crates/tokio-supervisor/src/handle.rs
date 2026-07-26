@@ -12,11 +12,14 @@ use tokio::{
 use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
-    error::{ControlError, RestartMonitorError, SupervisorError},
+    error::{ControlError, SupervisorError},
     event::SupervisorEvent,
-    monitor::{RestartMonitor, RestartWatch},
+    lifecycle::{LifecycleHub, LifecycleWatch},
     snapshot::{ChildMembershipView, SupervisorSnapshot, SupervisorStateView},
 };
+
+#[allow(deprecated)]
+use crate::monitor::RestartWatch;
 
 type SupervisorJoinHandle = JoinHandle<Result<(), SupervisorError>>;
 type DoneSender = watch::Sender<Option<Result<(), SupervisorError>>>;
@@ -115,8 +118,9 @@ pub(crate) fn attached_children_state(
 ///
 /// The sender is dropped when the supervisor child becomes terminal (it can
 /// never run again), which closes the channel for watch-style consumers such
-/// as [`RestartWatch`]. The retained receiver keeps serving the final snapshot
-/// to [`SupervisorHandle::snapshot`] / `subscribe_snapshots` afterwards.
+/// as [`LifecycleWatch`] and [`RestartWatch`]. The retained receiver keeps
+/// serving the final snapshot to [`SupervisorHandle::snapshot`] /
+/// `subscribe_snapshots` afterwards.
 struct SnapshotSlot {
     tx: Option<watch::Sender<SupervisorSnapshot>>,
     rx: watch::Receiver<SupervisorSnapshot>,
@@ -131,6 +135,7 @@ pub(crate) struct StableSupervisorChannels {
     binding: Mutex<StableBindingState>,
     initial_incarnation: Mutex<Option<InitialIncarnationChannels>>,
     events_tx: broadcast::Sender<SupervisorEvent>,
+    lifecycle: Arc<LifecycleHub>,
     snapshots: Mutex<SnapshotSlot>,
     attached_children: AttachedChildrenState,
     nested_channels: NestedChannels,
@@ -170,6 +175,7 @@ impl StableSupervisorChannels {
                 done_rx,
             })),
             events_tx,
+            lifecycle: LifecycleHub::new(),
             snapshots: Mutex::new(SnapshotSlot {
                 tx: Some(snapshots_tx),
                 rx: snapshots_rx,
@@ -202,7 +208,7 @@ impl StableSupervisorChannels {
         command_tx: mpsc::Sender<SupervisorCommand>,
         done_rx: DoneReceiver,
         mut initial_snapshot: SupervisorSnapshot,
-        initial_attached_children: Vec<AttachedChildState>,
+        mut initial_attached_children: Vec<AttachedChildState>,
     ) -> Option<(StableBindingGuard, watch::Sender<SupervisorSnapshot>)> {
         let mut binding = self.binding.lock().expect("stable control slot poisoned");
         if binding.terminal {
@@ -214,9 +220,24 @@ impl StableSupervisorChannels {
         // is acquired inside the same lifecycle boundary, so `run_as_child`
         // never has to reopen the terminalization race after binding.
         let snapshots = self.snapshots();
+        // Membership epochs belong to the stable supervisor identity, not an
+        // individual incarnation. Assign the new static memberships before
+        // publishing the incarnation baseline so snapshot reducers and later
+        // `Added` events agree on their keys.
+        for child in &mut initial_snapshot.children {
+            let membership_epoch = self.lifecycle.next_membership_epoch();
+            child.membership_epoch = membership_epoch;
+            if let Some(attached) = initial_attached_children
+                .iter_mut()
+                .find(|attached| attached.identity.id == child.id)
+            {
+                attached.identity.membership_epoch = membership_epoch;
+            }
+        }
         // The children belong to the new incarnation, but the aggregate
         // restart counter belongs to the stable supervisor identity.
         initial_snapshot.total_restarts = snapshots.borrow().total_restarts;
+        initial_snapshot.lifecycle_seq = self.lifecycle.seq();
         snapshots.send_if_modified(|current| {
             if *current == initial_snapshot {
                 return false;
@@ -313,6 +334,10 @@ impl StableSupervisorChannels {
         }
     }
 
+    pub(crate) fn lifecycle(&self) -> Arc<LifecycleHub> {
+        Arc::clone(&self.lifecycle)
+    }
+
     /// Marks this supervisor child as terminal: no future incarnation will
     /// ever run. Drops the stable snapshot sender so watch-style consumers
     /// observe channel closure, and cascades to nested descendants, which can
@@ -351,6 +376,7 @@ impl StableSupervisorChannels {
             .tx
             .take();
         drop(tx);
+        self.lifecycle.terminal();
 
         let descendants: Vec<_> = self
             .nested_channels
@@ -581,6 +607,7 @@ struct RootHandle {
     command_tx: mpsc::Sender<SupervisorCommand>,
     done_rx: DoneReceiver,
     events_tx: broadcast::Sender<SupervisorEvent>,
+    lifecycle: Arc<LifecycleHub>,
     snapshots_rx: watch::Receiver<SupervisorSnapshot>,
     attached_children: AttachedChildrenState,
     nested_channels: NestedChannels,
@@ -628,6 +655,7 @@ pub(crate) struct SupervisorHandleInit {
     pub(crate) done_tx: DoneSender,
     pub(crate) done_rx: DoneReceiver,
     pub(crate) events_tx: broadcast::Sender<SupervisorEvent>,
+    pub(crate) lifecycle: Arc<LifecycleHub>,
     pub(crate) snapshots_rx: watch::Receiver<SupervisorSnapshot>,
     pub(crate) attached_children: AttachedChildrenState,
     pub(crate) join_handle: SupervisorJoinHandle,
@@ -644,8 +672,8 @@ pub(crate) struct SupervisorHandleInit {
 ///   to obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`subscribe`](Self::subscribe) for (lossy) events,
 ///   [`snapshot`](Self::snapshot) / [`subscribe_snapshots`](Self::subscribe_snapshots)
-///   for state, [`watch_restarts`](Self::watch_restarts) for reliable restart
-///   counting.
+///   for state, and [`watch_lifecycle`](Self::watch_lifecycle) for ordered,
+///   reliable transitions.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
 /// Dropping the last handle clone requests graceful shutdown, equivalent to
@@ -667,6 +695,7 @@ impl SupervisorHandle {
                 command_tx: init.command_tx,
                 done_rx: init.done_rx,
                 events_tx: init.events_tx,
+                lifecycle: init.lifecycle,
                 snapshots_rx: init.snapshots_rx,
                 attached_children: init.attached_children,
                 nested_channels: init.nested_channels,
@@ -917,36 +946,6 @@ impl SupervisorHandle {
         }
     }
 
-    /// Captures a direct child's current generation and returns an awaitable
-    /// that resolves once the child is next observed running with a greater
-    /// generation.
-    ///
-    /// Call this before triggering the crash: the baseline generation is
-    /// captured here, synchronously, not when the monitor is awaited. A monitor
-    /// created after a restart has fully completed waits for the next restart.
-    ///
-    /// This observes only direct children of this supervisor. Children inside
-    /// nested supervisors are not visible by id at this level; a path-aware
-    /// monitor is a future extension.
-    pub fn monitor_restart(
-        &self,
-        id: impl Into<String>,
-    ) -> Result<RestartMonitor, RestartMonitorError> {
-        let id = id.into();
-        let snapshots_rx = self.snapshots_rx();
-        let snapshot = snapshots_rx.borrow();
-        let child = snapshot
-            .child(&id)
-            .ok_or_else(|| RestartMonitorError::UnknownChild(id.clone()))?;
-        if child.membership == ChildMembershipView::Removing {
-            return Err(RestartMonitorError::ChildRemoved(id));
-        }
-        let generation = child.generation;
-        drop(snapshot);
-
-        Ok(RestartMonitor::new(id, generation, snapshots_rx))
-    }
-
     /// Returns a new receiver for supervisor lifecycle events.
     ///
     /// # Events are lossy observability, not durable control
@@ -966,7 +965,7 @@ impl SupervisorHandle {
     /// (treat the gap as if the guarded condition occurred), or better, use a
     /// cumulative source that cannot miss occurrences:
     ///
-    /// - [`watch_restarts`](Self::watch_restarts) for restart activity, or
+    /// - [`watch_lifecycle`](Self::watch_lifecycle) for ordered transitions, or
     /// - [`subscribe_snapshots`](Self::subscribe_snapshots) with the
     ///   monotonic [`SupervisorSnapshot::total_restarts`] and per-child
     ///   [`ChildSnapshot::restart_count`](crate::ChildSnapshot::restart_count)
@@ -975,6 +974,27 @@ impl SupervisorHandle {
     ///   account for every restart.
     pub fn subscribe(&self) -> broadcast::Receiver<SupervisorEvent> {
         self.events_tx().subscribe()
+    }
+
+    /// Returns an ordered, reliable stream of lifecycle transitions among
+    /// this supervisor's direct children.
+    ///
+    /// The baseline is creation time: earlier transitions are not replayed.
+    /// To obtain a gap-free state-plus-stream view, create the watch first,
+    /// then read [`snapshot`](Self::snapshot), then discard watched events
+    /// whose sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
+    /// Pre-spawn snapshots already project configured children as `Starting`,
+    /// so apply a later `Added` for that membership as an idempotent upsert
+    /// keyed by `(child_id, membership_epoch)`. Membership epochs remain
+    /// unique across incarnations of this stable supervisor identity.
+    ///
+    /// Each watch owns a bounded buffer. Sustained overflow is represented by
+    /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged), never
+    /// silent loss. This scope does not aggregate nested supervisors; obtain a
+    /// nested handle with [`supervisor`](Self::supervisor) and watch it
+    /// separately.
+    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+        self.lifecycle_hub().watch()
     }
 
     /// Returns a [`RestartWatch`] that reliably reports this supervisor's
@@ -1006,6 +1026,8 @@ impl SupervisorHandle {
     /// }
     /// # }
     /// ```
+    #[deprecated(note = "use watch_lifecycle and LifecycleEvent restart counters instead")]
+    #[allow(deprecated)]
     pub fn watch_restarts(&self) -> RestartWatch {
         RestartWatch::new(self.snapshots_rx())
     }
@@ -1072,6 +1094,13 @@ impl SupervisorHandle {
         match &self.kind {
             HandleKind::Root(root) => root.snapshots_rx.clone(),
             HandleKind::Stable(stable) => stable.snapshots_rx(),
+        }
+    }
+
+    fn lifecycle_hub(&self) -> Arc<LifecycleHub> {
+        match &self.kind {
+            HandleKind::Root(root) => Arc::clone(&root.lifecycle),
+            HandleKind::Stable(stable) => stable.lifecycle(),
         }
     }
 

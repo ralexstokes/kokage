@@ -14,6 +14,7 @@ use crate::{
         SupervisorCommand, SupervisorHandle, SupervisorHandleInit, attached_children_state,
         empty_nested_channels,
     },
+    lifecycle::LifecycleHub,
     observability::{format_path, strategy_label, supervisor_name_for_path},
     restart::RestartIntensity,
     runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
@@ -83,9 +84,11 @@ impl Supervisor {
         let (command_tx, command_rx) = mpsc::channel(self.config.control_channel_capacity);
         let (done_tx, done_rx) = watch::channel(None);
         let (events_tx, _) = broadcast::channel(self.config.event_channel_capacity);
+        let lifecycle = LifecycleHub::new();
         let (snapshots_tx, snapshots_rx) = watch::channel(initial_snapshot(&self.config));
         let task_done_tx = done_tx.clone();
         let task_events_tx = events_tx.clone();
+        let task_lifecycle = Arc::clone(&lifecycle);
         let task_snapshots_tx = snapshots_tx.clone();
         let task_nested_channels = nested_channels.clone();
         let task_attached_children = Arc::clone(&attached_children);
@@ -95,6 +98,7 @@ impl Supervisor {
                 .run_with_channels(
                     shutdown_rx,
                     task_events_tx,
+                    Arc::clone(&task_lifecycle),
                     task_snapshots_tx,
                     task_attached_children,
                     command_rx,
@@ -105,6 +109,7 @@ impl Supervisor {
                     false,
                 )
                 .await;
+            task_lifecycle.terminal();
             let _ = task_done_tx.send(Some(result.clone()));
             result
         });
@@ -116,6 +121,7 @@ impl Supervisor {
             done_tx,
             done_rx,
             events_tx,
+            lifecycle,
             snapshots_rx,
             attached_children,
             join_handle,
@@ -159,6 +165,7 @@ impl Supervisor {
                 },
             );
         let events_tx = channels.events();
+        let lifecycle = channels.lifecycle();
         let nested_channels = channels.nested_channels();
         let attached_children = channels.attached_children();
         let startup_ctx = ctx.clone();
@@ -193,6 +200,7 @@ impl Supervisor {
                 .run_with_channels(
                     shutdown_rx,
                     events_tx,
+                    lifecycle,
                     snapshots_tx,
                     attached_children,
                     command_rx,
@@ -236,6 +244,7 @@ impl Supervisor {
         self,
         shutdown_rx: watch::Receiver<bool>,
         events_tx: broadcast::Sender<SupervisorEvent>,
+        lifecycle: Arc<LifecycleHub>,
         snapshots_tx: watch::Sender<SupervisorSnapshot>,
         attached_children: AttachedChildrenState,
         command_rx: mpsc::Receiver<SupervisorCommand>,
@@ -252,6 +261,7 @@ impl Supervisor {
             self.config,
             shutdown_rx,
             events_tx,
+            lifecycle,
             snapshots_tx,
             attached_children,
             command_rx,
@@ -316,6 +326,7 @@ pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot 
         state: SupervisorStateView::Running,
         strategy: config.strategy,
         total_restarts: 0,
+        lifecycle_seq: 0,
         children: config
             .children
             .iter()

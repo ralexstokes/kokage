@@ -10,10 +10,13 @@ use crate::{
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
-    AttachedChildIdentity, ChildSpec, ControlError, RestartIntensity, RestartPolicy, RestartWatch,
-    ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-    SupervisorSpec,
+    AttachedChildIdentity, ChildSpec, ControlError, LifecycleEvent, LifecycleWatch,
+    RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot, SupervisorSpec,
 };
+
+#[allow(deprecated)]
+use tokio_supervisor::RestartWatch;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
@@ -202,10 +205,12 @@ struct DynamicChildOptions {
 /// the pump. It also stops automatically when the watched supervisor can no
 /// longer restart a child or when the target actor permanently terminates.
 #[must_use = "dropping the guard immediately cancels the restart watch"]
+#[deprecated(note = "use LifecycleWatchGuard with RuntimeHandle::watch_lifecycle_to instead")]
 pub struct RestartWatchGuard {
     cancellation: CancellationToken,
 }
 
+#[allow(deprecated)]
 impl RestartWatchGuard {
     /// Cancels the restart-count pump.
     ///
@@ -221,6 +226,7 @@ impl RestartWatchGuard {
     }
 }
 
+#[allow(deprecated)]
 impl std::fmt::Debug for RestartWatchGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RestartWatchGuard")
@@ -229,12 +235,14 @@ impl std::fmt::Debug for RestartWatchGuard {
     }
 }
 
+#[allow(deprecated)]
 impl Drop for RestartWatchGuard {
     fn drop(&mut self) {
         self.cancel();
     }
 }
 
+#[allow(deprecated)]
 fn spawn_restart_watch_to<M, F>(
     mut restarts: RestartWatch,
     target: ActorRef<M>,
@@ -288,6 +296,85 @@ where
     });
 
     RestartWatchGuard { cancellation }
+}
+
+/// Cancellation guard for a lifecycle-event mailbox pump.
+///
+/// Created by [`RuntimeHandle::watch_lifecycle_to`]. Dropping the guard
+/// cancels the pump. It also stops automatically when the watched supervisor
+/// identity or target actor permanently terminates.
+#[must_use = "dropping the guard immediately cancels the lifecycle watch"]
+pub struct LifecycleWatchGuard {
+    cancellation: CancellationToken,
+}
+
+impl LifecycleWatchGuard {
+    /// Cancels the lifecycle pump.
+    ///
+    /// Cancellation is idempotent. A message already accepted by the target
+    /// mailbox cannot be retracted.
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    /// Returns whether the lifecycle pump has been cancelled or stopped.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+}
+
+impl std::fmt::Debug for LifecycleWatchGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LifecycleWatchGuard")
+            .field("is_cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+impl Drop for LifecycleWatchGuard {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+fn spawn_lifecycle_watch_to<M, F>(
+    mut lifecycle: LifecycleWatch,
+    target: ActorRef<M>,
+    mut map: F,
+) -> LifecycleWatchGuard
+where
+    M: Send + 'static,
+    F: FnMut(LifecycleEvent) -> M + Send + 'static,
+{
+    let cancellation = CancellationToken::new();
+    let task_cancellation = cancellation.clone();
+
+    tokio::spawn(async move {
+        let _cancel_on_exit = task_cancellation.clone().drop_guard();
+        loop {
+            let Some(event) = (tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => None,
+                () = target.wait_terminated() => None,
+                event = lifecycle.next() => event,
+            }) else {
+                return;
+            };
+
+            tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => return,
+                () = target.wait_terminated() => return,
+                sent = target.send_to_incarnation(map(event)) => {
+                    if sent.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    LifecycleWatchGuard { cancellation }
 }
 
 /// Configured-but-not-yet-running runtime that owns a supervisor and its
@@ -631,12 +718,47 @@ impl RuntimeHandle {
         self.supervisor.wait_started().await
     }
 
+    /// Returns the ordered lifecycle stream for this runtime's direct
+    /// children.
+    ///
+    /// Create the watch before reading [`snapshot`](Self::snapshot), then
+    /// discard events whose `seq` is at most the snapshot's `lifecycle_seq`
+    /// to obtain a gap-free state-plus-stream view. Pre-spawn snapshots
+    /// already project configured children, so reducers should apply their
+    /// later `Added` events as idempotent membership upserts. Use a
+    /// [`subtree`](Self::subtree) handle for nested scopes.
+    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+        self.supervisor.watch_lifecycle()
+    }
+
+    /// Pumps lifecycle events into `target` using its ordinary mailbox policy.
+    ///
+    /// The pump follows the target through ordinary actor restarts, but never
+    /// replays an event to a fresh incarnation: lifecycle events are discrete
+    /// history, so replay would fabricate a transition. A restarted consumer
+    /// should rehydrate using watch → snapshot → `lifecycle_seq` filtering in
+    /// `on_start`. FIFO mailboxes are recommended when every transition must
+    /// be observed; a conflating mailbox may discard intermediate messages.
+    ///
+    /// The pump stops when the returned guard is dropped or cancelled, when
+    /// this runtime's identity becomes terminal after draining its staged
+    /// events, or when the target actor permanently terminates.
+    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> LifecycleWatchGuard
+    where
+        M: Send + 'static,
+        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    {
+        spawn_lifecycle_watch_to(self.watch_lifecycle(), target.clone(), map)
+    }
+
     /// Delegates to [`SupervisorHandle::watch_restarts`]: reliable,
     /// snapshot-backed observation of restart activity, suitable for control
     /// logic such as aggregate restart breakers.
     ///
     /// Covers the root supervisor's direct children only; call this method on
     /// a [`subtree`](Self::subtree) handle to observe that subtree.
+    #[deprecated(note = "use watch_lifecycle and LifecycleEvent restart counters instead")]
+    #[allow(deprecated)]
     pub fn watch_restarts(&self) -> RestartWatch {
         self.supervisor.watch_restarts()
     }
@@ -655,6 +777,8 @@ impl RuntimeHandle {
     /// cancelled, when this runtime reaches a terminal state, or when the
     /// target actor permanently terminates. It follows the target through
     /// ordinary actor restarts.
+    #[deprecated(note = "use watch_lifecycle_to instead")]
+    #[allow(deprecated)]
     pub fn watch_restarts_to<M, F>(&self, target: &ActorRef<M>, map: F) -> RestartWatchGuard
     where
         M: Send + 'static,

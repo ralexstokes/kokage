@@ -92,9 +92,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     frontend.send("hello".to_owned()).await?;
-    let restart = handle.supervisor_handle().monitor_restart("worker")?;
+    let mut lifecycle = handle.watch_lifecycle();
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .generation;
     frontend.send("fail-worker".to_owned()).await?;
-    restart.await?;
+    lifecycle
+        .wait_started("worker", baseline)
+        .await
+        .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;
 
     // Wait for the worker to finish the last order before shutting down.
