@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::{Duration, Instant as StdInstant},
 };
@@ -25,7 +25,7 @@ use crate::{
     },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
-    shutdown::AutoShutdown,
+    shutdown::{AutoShutdown, ShutdownMode},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, NestedSnapshotNotification,
         NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
@@ -113,69 +113,24 @@ type CommandResult<T> = Result<T, CommandFailure>;
 type JoinedChild = Result<(Id, ChildEnvelope), JoinError>;
 
 #[derive(Clone, Copy)]
-enum JoinInterest {
-    None,
-    WhenNonEmpty,
-    Required,
-}
-
-#[derive(Clone, Copy)]
 struct WakeOptions {
     commands: bool,
     nested_snapshots: bool,
     nested_events: bool,
     readiness: bool,
-    readiness_first: bool,
-    joins: JoinInterest,
+    joins: bool,
     deadline: Option<Instant>,
 }
 
 impl WakeOptions {
-    fn main_loop() -> Self {
+    fn main_loop(deadline: Option<Instant>) -> Self {
         Self {
             commands: true,
             nested_snapshots: true,
             nested_events: true,
             readiness: true,
-            readiness_first: false,
-            joins: JoinInterest::WhenNonEmpty,
-            deadline: None,
-        }
-    }
-
-    fn readiness() -> Self {
-        Self {
-            commands: false,
-            nested_snapshots: true,
-            nested_events: true,
-            readiness: true,
-            readiness_first: true,
-            joins: JoinInterest::WhenNonEmpty,
-            deadline: None,
-        }
-    }
-
-    fn restart_delay(deadline: Instant) -> Self {
-        Self {
-            commands: true,
-            nested_snapshots: false,
-            nested_events: false,
-            readiness: false,
-            readiness_first: false,
-            joins: JoinInterest::None,
-            deadline: Some(deadline),
-        }
-    }
-
-    fn child_removal(deadline: Instant) -> Self {
-        Self {
-            commands: false,
-            nested_snapshots: false,
-            nested_events: false,
-            readiness: false,
-            readiness_first: false,
-            joins: JoinInterest::Required,
-            deadline: Some(deadline),
+            joins: true,
+            deadline,
         }
     }
 }
@@ -211,6 +166,39 @@ pub(crate) struct ChildEntry {
     pub(crate) nested_snapshot_state: Option<NestedSnapshotState>,
     pub(crate) nested_channels: Option<Arc<StableSupervisorChannels>>,
     pub(crate) membership: MembershipState,
+    pending_removal: Option<PendingRemoval>,
+}
+
+struct PendingRemoval {
+    reply: oneshot::Sender<Result<(), ControlError>>,
+    mode: ShutdownMode,
+    grace_deadline: Instant,
+    initiated_at: StdInstant,
+    grace_expired: bool,
+}
+
+#[derive(Clone, Copy)]
+struct StartItem {
+    key: ChildKey,
+    instance: u64,
+    emit_restart_event: bool,
+}
+
+struct StartGate {
+    key: ChildKey,
+    instance: u64,
+    generation: u64,
+}
+
+#[derive(Default)]
+struct StartSequence {
+    queue: VecDeque<StartItem>,
+    gate: Option<StartGate>,
+}
+
+struct StartupGate {
+    ready: crate::context::ChildContext,
+    pending: Vec<(ChildKey, u64)>,
 }
 
 impl ChildEntry {
@@ -233,6 +221,7 @@ impl ChildEntry {
             nested_snapshot_state: None,
             nested_channels,
             membership: MembershipState::Active,
+            pending_removal: None,
         }
     }
 }
@@ -356,7 +345,8 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) ready_rx: mpsc::UnboundedReceiver<ChildReady>,
     pub(crate) commands_open: bool,
     pub(crate) task_map: HashMap<Id, TaskMeta>,
-    pub(crate) restart_epoch: u64,
+    start_sequence: Option<StartSequence>,
+    startup_gate: Option<StartupGate>,
     /// Cumulative restarts scheduled across all direct children (including
     /// since-removed ones), seeded from the previous incarnation for nested
     /// supervisors; exposed as [`SupervisorSnapshot::total_restarts`].
@@ -454,7 +444,8 @@ impl SupervisorRuntime {
             ready_rx,
             commands_open: true,
             task_map: HashMap::new(),
-            restart_epoch: 0,
+            start_sequence: None,
+            startup_gate: None,
             total_restarts,
         }
     }
@@ -464,9 +455,24 @@ impl SupervisorRuntime {
         startup_ready: Option<crate::context::ChildContext>,
     ) -> Result<(), SupervisorError> {
         match self.run_until_exit(startup_ready).await {
-            Ok(()) => Ok(()),
-            Err(ExitReason::Shutdown) => self.shutdown_all().await,
-            Err(ExitReason::Failure(error)) => Err(error),
+            Ok(()) => {
+                self.resolve_pending_removals(None);
+                Ok(())
+            }
+            Err(ExitReason::Shutdown) => {
+                let result = self.shutdown_all().await;
+                self.resolve_pending_removals(None);
+                result
+            }
+            Err(ExitReason::Failure(error @ SupervisorError::StartupAborted(_))) => {
+                let _ = self.shutdown_all().await;
+                self.resolve_pending_removals(Some(&error));
+                Err(error)
+            }
+            Err(ExitReason::Failure(error)) => {
+                self.resolve_pending_removals(Some(&error));
+                Err(error)
+            }
         }
     }
 
@@ -481,24 +487,23 @@ impl SupervisorRuntime {
             .iter()
             .filter_map(|&key| self.children.get(key).map(|entry| (key, entry.instance)))
             .collect();
-        let startup_completed = self.start_children(initial_children.clone()).await?;
         if let Some(startup_ready) = startup_ready {
-            if startup_completed && self.wait_until_children_ready(&initial_instances).await? {
-                startup_ready.mark_ready();
-            } else {
-                let error = SupervisorError::StartupAborted(
-                    "nested supervisor child failed before startup completed".to_owned(),
-                );
-                let _ = self.shutdown_all().await;
-                return Err(ExitReason::Failure(error));
-            }
+            self.startup_gate = Some(StartupGate {
+                ready: startup_ready,
+                pending: initial_instances,
+            });
         }
+        self.start_children(initial_children)?;
+        self.complete_empty_startup_gate();
 
         loop {
-            match self.next_wake(WakeOptions::main_loop()).await {
+            match self
+                .next_wake(WakeOptions::main_loop(self.earliest_deadline()))
+                .await
+            {
                 Wake::Shutdown => return Err(ExitReason::Shutdown),
                 Wake::Command(command) => match command {
-                    Some(command) => self.handle_command(command).await?,
+                    Some(command) => self.handle_command(command)?,
                     None => self.commands_open = false,
                 },
                 Wake::NestedSnapshot(update) => {
@@ -513,15 +518,44 @@ impl SupervisorRuntime {
                 }
                 Wake::Ready(ready) => {
                     if let Some(ready) = ready {
-                        self.handle_child_ready(ready);
+                        self.handle_child_ready(ready)?;
                     }
                 }
                 Wake::Joined(maybe) => {
                     if let Some(joined) = maybe {
-                        self.handle_joined_child(joined).await?;
+                        self.handle_joined_child(joined)?;
                     }
                 }
-                Wake::Deadline => unreachable!("main loop has no deadline"),
+                Wake::Deadline => {
+                    // Preserve the existing zero-backoff contract: let tasks
+                    // woken by `ChildRestartScheduled` enqueue control work,
+                    // then give the whole queued batch priority over an
+                    // already-due restart.
+                    tokio::task::yield_now().await;
+                    self.drain_deadline_command_batch()?;
+                    self.handle_deadlines().await?;
+                }
+            }
+        }
+    }
+
+    fn drain_deadline_command_batch(&mut self) -> RuntimeResult<()> {
+        loop {
+            // The batch preserves command ordering relative to the due
+            // restart, but shutdown retains the select loop's higher priority
+            // between every pair of commands.
+            if self.shutdown_rx.has_changed().is_err() || *self.shutdown_rx.borrow() {
+                return Err(ExitReason::Shutdown);
+            }
+            match self.command_rx.try_recv() {
+                Ok(command) => self.handle_command(command)?,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // `try_recv` reports disconnection only after every
+                    // buffered command has been consumed.
+                    self.commands_open = false;
+                    return Ok(());
+                }
+                Err(mpsc::error::TryRecvError::Empty) => return Ok(()),
             }
         }
     }
@@ -530,22 +564,16 @@ impl SupervisorRuntime {
     /// and always wins when multiple inputs are ready.
     async fn next_wake(&mut self, options: WakeOptions) -> Wake {
         loop {
-            if options.readiness_first {
-                if self.shutdown_rx.has_changed().is_err() || *self.shutdown_rx.borrow() {
-                    return Wake::Shutdown;
-                }
-                match self.ready_rx.try_recv() {
-                    Ok(ready) => return Wake::Ready(Some(ready)),
-                    Err(mpsc::error::TryRecvError::Disconnected) => return Wake::Ready(None),
-                    Err(mpsc::error::TryRecvError::Empty) => {}
-                }
+            if self.shutdown_rx.has_changed().is_err() || *self.shutdown_rx.borrow() {
+                return Wake::Shutdown;
             }
-
-            let wait_for_join = match options.joins {
-                JoinInterest::None => false,
-                JoinInterest::WhenNonEmpty => !self.join_set.is_empty(),
-                JoinInterest::Required => true,
-            };
+            if options
+                .deadline
+                .is_some_and(|deadline| deadline <= Instant::now())
+            {
+                return Wake::Deadline;
+            }
+            let wait_for_join = options.joins && !self.join_set.is_empty();
             let deadline = options.deadline.unwrap_or_else(Instant::now);
             let wake = tokio::select! {
                 biased;
@@ -555,14 +583,14 @@ impl SupervisorRuntime {
                 command = self.command_rx.recv(), if options.commands && self.commands_open => {
                     Some(Wake::Command(command))
                 }
+                ready = self.ready_rx.recv(), if options.readiness => {
+                    Some(Wake::Ready(ready))
+                }
                 update = self.nested_snapshot_rx.recv(), if options.nested_snapshots => {
                     Some(Wake::NestedSnapshot(update))
                 }
                 event = self.nested_event_rx.recv(), if options.nested_events => {
                     Some(Wake::NestedEvent(event))
-                }
-                ready = self.ready_rx.recv(), if options.readiness => {
-                    Some(Wake::Ready(ready))
                 }
                 joined = self.join_set.join_next_with_id(), if wait_for_join => {
                     Some(Wake::Joined(joined))
@@ -577,151 +605,223 @@ impl SupervisorRuntime {
         }
     }
 
-    async fn start_children(&mut self, keys: Vec<ChildKey>) -> RuntimeResult<bool> {
-        self.respawn_sequence(keys, false).await
+    fn start_children(&mut self, keys: Vec<ChildKey>) -> RuntimeResult<()> {
+        self.schedule_start_sequence(keys, false)
     }
 
-    async fn respawn_sequence(
+    fn respawn_sequence(
         &mut self,
         keys: Vec<ChildKey>,
         emit_restart_events: bool,
-    ) -> RuntimeResult<bool> {
-        let restart_epoch = self.restart_epoch;
+    ) -> RuntimeResult<()> {
+        self.schedule_start_sequence(keys, emit_restart_events)
+    }
+
+    fn schedule_start_sequence(
+        &mut self,
+        keys: Vec<ChildKey>,
+        emit_restart_events: bool,
+    ) -> RuntimeResult<()> {
         for key in keys {
             if emit_restart_events {
                 match self.group_respawn_disposition(key) {
                     GroupRespawnDisposition::Respawn => {}
                     GroupRespawnDisposition::Skip => continue,
                     GroupRespawnDisposition::Finalize { startup_aborted } => {
-                        self.finalize_skipped_group_respawn(key, startup_aborted);
+                        self.finalize_skipped_group_respawn(key, startup_aborted)?;
                         continue;
                     }
                 }
             }
-            let SpawnOutcome::Spawned {
-                ready,
-                old_generation,
-                new_generation,
-            } = Box::pin(self.spawn_child_for_start(key)).await?
-            else {
+
+            let Some(entry) = self.children.get(key) else {
                 continue;
             };
-            if self.restart_epoch != restart_epoch {
-                return Ok(true);
-            }
-            if emit_restart_events && let Some(old_generation) = old_generation {
-                self.send_restart_event(key, old_generation, new_generation);
-            }
-            if !ready {
-                if self.children.contains(key) {
-                    return Ok(false);
-                }
+            if entry.membership != MembershipState::Active
+                || !matches!(
+                    entry.runtime.state,
+                    RuntimeChildState::Stopped | RuntimeChildState::StartQueued
+                )
+            {
                 continue;
             }
+
+            let item = StartItem {
+                key,
+                instance: entry.instance,
+                emit_restart_event: emit_restart_events,
+            };
+            if self.meta.start_mode == StartMode::Concurrent {
+                self.spawn_start_item(item)?;
+            } else {
+                let entry = &mut self.children[key];
+                entry.runtime.state = RuntimeChildState::StartQueued;
+                entry.runtime.has_reported_ready = false;
+                entry.runtime.next_restart_deadline = None;
+                self.start_sequence
+                    .get_or_insert_with(StartSequence::default)
+                    .queue
+                    .push_back(item);
+            }
         }
-        Ok(true)
+
+        if self.meta.start_mode == StartMode::Sequential {
+            self.publish_snapshot();
+            self.advance_start_sequence()?;
+        }
+        Ok(())
     }
 
-    async fn spawn_child_for_start(&mut self, key: ChildKey) -> RuntimeResult<SpawnOutcome> {
-        let Some(entry) = self.children.get(key) else {
-            return Ok(SpawnOutcome::Skipped);
+    fn spawn_start_item(&mut self, item: StartItem) -> RuntimeResult<()> {
+        let Some(entry) = self.children.get(item.key) else {
+            return Ok(());
         };
-        if entry.membership != MembershipState::Active
-            || entry.runtime.state != RuntimeChildState::Stopped
+        if entry.instance != item.instance
+            || entry.membership != MembershipState::Active
+            || !matches!(
+                entry.runtime.state,
+                RuntimeChildState::Stopped | RuntimeChildState::StartQueued
+            )
         {
-            return Ok(SpawnOutcome::Skipped);
+            return Ok(());
         }
         let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
-        let (old_generation, new_generation) = self.spawn_child(key)?;
-        let ready = if self.meta.start_mode == StartMode::Sequential && readiness_gated {
-            Box::pin(self.wait_until_child_ready(key)).await?
-        } else {
-            true
-        };
-        Ok(SpawnOutcome::Spawned {
-            ready,
-            old_generation,
-            new_generation,
-        })
+        let (old_generation, new_generation) = self.spawn_child(item.key)?;
+        if self.meta.start_mode == StartMode::Sequential && readiness_gated {
+            self.start_sequence
+                .get_or_insert_with(StartSequence::default)
+                .gate = Some(StartGate {
+                key: item.key,
+                instance: item.instance,
+                generation: new_generation,
+            });
+        } else if !readiness_gated {
+            self.startup_member_ready(item.key, item.instance);
+        }
+        if item.emit_restart_event
+            && let Some(old_generation) = old_generation
+        {
+            // Group-restart transitions are emitted when the replacement is
+            // spawned, matching one-for-one restarts and preserving the full
+            // generation chain even if readiness is never reported.
+            self.send_restart_event(item.key, old_generation, new_generation);
+        }
+        Ok(())
     }
 
-    async fn wait_until_child_ready(&mut self, key: ChildKey) -> RuntimeResult<bool> {
-        let Some(instance) = self.children.get(key).map(|entry| entry.instance) else {
-            return Ok(false);
-        };
+    fn advance_start_sequence(&mut self) -> RuntimeResult<()> {
         loop {
-            let Some(entry) = self.children.get(key) else {
-                return Ok(false);
-            };
-            if entry.instance != instance {
-                return Ok(false);
-            }
-            match entry.runtime.state {
-                RuntimeChildState::Running => return Ok(true),
-                RuntimeChildState::Stopped => return Ok(false),
-                RuntimeChildState::Starting | RuntimeChildState::Stopping => {}
+            let gate_action = self.start_sequence.as_ref().and_then(|sequence| {
+                sequence.gate.as_ref().map(|gate| {
+                    let state = self.children.get(gate.key).and_then(|entry| {
+                        (entry.instance == gate.instance
+                            && entry.membership == MembershipState::Active)
+                            .then_some((entry.runtime.state, entry.runtime.next_restart_deadline))
+                    });
+                    (gate.key, gate.instance, state)
+                })
+            });
+
+            if let Some((key, instance, state)) = gate_action {
+                match state {
+                    Some((RuntimeChildState::Starting | RuntimeChildState::Stopping, _))
+                    | Some((RuntimeChildState::Stopped, Some(_))) => return Ok(()),
+                    Some((RuntimeChildState::Running, _)) => {
+                        self.start_sequence
+                            .as_mut()
+                            .and_then(|sequence| sequence.gate.take())
+                            .expect("start gate was present");
+                        self.startup_member_ready(key, instance);
+                    }
+                    Some((RuntimeChildState::Stopped, None)) => {
+                        self.start_sequence
+                            .as_mut()
+                            .expect("start sequence was present")
+                            .gate = None;
+                        self.startup_member_aborted(key, instance)?;
+                    }
+                    Some((RuntimeChildState::StartQueued, _)) | None => {
+                        self.start_sequence
+                            .as_mut()
+                            .expect("start sequence was present")
+                            .gate = None;
+                    }
+                }
+                continue;
             }
 
-            match self.next_wake(WakeOptions::readiness()).await {
-                Wake::Shutdown => return Err(ExitReason::Shutdown),
-                Wake::Ready(ready) => {
-                    if let Some(ready) = ready {
-                        self.handle_child_ready(ready);
-                    }
-                }
-                Wake::NestedSnapshot(update) => {
-                    if let Some(update) = update {
-                        self.handle_nested_snapshot(update);
-                    }
-                }
-                Wake::NestedEvent(event) => {
-                    if let Some(event) = event {
-                        self.handle_nested_event(event);
-                    }
-                }
-                Wake::Joined(maybe) => {
-                    if let Some(joined) = maybe {
-                        self.handle_joined_child(joined).await?;
-                    }
-                }
-                Wake::Command(_) | Wake::Deadline => {
-                    unreachable!("readiness wait enables only readiness inputs")
-                }
+            let item = self
+                .start_sequence
+                .as_mut()
+                .and_then(|sequence| sequence.queue.pop_front());
+            let Some(item) = item else {
+                self.start_sequence = None;
+                return Ok(());
+            };
+            self.spawn_start_item(item)?;
+            if self
+                .start_sequence
+                .as_ref()
+                .is_some_and(|sequence| sequence.gate.is_some())
+            {
+                return Ok(());
             }
         }
     }
 
-    async fn wait_until_children_ready(
-        &mut self,
-        children: &[(ChildKey, u64)],
-    ) -> RuntimeResult<bool> {
-        for &(key, instance) in children {
-            let Some(entry) = self.children.get(key) else {
-                continue;
-            };
-            if entry.instance != instance {
-                continue;
-            }
-            if entry.runtime.has_reported_ready {
-                continue;
-            }
-            if !Box::pin(self.wait_until_child_ready(key)).await? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    fn handle_child_ready(&mut self, ready: ChildReady) {
-        let Some(entry) = self.children.get_mut(ready.key) else {
+    fn startup_member_ready(&mut self, key: ChildKey, instance: u64) {
+        let Some(gate) = self.startup_gate.as_mut() else {
             return;
+        };
+        gate.pending.retain(|&(pending_key, pending_instance)| {
+            pending_key != key || pending_instance != instance
+        });
+        self.complete_empty_startup_gate();
+    }
+
+    fn startup_member_aborted(&mut self, key: ChildKey, instance: u64) -> RuntimeResult<()> {
+        let pending = self
+            .startup_gate
+            .as_ref()
+            .is_some_and(|gate| gate.pending.contains(&(key, instance)));
+        if !pending {
+            return Ok(());
+        }
+        let id = self
+            .children
+            .get(key)
+            .map_or_else(|| "unknown".to_owned(), |entry| entry.id.clone());
+        Err(SupervisorError::StartupAborted(format!(
+            "child `{id}` exited before reporting readiness"
+        ))
+        .into())
+    }
+
+    fn startup_member_removed(&mut self, key: ChildKey, instance: u64) {
+        self.startup_member_ready(key, instance);
+    }
+
+    fn complete_empty_startup_gate(&mut self) {
+        if self
+            .startup_gate
+            .as_ref()
+            .is_some_and(|gate| gate.pending.is_empty())
+        {
+            let gate = self.startup_gate.take().expect("startup gate was present");
+            gate.ready.mark_ready();
+        }
+    }
+
+    fn handle_child_ready(&mut self, ready: ChildReady) -> RuntimeResult<()> {
+        let Some(entry) = self.children.get_mut(ready.key) else {
+            return Ok(());
         };
         if entry.instance != ready.instance
             || entry.runtime.generation != ready.generation
             || entry.membership != MembershipState::Active
             || entry.runtime.state != RuntimeChildState::Starting
         {
-            return;
+            return Ok(());
         }
         entry.runtime.state = RuntimeChildState::Running;
         entry.runtime.has_reported_ready = true;
@@ -730,6 +830,23 @@ impl SupervisorRuntime {
             id,
             generation: ready.generation,
         });
+        self.startup_member_ready(ready.key, ready.instance);
+
+        let matches_gate = self.start_sequence.as_ref().is_some_and(|sequence| {
+            sequence.gate.as_ref().is_some_and(|gate| {
+                gate.key == ready.key
+                    && gate.instance == ready.instance
+                    && gate.generation == ready.generation
+            })
+        });
+        if matches_gate {
+            self.start_sequence
+                .as_mut()
+                .and_then(|sequence| sequence.gate.take())
+                .expect("matching start gate was present");
+            self.advance_start_sequence()?;
+        }
+        Ok(())
     }
 
     fn group_respawn_disposition(&self, key: ChildKey) -> GroupRespawnDisposition {
@@ -749,37 +866,42 @@ impl SupervisorRuntime {
         GroupRespawnDisposition::Respawn
     }
 
-    fn finalize_skipped_group_respawn(&mut self, key: ChildKey, startup_aborted: bool) {
+    fn finalize_skipped_group_respawn(
+        &mut self,
+        key: ChildKey,
+        startup_aborted: bool,
+    ) -> RuntimeResult<()> {
+        let instance = self.children[key].instance;
         if startup_aborted {
             self.children[key].runtime.startup_aborted = true;
             self.publish_snapshot();
+            self.startup_member_aborted(key, instance)?;
         }
         // Skipped by the group respawn and never restarted afterwards; if
         // this supervisor is the root, that judgment is final.
         if self.children[key].runtime.definition.remove_on_exit {
-            self.finalize_removed_child(key);
+            self.finalize_removed_child(key, false);
         } else {
             self.mark_child_terminal(key);
         }
+        Ok(())
     }
 
-    async fn handle_command(&mut self, command: SupervisorCommand) -> RuntimeResult<()> {
+    fn handle_command(&mut self, command: SupervisorCommand) -> RuntimeResult<()> {
         match command {
             SupervisorCommand::AddChild { child, reply } => {
-                complete_command(reply, self.add_child(child).await)
+                complete_command(reply, self.add_child(child))
             }
-            SupervisorCommand::RemoveChild { id, reply } => {
-                complete_command(reply, self.remove_child(id).await)
-            }
+            SupervisorCommand::RemoveChild { id, reply } => self.remove_child(id, reply),
             SupervisorCommand::AddSupervisor {
                 id,
                 supervisor,
                 reply,
-            } => complete_command(reply, self.add_supervisor(id, *supervisor).await),
+            } => complete_command(reply, self.add_supervisor(id, *supervisor)),
         }
     }
 
-    async fn add_child(&mut self, child: crate::child::ChildSpec) -> CommandResult<u64> {
+    fn add_child(&mut self, child: crate::child::ChildSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
@@ -807,8 +929,13 @@ impl SupervisorRuntime {
         }
 
         let id = child.id().to_owned();
-        if self.children_by_id.contains_key(&id) {
-            return Err(ControlError::DuplicateChildId(id).into());
+        if let Some(&key) = self.children_by_id.get(&id) {
+            let error = if self.children[key].membership == MembershipState::Removing {
+                ControlError::ChildRemovalInProgress(id)
+            } else {
+                ControlError::DuplicateChildId(id)
+            };
+            return Err(error.into());
         }
 
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
@@ -826,16 +953,12 @@ impl SupervisorRuntime {
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
 
-        self.start_children(vec![key]).await?;
+        self.start_children(vec![key])?;
 
         Ok(membership_epoch)
     }
 
-    async fn add_supervisor(
-        &mut self,
-        id: String,
-        supervisor: SupervisorSpec,
-    ) -> CommandResult<u64> {
+    fn add_supervisor(&mut self, id: String, supervisor: SupervisorSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
@@ -859,8 +982,13 @@ impl SupervisorRuntime {
             )
             .into());
         }
-        if self.children_by_id.contains_key(&id) {
-            return Err(ControlError::DuplicateChildId(id).into());
+        if let Some(&key) = self.children_by_id.get(&id) {
+            let error = if self.children[key].membership == MembershipState::Removing {
+                ControlError::ChildRemovalInProgress(id)
+            } else {
+                ControlError::DuplicateChildId(id)
+            };
+            return Err(error.into());
         }
 
         let stable = supervisor.supervisor.stable_channels(false);
@@ -883,7 +1011,7 @@ impl SupervisorRuntime {
             .expect("nested channel map poisoned")
             .insert(id.clone(), stable);
 
-        self.start_children(vec![key]).await?;
+        self.start_children(vec![key])?;
 
         Ok(membership_epoch)
     }
@@ -945,126 +1073,96 @@ impl SupervisorRuntime {
         });
     }
 
-    async fn remove_child(&mut self, id: String) -> CommandResult<()> {
+    fn remove_child(
+        &mut self,
+        id: String,
+        reply: oneshot::Sender<Result<(), ControlError>>,
+    ) -> RuntimeResult<()> {
         if self.state == SupervisorState::Stopping {
-            return Err(ControlError::SupervisorStopping.into());
+            let _ = reply.send(Err(ControlError::SupervisorStopping));
+            return Ok(());
         }
 
         let Some(&key) = self.children_by_id.get(&id) else {
-            return Err(ControlError::UnknownChildId(id).into());
+            let _ = reply.send(Err(ControlError::UnknownChildId(id)));
+            return Ok(());
         };
 
         if self.children[key].membership == MembershipState::Removing {
-            return Err(ControlError::ChildRemovalInProgress(id).into());
+            let _ = reply.send(Err(ControlError::ChildRemovalInProgress(id)));
+            return Ok(());
         }
 
-        let (mode, grace, active) = {
+        let (instance, mode, active) = {
             let entry = &mut self.children[key];
             entry.membership = MembershipState::Removing;
             let active = entry.runtime.state.is_active();
             if active {
                 entry.runtime.state = RuntimeChildState::Stopping;
             }
-            (
-                entry.runtime.definition.shutdown_policy.mode,
-                entry.runtime.definition.shutdown_policy.grace,
-                active,
-            )
+            let mode = entry.runtime.definition.shutdown_policy.mode;
+            let grace_deadline = Instant::now() + entry.runtime.definition.shutdown_policy.grace;
+            entry.pending_removal = Some(PendingRemoval {
+                reply,
+                mode,
+                grace_deadline,
+                initiated_at: StdInstant::now(),
+                grace_expired: false,
+            });
+            (entry.instance, mode, active)
         };
 
         self.publish_snapshot();
+        if active {
+            match mode {
+                ShutdownMode::Abort => self.abort_child(key),
+                ShutdownMode::CooperativeStrict | ShutdownMode::CooperativeThenAbort => {
+                    self.cancel_child(key)
+                }
+            }
+        }
+        self.detach_start_member(key, instance)?;
 
         if !active {
-            self.finalize_removed_child(key);
-            return Ok(());
+            self.finalize_removed_child(key, false);
         }
-
-        match mode {
-            crate::shutdown::ShutdownMode::Abort => {
-                self.abort_and_detach_child(key).await?;
-                Ok(())
-            }
-            crate::shutdown::ShutdownMode::CooperativeStrict => {
-                self.cancel_child(key);
-                self.await_child_removal(key, Instant::now() + grace, true)
-                    .await
-            }
-            crate::shutdown::ShutdownMode::CooperativeThenAbort => {
-                self.cancel_child(key);
-                self.await_child_removal(key, Instant::now() + grace, false)
-                    .await
-            }
-        }
-    }
-
-    async fn await_child_removal(
-        &mut self,
-        key: ChildKey,
-        deadline: Instant,
-        timeout_is_error: bool,
-    ) -> CommandResult<()> {
-        let child_id = self.child_id(key).ok_or_else(|| {
-            ControlError::Internal("missing child id while removing child".to_owned())
-        })?;
-        let started_at = StdInstant::now();
-        let mut removal_error: Option<ControlError> = None;
-
-        loop {
-            if !self.children.contains(key)
-                || self.children[key].membership == MembershipState::Removed
-            {
-                self.meta.observability.record_shutdown_duration(
-                    "remove_child",
-                    started_at.elapsed(),
-                    Some(&child_id),
-                );
-                return removal_error.map_or(Ok(()), |error| Err(error.into()));
-            }
-
-            match self.next_wake(WakeOptions::child_removal(deadline)).await {
-                Wake::Shutdown => return Err(ExitReason::Shutdown.into()),
-                Wake::Joined(maybe) => {
-                    self.handle_join_during_control(maybe).await?;
-                }
-                Wake::Deadline => {
-                    self.meta
-                        .observability
-                        .record_shutdown_timeout("remove_child", Some(&child_id));
-                    if timeout_is_error {
-                        removal_error = Some(ControlError::ShutdownTimedOut(child_id.clone()));
-                    }
-                    self.abort_and_detach_child(key).await?;
-                    self.meta.observability.record_shutdown_duration(
-                        "remove_child",
-                        started_at.elapsed(),
-                        Some(&child_id),
-                    );
-                    return removal_error.map_or(Ok(()), |error| Err(error.into()));
-                }
-                Wake::Command(_)
-                | Wake::NestedSnapshot(_)
-                | Wake::NestedEvent(_)
-                | Wake::Ready(_) => {
-                    unreachable!("child removal enables only joins and its deadline")
-                }
-            }
-        }
-    }
-
-    async fn handle_join_during_control(
-        &mut self,
-        maybe: Option<JoinedChild>,
-    ) -> CommandResult<()> {
-        let Some(joined) = maybe else {
-            return Err(ControlError::Internal(
-                "supervisor join set drained before child removal completed".to_owned(),
-            )
-            .into());
-        };
-
-        self.handle_joined_child(joined).await?;
-
         Ok(())
+    }
+
+    fn detach_start_member(&mut self, key: ChildKey, instance: u64) -> RuntimeResult<()> {
+        let cleared_gate = self.remove_start_sequence_member(key, instance);
+        self.startup_member_removed(key, instance);
+        if cleared_gate {
+            self.advance_start_sequence()?;
+        }
+        Ok(())
+    }
+
+    fn terminal_start_member(&mut self, key: ChildKey, instance: u64) -> RuntimeResult<()> {
+        let cleared_gate = self.remove_start_sequence_member(key, instance);
+        self.startup_member_aborted(key, instance)?;
+        if cleared_gate {
+            self.advance_start_sequence()?;
+        }
+        Ok(())
+    }
+
+    fn remove_start_sequence_member(&mut self, key: ChildKey, instance: u64) -> bool {
+        let mut cleared_gate = false;
+        if let Some(sequence) = self.start_sequence.as_mut() {
+            sequence
+                .queue
+                .retain(|item| item.key != key || item.instance != instance);
+            if sequence
+                .gate
+                .as_ref()
+                .is_some_and(|gate| gate.key == key && gate.instance == instance)
+            {
+                sequence.gate = None;
+                cleared_gate = true;
+            }
+        }
+        cleared_gate
     }
 
     fn cancel_child(&mut self, key: ChildKey) {
@@ -1091,23 +1189,20 @@ impl SupervisorRuntime {
         }
     }
 
-    fn child_id(&self, key: ChildKey) -> Option<String> {
-        self.children.get(key).map(|entry| entry.id.clone())
-    }
-
     pub(crate) fn child_path(&self, key: ChildKey) -> Vec<String> {
         let mut path = self.meta.path_prefix.clone();
         path.push(self.children[key].id.clone());
         path
     }
 
-    fn finalize_removed_child(&mut self, key: ChildKey) {
+    pub(crate) fn finalize_removed_child(&mut self, key: ChildKey, check_elapsed_grace: bool) {
         if !self.children.contains(key) {
             return;
         }
 
         let had_live_task = self.children[key].runtime.abort_handle.is_some();
         let mut entry = self.children.remove(key);
+        let pending_removal = entry.pending_removal.take();
         entry.membership = MembershipState::Removed;
         entry.last_exit = None;
         entry.nested_snapshot = None;
@@ -1133,36 +1228,90 @@ impl SupervisorRuntime {
         // Do that before publishing removal so watches observe terminality
         // before the child disappears from membership.
         drop(entry);
-        self.send_event(SupervisorEvent::ChildRemoved { id });
+        self.send_event(SupervisorEvent::ChildRemoved { id: id.clone() });
+
+        if let Some(pending) = pending_removal {
+            let result = self.pending_removal_result(&id, &pending, check_elapsed_grace, None);
+            // Removal completion is deliberately last: terminality, the
+            // membership drop, and ChildRemoved are all observable first.
+            let _ = pending.reply.send(result);
+        }
     }
 
-    async fn handle_joined_child(
+    /// Resolves every accepted removal whose ordinary child-exit path did not
+    /// run before the supervisor loop exited. Keeping this epilogue on every
+    /// exit prevents reply senders from being dropped as `Unavailable`.
+    fn resolve_pending_removals(&mut self, failure: Option<&SupervisorError>) {
+        let pending: Vec<_> = self
+            .children
+            .iter_mut()
+            .filter_map(|(_, entry)| {
+                entry
+                    .pending_removal
+                    .take()
+                    .map(|pending| (entry.id.clone(), pending))
+            })
+            .collect();
+        for (id, pending) in pending {
+            let result = self.pending_removal_result(&id, &pending, true, failure);
+            let _ = pending.reply.send(result);
+        }
+    }
+
+    fn pending_removal_result(
+        &self,
+        id: &str,
+        pending: &PendingRemoval,
+        check_elapsed_grace: bool,
+        failure: Option<&SupervisorError>,
+    ) -> Result<(), ControlError> {
+        let grace_expired = pending.grace_expired
+            || (check_elapsed_grace
+                && !matches!(pending.mode, ShutdownMode::Abort)
+                && Instant::now() >= pending.grace_deadline);
+        if grace_expired && !pending.grace_expired {
+            self.meta
+                .observability
+                .record_shutdown_timeout("remove_child", Some(id));
+        }
+        self.meta.observability.record_shutdown_duration(
+            "remove_child",
+            pending.initiated_at.elapsed(),
+            Some(id),
+        );
+        if let Some(error) = failure {
+            Err(map_supervisor_error_to_control(error.clone()))
+        } else if grace_expired && matches!(pending.mode, ShutdownMode::CooperativeStrict) {
+            Err(ControlError::ShutdownTimedOut(id.to_owned()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn handle_joined_child(
         &mut self,
         joined: Result<(Id, ChildEnvelope), JoinError>,
     ) -> RuntimeResult<()> {
         let Some(classified) = self.consume_joined_child(joined)? else {
             return Ok(());
         };
-        self.dispatch_exit(classified).await
+        self.dispatch_exit(classified)
     }
 
-    async fn dispatch_exit(&mut self, classified: ClassifiedExit) -> RuntimeResult<()> {
+    fn dispatch_exit(&mut self, classified: ClassifiedExit) -> RuntimeResult<()> {
         self.record_exit(classified.key, classified.generation, &classified.status);
-        self.apply_exit_policy(classified).await
+        self.apply_exit_policy(classified)
     }
 
-    async fn apply_exit_policy(&mut self, classified: ClassifiedExit) -> RuntimeResult<()> {
-        self.apply_exit_policy_inner(classified, true).await
+    fn apply_exit_policy(&mut self, classified: ClassifiedExit) -> RuntimeResult<()> {
+        self.apply_exit_policy_inner(classified, true)
     }
 
-    async fn apply_drained_completion_policy(
-        &mut self,
-        classified: ClassifiedExit,
-    ) -> RuntimeResult<()> {
-        self.apply_exit_policy_inner(classified, false).await
+    fn apply_drained_completion_policy(&mut self, classified: ClassifiedExit) -> RuntimeResult<()> {
+        self.apply_exit_policy_inner(classified, false)
     }
 
-    async fn apply_exit_policy_inner(
+    fn apply_exit_policy_inner(
         &mut self,
         classified: ClassifiedExit,
         allow_restart: bool,
@@ -1172,7 +1321,7 @@ impl SupervisorRuntime {
         }
 
         if self.children[classified.key].membership == MembershipState::Removing {
-            self.finalize_removed_child(classified.key);
+            self.finalize_removed_child(classified.key, false);
             return Ok(());
         }
 
@@ -1188,13 +1337,17 @@ impl SupervisorRuntime {
         let restart_policy = self.children[classified.key].runtime.definition.restart;
 
         if allow_restart && restart_policy.should_restart(classified.status.is_failure()) {
-            match self.meta.strategy {
-                Strategy::OneForOne => self.handle_one_for_one_restart(classified.key).await?,
-                Strategy::OneForAll => self.handle_one_for_all_restart(classified.key).await?,
-                Strategy::RestForOne => self.handle_rest_for_one_restart(classified.key).await?,
-            }
+            let previous_generation = self.children[classified.key].runtime.generation;
+            let delay = self.schedule_restart(classified.key)?;
+            self.send_event(SupervisorEvent::ChildRestartScheduled {
+                id: self.children[classified.key].id.clone(),
+                generation: previous_generation,
+                delay,
+            });
         } else if allow_restart {
-            if !self.children[classified.key].runtime.has_reported_ready {
+            let instance = self.children[classified.key].instance;
+            let startup_aborted = !self.children[classified.key].runtime.has_reported_ready;
+            if startup_aborted {
                 self.children[classified.key].runtime.startup_aborted = true;
                 self.publish_snapshot();
             }
@@ -1203,7 +1356,13 @@ impl SupervisorRuntime {
                 .definition
                 .remove_on_exit
             {
-                self.finalize_removed_child(classified.key);
+                let startup_result = if startup_aborted {
+                    self.terminal_start_member(classified.key, instance)
+                } else {
+                    Ok(())
+                };
+                self.finalize_removed_child(classified.key, false);
+                startup_result?;
                 return Ok(());
             }
             // The exit will not be restarted. Under group strategies a
@@ -1226,6 +1385,9 @@ impl SupervisorRuntime {
             };
             if stop_is_final {
                 self.mark_child_terminal(classified.key);
+            }
+            if startup_aborted {
+                self.terminal_start_member(classified.key, instance)?;
             }
         }
 
@@ -1332,61 +1494,134 @@ impl SupervisorRuntime {
         });
     }
 
-    async fn handle_one_for_one_restart(&mut self, key: ChildKey) -> RuntimeResult<()> {
-        let Some(permit) = self.begin_restart(key).await? else {
+    fn earliest_deadline(&self) -> Option<Instant> {
+        self.children
+            .iter()
+            .flat_map(|(_, entry)| {
+                let removal = entry.pending_removal.as_ref().and_then(|pending| {
+                    (!pending.grace_expired && !matches!(pending.mode, ShutdownMode::Abort))
+                        .then_some(pending.grace_deadline)
+                });
+                [removal, entry.runtime.next_restart_deadline]
+            })
+            .flatten()
+            .min()
+    }
+
+    async fn handle_deadlines(&mut self) -> RuntimeResult<()> {
+        // A shutdown request always wins over restart and removal deadlines. In
+        // particular, the deadline wake path yields once so a concurrently
+        // queued shutdown can be observed before a zero-delay restart spawns.
+        if self.shutdown_rx.has_changed().is_err() || *self.shutdown_rx.borrow() {
+            return Err(ExitReason::Shutdown);
+        }
+
+        let now = Instant::now();
+        let expired_removals: Vec<_> = self
+            .child_order
+            .iter()
+            .copied()
+            .filter(|&key| {
+                self.children.get(key).is_some_and(|entry| {
+                    entry.pending_removal.as_ref().is_some_and(|pending| {
+                        !pending.grace_expired
+                            && !matches!(pending.mode, ShutdownMode::Abort)
+                            && pending.grace_deadline <= now
+                    })
+                })
+            })
+            .collect();
+        for key in expired_removals {
+            let id = {
+                let entry = &mut self.children[key];
+                let pending = entry
+                    .pending_removal
+                    .as_mut()
+                    .expect("expired removal retained its pending state");
+                pending.grace_expired = true;
+                entry.id.clone()
+            };
+            self.meta
+                .observability
+                .record_shutdown_timeout("remove_child", Some(&id));
+            self.abort_child(key);
+        }
+
+        let due_restarts: Vec<_> = self
+            .child_order
+            .iter()
+            .copied()
+            .filter(|&key| {
+                self.children.get(key).is_some_and(|entry| {
+                    entry.membership == MembershipState::Active
+                        && entry.runtime.state == RuntimeChildState::Stopped
+                        && entry
+                            .runtime
+                            .next_restart_deadline
+                            .is_some_and(|deadline| deadline <= now)
+                })
+            })
+            .collect();
+
+        match self.meta.strategy {
+            Strategy::OneForOne => {
+                for key in due_restarts {
+                    self.restart_one(key)?;
+                }
+            }
+            Strategy::OneForAll => {
+                if let Some(key) = due_restarts.first().copied() {
+                    self.children[key].runtime.next_restart_deadline = None;
+                    self.restart_group(key, true).await?;
+                }
+            }
+            Strategy::RestForOne => {
+                if let Some(key) = due_restarts.first().copied() {
+                    self.children[key].runtime.next_restart_deadline = None;
+                    let deferred = self.restart_group(key, false).await?;
+                    for classified in deferred {
+                        if self.current_child_matches(
+                            classified.key,
+                            classified.instance,
+                            classified.generation,
+                        ) {
+                            self.apply_exit_policy(classified)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn restart_one(&mut self, key: ChildKey) -> RuntimeResult<()> {
+        let Some(entry) = self.children.get(key) else {
             return Ok(());
         };
+        if entry.membership != MembershipState::Active
+            || entry.runtime.state != RuntimeChildState::Stopped
+            || entry.runtime.next_restart_deadline.is_none()
+        {
+            return Ok(());
+        }
+        let instance = entry.instance;
+        self.children[key].runtime.next_restart_deadline = None;
         let (old_generation, new_generation) = self.spawn_child(key)?;
-        self.send_restart_event(
-            key,
-            old_generation.unwrap_or(permit.previous_generation),
-            new_generation,
-        );
-        Ok(())
-    }
-
-    async fn handle_one_for_all_restart(&mut self, failing_key: ChildKey) -> RuntimeResult<()> {
-        self.restart_group(failing_key, true).await?;
-        Ok(())
-    }
-
-    async fn handle_rest_for_one_restart(&mut self, failing_key: ChildKey) -> RuntimeResult<()> {
-        let deferred = self.restart_group(failing_key, false).await?;
-        for classified in deferred {
-            // A deferred child may already have been respawned (or removed) by
-            // an earlier deferred dispatch's suffix restart; its recorded exit
-            // is then stale and must not be applied to the fresh generation.
-            if !self.current_child_matches(
-                classified.key,
-                classified.instance,
-                classified.generation,
-            ) {
-                continue;
-            }
-            Box::pin(self.apply_exit_policy(classified)).await?;
+        if let Some(gate) = self
+            .start_sequence
+            .as_mut()
+            .and_then(|sequence| sequence.gate.as_mut())
+            .filter(|gate| gate.key == key && gate.instance == instance)
+        {
+            gate.generation = new_generation;
+        }
+        if let Some(old_generation) = old_generation {
+            self.send_restart_event(key, old_generation, new_generation);
+        }
+        if self.children[key].runtime.state == RuntimeChildState::Running {
+            self.advance_start_sequence()?;
         }
         Ok(())
-    }
-
-    async fn begin_restart(&mut self, key: ChildKey) -> RuntimeResult<Option<RestartPermit>> {
-        let restart_instance = self.children[key].instance;
-        let previous_generation = self.children[key].runtime.generation;
-        let delay = self.schedule_restart(key)?;
-        self.send_event(SupervisorEvent::ChildRestartScheduled {
-            id: self.children[key].id.clone(),
-            generation: previous_generation,
-            delay,
-        });
-        self.wait_for_restart_delay(delay).await?;
-        let Some(entry) = self.children.get(key) else {
-            return Ok(None);
-        };
-        if entry.instance != restart_instance || entry.membership != MembershipState::Active {
-            return Ok(None);
-        }
-        Ok(Some(RestartPermit {
-            previous_generation,
-        }))
     }
 
     async fn restart_group(
@@ -1394,7 +1629,10 @@ impl SupervisorRuntime {
         failing_key: ChildKey,
         fresh_group_token: bool,
     ) -> RuntimeResult<Vec<ClassifiedExit>> {
-        if self.begin_restart(failing_key).await?.is_none() {
+        let Some(failing_entry) = self.children.get(failing_key) else {
+            return Ok(Vec::new());
+        };
+        if failing_entry.membership != MembershipState::Active {
             return Ok(Vec::new());
         }
         let keys = if fresh_group_token {
@@ -1433,13 +1671,22 @@ impl SupervisorRuntime {
             ) {
                 continue;
             }
-            Box::pin(self.apply_drained_completion_policy(classified)).await?;
+            self.apply_drained_completion_policy(classified)?;
         }
         if fresh_group_token {
             self.group_token = CancellationToken::new();
         }
-        self.restart_epoch = self.restart_epoch.saturating_add(1);
-        let _ = self.respawn_sequence(keys, true).await?;
+        if let Some(sequence) = self.start_sequence.as_mut() {
+            sequence.queue.retain(|item| !keys.contains(&item.key));
+            if sequence
+                .gate
+                .as_ref()
+                .is_some_and(|gate| keys.contains(&gate.key))
+            {
+                sequence.gate = None;
+            }
+        }
+        self.respawn_sequence(keys, true)?;
         Ok(deferred)
     }
 
@@ -1466,33 +1713,6 @@ impl SupervisorRuntime {
         let child_id = &*self.children[key].id;
         trace!(?child_id, ?delay, "scheduled child restart");
         Ok(delay)
-    }
-
-    async fn wait_for_restart_delay(&mut self, delay: Duration) -> RuntimeResult<()> {
-        let deadline = Instant::now() + delay;
-        // Even an immediate restart yields once so commands triggered by the
-        // restart-scheduled event can enter the queue. The biased wake below
-        // drains those commands before accepting the already-ready deadline.
-        if delay.is_zero() {
-            tokio::task::yield_now().await;
-        }
-
-        loop {
-            match self.next_wake(WakeOptions::restart_delay(deadline)).await {
-                Wake::Shutdown => return Err(ExitReason::Shutdown),
-                Wake::Command(Some(command)) => {
-                    Box::pin(self.handle_command(command)).await?;
-                }
-                Wake::Command(None) => self.commands_open = false,
-                Wake::Deadline => return Ok(()),
-                Wake::NestedSnapshot(_)
-                | Wake::NestedEvent(_)
-                | Wake::Ready(_)
-                | Wake::Joined(_) => {
-                    unreachable!("restart delay enables only commands and its deadline")
-                }
-            }
-        }
     }
 
     fn running_child_count(&self) -> usize {
@@ -1583,7 +1803,9 @@ impl SupervisorRuntime {
                 started: entry.runtime.has_reported_ready,
                 startup_aborted: entry.runtime.startup_aborted,
                 state: match entry.runtime.state {
-                    RuntimeChildState::Starting => ChildStateView::Starting,
+                    RuntimeChildState::StartQueued | RuntimeChildState::Starting => {
+                        ChildStateView::Starting
+                    }
                     RuntimeChildState::Running => ChildStateView::Running,
                     RuntimeChildState::Stopping => ChildStateView::Stopping,
                     RuntimeChildState::Stopped => ChildStateView::Stopped,
@@ -1615,28 +1837,6 @@ impl SupervisorRuntime {
         }
     }
 
-    async fn drain_ready_joins(&mut self) -> RuntimeResult<()> {
-        loop {
-            match tokio::time::timeout(Duration::ZERO, self.join_set.join_next_with_id()).await {
-                Ok(Some(joined)) => {
-                    self.handle_joined_child(joined).await?;
-                }
-                Ok(None) | Err(_) => return Ok(()),
-            }
-        }
-    }
-
-    async fn abort_and_detach_child(&mut self, key: ChildKey) -> RuntimeResult<()> {
-        self.abort_child(key);
-        tokio::task::yield_now().await;
-        self.drain_ready_joins().await?;
-        if self.state != SupervisorState::Running {
-            return Ok(());
-        }
-        self.finalize_removed_child_if_present(key);
-        Ok(())
-    }
-
     pub(crate) fn consume_joined_child(
         &mut self,
         joined: Result<(Id, ChildEnvelope), JoinError>,
@@ -1654,12 +1854,6 @@ impl SupervisorRuntime {
         self.children.get(key).is_some_and(|entry| {
             entry.instance == instance && entry.runtime.generation == generation
         })
-    }
-
-    fn finalize_removed_child_if_present(&mut self, key: ChildKey) {
-        if self.children.contains(key) {
-            self.finalize_removed_child(key);
-        }
     }
 }
 
@@ -1720,23 +1914,10 @@ pub(crate) struct ClassifiedExit {
     pub(crate) status: ExitStatus,
 }
 
-enum SpawnOutcome {
-    Skipped,
-    Spawned {
-        ready: bool,
-        old_generation: Option<u64>,
-        new_generation: u64,
-    },
-}
-
 enum GroupRespawnDisposition {
     Respawn,
     Skip,
     Finalize { startup_aborted: bool },
-}
-
-struct RestartPermit {
-    previous_generation: u64,
 }
 
 /// Why the supervisor is draining its join set.
@@ -1782,7 +1963,7 @@ fn event_child_id(event: &SupervisorEvent) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::{
-        Supervisor, SupervisorBuilder,
+        ChildSpec, Supervisor, SupervisorBuilder,
         handle::{attached_children_state, empty_nested_channels},
         supervisor::initial_snapshot,
     };
@@ -1836,8 +2017,190 @@ mod tests {
             .expect("readiness receiver should remain open");
 
         assert!(matches!(
-            runtime.next_wake(WakeOptions::readiness()).await,
+            runtime.next_wake(WakeOptions::main_loop(None)).await,
             Wake::Ready(Some(ChildReady { key: 1, .. }))
+        ));
+    }
+
+    #[test]
+    fn deadline_command_batch_preserves_shutdown_priority() {
+        let config = empty_supervisor().config;
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, _) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (command_tx, command_rx) = mpsc::channel(control_capacity);
+        let mut runtime = SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+        );
+        let (reply, _reply_rx) = oneshot::channel();
+        command_tx
+            .try_send(SupervisorCommand::AddChild {
+                child: ChildSpec::new("late", |_| async { Ok(()) }),
+                reply,
+            })
+            .expect("command channel should have capacity");
+        shutdown_tx.send(true).expect("runtime retains receiver");
+
+        assert!(matches!(
+            runtime.drain_deadline_command_batch(),
+            Err(ExitReason::Shutdown)
+        ));
+        assert!(
+            !runtime.children_by_id.contains_key("late"),
+            "queued commands must not be accepted after shutdown wins"
+        );
+    }
+
+    #[test]
+    fn pending_removal_epilogue_preserves_strict_grace_timeout() {
+        let supervisor = SupervisorBuilder::new()
+            .child(ChildSpec::new("removable", |_| async { Ok(()) }))
+            .build()
+            .expect("valid supervisor config");
+        let config = supervisor.config;
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, _) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (_command_tx, command_rx) = mpsc::channel(control_capacity);
+        let mut runtime = SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+        );
+        let key = runtime.child_order[0];
+        let (reply, mut reply_rx) = oneshot::channel();
+        runtime.children[key].pending_removal = Some(PendingRemoval {
+            reply,
+            mode: ShutdownMode::CooperativeStrict,
+            grace_deadline: Instant::now(),
+            initiated_at: StdInstant::now(),
+            grace_expired: true,
+        });
+
+        runtime.resolve_pending_removals(None);
+
+        assert_eq!(
+            reply_rx.try_recv(),
+            Ok(Err(ControlError::ShutdownTimedOut("removable".to_owned())))
+        );
+    }
+
+    #[tokio::test]
+    async fn gated_group_restarts_emit_each_generation_before_readiness() {
+        let supervisor = SupervisorBuilder::new()
+            .start_mode(StartMode::Sequential)
+            .child(
+                ChildSpec::new("gated", |ctx| async move {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                })
+                .wait_for_ready(),
+            )
+            .build()
+            .expect("valid supervisor config");
+        let config = supervisor.config;
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, mut events_rx) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (_command_tx, command_rx) = mpsc::channel(control_capacity);
+        let mut runtime = SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+        );
+        let key = runtime.child_order[0];
+        let instance = runtime.children[key].instance;
+        runtime.children[key].runtime.has_started = true;
+        runtime.start_sequence = Some(StartSequence::default());
+
+        assert!(
+            runtime
+                .spawn_start_item(StartItem {
+                    key,
+                    instance,
+                    emit_restart_event: true,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(SupervisorEvent::ChildRestarted {
+                old_generation: 0,
+                new_generation: 1,
+                ..
+            })
+        ));
+
+        {
+            let child = &mut runtime.children[key].runtime;
+            child.state = RuntimeChildState::Stopped;
+            child.next_restart_deadline = Some(Instant::now());
+        }
+
+        assert!(runtime.restart_one(key).is_ok());
+        let gate = runtime
+            .start_sequence
+            .as_ref()
+            .and_then(|sequence| sequence.gate.as_ref())
+            .expect("replacement generation remains readiness-gated");
+        assert_eq!(gate.generation, 2);
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(SupervisorEvent::ChildRestarted {
+                old_generation: 1,
+                new_generation: 2,
+                ..
+            })
+        ));
+
+        assert!(
+            runtime
+                .handle_child_ready(ChildReady {
+                    key,
+                    instance,
+                    generation: 2,
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(SupervisorEvent::ChildStarted { generation: 2, .. })
+        ));
+        assert!(matches!(
+            events_rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
         ));
     }
 

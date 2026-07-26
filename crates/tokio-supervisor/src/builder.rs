@@ -45,12 +45,12 @@ pub enum StartMode {
     #[default]
     Concurrent,
     /// Start children in declaration order, waiting for each child to report
-    /// readiness before spawning the next. While readiness-gated startup is
-    /// waiting (including inside a nested supervisor), shutdown remains
-    /// responsive but control commands are queued. A child must not await a
-    /// control command on its own supervisor before reporting ready. There is no
-    /// built-in readiness timeout; children that use explicit readiness should
-    /// arrange their own initialization timeout.
+    /// readiness before spawning the next. Children added while a sequence is
+    /// in progress are inserted immediately and queued behind its existing
+    /// members; the add operation does not wait for readiness. Shutdown and
+    /// control commands remain responsive while the sequence is gated. There
+    /// is no built-in readiness timeout; children that use explicit readiness
+    /// should arrange their own initialization timeout.
     Sequential,
 }
 

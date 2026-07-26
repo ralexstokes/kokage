@@ -126,10 +126,12 @@ children are gated automatically: their `on_start` hook is the readiness
 boundary. Use `ActorContext::continue_with(message)` inside `on_start` to queue
 expensive follow-up work as the actor's next message without delaying later
 siblings. Call `handle.wait_started().await` when code outside the tree needs
-to wait until all current children are running. Readiness-gated startup queues
-control commands even for a concurrent nested supervisor, so initialization
-must not await a control command on its own supervisor before reporting ready.
-There is no implicit readiness timeout.
+to wait until all current children are running. Readiness gates do not block
+the control loop: a child may await a control operation on its own supervisor
+before reporting ready. An add resolves when membership is inserted and startup
+is scheduled. If a sequential sequence is already in progress, the inserted
+child is visible as `Starting` with `started == false` and waits behind earlier
+members. There is no implicit readiness timeout.
 
 ## Strategies
 
@@ -140,10 +142,15 @@ The [`Strategy`] decides who is affected when a child fails:
 - **`Strategy::OneForAll`** — every child is stopped and restarted together.
   Use this when children hold interdependent state, e.g. a producer/consumer
   pair that must resynchronize from scratch. (`Never` children are drained
-  with the group but not respawned.)
+  with the group but not respawned.) Draining the old generation is an atomic
+  critical section, so control commands wait behind it until every old task
+  exits or reaches its shutdown backstop. Post-drain readiness gates are
+  non-blocking loop state.
 - **`Strategy::RestForOne`** — the failed child and every child declared after
   it are stopped, then eligible children in that suffix restart in declaration
-  order. Earlier children remain running. Use this for ordered pipelines.
+  order. Earlier children remain running. Use this for ordered pipelines. Its
+  old-suffix drain has the same bounded control-command blocking window as
+  `OneForAll`.
 
 For `RestForOne`, declaration order is therefore part of the fault model. If
 children are declared as `outbound`, `progress`, `inbound`, an `inbound`
@@ -269,7 +276,9 @@ pressroom.add_child(child).await?;
 `add_child` returns the membership epoch allocated atomically for that
 insertion. It is the same value published in the child's snapshot and remains
 the identity of that membership if the id is removed and reused before the
-caller next samples the tree.
+caller next samples the tree. The reply is an insertion contract, not a
+readiness contract: in sequential mode the child can still be queued behind an
+earlier gate. `wait_started()` observes the stronger readiness boundary.
 
 Supervisors can start empty or have their last child removed. At zero children
 they keep serving control commands and wait for the next `add_child` or an

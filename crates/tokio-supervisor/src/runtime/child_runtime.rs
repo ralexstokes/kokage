@@ -68,6 +68,7 @@ pub(crate) struct ChildRuntime {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RuntimeChildState {
+    StartQueued,
     Starting,
     Running,
     Stopping,
@@ -76,7 +77,7 @@ pub(crate) enum RuntimeChildState {
 
 impl RuntimeChildState {
     pub(crate) fn is_active(self) -> bool {
-        !matches!(self, Self::Stopped)
+        matches!(self, Self::Starting | Self::Running | Self::Stopping)
     }
 }
 

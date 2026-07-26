@@ -176,6 +176,8 @@ impl SupervisorRuntime {
         let timed_out = collect_child_names(&self.children, |key, child| {
             scope.contains(key)
                 && child.membership != MembershipState::Removed
+                && (matches!(reason, DrainReason::Shutdown)
+                    || child.membership != MembershipState::Removing)
                 && child.runtime.state.is_active()
                 && matches!(
                     child.runtime.definition.shutdown_policy.mode,
@@ -232,6 +234,10 @@ impl SupervisorRuntime {
         // entry must not look Running once its join is consumed, or a nested
         // drain that includes this key would wait on a join that never comes.
         self.record_exit(classified.key, classified.generation, &classified.status);
+        if self.children[classified.key].membership == MembershipState::Removing {
+            self.finalize_removed_child(classified.key, true);
+            return Ok(());
+        }
         let naturally_completed = matches!(classified.status, super::exit::ExitStatus::Completed)
             && self.children[classified.key].runtime.completion.is_clean();
         if !scope.contains(classified.key) || naturally_completed {

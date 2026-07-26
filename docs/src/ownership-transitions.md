@@ -18,9 +18,7 @@ sender ──message──▶ router ── Active(ref, "key#7") ──▶ sessi
                        ▼                                  │
              Removing [buffer] ◀────────bounce────────────┘
                        │ pipelined remove_child("key#7") … Reaped
-                       ▼
-             Mounting [buffer] — pipelined add_subtree("key#8")
-                       │ … Mounted: replay buffer
+                       │ await add_subtree("key#8") — insertion reply
                        ▼
                 Active(ref, "key#8") ──▶ session rehydrates from journal
 ```
@@ -46,16 +44,18 @@ The protocol has five parts:
    is removed by name without touching live state. Because the retiree
    re-sends its request every idle sweep until teardown lands, orphans
    self-retire instead of leaking.
-4. **Never await the control plane from the writer.** The supervisor
-   processes control commands serially, and a cooperative removal drains the
-   departing child before its command completes — so an awaited addition,
-   even for a distinct id, can queue behind a drain whose progress needs the
-   writer to keep consuming bounced messages. Under backpressure that cycle
-   deadlocks until the shutdown grace expires and drops acknowledged mail.
-   Pipeline both transitions as steps and hold per-key pending state
-   (`Mounting`/`Removing`, each buffering raced traffic) until the completion
-   message arrives; the buffer replays into the replacement, whose session
-   rebuilds context from the journal.
+4. **Pipeline a removal whose drain depends on the writer; distinct adds may
+   be awaited.** `remove_child` deliberately resolves only after detachment. If
+   the retiree must bounce messages through this writer to finish draining,
+   awaiting that removal would stop the writer from receiving those messages
+   and self-deadlock until the grace expires. Keep a `Removing` state, pipeline
+   that operation, and consume bounces until its completion arrives. The
+   supervisor loop continues dispatching unrelated commands during the drain,
+   so an awaited `add_subtree` for fresh `key#8` resolves as soon as the new
+   membership is inserted. A separate `Mounting` buffer is no longer required
+   merely to avoid control-loop serialization. Under sequential startup the
+   subtree can still be queued, but its returned handle is usable and its own
+   control channel buffers work until the subtree loop starts.
 5. **Bounce the race and drain.** After requesting eviction, the retiree
    sends any late arrival back to the router and uses `DrainPolicy::Drain`.
    FIFO mailboxes preserve sequential enqueue order from one sender, so the
@@ -65,9 +65,11 @@ The protocol has five parts:
    enough grace for this drain to finish: immediate abort or expiry of the
    grace period can skip remaining drain work.
 
-The runnable `agent_control` example implements this exact recipe. The
-router's slot machine, epoch-minted `add_subtree` membership, and pipelined
-transitions live in `crates/tokio-otp/examples/agent_control/router.rs`; the
+The runnable `agent_control` example implements a conservative version of this
+recipe. Its step-based router retains symmetric `Mounting` and `Removing`
+states, although only the removal must be pipelined for control-plane safety.
+The slot machine and epoch-minted `add_subtree` membership live in
+`crates/tokio-otp/examples/agent_control/router.rs`; the
 retiree bounce, retirement re-request, and `DrainPolicy::Drain` live in
 `session.rs`; phase 7 in `main.rs` injects traffic inside the eviction window
 and proves the replacement session answers it with replayed context.
@@ -79,9 +81,10 @@ gated on a removal-completed handshake. Per-incarnation subtree ids deleted
 the shared counter and the same-id coordination — the id itself is the
 incarnation identity, which a bare generation could not provide across writer
 restarts — and subtree ownership deleted the retiree's teardown-flush
-machinery. The transition buffers, though, are not negotiation: they are
-forced by the control plane serializing additions behind removal drains, and
-they would disappear if removal completed off the supervisor's command loop.
+machinery. The `Removing` buffer remains part of the application handoff: it
+owns raced traffic while the predecessor drains. A distinct-id `Mounting`
+buffer is optional now that additions are dispatched during that drain and
+reply on insertion.
 
 ## Put durable ownership outside the mailbox
 

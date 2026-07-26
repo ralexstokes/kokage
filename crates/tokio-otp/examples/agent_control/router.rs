@@ -22,13 +22,12 @@ use crate::{
     session::SessionFactory,
 };
 
-// The supervisor processes control commands serially and a cooperative
-// removal drains the departing subtree before the command completes, so an
-// awaited add_subtree — even for a distinct id — can queue behind a drain
-// whose progress needs this router to keep consuming bounced messages. The
-// router therefore never awaits the control plane: both transitions run as
-// pipelined steps, and the slot buffers traffic until the step's completion
-// message arrives.
+// A cooperative removal resolves only after the departing subtree drains. If
+// that drain bounces messages through this router, awaiting removal here would
+// stop the router from making the drain progress. Removal therefore remains a
+// pipelined step. Distinct-id additions are now dispatched during that drain
+// and resolve on insertion; this example retains a symmetric Mounting step so
+// every membership transition uses the same explicit completion-message shape.
 enum SessionSlot {
     /// add_subtree is in flight; `evict` records a retirement request that
     /// arrived before the mount completed.

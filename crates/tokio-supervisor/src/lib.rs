@@ -63,7 +63,10 @@
 //! When the supervisor is draining multiple cooperative children at once
 //! (during shutdown or a [`OneForAll`](Strategy::OneForAll) restart), it uses a
 //! shared deadline equal to the maximum grace period among the active
-//! cooperative children.
+//! cooperative children. Group and full-shutdown drains are atomic critical
+//! sections, so control commands wait behind them until the old generation is
+//! gone; ordinary removals, restart backoffs, and readiness gates remain
+//! responsive.
 //!
 //! All shutdown modes are cooperative at Tokio poll boundaries. A non-yielding
 //! future is never forcibly preempted. If you need hard-stop guarantees for
@@ -82,7 +85,11 @@
 //!   nested supervisor; [`supervisor`](SupervisorHandle::supervisor) returns
 //!   its restart-stable handle.
 //!
-//! Control operations wait when the control channel is full.
+//! Control operations wait when the control channel is full. Successful adds
+//! resolve once membership is inserted and startup is scheduled, which can be
+//! before the child spawns under sequential startup; use
+//! [`SupervisorHandle::wait_started`] for readiness. Active removals resolve
+//! only after detachment, without blocking distinct-id control operations.
 //!
 //! Supervisors may start empty or have their last child removed. They idle at
 //! zero children and continue accepting control commands until shutdown.

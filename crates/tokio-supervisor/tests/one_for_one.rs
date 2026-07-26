@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use tokio::{
-    sync::mpsc,
+    sync::{Notify, mpsc},
     time::{Duration, sleep, timeout},
 };
 use tokio_supervisor::{
@@ -13,6 +13,96 @@ use tokio_supervisor::{
 };
 
 mod common;
+
+#[tokio::test]
+async fn sibling_restart_dispatches_during_another_childs_backoff() {
+    let slow_failure = Arc::new(Notify::new());
+    let fast_failure = Arc::new(Notify::new());
+    let (slow_tx, mut slow_rx) = mpsc::unbounded_channel();
+    let (fast_tx, mut fast_rx) = mpsc::unbounded_channel();
+
+    let slow = ChildSpec::new("slow", {
+        let slow_failure = Arc::clone(&slow_failure);
+        move |ctx| {
+            let slow_failure = Arc::clone(&slow_failure);
+            let slow_tx = slow_tx.clone();
+            async move {
+                slow_tx
+                    .send(ctx.generation())
+                    .expect("test receiver dropped");
+                if ctx.generation() == 0 {
+                    slow_failure.notified().await;
+                    Err(common::test_error("slow restart"))
+                } else {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            }
+        }
+    })
+    .restart(RestartPolicy::OnFailure)
+    .restart_intensity(
+        RestartIntensity::new(4, Duration::from_secs(2))
+            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(500))),
+    );
+    let fast = ChildSpec::new("fast", {
+        let fast_failure = Arc::clone(&fast_failure);
+        move |ctx| {
+            let fast_failure = Arc::clone(&fast_failure);
+            let fast_tx = fast_tx.clone();
+            async move {
+                fast_tx
+                    .send(ctx.generation())
+                    .expect("test receiver dropped");
+                if ctx.generation() == 0 {
+                    fast_failure.notified().await;
+                    Err(common::test_error("fast restart"))
+                } else {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            }
+        }
+    })
+    .restart(RestartPolicy::OnFailure);
+    let handle = SupervisorBuilder::new()
+        .child(slow)
+        .child(fast)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    assert_eq!(common::recv_event(&mut slow_rx).await, 0);
+    assert_eq!(common::recv_event(&mut fast_rx).await, 0);
+    let mut events = handle.subscribe();
+
+    slow_failure.notify_one();
+    loop {
+        if matches!(
+            common::recv_supervisor_event(&mut events).await,
+            SupervisorEvent::ChildRestartScheduled { ref id, delay, .. }
+                if id == "slow" && delay == Duration::from_millis(500)
+        ) {
+            break;
+        }
+    }
+
+    fast_failure.notify_one();
+    assert_eq!(
+        timeout(Duration::from_millis(200), fast_rx.recv())
+            .await
+            .expect("fast sibling should restart during slow backoff")
+            .expect("fast start sender remains open"),
+        1
+    );
+    assert!(
+        timeout(Duration::from_millis(20), slow_rx.recv())
+            .await
+            .is_err(),
+        "slow child should still be in backoff"
+    );
+
+    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+}
 
 #[tokio::test]
 async fn failed_transient_child_restarts_and_sibling_keeps_running() {
