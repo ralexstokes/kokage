@@ -4,11 +4,11 @@
       "Bash(cargo check *)",
       "Bash(cargo build *)",
       "Bash(cargo test *)",
+      "Bash(cargo nextest *)",
       "Bash(cargo +nightly clippy *)",
       "Bash(just ci)",
-      "Bash(just ci *)",
       "Bash(just check)",
-      "Bash(just check *)"
+      "Bash(just test)",
     ]
   }
 }
