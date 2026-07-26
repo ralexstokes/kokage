@@ -2,6 +2,11 @@
 /// child exits unexpectedly.
 ///
 /// Modelled after Erlang/OTP supervisor strategies.
+///
+/// A group drain owns its shared shutdown backstop. If that backstop
+/// force-aborts a child whose concurrent
+/// [`CooperativeStrict`](crate::ShutdownMode::CooperativeStrict) removal has
+/// not reached its own grace deadline, the removal completes successfully.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]

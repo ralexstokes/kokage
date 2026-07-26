@@ -33,6 +33,10 @@ pub enum ShutdownMode {
     /// failing to exit within the grace period is reported as a timeout error
     /// instead of being aborted silently.
     ///
+    /// During a group restart, the group drain owns its shared backstop. If it
+    /// force-aborts a concurrent removal before this child's own grace expires,
+    /// that removal completes successfully rather than reporting a timeout.
+    ///
     /// Abort remains cooperative at Tokio poll boundaries, so a non-yielding
     /// future can outlive the shutdown call briefly. For hard-stop guarantees,
     /// isolate blocking work outside the supervised Tokio task.
