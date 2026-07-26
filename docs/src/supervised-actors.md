@@ -182,12 +182,17 @@ struct App {
     sessions: DynamicScope,
 }
 
+// Reserved before wiring, so an actor factory can capture the mount.
+let sessions = Runtime::dynamic();
+let mount = sessions.handle();
+
 let (runtime, refs) = App::runtime_with_refs(|_refs| AppFactories {
-    ingest: || Ingest::new(),
+    ingest: move || Ingest::new(mount.clone()),
     workers: WorkersFactories {
         parse: || Parser::new(),
         render: || Renderer::new(),
     },
+    sessions,
 })?;
 let handle = runtime.spawn();
 ```
@@ -216,8 +221,12 @@ Three field attributes select what a field is:
 - `#[topology(scope)]` — a nested derived topology, becoming a named child
   scope.
 - `#[topology(dynamic)]` — an empty scope whose membership is written at
-  runtime through `handle.subtree("sessions")`. The field type is the
-  `DynamicScope` marker, which is never constructed.
+  runtime. The field type is the `DynamicScope` marker, which is never
+  constructed; its wiring entry is a `DynamicRuntimeBuilder`. Supplying the
+  builder is what makes the scope's mount handle available *before* wiring, so
+  an actor can hold it as a durable factory field instead of looking the scope
+  up after spawn. Policy comes from the builder
+  (`Runtime::dynamic().restart(..)`), not from attributes.
 - `#[topology(leader)]` — an actor started before, and owning, the scope formed
   by the struct's remaining fields. It must be the first field, and relates to
   its scope by `leader_strategy` (`Strategy::RestForOne` by default). A

@@ -156,15 +156,17 @@ fn a_label_attribute_overrides_the_field_name_in_paths_and_child_ids() {
 #[derive(Topology)]
 struct WithDynamic {
     manager: Worker,
-    #[topology(dynamic, restart = RestartPolicy::Never)]
+    #[topology(dynamic)]
     sessions: DynamicScope,
 }
 
 #[test]
 fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
-    let (tree, _refs) =
-        WithDynamic::tree_with_refs(|_refs| WithDynamicFactories { manager: || Worker })
-            .expect("tree builds");
+    let (tree, _refs) = WithDynamic::tree_with_refs(|_refs| WithDynamicFactories {
+        manager: || Worker,
+        sessions: Runtime::dynamic().restart(RestartPolicy::Never),
+    })
+    .expect("tree builds");
     let outline = tree.outline();
 
     assert_eq!(outline.child_ids(), ["manager", "sessions"]);
@@ -183,8 +185,11 @@ fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
 
 #[tokio::test]
 async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
-    let runtime = WithDynamic::runtime(|_refs| WithDynamicFactories { manager: || Worker })
-        .expect("runtime builds");
+    let runtime = WithDynamic::runtime(|_refs| WithDynamicFactories {
+        manager: || Worker,
+        sessions: Runtime::dynamic(),
+    })
+    .expect("runtime builds");
     let handle = runtime.spawn();
     handle.wait_started().await.expect("runtime starts");
 
@@ -224,7 +229,10 @@ struct LeaderApp {
 fn a_leader_field_lowers_to_an_actor_with_scope_node() {
     let (tree, _refs) = LeaderApp::tree_with_refs(|_refs| LeaderAppFactories {
         front: || Worker,
-        pool: PoolFactories { manager: || Worker },
+        pool: PoolFactories {
+            manager: || Worker,
+            workers: Runtime::dynamic(),
+        },
     })
     .expect("tree builds");
     let outline = tree.outline();
@@ -248,7 +256,10 @@ fn a_leader_field_lowers_to_an_actor_with_scope_node() {
 async fn a_leader_runs_ahead_of_the_scope_it_owns() {
     let (runtime, refs) = LeaderApp::runtime_with_refs(|_refs| LeaderAppFactories {
         front: || Worker,
-        pool: PoolFactories { manager: || Worker },
+        pool: PoolFactories {
+            manager: || Worker,
+            workers: Runtime::dynamic(),
+        },
     })
     .expect("runtime builds");
     let handle = runtime.spawn();
@@ -292,4 +303,77 @@ fn a_topology_without_supervision_attributes_matches_a_whole_graph_tree() {
     .expect("graph builds");
 
     assert_eq!(tree.outline(), SupervisionTree::graph(&graph).outline());
+}
+
+/// An actor holding the mount handle of a dynamic scope declared beside it.
+struct Mounter {
+    sessions: RuntimeHandle,
+}
+
+impl Actor for Mounter {
+    type Msg = Reply<u32>;
+
+    async fn handle(
+        &mut self,
+        reply: Reply<u32>,
+        _ctx: &mut ActorContext<Reply<u32>>,
+    ) -> ActorResult {
+        let worker = self
+            .sessions
+            .add_actor("spawned", || Worker, DynamicActorOptions::new())
+            .await
+            .expect("dynamic scope accepts the actor");
+        reply.send(worker.call(CALL_TIMEOUT, |reply| reply).await?);
+        Ok(Continue)
+    }
+}
+
+#[derive(Topology)]
+struct Mounted {
+    mounter: Mounter,
+    #[topology(dynamic)]
+    sessions: DynamicScope,
+}
+
+#[tokio::test]
+async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
+    // The reservation is what a `#[topology(dynamic)]` field buys over
+    // appending the scope afterwards: the handle exists early enough to become
+    // a durable factory field, so it survives restarts of the actor holding it.
+    let sessions = Runtime::dynamic();
+    let mount = sessions.handle();
+
+    let (runtime, refs) = Mounted::runtime_with_refs(|_refs| MountedFactories {
+        mounter: move || Mounter {
+            sessions: mount.clone(),
+        },
+        sessions,
+    })
+    .expect("runtime builds");
+    let handle = runtime.spawn();
+    handle.wait_started().await.expect("runtime starts");
+
+    // The mounter reaches the declared scope through the handle it was built
+    // with, and the actor it adds there answers.
+    assert_eq!(
+        refs.mounter
+            .call(CALL_TIMEOUT, |reply| reply)
+            .await
+            .expect("mounter replies"),
+        7
+    );
+
+    let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
+    assert_eq!(sessions.snapshot().kind, ScopeKind::Dynamic);
+    assert_eq!(
+        sessions
+            .snapshot()
+            .children
+            .into_iter()
+            .map(|child| child.id.to_string())
+            .collect::<Vec<_>>(),
+        ["spawned"]
+    );
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
 }

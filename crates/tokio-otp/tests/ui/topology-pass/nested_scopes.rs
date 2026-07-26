@@ -2,7 +2,8 @@
 //! and a dynamic marker scope all wire from one factories literal.
 
 use tokio_otp::{
-    ActorContext, ActorResult, DynamicScope, RestartPolicy, Strategy, Topology, TopologyBuildError,
+    ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime, Strategy, Topology,
+    TopologyBuildError,
 };
 
 struct Worker;
@@ -27,7 +28,7 @@ struct Workers {
 struct Pool {
     #[topology(leader)]
     manager: Worker,
-    #[topology(dynamic, restart = RestartPolicy::Never)]
+    #[topology(dynamic)]
     sessions: DynamicScope,
 }
 
@@ -51,6 +52,7 @@ fn main() -> Result<(), TopologyBuildError> {
         },
         pool: PoolFactories {
             manager: || Worker,
+            sessions: Runtime::dynamic().restart(RestartPolicy::Never),
         },
     })?;
 

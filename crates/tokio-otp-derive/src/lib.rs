@@ -197,6 +197,7 @@ fn parse_factory_attributes(
 /// * a generic `PipelineFactories` struct with one factory field per topology
 ///   field, implementing `tokio_otp::TopologyFactories<Pipeline>`;
 /// * a `PipelineSlots` struct holding the unfilled graph slots;
+/// * a `PipelineScopes` struct holding the reserved dynamic scopes;
 /// * an implementation of the `tokio_otp::Topology` trait; and
 /// * three families of constructors, each in a plain, `_with_refs`, and
 ///   `_with` (preconfigured `GraphBuilder`) form:
@@ -393,7 +394,7 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     Actor, ActorContext, ActorResult, DynamicScope, RestartPolicy, Strategy,
+/// #     Actor, ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime, Strategy,
 /// #     TopologyBuildError, prelude::Continue,
 /// # };
 /// # struct Worker;
@@ -428,6 +429,7 @@ fn parse_factory_attributes(
 ///         parse: || Worker,
 ///         render: || Worker,
 ///     },
+///     sessions: Runtime::dynamic().restart(RestartPolicy::Never),
 /// })?;
 /// # let _ = (runtime, refs.ingest, refs.workers.parse);
 /// # Ok(())
@@ -459,9 +461,11 @@ fn parse_factory_attributes(
 ///
 /// * `scope` — a nested derived topology, contributing a named child scope.
 /// * `dynamic` — an empty scope whose membership is written at runtime. The
-///   field type must be `DynamicScope`, a marker that is never constructed;
-///   `restart`, `shutdown`, and `restart_intensity` set the scope's defaults
-///   for actors added later.
+///   field type must be `DynamicScope`, a marker that is never constructed.
+///   Its wiring entry is a `DynamicRuntimeBuilder` rather than an actor
+///   factory, which both configures the scope
+///   (`Runtime::dynamic().restart(..)`) and makes its mount handle available
+///   before any actor is built, so a factory can capture it.
 /// * `leader` — an actor started before, and owning, the scope formed by the
 ///   struct's remaining fields. It must be the first field, and lowers to
 ///   `SupervisionTree::leader`, relating the two by `leader_strategy`
@@ -657,6 +661,17 @@ fn parse_topology_field(field: &Field) -> syn::Result<FieldAttrs> {
              on its own struct",
         ));
     }
+    if parsed.kind == FieldKind::Dynamic
+        && (parsed.restart.is_some()
+            || parsed.shutdown.is_some()
+            || parsed.restart_intensity.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            field,
+            "a dynamic scope takes its policy from the `DynamicRuntimeBuilder` wired for \
+             this field, as in `Runtime::dynamic().restart(..)`",
+        ));
+    }
 
     Ok(parsed)
 }
@@ -745,6 +760,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
     let refs = format_ident!("{topology}Refs");
     let factories = format_ident!("{topology}Factories");
     let slots = format_ident!("{topology}Slots");
+    let scopes = format_ident!("{topology}Scopes");
 
     let field_idents: Vec<_> = fields
         .iter()
@@ -771,6 +787,8 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
     }
     let all_params: Vec<&syn::Ident> = factory_params.iter().flatten().collect();
 
+    let mut scope_fields = Vec::new();
+    let mut scope_ctor = Vec::new();
     let mut slot_fields = Vec::new();
     let mut refs_fields = Vec::new();
     let mut factory_fields = Vec::new();
@@ -858,8 +876,12 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                         &::tokio_otp::qualified_label(prefix, #name),
                     );
                 });
+                scope_fields.push(quote! {
+                    #field_vis #ident: <#ty as ::tokio_otp::Topology>::Scopes
+                });
+                scope_ctor.push(ident);
                 define_stmts.push(quote! {
-                    <#param as ::tokio_otp::TopologyFactories<#ty>>::define(
+                    let #ident = <#param as ::tokio_otp::TopologyFactories<#ty>>::define(
                         self.#ident,
                         builder,
                         slots.#ident,
@@ -873,6 +895,17 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                     fn #assertion(marker: #ty) -> ::tokio_otp::DynamicScope {
                         marker
                     }
+                });
+                factory_fields.push(quote! {
+                    #[allow(dead_code)]
+                    #field_vis #ident: ::tokio_otp::DynamicRuntimeBuilder
+                });
+                scope_fields.push(quote! {
+                    #field_vis #ident: ::tokio_otp::DynamicRuntimeBuilder
+                });
+                scope_ctor.push(ident);
+                define_stmts.push(quote! {
+                    let #ident = self.#ident;
                 });
             }
         }
@@ -910,26 +943,23 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 scope_stmts.push(quote! {
                     let tree = tree.child(<#ty as ::tokio_otp::Topology>::node(
                         graph,
+                        scopes.#ident,
                         #name,
                         &::tokio_otp::qualified_label(prefix, #name),
                     ));
                 });
             }
             FieldKind::Dynamic => {
-                let mut node = quote! {
-                    ::tokio_otp::SupervisionTree::dynamic().dynamic_defaults(graph)
-                };
-                if let Some(restart) = &attrs.restart {
-                    node = quote! { #node.default_restart(#restart) };
-                }
-                if let Some(shutdown) = &attrs.shutdown {
-                    node = quote! { #node.default_shutdown(#shutdown) };
-                }
-                if let Some(intensity) = &attrs.restart_intensity {
-                    node = quote! { #node.restart_intensity(#intensity) };
-                }
-                let _ = ident;
-                scope_stmts.push(quote! { let tree = tree.child(#node.id(#name)); });
+                // The reserved builder carries this scope's policy and the
+                // identity behind any handle already handed out; the graph only
+                // supplies execution defaults for actors added later.
+                scope_stmts.push(quote! {
+                    let tree = tree.child(
+                        ::tokio_otp::SupervisionTree::from(scopes.#ident)
+                            .dynamic_defaults(graph)
+                            .id(#name),
+                    );
+                });
             }
         }
     }
@@ -961,12 +991,12 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 ::tokio_otp::SupervisionTree::leader(
                     id,
                     #spec,
-                    Self::__topology_scope(graph, prefix),
+                    Self::__topology_scope(graph, scopes, prefix),
                     #strategy,
                 )
             }
         }
-        None => quote! { Self::__topology_scope(graph, prefix).id(id) },
+        None => quote! { Self::__topology_scope(graph, scopes, prefix).id(id) },
     };
 
     // A leader topology is a fragment: its node is an actor-with-scope child,
@@ -996,6 +1026,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                     #(#factory_bounds,)*
                 {
                     Self::__topology_graph(::tokio_otp::GraphBuilder::new(), wire)
+                        .map(|(graph, refs, _scopes)| (graph, refs))
                 }
 
                 #vis fn graph_with<#(#all_params),*>(
@@ -1005,7 +1036,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 where
                     #(#factory_bounds,)*
                 {
-                    Self::__topology_graph(builder, wire).map(|(graph, _refs)| graph)
+                    Self::__topology_graph(builder, wire).map(|(graph, _refs, _scopes)| graph)
                 }
 
                 #vis fn tree<#(#all_params),*>(
@@ -1042,8 +1073,8 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 where
                     #(#factory_bounds,)*
                 {
-                    let (graph, refs) = Self::__topology_graph(builder, wire)?;
-                    let tree = Self::__topology_scope(&graph, "");
+                    let (graph, refs, scopes) = Self::__topology_graph(builder, wire)?;
+                    let tree = Self::__topology_scope(&graph, scopes, "");
                     ::core::result::Result::Ok((tree, refs))
                 }
 
@@ -1105,6 +1136,10 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             #(#slot_fields,)*
         }
 
+        #vis struct #scopes {
+            #(#scope_fields,)*
+        }
+
         #vis struct #factories<#(#all_params),*> {
             #(#factory_fields,)*
         }
@@ -1118,14 +1153,16 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 self,
                 builder: &mut ::tokio_otp::GraphBuilder,
                 slots: <#topology as ::tokio_otp::Topology>::Slots,
-            ) {
+            ) -> <#topology as ::tokio_otp::Topology>::Scopes {
                 #(#define_stmts)*
+                #scopes { #(#scope_ctor,)* }
             }
         }
 
         impl ::tokio_otp::Topology for #topology {
             type Refs = #refs;
             type Slots = #slots;
+            type Scopes = #scopes;
 
             fn open(
                 builder: &mut ::tokio_otp::GraphBuilder,
@@ -1149,6 +1186,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
 
             fn node(
                 graph: &::tokio_otp::Graph,
+                scopes: Self::Scopes,
                 id: &str,
                 prefix: &str,
             ) -> ::tokio_otp::SupervisionTree {
@@ -1160,6 +1198,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             #[doc(hidden)]
             fn __topology_scope(
                 graph: &::tokio_otp::Graph,
+                scopes: #scopes,
                 prefix: &str,
             ) -> ::tokio_otp::SupervisionTree {
                 let tree = #scope_root;
@@ -1171,16 +1210,20 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             fn __topology_graph<#(#all_params),*>(
                 mut builder: ::tokio_otp::GraphBuilder,
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-            ) -> ::core::result::Result<(::tokio_otp::Graph, #refs), ::tokio_otp::GraphBuildError>
+            ) -> ::core::result::Result<
+                (::tokio_otp::Graph, #refs, #scopes),
+                ::tokio_otp::GraphBuildError,
+            >
             where
                 #(#factory_bounds,)*
             {
                 let (slots, refs) =
                     <Self as ::tokio_otp::Topology>::open(&mut builder, "");
                 let factories = wire(&refs);
-                ::tokio_otp::TopologyFactories::<Self>::define(factories, &mut builder, slots);
+                let scopes =
+                    ::tokio_otp::TopologyFactories::<Self>::define(factories, &mut builder, slots);
                 let graph = builder.build()?;
-                ::core::result::Result::Ok((graph, refs))
+                ::core::result::Result::Ok((graph, refs, scopes))
             }
         }
 

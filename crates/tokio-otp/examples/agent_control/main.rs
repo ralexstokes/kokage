@@ -31,9 +31,10 @@
 //!
 //! # Supervision topology
 //!
-//! The static shape below is one `#[derive(Topology)]` declaration
-//! (`AgentControl`), so struct nesting is scope nesting and every actor label
-//! is qualified by its scope path (`gateway.inbound`, `core.journal`).
+//! The shape below is one `#[derive(Topology)]` declaration (`AgentControl`),
+//! so struct nesting is scope nesting and every actor label is qualified by its
+//! scope path (`gateway.inbound`, `core.journal`). Supervisor child ids stay
+//! local, so the paths read `root.gateway.inbound` and `root.core.journal`.
 //!
 //! ```text
 //! root (OneForOne)                     — struct AgentControl
@@ -45,8 +46,8 @@
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
 //! └── sessions  empty subtree mount; per-conversation subtrees at runtime
-//!               (appended with `SupervisionTree::subtree`, not derived: the
-//!                router needs its mount handle at wiring time)
+//!               (a `#[topology(dynamic)]` field, so the router can capture its
+//!                mount handle at wiring time)
 //!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
 //!         │                        every incarnation's id unique, so respawn
 //!         │                        never races a predecessor's removal
@@ -184,9 +185,9 @@ struct Core {
     router: Router,
 }
 
-/// The application's static shape. `sessions` is deliberately absent: its mount
-/// handle must be reserved before wiring (see `build_app`), so it is appended
-/// to the derived tree rather than declared as a `#[topology(dynamic)]` field.
+/// The whole application. `sessions` is a dynamic scope: its builder is wired
+/// like any other field, which is what lets the router capture its mount handle
+/// before any actor is constructed.
 #[derive(Topology)]
 #[topology(strategy = Strategy::OneForOne)]
 struct AgentControl {
@@ -194,6 +195,8 @@ struct AgentControl {
     gateway: Gateway,
     #[topology(scope)]
     core: Core,
+    #[topology(dynamic)]
+    sessions: DynamicScope,
 }
 
 struct App {
@@ -304,6 +307,7 @@ async fn build_app() -> Result<App, AnyError> {
                 proof: proof.clone(),
             },
         },
+        sessions: sessions_runtime,
     })?;
     let CoreRefs {
         journal,
@@ -313,11 +317,7 @@ async fn build_app() -> Result<App, AnyError> {
         router,
     } = refs.core;
 
-    // The sessions mount was reserved before anything was built, so it is
-    // appended to the derived declaration rather than declared as a field.
-    let runtime = tree
-        .subtree("sessions", sessions_runtime.into_tree())
-        .build()?;
+    let runtime = tree.build()?;
     let handle = runtime.spawn();
     let gateway = handle.subtree("gateway").expect("gateway runtime subtree");
     let core = handle.subtree("core").expect("core runtime subtree");

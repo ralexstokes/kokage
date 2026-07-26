@@ -22,6 +22,15 @@ pub trait Topology: Sized {
     /// Unfilled slot tokens, one per actor this topology declares.
     type Slots;
 
+    /// Reserved dynamic scopes, one per `#[topology(dynamic)]` field, plus one
+    /// nested bundle per nested scope.
+    ///
+    /// A dynamic scope is supplied as a [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) through the
+    /// factories bundle, so its mount handle can be taken with
+    /// [`handle`](crate::DynamicRuntimeBuilder::handle) before wiring — early enough
+    /// for an actor factory to capture it.
+    type Scopes;
+
     /// Opens a graph slot for every declared actor beneath `prefix`.
     ///
     /// `prefix` is the qualified label of the enclosing scope, or empty at the
@@ -33,45 +42,72 @@ pub trait Topology: Sized {
     ///
     /// `prefix` must be the same value passed to [`open`](Self::open), so that
     /// the node resolves the actors it was built with.
-    fn node(graph: &Graph, id: &str, prefix: &str) -> SupervisionTree;
+    fn node(graph: &Graph, scopes: Self::Scopes, id: &str, prefix: &str) -> SupervisionTree;
 }
 
 /// A bundle of factories filling every slot a topology declares.
 ///
 /// The generated `<Topology>Factories` struct implements this trait, with one
-/// field per actor and per nested scope. A nested scope's field holds that
-/// scope's own factories bundle, so wiring nests the same way the topology
-/// does.
+/// field per actor, per nested scope, and per dynamic scope. A nested scope's
+/// field holds that scope's own factories bundle, so wiring nests the same way
+/// the topology does; a dynamic scope's field holds a
+/// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder).
 pub trait TopologyFactories<T: Topology> {
-    /// Fills every slot returned by [`Topology::open`].
-    fn define(self, builder: &mut GraphBuilder, slots: T::Slots);
+    /// Fills every slot returned by [`Topology::open`], yielding the dynamic
+    /// scopes this bundle carried.
+    fn define(self, builder: &mut GraphBuilder, slots: T::Slots) -> T::Scopes;
 }
 
 /// Marker field type declaring an empty dynamic scope in a derived topology.
 ///
 /// A field of this type carries no actor and is never constructed; it declares
-/// a [`SupervisionTree::dynamic`] scope whose membership is written at runtime
-/// through the corresponding [`RuntimeHandle`](crate::RuntimeHandle) subtree.
-/// The field must be marked `#[topology(dynamic)]`:
+/// a [`SupervisionTree::dynamic`] scope whose membership is written at runtime.
+/// The field must be marked `#[topology(dynamic)]`, and its wiring entry is a
+/// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) rather than an actor
+/// factory — which is what makes
+/// the scope's mount handle available before any actor is constructed, so a
+/// factory can capture it:
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     Actor, ActorContext, ActorResult, DynamicScope, RestartPolicy, prelude::Continue,
+/// #     Actor, ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime,
+/// #     RuntimeHandle, TopologyBuildError, prelude::Continue,
 /// # };
-/// # struct Manager;
+/// # struct Manager {
+/// #     sessions: RuntimeHandle,
+/// # }
 /// # impl Actor for Manager {
 /// #     type Msg = ();
 /// #     async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+/// #         let _ = &self.sessions;
 /// #         Ok(Continue)
 /// #     }
 /// # }
 /// #[derive(tokio_otp::Topology)]
 /// struct App {
 ///     manager: Manager,
-///     #[topology(dynamic, restart = RestartPolicy::Never)]
+///     #[topology(dynamic)]
 ///     sessions: DynamicScope,
 /// }
+///
+/// # fn main() -> Result<(), TopologyBuildError> {
+/// let sessions = Runtime::dynamic().restart(RestartPolicy::Never);
+/// // Reserved before wiring, so the manager can hold it across restarts.
+/// let mount = sessions.handle();
+///
+/// let runtime = App::runtime(|_refs| AppFactories {
+///     manager: move || Manager {
+///         sessions: mount.clone(),
+///     },
+///     sessions,
+/// })?;
+/// # drop(runtime);
+/// # Ok(())
+/// # }
 /// ```
+///
+/// Policy for the scope comes from the builder — `Runtime::dynamic().restart(..)`
+/// and friends — rather than from attributes on the field.
 pub enum DynamicScope {}
 
 /// Errors returned when building a runtime from a derived topology.
