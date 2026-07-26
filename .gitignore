@@ -27,4 +27,7 @@ result
 # mdBook output
 docs/book/
 
-.claude/
+# Local Claude Code state stays untracked, but the shared permission
+# allowlist is committed so worktrees and other clones pick it up.
+.claude/*
+!.claude/settings.json
