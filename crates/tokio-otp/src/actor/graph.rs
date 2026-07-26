@@ -211,8 +211,8 @@ impl Graph {
         self.inner.actors.iter().map(RunnableActor::stats).collect()
     }
 
-    pub(crate) fn dynamic_factory(&self) -> RunnableActorFactory {
-        RunnableActorFactory {
+    pub(crate) fn dynamic_builder(&self) -> RunnableActorBuilder {
+        RunnableActorBuilder {
             observability: self.inner.observability.clone(),
             mailbox_capacity: self.inner.mailbox_capacity,
         }
@@ -614,15 +614,18 @@ impl std::fmt::Debug for RunnableActor {
 /// Registration surface for constructing runtime-added actors that share
 /// execution settings.
 ///
-/// Its [`actor`](Self::actor) methods accept an [`ActorFactory`], which is the
-/// reusable recipe that constructs each actor incarnation.
+/// Its [`actor`](Self::actor) methods take an [`ActorFactory`] — the reusable
+/// recipe that constructs each actor incarnation — and return the
+/// [`RunnableActor`] that wraps it. The two are distinct layers: a factory
+/// builds one incarnation, while this builder assembles the runnable actor
+/// around it.
 #[derive(Clone, Debug)]
-pub struct RunnableActorFactory {
+pub struct RunnableActorBuilder {
     observability: GraphObservability,
     mailbox_capacity: usize,
 }
 
-impl RunnableActorFactory {
+impl RunnableActorBuilder {
     /// Creates a factory with the same defaults [`GraphBuilder`](crate::GraphBuilder)
     /// uses for a graph without an explicit name.
     pub fn new() -> Self {
@@ -697,7 +700,7 @@ impl RunnableActorFactory {
     }
 }
 
-impl Default for RunnableActorFactory {
+impl Default for RunnableActorBuilder {
     fn default() -> Self {
         Self::new()
     }

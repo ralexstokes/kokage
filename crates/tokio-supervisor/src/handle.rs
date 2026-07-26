@@ -46,17 +46,9 @@ impl ControlEndpoint {
             .await
     }
 
-    async fn add_supervisor(
-        &self,
-        id: String,
-        supervisor: PendingSupervisorSpec,
-    ) -> Result<u64, ControlError> {
-        self.send(|reply| SupervisorCommand::AddSupervisor {
-            id,
-            supervisor,
-            reply,
-        })
-        .await
+    async fn add_supervisor(&self, supervisor: PendingSupervisorSpec) -> Result<u64, ControlError> {
+        self.send(|reply| SupervisorCommand::AddSupervisor { supervisor, reply })
+            .await
     }
 
     async fn send<T>(
@@ -1039,10 +1031,9 @@ mod tests {
         let child = child.build().expect("nested supervisor builds");
         let (command_tx, mut command_rx) = mpsc::channel(1);
         let endpoint = ControlEndpoint { command_tx };
-        let mut adding = Box::pin(endpoint.add_supervisor(
-            "nested".to_owned(),
-            PendingSupervisorSpec::new(SupervisorSpec::new(child)),
-        ));
+        let mut adding = Box::pin(endpoint.add_supervisor(PendingSupervisorSpec::new(
+            SupervisorSpec::new("nested", child),
+        )));
 
         let queued = tokio::select! {
             command = command_rx.recv() => command.expect("add command queued"),
@@ -1268,7 +1259,6 @@ pub(crate) enum SupervisorCommand {
         reply: oneshot::Sender<Result<(), ControlError>>,
     },
     AddSupervisor {
-        id: String,
         supervisor: PendingSupervisorSpec,
         reply: oneshot::Sender<Result<u64, ControlError>>,
     },
@@ -1397,14 +1387,10 @@ impl SupervisorHandle {
     /// before the child is spawned. This operation is supported only by
     /// dynamic supervisors; use [`wait_started`](Self::wait_started) to await
     /// readiness.
-    pub async fn add_supervisor(
-        &self,
-        id: impl Into<String>,
-        supervisor: impl Into<SupervisorSpec>,
-    ) -> Result<u64, ControlError> {
-        let supervisor = PendingSupervisorSpec::new(supervisor.into());
+    pub async fn add_supervisor(&self, supervisor: SupervisorSpec) -> Result<u64, ControlError> {
+        let supervisor = PendingSupervisorSpec::new(supervisor);
         let endpoint = self.control_endpoint()?;
-        endpoint.add_supervisor(id.into(), supervisor).await
+        endpoint.add_supervisor(supervisor).await
     }
 
     /// Removes a child by id from this supervisor.

@@ -196,7 +196,7 @@ let uploads = graph.actor_with_options(
 
 The same `ActorOptions` value works with `GraphBuilder::slot_with_options`,
 `GraphBuilder::add_with_options`, and
-`RunnableActorFactory::actor_with_options`. Dynamic registration exposes the
+`RunnableActorBuilder::actor_with_options`. Dynamic registration exposes the
 same settings directly on `DynamicActorOptions`, so mailbox and size settings
 can be combined with
 `DynamicActorOptions::new().mailbox(MailboxMode::Conflate).message_size()`

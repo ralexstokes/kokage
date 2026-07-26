@@ -32,3 +32,10 @@ Erlang/OTP-like functionality for the `tokio` ecosystem, organized as a Cargo wo
 * Builds and tests run with `--workspace --all-targets --all-features`; keep feature-gated code (`metrics`, `serde`) compiling under those flags.
 
 * Nix files are formatted with `nixfmt` (checked by `just nixfmt-check`).
+
+* Type names are suffixed by what the value carries, not by what it configures:
+
+  * `*Factory` — construction only, one `build()`-shaped method, no identity and no policy (`ActorFactory`). Its fields are the durable configuration that survives restarts.
+  * `*Spec` — a complete child declaration a supervisor can insert: identity + payload + supervision policy (`ChildSpec`, `SupervisorSpec`, `ActorSpec`). Where the identity comes from — an explicit argument or the payload's own label — does not matter.
+  * `*Options` — tuning with no payload and no identity, passed alongside the thing it modifies (`ActorOptions`, `DynamicActorOptions`).
+  * `*Builder` — assembles one of the above from parts (`GraphBuilder`, `SupervisorBuilder`, `RunnableActorBuilder`).

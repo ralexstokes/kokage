@@ -24,7 +24,7 @@ pub use context::{ActorContext, ActorRef, Reply, StepHandle};
 pub use error::{CallError, GraphBuildError, SendError, StepDeadline, TryRecvError};
 pub use factory::ActorFactory;
 pub use graph::{
-    ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor, RunnableActorFactory,
+    ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor, RunnableActorBuilder,
 };
 pub use handler::{Actor, DrainPolicy};
 pub use monitor::{Down, DownReason, MonitorEvent};

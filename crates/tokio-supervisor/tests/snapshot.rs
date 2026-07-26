@@ -13,7 +13,7 @@ use tokio::{
 use tokio_supervisor::{
     BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
     DynamicSupervisorBuilder, ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind,
-    SupervisorBuilder, SupervisorEvent, SupervisorSnapshot, SupervisorStateView,
+    SupervisorBuilder, SupervisorEvent, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
 };
 
 mod common;
@@ -83,7 +83,7 @@ async fn nested_supervisors_allocate_membership_epochs_independently() {
         .await
         .expect("anchor added");
     handle
-        .add_supervisor("nested", nested)
+        .add_supervisor(SupervisorSpec::new("nested", nested))
         .await
         .expect("nested supervisor added");
     let nested_handle = handle
@@ -311,7 +311,7 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid outer supervisor");
 

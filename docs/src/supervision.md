@@ -277,7 +277,7 @@ let pressroom = SupervisorBuilder::new()
     .build()?;
 
 let shop = SupervisorBuilder::new()
-    .supervisor("pressroom", pressroom)
+    .supervisor(SupervisorSpec::new("pressroom", pressroom))
     .child(front_desk)
     .build()?;
 ```

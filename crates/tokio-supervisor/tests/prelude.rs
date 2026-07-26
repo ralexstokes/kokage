@@ -101,7 +101,7 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
                 25,
             ))),
         )
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .build()
         .expect("valid outer supervisor")
         .spawn();

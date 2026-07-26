@@ -8,8 +8,8 @@ use tokio_supervisor::{
 };
 
 use crate::{
-    Graph, RunnableActor, RunnableActorFactory, Runtime,
-    runtime::{ActorChildSpec, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
+    Graph, RunnableActor, RunnableActorBuilder, Runtime,
+    runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
 /// Configuration carried by an ordered or dynamic scope node.
@@ -30,7 +30,7 @@ pub struct SupervisionScope {
     pub default_shutdown: ShutdownPolicy,
     /// Declared child nodes, in semantic order.
     pub children: Vec<SupervisionTree>,
-    dynamic_factory: Option<RunnableActorFactory>,
+    dynamic_builder: Option<RunnableActorBuilder>,
     reserved_builder: Option<ReservedScopeBuilder>,
     reserved_actors: Option<Arc<ActorRuntimeState>>,
 }
@@ -58,7 +58,7 @@ impl Clone for SupervisionScope {
             default_restart: self.default_restart,
             default_shutdown: self.default_shutdown,
             children: self.children.clone(),
-            dynamic_factory: self.dynamic_factory.clone(),
+            dynamic_builder: self.dynamic_builder.clone(),
             reserved_builder: None,
             reserved_actors: None,
         }
@@ -74,7 +74,7 @@ impl SupervisionScope {
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             children: Vec::new(),
-            dynamic_factory: None,
+            dynamic_builder: None,
             reserved_builder: None,
             reserved_actors: None,
         }
@@ -101,7 +101,7 @@ pub enum SupervisionTree {
         scope: SupervisionScope,
     },
     /// A graph actor child.
-    Actor(ActorChild),
+    Actor(ActorSpec),
     /// An arbitrary non-actor task child.
     Child(ChildSpec),
     /// An actor leader followed by a scope it owns.
@@ -109,7 +109,7 @@ pub enum SupervisionTree {
         /// Id of the generated ordered scope in its parent.
         id: String,
         /// Leader actor, installed first.
-        actor: ActorChild,
+        actor: ActorSpec,
         /// Scope owned by the leader, installed second as `children`.
         children: Box<SupervisionTree>,
         /// Restart relationship between the leader and owned scope.
@@ -122,14 +122,14 @@ pub type SupervisionChild = SupervisionTree;
 
 /// A graph actor placed in a supervision tree with optional policy overrides.
 #[derive(Clone)]
-pub struct ActorChild {
+pub struct ActorSpec {
     actor: RunnableActor,
     restart: Option<RestartPolicy>,
     shutdown: Option<ShutdownPolicy>,
     restart_intensity: Option<RestartIntensity>,
 }
 
-impl ActorChild {
+impl ActorSpec {
     /// Places a runnable actor using its enclosing ordered scope's defaults.
     pub fn new(actor: RunnableActor) -> Self {
         Self {
@@ -167,15 +167,15 @@ impl ActorChild {
     }
 }
 
-impl From<RunnableActor> for ActorChild {
+impl From<RunnableActor> for ActorSpec {
     fn from(actor: RunnableActor) -> Self {
         Self::new(actor)
     }
 }
 
-impl std::fmt::Debug for ActorChild {
+impl std::fmt::Debug for ActorSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ActorChild")
+        f.debug_struct("ActorSpec")
             .field("label", &self.label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
@@ -259,7 +259,7 @@ impl SupervisionTree {
     pub fn dynamic_defaults(mut self, graph: &Graph) -> Self {
         self.scope_mut()
             .expect("execution defaults apply only to scope nodes")
-            .dynamic_factory = Some(graph.dynamic_factory());
+            .dynamic_builder = Some(graph.dynamic_builder());
         self
     }
 
@@ -314,7 +314,7 @@ impl SupervisionTree {
 
     /// Appends an actor node to this scope.
     #[must_use]
-    pub fn actor(self, actor: impl Into<ActorChild>) -> Self {
+    pub fn actor(self, actor: impl Into<ActorSpec>) -> Self {
         self.child(Self::Actor(actor.into()))
     }
 
@@ -344,7 +344,7 @@ impl SupervisionTree {
     pub fn actor_with_scope(
         self,
         id: impl Into<String>,
-        actor: impl Into<ActorChild>,
+        actor: impl Into<ActorSpec>,
         children: impl Into<SupervisionTree>,
     ) -> Self {
         self.actor_with_scope_strategy(id, actor, children, Strategy::RestForOne)
@@ -369,7 +369,7 @@ impl SupervisionTree {
     pub fn actor_with_scope_strategy(
         self,
         id: impl Into<String>,
-        actor: impl Into<ActorChild>,
+        actor: impl Into<ActorSpec>,
         children: impl Into<SupervisionTree>,
         strategy: Strategy,
     ) -> Self {
@@ -470,15 +470,15 @@ impl SupervisionTree {
             Self::Ordered { scope } | Self::Dynamic { scope } => scope,
             _ => unreachable!("kind() accepted only a scope node"),
         };
-        let actor_factory = scope.dynamic_factory.clone().unwrap_or_default();
+        let actor_builder = scope.dynamic_builder.clone().unwrap_or_default();
         let actors = scope.reserved_actors.take().unwrap_or_else(|| {
             Arc::new(ActorRuntimeState::new(
-                actor_factory.clone(),
+                actor_builder.clone(),
                 scope.default_restart,
                 scope.default_shutdown,
             ))
         });
-        actors.configure(actor_factory, scope.default_restart, scope.default_shutdown);
+        actors.configure(actor_builder, scope.default_restart, scope.default_shutdown);
         let reserved_builder = scope.reserved_builder.take();
 
         if kind == ScopeKind::Dynamic {
@@ -522,7 +522,7 @@ impl SupervisionTree {
                 Self::Actor(actor) => builder.child(actor_child_spec(
                     actor.actor,
                     &actors,
-                    ActorChildSpec::new(
+                    ActorChildOptions::new(
                         actor.restart.unwrap_or(scope.default_restart),
                         actor.shutdown.unwrap_or(scope.default_shutdown),
                     )
@@ -535,8 +535,7 @@ impl SupervisionTree {
                     )?;
                     let (nested, nested_actors) = tree.lower_scope()?;
                     builder.supervisor(
-                        id,
-                        SupervisorSpec::new(nested)
+                        SupervisorSpec::new(id, nested)
                             .attachment(RuntimeAttachment::subtree(&actors, nested_actors)),
                     )
                 }
@@ -547,7 +546,7 @@ impl SupervisionTree {
                     strategy,
                 } => {
                     let owned_actors = Arc::new(ActorRuntimeState::new(
-                        RunnableActorFactory::new(),
+                        RunnableActorBuilder::new(),
                         scope.default_restart,
                         scope.default_shutdown,
                     ));
@@ -559,7 +558,7 @@ impl SupervisionTree {
                     let leader = actor_child_spec(
                         actor.actor,
                         &owned_actors,
-                        ActorChildSpec::new(
+                        ActorChildOptions::new(
                             actor.restart.unwrap_or(scope.default_restart),
                             actor.shutdown.unwrap_or(scope.default_shutdown),
                         )
@@ -570,15 +569,13 @@ impl SupervisionTree {
                         .strategy(strategy)
                         .child(leader)
                         .supervisor(
-                            "children",
-                            SupervisorSpec::new(children_supervisor).attachment(
+                            SupervisorSpec::new("children", children_supervisor).attachment(
                                 RuntimeAttachment::subtree(&owned_actors, children_actors),
                             ),
                         )
                         .build()?;
                     builder.supervisor(
-                        id,
-                        SupervisorSpec::new(owned)
+                        SupervisorSpec::new(id, owned)
                             .attachment(RuntimeAttachment::subtree(&actors, owned_actors)),
                     )
                 }

@@ -19,10 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("worker stopping");
             Ok(())
         }))
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
         .build()?;
 
     let handle = supervisor.spawn();

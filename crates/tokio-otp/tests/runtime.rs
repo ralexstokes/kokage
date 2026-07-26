@@ -19,7 +19,8 @@ use tokio_otp::{
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorStateView,
+    ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
+    SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -256,12 +257,12 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         .expect("dynamic raw-members subtree");
     raw_members
         .supervisor_handle()
-        .add_supervisor(
+        .add_supervisor(SupervisorSpec::new(
             "raw",
             SupervisorBuilder::new()
                 .build()
                 .expect("raw supervisor builds"),
-        )
+        ))
         .await
         .expect("raw supervisor added");
     assert!(handle.subtree("raw").is_none());

@@ -1160,7 +1160,7 @@ mod runnable_actor {
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
-        GraphBuilder, MessageSize, RawActor, RestartPolicy, RunnableActor, RunnableActorFactory,
+        GraphBuilder, MessageSize, RawActor, RestartPolicy, RunnableActor, RunnableActorBuilder,
         SendError, SupervisionTree, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
@@ -1883,7 +1883,7 @@ mod runnable_actor {
     #[tokio::test]
     async fn factory_minted_ref_is_live_across_runs_and_dies_with_the_binding() {
         let (out_tx, mut out_rx) = mpsc::unbounded_channel();
-        let (worker, worker_ref) = RunnableActorFactory::new().actor("worker", move || Forward {
+        let (worker, worker_ref) = RunnableActorBuilder::new().actor("worker", move || Forward {
             out: out_tx.clone(),
         });
 

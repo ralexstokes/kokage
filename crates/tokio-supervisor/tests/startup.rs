@@ -282,7 +282,7 @@ async fn nested_supervisor_gates_later_parent_siblings() {
     })
     .wait_for_ready();
     let handle = SupervisorBuilder::new()
-        .supervisor("nested", nested)
+        .supervisor(SupervisorSpec::new("nested", nested))
         .child(later)
         .build()
         .unwrap()
@@ -321,7 +321,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
             )
             .build()
             .unwrap();
-        root = root.supervisor(format!("noisy-{index}"), nested);
+        root = root.supervisor(SupervisorSpec::new(format!("noisy-{index}"), nested));
     }
 
     let gated = ChildSpec::new("gated", {
@@ -543,10 +543,7 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
         .build()
         .unwrap();
     let handle = SupervisorBuilder::new()
-        .supervisor(
-            "nested",
-            SupervisorSpec::new(nested).restart(RestartPolicy::Never),
-        )
+        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
         .build()
         .unwrap()
         .spawn();
