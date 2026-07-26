@@ -113,14 +113,23 @@ impl LifecycleWatch {
 
     /// Waits for `child_id` to start at a generation above `after_generation`.
     ///
-    /// Returns `None` if that membership is removed first or the watched
-    /// supervisor identity becomes terminal. This is a convenience for
-    /// one-shot restart waits; consumers maintaining lifecycle-derived state
-    /// must still realign from a snapshot after a [`LifecycleEventKind::Lagged`]
-    /// marker.
+    /// Returns `None` once that start can no longer be observed on this watch:
+    /// the membership was removed, the watched supervisor identity became
+    /// terminal, or a [`LifecycleEventKind::Lagged`] marker discarded a prefix
+    /// that may have contained it. This is a convenience for one-shot restart
+    /// waits — it reports that waiting longer is futile, not which of those
+    /// happened. Callers that must distinguish them, or that need to resume
+    /// waiting after lag, should realign from
+    /// [`snapshot`](crate::SupervisorHandle::snapshot).
     pub async fn wait_started(&mut self, child_id: &str, after_generation: u64) -> Option<u64> {
         loop {
             let event = self.next().await?;
+            // Checked before the child filter: a marker's envelope describes
+            // the newest discarded transition, which need not belong to
+            // `child_id` even when the dropped prefix contained its `Started`.
+            if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
+                return None;
+            }
             if event.child_id != child_id {
                 continue;
             }
@@ -346,5 +355,32 @@ impl LifecycleHub {
                 queue.mark_terminal();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LifecycleHub;
+
+    /// `emit` sweeps dropped watchers, but an identity that never emits would
+    /// otherwise accumulate them: per-connection watches on a quiet tree are a
+    /// normal pattern, so registration sweeps too.
+    #[test]
+    fn registering_a_watch_sweeps_dropped_watchers() {
+        let hub = LifecycleHub::new();
+
+        for _ in 0..8 {
+            drop(hub.watch());
+        }
+        let _live = hub.watch();
+
+        assert_eq!(
+            hub.state
+                .lock()
+                .expect("hub state is not poisoned")
+                .watchers
+                .len(),
+            1
+        );
     }
 }

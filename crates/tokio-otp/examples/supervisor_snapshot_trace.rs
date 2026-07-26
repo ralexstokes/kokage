@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     lifecycle
         .wait_started("worker", baseline)
         .await
-        .ok_or_else(|| io::Error::other("worker removed before restarting"))?;
+        .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;
 
     // Wait for the worker to finish the last order before shutting down.

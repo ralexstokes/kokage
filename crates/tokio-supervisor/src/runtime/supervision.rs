@@ -1868,6 +1868,17 @@ impl SupervisorRuntime {
         }
         drop(attached_children);
         let snapshot = self.snapshot_view();
+        // Suppressing an unchanged local publication halves the wake-ups that
+        // every transition would otherwise deliver to snapshot subscribers,
+        // because the aligned lifecycle publication is immediately followed by
+        // the event-driven one. The parent forward is not conditional on that:
+        // a parent learns a nested snapshot only by being pushed one, so an
+        // incarnation whose first view matches its bind baseline would
+        // otherwise never populate the parent's cell. Redundant forwards are
+        // coalesced on the far side instead, by `NestedSnapshotState`: a fresh
+        // cell per incarnation always accepts that first view, and thereafter
+        // an unchanged snapshot neither replaces the stored one nor queues a
+        // notification.
         self.snapshots.send_if_modified(|current| {
             if *current == snapshot {
                 return false;
