@@ -81,7 +81,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `DynamicActorOptions` carries the new child's restart policy, shutdown policy,
 optional restart intensity, and terminal-removal behavior. A
-`RestartPolicy::Never` actor is removed automatically after either a clean or
+runtime's restart and shutdown defaults are inherited unless the options use
+the `restart(...)` or `shutdown(...)` builder methods to override them. A
+caller migrating from direct `options.restart` or `options.shutdown` field
+assignment should use those methods so the runtime can distinguish an explicit
+override from an inherited default.
+
+A `RestartPolicy::Never` actor is removed automatically after either a clean or
 failed exit, matching OTP temporary-child semantics; other restart policies
 retain a terminal child in the supervisor snapshot by default. Override either
 default with `remove_on_exit(bool)`. Removal only follows an exit the policy
@@ -217,8 +223,9 @@ no `OnceLock` or post-spawn handle injection is needed. Before binding, control
 operations return `ControlError::Unavailable`, while `snapshot()` exposes the
 declared children as starting and lifecycle/snapshot subscriptions are already
 valid. `wait_started()` waits for a real bound incarnation, including for an
-empty dynamic scope. Dropping an unbuilt builder, failing `build()`, or having
-an insertion rejected makes the identity terminal and closes retained streams.
+empty dynamic scope. Dropping an unbuilt builder, failing `build()`, dropping a
+built scope before it is spawned or inserted, or having an insertion rejected
+makes the identity terminal and closes retained streams.
 
 The same rule applies to `SupervisorBuilder` and
 `DynamicSupervisorBuilder`, whose `handle()` returns a raw
@@ -234,7 +241,9 @@ dynamic scope; an ordered scope returns
 `ControlError::UnsupportedByScopeKind`. Awaiting ordinary scope operations is
 safe, with one residual cycle to avoid: do not await removal of a sibling whose
 drain needs this actor to keep consuming its own mailbox. Pipeline that removal
-with `ctx.step`.
+with `ctx.step`. Startup readiness has the same rule: awaiting the enclosing
+scope's `wait_started()` from `on_start` waits on the current actor's own
+readiness and therefore deadlocks. Pipeline the wait and let `on_start` return.
 
 For the common leader-and-workers shape, declare an actor-owned scope:
 

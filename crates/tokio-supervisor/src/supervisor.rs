@@ -34,11 +34,34 @@ use crate::{
 /// A configured supervisor, ready to be spawned or nested as a first-class
 /// supervisor child.
 ///
-/// Cloning a `Supervisor` produces an independent configuration that can be
-/// started separately.
+/// # Cloning reserves a new identity
+///
+/// A `Supervisor` owns the stable identity behind [`handle`](Self::handle),
+/// reserved when its builder was created. Cloning copies the *configuration*
+/// and reserves a **separate** identity for the copy, so a handle taken before
+/// the clone continues to address the original:
+///
+/// ```no_run
+/// # use tokio_supervisor::SupervisorBuilder;
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let supervisor = SupervisorBuilder::new().build()?;
+/// let handle = supervisor.handle();
+///
+/// supervisor.clone().spawn(); // spawns the clone's identity, not `handle`'s
+/// drop(supervisor);           // abandons `handle`'s identity: it goes terminal
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Spawn or nest the same value the handle came from. Handle *clones* are
+/// unaffected — they all address one identity.
 pub struct Supervisor {
     pub(crate) config: SupervisorConfig,
     pub(crate) channels: Arc<StableSupervisorChannels>,
+    // A built declaration owns abandonment terminality until its channels are
+    // handed to a parent edge. Spawned roots terminalize through this guard
+    // when their owned runtime finishes.
+    terminalize_on_drop: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -101,15 +124,23 @@ impl ParentLink {
 
 impl Supervisor {
     pub(crate) fn new(config: SupervisorConfig) -> Self {
-        let channels = stable_channels_for_config(&config, false);
-        Self { config, channels }
+        let channels = stable_channels_for_config(&config);
+        Self {
+            config,
+            channels,
+            terminalize_on_drop: AtomicBool::new(true),
+        }
     }
 
     pub(crate) fn with_channels(
         config: SupervisorConfig,
         channels: Arc<StableSupervisorChannels>,
     ) -> Self {
-        Self { config, channels }
+        Self {
+            config,
+            channels,
+            terminalize_on_drop: AtomicBool::new(true),
+        }
     }
 
     /// Returns this supervisor's immutable scope kind.
@@ -292,13 +323,8 @@ impl Supervisor {
         });
         // Hard cascade is armed by default: aborting an ancestor runtime drops
         // its JoinSet, each nested wrapper aborts its owned runtime, and the
-        // cascade continues recursively. Explicit `ShutdownMode::Abort` opts
-        // that wrapper incarnation into the older wrapper-only contract: the
-        // shutdown signal is sent, but the nested runtime drains detached. An
-        // ordinary supervisor failure makes the same explicit opt-out before
-        // its JoinSet is dropped. The paired tests are
-        // `explicit_wrapper_abort_signals_nested_shutdown_instead_of_cascading_hard`
-        // and `parent_child_grace_bounds_a_slow_nested_ordered_teardown`.
+        // cascade continues recursively. Cooperative shutdown disarms this
+        // guard after the nested runtime joins normally.
         let mut nested_task_on_drop = NestedTaskOnDrop {
             abort_handle: join_handle.abort_handle(),
             shutdown_tx: shutdown_tx.clone(),
@@ -358,7 +384,7 @@ impl Supervisor {
         let supervisor_path = format_path(&path);
         let strategy = strategy_label(self.config.strategy);
         let mut runtime = SupervisorRuntime::new(
-            self.config,
+            self.config.clone(),
             shutdown_rx,
             events_tx,
             lifecycle,
@@ -389,13 +415,32 @@ impl Supervisor {
         statically_configured: bool,
     ) -> Arc<StableSupervisorChannels> {
         self.channels.claim_edge(statically_configured);
+        self.terminalize_on_drop.store(false, Ordering::Release);
         Arc::clone(&self.channels)
     }
 }
 
 impl Clone for Supervisor {
+    /// Copies the configuration and reserves an independent stable identity.
+    /// See the [type-level note](Supervisor#cloning-reserves-a-new-identity):
+    /// a handle taken before the clone still addresses the original.
     fn clone(&self) -> Self {
-        Self::new(self.config.clone())
+        let mut config = self.config.clone();
+        config.children = self
+            .config
+            .children
+            .iter()
+            .map(|child| Arc::new((**child).clone()))
+            .collect();
+        Self::new(config)
+    }
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if self.terminalize_on_drop.swap(false, Ordering::AcqRel) {
+            self.channels.terminal();
+        }
     }
 }
 
@@ -422,7 +467,6 @@ fn prepare_nested_channels(config: &SupervisorConfig) -> NestedChannels {
 
 pub(crate) fn stable_channels_for_config(
     config: &SupervisorConfig,
-    statically_configured: bool,
 ) -> Arc<StableSupervisorChannels> {
     let nested_channels = prepare_nested_channels(config);
     let attached_children = initial_attached_children(config, &nested_channels);
@@ -432,22 +476,28 @@ pub(crate) fn stable_channels_for_config(
         config.event_channel_capacity,
         nested_channels,
         attached_children,
-        statically_configured,
     )
 }
 
-pub(crate) fn reset_channels_for_config(
+/// Republishes a reserved identity's declared view after a builder mutation.
+pub(crate) fn refresh_declaration_for_config(
     config: &SupervisorConfig,
     channels: &StableSupervisorChannels,
 ) {
     let nested_channels = prepare_nested_channels(config);
     let attached_children = initial_attached_children(config, &nested_channels);
-    channels.reset_declaration(
-        initial_snapshot(config),
+    channels.reset_declared_view(initial_snapshot(config), nested_channels, attached_children);
+}
+
+/// Applies a finished configuration to a reserved identity, once, at build.
+pub(crate) fn reset_channels_for_config(
+    config: &SupervisorConfig,
+    channels: &StableSupervisorChannels,
+) {
+    refresh_declaration_for_config(config, channels);
+    channels.reset_declared_capacities(
         config.control_channel_capacity,
         config.event_channel_capacity,
-        nested_channels,
-        attached_children,
     );
 }
 

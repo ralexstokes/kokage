@@ -82,6 +82,36 @@ async fn restart_is_an_ordered_exit_started_pair() {
 }
 
 #[tokio::test]
+async fn wait_started_reports_membership_removal() {
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("worker is added");
+    handle.wait_started().await.expect("startup succeeds");
+    let mut lifecycle = handle.watch_lifecycle();
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .generation;
+
+    handle
+        .remove_child("worker")
+        .await
+        .expect("worker removal succeeds");
+    assert_eq!(lifecycle.wait_started("worker", baseline).await, None);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
 async fn readiness_gated_started_is_emitted_only_after_ready() {
     let release = Arc::new(Notify::new());
     let child_release = Arc::clone(&release);
@@ -195,6 +225,51 @@ async fn cooperative_remove_publishes_removed_before_reply() {
 }
 
 #[tokio::test]
+async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
+    handle
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("dynamic child added");
+    handle.wait_started().await.expect("dynamic child starts");
+
+    let added = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Added)
+    })
+    .await;
+    let started = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+    })
+    .await;
+    handle
+        .remove_child("worker")
+        .await
+        .expect("dynamic child removed");
+    let exited = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+    })
+    .await;
+    let removed = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Removed)
+    })
+    .await;
+
+    assert_eq!(started.seq, added.seq + 1);
+    assert_eq!(exited.seq, started.seq + 1);
+    assert_eq!(removed.seq, exited.seq + 1);
+    assert_eq!(removed.membership_epoch, added.membership_epoch);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
 async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     const RESTARTS: usize = 80;
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -226,11 +301,13 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     .await;
 
     let lagged = next_event(&mut lifecycle).await;
-    assert_eq!(lagged.seq, 1);
+    assert_eq!(lagged.seq, 35);
     assert!(matches!(
         lagged.kind,
         LifecycleEventKind::Lagged { dropped: 35 }
     ));
+    assert_eq!(lagged.total_restarts, 16);
+    assert_eq!(lagged.child_restart_count, 16);
     let first_retained = next_event(&mut lifecycle).await;
     assert_eq!(first_retained.seq, 36);
     assert_eq!(first_retained.total_restarts, 17);
@@ -333,6 +410,11 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .spawn();
     handle.wait_started().await.expect("startup succeeds");
     let middle = handle.supervisor("middle").expect("middle handle");
+    let initial_worker_epoch = middle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .membership_epoch;
     let mut lifecycle = middle.watch_lifecycle();
 
     crash_worker.notify_one();
@@ -356,6 +438,8 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
     .await;
     assert_eq!(added.seq, fatal_exit.seq + 1);
     assert!(started.seq > added.seq);
+    assert!(added.membership_epoch > initial_worker_epoch);
+    assert_eq!(started.membership_epoch, added.membership_epoch);
     assert_eq!(added.total_restarts, 2);
     assert_eq!(started.total_restarts, 2);
 
@@ -840,4 +924,63 @@ fn completing_supervisor(complete: &Arc<Notify>) -> tokio_supervisor::Supervisor
         )
         .build()
         .expect("valid completing supervisor")
+}
+
+/// `wait_started` must give up at a `Lagged` marker even when the marker's
+/// envelope names a different child. The marker stands for a discarded prefix
+/// that may have carried the awaited `Started`, so scanning past it on an id
+/// mismatch would wait for a transition this watch can no longer deliver.
+#[tokio::test]
+async fn wait_started_reports_a_start_lost_to_overflow() {
+    const RESTARTS: usize = 80;
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
+
+    handle
+        .add_child(ChildSpec::new("quiet", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("dynamic add succeeds");
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let child_attempts = Arc::clone(&attempts);
+    handle
+        .add_child(
+            ChildSpec::new("storm", move |ctx| {
+                let attempts = Arc::clone(&child_attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) < RESTARTS {
+                        return Err(common::test_error("again"));
+                    }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60))),
+        )
+        .await
+        .expect("dynamic add succeeds");
+
+    let mut snapshots = handle.subscribe_snapshots();
+    wait_for_snapshot(&mut snapshots, |snapshot| {
+        snapshot
+            .child("storm")
+            .is_some_and(|child| child.generation == RESTARTS as u64 && child.started)
+    })
+    .await;
+
+    // The storm has evicted every "quiet" transition, so the marker that now
+    // fronts the buffer is stamped with a "storm" envelope.
+    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.wait_started("quiet", 0))
+        .await
+        .expect("wait_started must not outlive the transitions it awaits");
+    assert_eq!(waited, None);
+
+    shutdown(handle).await;
 }

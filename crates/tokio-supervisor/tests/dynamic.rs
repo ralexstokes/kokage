@@ -6,8 +6,8 @@ use tokio::{
 };
 use tokio_supervisor::{
     ChildSpec, ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView,
-    RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, SupervisorBuilder, SupervisorEvent,
-    SupervisorHandle,
+    RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, SupervisorBuilder,
+    SupervisorError, SupervisorEvent, SupervisorHandle,
 };
 
 mod common;
@@ -810,6 +810,71 @@ async fn shutdown_absorbs_and_completes_a_pending_removal() {
         .expect("shutdown should finalize the pending removal");
 
     handle.wait().await.expect("shutdown should succeed");
+}
+
+#[tokio::test]
+async fn fatal_exit_resolves_an_accepted_pending_removal() {
+    let removable_started = Arc::new(Notify::new());
+    let removable_cancelled = Arc::new(Notify::new());
+    let failing_started = Arc::new(Notify::new());
+    let fail_now = Arc::new(Notify::new());
+
+    let handle = spawn_dynamic(
+        DynamicSupervisorBuilder::new()
+            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1))),
+        [
+            ChildSpec::new("removable", {
+                let removable_started = Arc::clone(&removable_started);
+                let removable_cancelled = Arc::clone(&removable_cancelled);
+                move |ctx| {
+                    let removable_started = Arc::clone(&removable_started);
+                    let removable_cancelled = Arc::clone(&removable_cancelled);
+                    async move {
+                        removable_started.notify_one();
+                        ctx.shutdown_token().cancelled().await;
+                        removable_cancelled.notify_one();
+                        std::future::pending::<()>().await;
+                        Ok(())
+                    }
+                }
+            })
+            .shutdown(ShutdownPolicy::new(
+                Duration::from_secs(5),
+                ShutdownMode::CooperativeThenAbort,
+            )),
+            ChildSpec::new("failing", {
+                let failing_started = Arc::clone(&failing_started);
+                let fail_now = Arc::clone(&fail_now);
+                move |_| {
+                    let failing_started = Arc::clone(&failing_started);
+                    let fail_now = Arc::clone(&fail_now);
+                    async move {
+                        failing_started.notify_one();
+                        fail_now.notified().await;
+                        Err(common::test_error("fatal restart"))
+                    }
+                }
+            }),
+        ],
+    )
+    .await;
+
+    removable_started.notified().await;
+    failing_started.notified().await;
+    let remove_handle = handle.clone();
+    let remove_task = tokio::spawn(async move { remove_handle.remove_child("removable").await });
+    removable_cancelled.notified().await;
+    fail_now.notify_one();
+
+    let remove_result = timeout(common::EVENT_TIMEOUT, remove_task)
+        .await
+        .expect("accepted removal reply must not dangle")
+        .expect("remove task should join");
+    assert_eq!(remove_result, Err(ControlError::SupervisorStopping));
+    assert_eq!(
+        handle.wait().await,
+        Err(SupervisorError::RestartIntensityExceeded)
+    );
 }
 
 #[tokio::test]

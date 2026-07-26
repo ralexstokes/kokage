@@ -154,25 +154,17 @@ async fn one_for_one_restart_flow() {
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child("flaky")
         .expect("flaky child should be known")
         .generation;
-    let mut lifecycle = handle.watch_lifecycle();
     trigger_failure.notify_one();
-    let generation = loop {
-        let event = lifecycle
-            .next()
-            .await
-            .expect("supervisor remains live during benchmark");
-        if event.child_id == "flaky"
-            && let tokio_supervisor::LifecycleEventKind::Started { generation } = event.kind
-            && generation > baseline
-        {
-            break generation;
-        }
-    };
+    let generation = lifecycle
+        .wait_started("flaky", baseline)
+        .await
+        .expect("supervisor remains live during benchmark");
     black_box(generation);
     black_box(attempts.load(Ordering::Relaxed));
 

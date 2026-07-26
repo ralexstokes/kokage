@@ -9,7 +9,7 @@ use tokio_supervisor::{
 
 use crate::{
     Graph, RunnableActor, RunnableActorFactory, Runtime,
-    runtime::{ActorRuntimeState, RuntimeAttachment, actor_child_spec},
+    runtime::{ActorChildSpec, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
 /// Configuration carried by an ordered or dynamic scope node.
@@ -43,6 +43,15 @@ enum ReservedScopeBuilder {
 }
 
 impl Clone for SupervisionScope {
+    /// Copies the declaration but **not** the reserved scope identity.
+    ///
+    /// A scope produced by [`RuntimeBuilder::into_tree`](crate::RuntimeBuilder::into_tree)
+    /// carries the builder whose [`handle`](crate::RuntimeBuilder::handle) was
+    /// already handed out. Only one tree can own that identity, so the clone
+    /// reserves a fresh one when it is built, and the previously taken handle
+    /// keeps addressing the original — which goes terminal if that original is
+    /// dropped rather than built. Build the value the handle came from, and
+    /// clone only declarations whose handles you have not taken.
     fn clone(&self) -> Self {
         Self {
             id: self.id.clone(),
@@ -357,9 +366,18 @@ impl SupervisionTree {
     /// Appends an actor leader with an owned scope and an explicit restart
     /// relationship.
     ///
-    /// Prefer [`actor_with_scope`](Self::actor_with_scope) for the default
-    /// `RestForOne` relationship. Use `OneForAll` when leader and child scope
-    /// must always recycle together.
+    /// The node lowers to the ordered pair `[leader, children]`, so `strategy`
+    /// states how the two relate when one of them fails:
+    ///
+    /// - [`RestForOne`](Strategy::RestForOne) — the default from
+    ///   [`actor_with_scope`](Self::actor_with_scope). A failing leader
+    ///   recycles the child scope with it; a failure inside the child scope
+    ///   leaves the leader running.
+    /// - [`OneForAll`](Strategy::OneForAll) — either side failing recycles
+    ///   both. Use it when the leader cannot outlive the workers it created.
+    /// - [`OneForOne`](Strategy::OneForOne) — the two restart independently.
+    ///   Accepted, but rarely what a leader wants: it survives with a child
+    ///   scope it no longer has state for.
     #[must_use]
     pub fn actor_with_scope_strategy(
         self,
@@ -526,11 +544,11 @@ impl SupervisionTree {
                 Self::Actor(actor) => builder.child(actor_child_spec(
                     actor.actor,
                     &actors,
-                    actor.restart.unwrap_or(scope.default_restart),
-                    actor.shutdown.unwrap_or(scope.default_shutdown),
-                    actor.restart_intensity,
-                    false,
-                    None,
+                    ActorChildSpec::new(
+                        actor.restart.unwrap_or(scope.default_restart),
+                        actor.shutdown.unwrap_or(scope.default_shutdown),
+                    )
+                    .restart_intensity(actor.restart_intensity),
                 )),
                 Self::Child(spec) => builder.child(spec),
                 tree @ (Self::Ordered { .. } | Self::Dynamic { .. }) => {
@@ -563,11 +581,12 @@ impl SupervisionTree {
                     let leader = actor_child_spec(
                         actor.actor,
                         &owned_actors,
-                        actor.restart.unwrap_or(scope.default_restart),
-                        actor.shutdown.unwrap_or(scope.default_shutdown),
-                        actor.restart_intensity,
-                        false,
-                        Some(children_handle),
+                        ActorChildSpec::new(
+                            actor.restart.unwrap_or(scope.default_restart),
+                            actor.shutdown.unwrap_or(scope.default_shutdown),
+                        )
+                        .restart_intensity(actor.restart_intensity)
+                        .children(children_handle),
                     );
                     let owned = SupervisorBuilder::new()
                         .strategy(strategy)

@@ -743,29 +743,20 @@ where
 }
 
 fn restart_observer(handle: &tokio_otp::SupervisorHandle, id: &str) -> (LifecycleWatch, u64) {
+    let lifecycle = handle.watch_lifecycle();
     let generation = handle
         .snapshot()
         .child(id)
         .unwrap_or_else(|| panic!("{id} is supervised"))
         .generation;
-    (handle.watch_lifecycle(), generation)
+    (lifecycle, generation)
 }
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
-    loop {
-        let event = lifecycle
-            .next()
-            .await
-            .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
-        if event.child_id == id
-            && matches!(
-                event.kind,
-                LifecycleEventKind::Started { generation } if generation > baseline
-            )
-        {
-            return;
-        }
-    }
+    lifecycle
+        .wait_started(id, baseline)
+        .await
+        .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
 }
 
 async fn await_until<F, Fut>(mut predicate: F) -> Result<(), AnyError>

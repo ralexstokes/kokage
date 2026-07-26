@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEventKind,
-    Strategy, SupervisorBuilder,
+    Strategy, SupervisorBuilder, SupervisorError,
 };
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -106,26 +106,38 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
 
 #[tokio::test]
 async fn dropped_builder_and_failed_build_terminalize_every_stream() {
-    for failed_build in [false, true] {
+    for abandonment in ["builder", "failed-build", "built-supervisor"] {
         let builder = SupervisorBuilder::new().child(waiting_child("worker"));
         let handle = builder.handle();
         let mut snapshots = handle.subscribe_snapshots();
         let mut events = handle.subscribe();
         let lifecycle = handle.watch_lifecycle();
 
-        if failed_build {
-            let error = builder
-                .control_channel_capacity(0)
-                .build()
-                .expect_err("invalid build fails");
-            assert!(error.to_string().contains("capacity"));
-        } else {
-            drop(builder);
+        match abandonment {
+            "builder" => drop(builder),
+            "failed-build" => {
+                let error = builder
+                    .control_channel_capacity(0)
+                    .build()
+                    .expect_err("invalid build fails");
+                assert!(error.to_string().contains("capacity"));
+            }
+            "built-supervisor" => {
+                let supervisor = builder.build().expect("supervisor builds");
+                drop(supervisor);
+            }
+            _ => unreachable!(),
         }
 
         assert!(matches!(
             handle.add_child(waiting_child("late")).await,
             Err(ControlError::Unavailable)
+        ));
+        assert!(matches!(
+            timeout(EVENT_TIMEOUT, handle.wait_started())
+                .await
+                .expect("abandoned identity resolves readiness"),
+            Err(SupervisorError::StartupAborted(_))
         ));
         assert!(snapshots.changed().await.is_err());
         assert!(events.recv().await.is_err());
@@ -220,13 +232,32 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
 
 #[tokio::test]
 async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
+    let leaf = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("leaf supervisor builds");
+    let middle = SupervisorBuilder::new()
+        .supervisor("leaf", leaf)
+        .build()
+        .expect("middle supervisor builds");
     let original = SupervisorBuilder::new()
-        .child(waiting_child("worker"))
+        .supervisor("middle", middle)
         .build()
         .expect("supervisor builds");
     let original_pre_spawn = original.handle();
+    let original_middle = original_pre_spawn
+        .supervisor("middle")
+        .expect("original middle identity is declared");
+    let original_leaf = original_middle
+        .supervisor("leaf")
+        .expect("original leaf identity is declared");
     let cloned = original.clone();
     let cloned_pre_spawn = cloned.handle();
+    let cloned_middle = cloned_pre_spawn
+        .supervisor("middle")
+        .expect("cloned middle identity is declared");
+    let cloned_leaf = cloned_middle
+        .supervisor("leaf")
+        .expect("cloned leaf identity is declared");
 
     let original = original.spawn();
     let cloned = cloned.spawn();
@@ -238,11 +269,113 @@ async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
         .wait_started()
         .await
         .expect("cloned identity binds separately");
+    original_middle
+        .wait_started()
+        .await
+        .expect("original middle identity binds");
+    cloned_middle
+        .wait_started()
+        .await
+        .expect("cloned middle identity binds separately");
+    original_leaf
+        .wait_started()
+        .await
+        .expect("original leaf identity binds");
+    cloned_leaf
+        .wait_started()
+        .await
+        .expect("cloned leaf identity binds separately");
+
+    original_leaf
+        .add_child(waiting_child("original-only"))
+        .await
+        .expect("original leaf identity accepts its own child");
+    assert!(original_leaf.snapshot().child("original-only").is_some());
+    assert!(cloned_leaf.snapshot().child("original-only").is_none());
 
     original.shutdown_and_wait().await.expect("original stops");
     assert_eq!(
         cloned.snapshot().state,
         tokio_supervisor::SupervisorStateView::Running
     );
+    cloned_leaf
+        .add_child(waiting_child("clone-only"))
+        .await
+        .expect("original shutdown does not terminalize cloned descendants");
     cloned.shutdown_and_wait().await.expect("clone stops");
+}
+
+#[tokio::test]
+async fn wait_on_a_reserved_handle_waits_for_the_scope_to_run_and_stop() {
+    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let handle = builder.handle();
+
+    // Nothing has bound yet, so `wait` is waiting for a scope that has not
+    // started rather than reporting an unavailable incarnation.
+    let mut waiting = Box::pin(handle.wait());
+    assert!(
+        timeout(Duration::from_millis(50), &mut waiting)
+            .await
+            .is_err(),
+        "wait must not resolve before the reserved identity binds"
+    );
+
+    let spawned = builder.build().expect("builder is valid").spawn();
+    handle
+        .wait_started()
+        .await
+        .expect("reserved identity binds");
+    spawned.shutdown();
+
+    timeout(EVENT_TIMEOUT, waiting)
+        .await
+        .expect("wait observes the spawned root stopping")
+        .expect("root stops cleanly");
+}
+
+#[tokio::test]
+async fn wait_on_an_abandoned_reserved_handle_reports_terminality() {
+    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let handle = builder.handle();
+
+    let mut waiting = Box::pin(handle.wait());
+    assert!(
+        timeout(Duration::from_millis(50), &mut waiting)
+            .await
+            .is_err(),
+        "wait must not resolve before the reserved identity binds"
+    );
+
+    drop(builder);
+
+    let error = timeout(EVENT_TIMEOUT, waiting)
+        .await
+        .expect("wait observes terminalization")
+        .expect_err("an abandoned identity never runs");
+    assert!(matches!(error, SupervisorError::Internal(_)));
+}
+
+#[tokio::test]
+async fn event_capacity_set_before_subscribing_reaches_the_spawned_scope() {
+    // Capacity is applied to the event channel once, at build. A subscriber
+    // taken from a pre-build handle pins the channel it attached to, so the
+    // documented order is: set the capacity, then subscribe.
+    let builder = SupervisorBuilder::new()
+        .event_channel_capacity(4)
+        .child(waiting_child("worker"));
+    let handle = builder.handle();
+    let mut events = handle.subscribe();
+
+    let spawned = builder.build().expect("builder is valid").spawn();
+    handle.wait_started().await.expect("scope starts");
+
+    timeout(EVENT_TIMEOUT, events.recv())
+        .await
+        .expect("a pre-build subscriber keeps receiving after bind")
+        .expect("event channel stays open across bind");
+
+    spawned
+        .shutdown_and_wait()
+        .await
+        .expect("root stops cleanly");
 }

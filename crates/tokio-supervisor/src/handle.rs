@@ -131,6 +131,17 @@ struct SnapshotSlot {
     rx: watch::Receiver<SupervisorSnapshot>,
 }
 
+/// Stable event channel for a supervisor identity.
+///
+/// Mirrors [`SnapshotSlot`]: the sender is dropped when the identity becomes
+/// terminal so watch-style consumers observe closure, and the retained
+/// receiver keeps `subscribe` working afterwards by resubscribing from it.
+///
+/// The retained receiver is also the reason
+/// [`StableSupervisorChannels::reset_declared_capacities`] can detect whether
+/// anyone outside these channels is listening: a `receiver_count` of exactly
+/// one means only `rx` is attached, so the channel can be replaced to honour a
+/// new capacity without orphaning a subscriber.
 struct EventSlot {
     tx: Option<broadcast::Sender<SupervisorEvent>>,
     rx: broadcast::Receiver<SupervisorEvent>,
@@ -138,12 +149,29 @@ struct EventSlot {
 
 struct StableBindingState {
     current: Option<IncarnationBinding>,
+    /// Whether any incarnation has ever bound to this identity. Distinguishes
+    /// a scope that has not started yet from one resting between
+    /// incarnations, which [`SupervisorHandle::wait`] treats differently.
+    bound_once: bool,
     terminal: bool,
 }
 
 enum StartupSnapshot {
     Bound(SupervisorSnapshot),
     Unbound,
+    Terminal,
+}
+
+/// What [`SupervisorHandle::wait`] should do for a non-root identity.
+enum WaitTarget {
+    /// An incarnation is bound; await its completion channel.
+    Bound(DoneReceiver),
+    /// Nothing has ever bound, so the scope has not started yet. The caller
+    /// waits for a first incarnation rather than reporting a failure.
+    NeverBound,
+    /// A previous incarnation ended and no replacement has bound yet.
+    BetweenIncarnations,
+    /// No incarnation can ever run again.
     Terminal,
 }
 
@@ -196,15 +224,25 @@ pub(crate) struct StableSupervisorChannels {
     snapshots: Mutex<SnapshotSlot>,
     attached_children: AttachedChildrenState,
     nested_channels: NestedChannels,
-    /// Whether these channels belong to a statically configured child (part
-    /// of the parent's `SupervisorConfig`) as opposed to a dynamically added
-    /// one. A replacement parent incarnation respawns exactly the static
-    /// children, so reconciliation uses this to tell a reusable identity from
-    /// an orphaned or colliding one.
+    /// Which kind of parent edge, if any, has claimed this identity.
+    ///
+    /// Holds one of [`EDGE_UNCLAIMED`], [`EDGE_DYNAMIC`], or [`EDGE_STATIC`].
+    /// A reserved identity starts unclaimed and is claimed exactly once, when
+    /// it is spawned as a root or attached to a parent. A replacement parent
+    /// incarnation respawns exactly the static children, so reconciliation
+    /// uses the static/dynamic distinction to tell a reusable identity from an
+    /// orphaned or colliding one.
     edge_kind: AtomicU8,
     root_extra: Mutex<RootExtraSlot>,
     handle_lease: Mutex<Weak<HandleLease>>,
 }
+
+/// No parent edge has claimed this identity yet.
+const EDGE_UNCLAIMED: u8 = 0;
+/// Claimed by a dynamic edge: a runtime insertion, or a spawned root.
+const EDGE_DYNAMIC: u8 = 1;
+/// Claimed by a static edge: declared in the parent's `SupervisorConfig`.
+const EDGE_STATIC: u8 = 2;
 
 impl StableSupervisorChannels {
     pub(crate) fn new(
@@ -213,7 +251,6 @@ impl StableSupervisorChannels {
         event_capacity: usize,
         nested_channels: NestedChannels,
         attached_children: Vec<AttachedChildState>,
-        _statically_configured: bool,
     ) -> Arc<Self> {
         let (events_tx, events_rx) = broadcast::channel(event_capacity);
         let (snapshots_tx, snapshots_rx) = watch::channel(initial_snapshot);
@@ -224,6 +261,7 @@ impl StableSupervisorChannels {
         Arc::new(Self {
             binding: Mutex::new(StableBindingState {
                 current: None,
+                bound_once: false,
                 terminal: false,
             }),
             binding_revision,
@@ -246,35 +284,48 @@ impl StableSupervisorChannels {
             }),
             attached_children: attached_children_state(Some(0), attached_children),
             nested_channels,
-            edge_kind: AtomicU8::new(0),
+            edge_kind: AtomicU8::new(EDGE_UNCLAIMED),
             root_extra: Mutex::new(RootExtraSlot::NotRoot),
             handle_lease: Mutex::new(Weak::new()),
         })
     }
 
     pub(crate) fn statically_configured(&self) -> bool {
-        self.edge_kind.load(Ordering::Acquire) == 2
+        self.edge_kind.load(Ordering::Acquire) == EDGE_STATIC
     }
 
     pub(crate) fn claim_edge(&self, statically_configured: bool) {
-        self.edge_kind
-            .store(u8::from(statically_configured) + 1, Ordering::Release);
+        let edge_kind = if statically_configured {
+            EDGE_STATIC
+        } else {
+            EDGE_DYNAMIC
+        };
+        self.edge_kind.store(edge_kind, Ordering::Release);
     }
 
-    pub(crate) fn reset_declaration(
-        &self,
-        initial_snapshot: SupervisorSnapshot,
-        control_capacity: usize,
-        event_capacity: usize,
-        nested_channels: NestedChannels,
-        attached_children: Vec<AttachedChildState>,
-    ) {
+    fn assert_reconfigurable(&self) {
         let binding = self.binding.lock().expect("stable control slot poisoned");
         assert!(
             binding.current.is_none() && !binding.terminal,
             "a bound or terminal supervisor identity cannot be reconfigured"
         );
-        drop(binding);
+    }
+
+    /// Republishes the declared view — snapshot, nested identities, and
+    /// attachments — for a reserved identity whose configuration changed.
+    ///
+    /// Builder mutators call this on every change, so it deliberately touches
+    /// no channel: reallocating the control, event, and completion channels
+    /// per mutation would make building an `n`-child scope allocate `n` full
+    /// channel sets. Capacities are applied once, by
+    /// [`reset_declared_capacities`](Self::reset_declared_capacities).
+    pub(crate) fn reset_declared_view(
+        &self,
+        initial_snapshot: SupervisorSnapshot,
+        nested_channels: NestedChannels,
+        attached_children: Vec<AttachedChildState>,
+    ) {
+        self.assert_reconfigurable();
 
         self.snapshots().send_if_modified(|snapshot| {
             if *snapshot == initial_snapshot {
@@ -299,6 +350,21 @@ impl StableSupervisorChannels {
             terminal: false,
             children: attached_children,
         };
+    }
+
+    /// Sizes this identity's channels from the finished configuration.
+    ///
+    /// Called once, when a reserved identity is built, because capacities are
+    /// only observable from the first incarnation onwards.
+    ///
+    /// The event channel is replaced only when the retained [`EventSlot::rx`]
+    /// is its sole receiver. A subscriber created from a pre-build handle
+    /// therefore pins the capacity in force when it subscribed: replacing the
+    /// channel under it would leave it permanently closed rather than merely
+    /// resized. [`event_channel_capacity`](crate::SupervisorBuilder::event_channel_capacity)
+    /// documents that ordering requirement.
+    pub(crate) fn reset_declared_capacities(&self, control_capacity: usize, event_capacity: usize) {
+        self.assert_reconfigurable();
 
         let mut events = self.events.lock().expect("stable event slot poisoned");
         if events
@@ -331,6 +397,17 @@ impl StableSupervisorChannels {
     }
 
     pub(crate) fn project_declared_children(&self, ids: Vec<String>) {
+        // Projected epochs are positional, and `bind` later overwrites them
+        // with epochs minted from this hub. The two agree — which is what
+        // makes the documented `(child_id, membership_epoch)` upsert on
+        // `watch_lifecycle` idempotent across the pre-spawn baseline — only
+        // because a reserved identity has not minted any epoch yet, so the
+        // hub allocates 0, 1, 2, ... in the same declaration order.
+        debug_assert_eq!(
+            self.lifecycle.peek_membership_epoch(),
+            0,
+            "declared projection assumes an identity that has not minted membership epochs yet"
+        );
         let snapshots = self.snapshots();
         snapshots.send_if_modified(|snapshot| {
             let children = ids
@@ -416,7 +493,7 @@ impl StableSupervisorChannels {
         command_tx: mpsc::Sender<SupervisorCommand>,
         done_rx: DoneReceiver,
         mut initial_snapshot: SupervisorSnapshot,
-        initial_attached_children: Vec<AttachedChildState>,
+        mut initial_attached_children: Vec<AttachedChildState>,
     ) -> Option<BoundIncarnation> {
         let mut binding = self.binding.lock().expect("stable control slot poisoned");
         if binding.terminal {
@@ -431,10 +508,24 @@ impl StableSupervisorChannels {
         let snapshots = self.snapshots();
         let events = self.events();
         let lifecycle = self.lifecycle();
+        // Membership epochs belong to the stable supervisor identity, not an
+        // individual incarnation. Assign the new static memberships before
+        // publishing the incarnation baseline so snapshot reducers and later
+        // `Added` events agree on their keys.
+        for child in &mut initial_snapshot.children {
+            let membership_epoch = lifecycle.next_membership_epoch();
+            child.membership_epoch = membership_epoch;
+            if let Some(attached) = initial_attached_children
+                .iter_mut()
+                .find(|attached| attached.identity.id == child.id)
+            {
+                attached.identity.membership_epoch = membership_epoch;
+            }
+        }
         // The children belong to the new incarnation, but the aggregate
         // restart counter belongs to the stable supervisor identity.
         initial_snapshot.total_restarts = snapshots.borrow().total_restarts;
-        initial_snapshot.lifecycle_seq = self.lifecycle.seq();
+        initial_snapshot.lifecycle_seq = lifecycle.seq();
         snapshots.send_if_modified(|current| {
             if *current == initial_snapshot {
                 return false;
@@ -461,6 +552,7 @@ impl StableSupervisorChannels {
             control: ControlEndpoint { command_tx },
             done_rx,
         });
+        binding.bound_once = true;
         self.bump_binding_revision();
         Some(BoundIncarnation {
             guard: StableBindingGuard {
@@ -479,6 +571,21 @@ impl StableSupervisorChannels {
             return None;
         }
         binding.current.clone()
+    }
+
+    /// Classifies what a non-root [`SupervisorHandle::wait`] should do, at one
+    /// binding-serialized point.
+    fn wait_target(&self) -> WaitTarget {
+        let binding = self.binding.lock().expect("stable control slot poisoned");
+        if binding.terminal {
+            WaitTarget::Terminal
+        } else if let Some(current) = binding.current.as_ref() {
+            WaitTarget::Bound(current.done_rx.clone())
+        } else if binding.bound_once {
+            WaitTarget::BetweenIncarnations
+        } else {
+            WaitTarget::NeverBound
+        }
     }
 
     /// Reads binding presence and its incarnation-local snapshot at one
@@ -700,7 +807,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            true,
         );
         let handle = channels.handle();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -738,7 +844,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            true,
         );
         let snapshots = channels.snapshots_rx();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -778,7 +883,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            true,
         );
         let handle = channels.handle();
 
@@ -827,7 +931,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            true,
         );
         let mut snapshots = channels.snapshots_rx();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -893,7 +996,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            false,
         );
         let handle = channels.handle();
         channels.mark_root();
@@ -955,6 +1057,57 @@ mod tests {
     }
 
     #[test]
+    fn a_superseded_handle_lease_does_not_shut_the_root_down() {
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        let channels =
+            StableSupervisorChannels::new(snapshot.clone(), 8, 8, empty_nested_channels(), vec![]);
+        let released = channels.handle();
+        channels.mark_root();
+        let initial = channels
+            .take_initial_incarnation(0)
+            .expect("initial incarnation channels are available");
+        let mut shutdown_rx = initial.shutdown_rx.clone();
+        let _bound = channels
+            .bind(
+                0,
+                initial.shutdown_tx,
+                initial.command_tx,
+                initial.done_rx,
+                snapshot,
+                Vec::new(),
+            )
+            .expect("root incarnation binds");
+
+        // Stand in for the replacement lease that `handle()` installs once the
+        // released lease's strong count reaches zero but before its `Drop`
+        // body runs.
+        let replacement = Arc::new(HandleLease {
+            channels: Arc::downgrade(&channels),
+        });
+        *channels
+            .handle_lease
+            .lock()
+            .expect("handle lease slot poisoned") = Arc::downgrade(&replacement);
+
+        drop(released);
+
+        assert!(
+            !*shutdown_rx.borrow_and_update(),
+            "a lease superseded by a live replacement must not signal shutdown"
+        );
+
+        drop(replacement);
+        assert!(
+            *shutdown_rx.borrow_and_update(),
+            "releasing the live replacement still shuts the root down"
+        );
+    }
+
+    #[test]
     fn terminalization_after_bind_uses_the_atomically_acquired_event_sender() {
         let initial_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
@@ -967,7 +1120,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            false,
         );
         let mut events = channels.events_rx();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -1009,7 +1161,6 @@ mod tests {
             8,
             empty_nested_channels(),
             Vec::new(),
-            false,
         );
         let handle = channels.handle();
         let initial = channels
@@ -1160,6 +1311,21 @@ impl Drop for HandleLease {
         let Some(channels) = self.channels.upgrade() else {
             return;
         };
+        {
+            // `handle()` mints a replacement lease as soon as this one's
+            // strong count reaches zero, which happens before this `drop`
+            // body runs. Without re-checking the slot under its own lock, a
+            // handle taken concurrently with the last drop — a pre-spawn
+            // handle released while `spawn` acquires its own — would be
+            // followed by this shutdown signal against the live binding.
+            let slot = channels
+                .handle_lease
+                .lock()
+                .expect("handle lease slot poisoned");
+            if !std::ptr::eq(slot.as_ptr(), self) {
+                return;
+            }
+        }
         if matches!(channels.root_extra(), RootExtraSlot::NotRoot) {
             return;
         }
@@ -1333,14 +1499,30 @@ impl SupervisorHandle {
                         )
                     })?;
                 }
-                RootExtraSlot::NotRoot => {
-                    let binding = self.channels.current_binding().ok_or_else(|| {
-                        SupervisorError::Internal(
+                RootExtraSlot::NotRoot => match self.channels.wait_target() {
+                    WaitTarget::Bound(done_rx) => break (done_rx, None),
+                    // A reserved identity that has never bound has not
+                    // started, so waiting for it to stop means waiting for it
+                    // to run first. This mirrors `wait_started`, which also
+                    // waits out the pre-bind window rather than failing.
+                    WaitTarget::NeverBound => {
+                        binding_revision.changed().await.map_err(|_| {
+                            SupervisorError::Internal(
+                                "supervisor binding channel closed before startup".to_owned(),
+                            )
+                        })?;
+                    }
+                    WaitTarget::BetweenIncarnations => {
+                        return Err(SupervisorError::Internal(
                             "supervisor incarnation is unavailable".to_owned(),
-                        )
-                    })?;
-                    break (binding.done_rx, None);
-                }
+                        ));
+                    }
+                    WaitTarget::Terminal => {
+                        return Err(SupervisorError::Internal(
+                            "supervisor identity is terminal and cannot run again".to_owned(),
+                        ));
+                    }
+                },
             }
         };
 
@@ -1483,7 +1665,9 @@ impl SupervisorHandle {
     /// then read [`snapshot`](Self::snapshot), then discard watched events
     /// whose sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
     /// Pre-spawn snapshots already project configured children as `Starting`,
-    /// so apply a later `Added` for that membership as an idempotent upsert.
+    /// so apply a later `Added` for that membership as an idempotent upsert
+    /// keyed by `(child_id, membership_epoch)`. Membership epochs remain
+    /// unique across incarnations of this stable supervisor identity.
     ///
     /// Each watch owns a bounded buffer. Sustained overflow is represented by
     /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged), never

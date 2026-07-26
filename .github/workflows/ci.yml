@@ -20,6 +20,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Select CI lane
+        id: lane
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            full=true
+            reason="push to main"
+          elif git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            flake.nix flake.lock nix rust-toolchain.toml; then
+            full=false
+            reason="ordinary pull request"
+          else
+            full=true
+            reason="Nix or Rust toolchain change"
+          fi
+
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "CI lane: $([[ "$full" == "true" ]] && echo full || echo fast) ($reason)" \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -29,5 +54,34 @@ jobs:
         with:
           use-flakehub: false
 
-      - name: Run flake checks
+      - name: Restore Cargo target cache
+        if: steps.lane.outputs.full != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            target
+            !target/debug/incremental/**
+            !target/doc/**
+            !target/tests/trybuild/**
+          # GitHub caches are immutable. Keep one cache per PR and dependency
+          # set so later commits get an exact hit instead of uploading another
+          # multi-gigabyte target archive for every SHA.
+          key: cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-pr-${{ github.event.pull_request.number }}
+          restore-keys: |
+            cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-
+
+      - name: Validate flake
+        if: steps.lane.outputs.full != 'true'
+        run: nix flake check --no-build --no-update-lock-file
+
+      - name: Run fast CI
+        if: steps.lane.outputs.full != 'true'
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: nix develop --command just ci
+
+      - name: Run full flake checks
+        if: steps.lane.outputs.full == 'true'
         run: nix flake check --no-update-lock-file

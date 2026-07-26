@@ -130,6 +130,12 @@ at runtime, so add and remove operations return
 empty runtime-written scope; its children start immediately. There is no
 implicit readiness timeout.
 
+Ordered startup latency is cumulative: the scope becomes ready after the sum
+of its declared readiness gates' `on_start` times. This is now the default for
+`SupervisorBuilder` and `Runtime::builder()`; use a dynamic scope when members
+should start independently and immediate runtime insertion is the right
+ownership model.
+
 ## Strategies
 
 The [`Strategy`] decides who is affected when a child fails:
@@ -173,7 +179,20 @@ its [`ShutdownPolicy`] governs how:
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
 A child stuck in a non-yielding loop cannot be preempted — isolate truly
 blocking work behind a blocking pool (as the actor layer's `run_blocking`
-does, see the next chapter) or an external process.
+does, see the next chapter) or an external process. Ordered teardown advances
+after issuing such an abort rather than waiting without a bound. A group
+restart is stricter than a shutdown, because it has to respawn what it drained:
+a child that is still running when the drain ends fails the restart, but only
+after the whole drain group's longest grace has been spent waiting for it. An
+abort of a nested supervisor wrapper hard-cascades through that subtree;
+cooperative shutdown lets the subtree apply its own ordered or dynamic drain
+first.
+
+Ordered shutdown latency is also cumulative: each cooperative child receives
+its own grace before the cursor moves to the previous declaration, so the
+worst-case grace budget is their sum (with the default, up to 5 seconds × the
+number of children). Dynamic scopes cancel siblings together and wait under
+one shared maximum-grace deadline.
 
 ### One shutdown clock per child
 

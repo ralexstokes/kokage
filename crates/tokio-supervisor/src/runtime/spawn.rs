@@ -94,7 +94,7 @@ impl SupervisorRuntime {
                 generation,
                 child_token,
                 abort_token,
-                SupervisorToken::new(self.group_token.clone()),
+                SupervisorToken::new(self.stopping_token.clone()),
                 self.own_handle.clone(),
                 (child.definition.readiness == ChildReadiness::Explicit).then(|| {
                     ReadySignal::new(

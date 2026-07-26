@@ -214,11 +214,48 @@ async fn runtime_builders_reserve_handles_and_terminalize_when_dropped() {
     drop(builder);
     assert_snapshot_stream_closes(&handle).await;
 
+    let builder = Runtime::builder();
+    let handle = builder.handle();
+    let runtime = builder.build().expect("ordered runtime builds");
+    drop(runtime);
+    assert_snapshot_stream_closes(&handle).await;
+
     let builder = Runtime::dynamic();
     let handle = builder.handle();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
     drop(builder);
     assert_snapshot_stream_closes(&handle).await;
+}
+
+#[test]
+fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
+    let mut graph = GraphBuilder::new();
+    graph.actor("actor", || Idle);
+    let builder = Runtime::builder()
+        .child(ChildSpec::new("task", |_| async { Ok(()) }))
+        .graph(graph.build().expect("graph builds"));
+    let handle = builder.handle();
+    let declared_before = handle
+        .snapshot()
+        .children
+        .into_iter()
+        .map(|child| child.id)
+        .collect::<Vec<_>>();
+
+    let builder = builder.strategy(Strategy::RestForOne);
+    let after = handle.snapshot();
+
+    assert_eq!(after.strategy, Strategy::RestForOne);
+    assert_eq!(
+        after
+            .children
+            .into_iter()
+            .map(|child| child.id)
+            .collect::<Vec<_>>(),
+        declared_before
+    );
+    assert_eq!(declared_before, ["task", "actor"]);
+    drop(builder);
 }
 
 #[tokio::test]
@@ -550,4 +587,37 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     wait_count(&leader_starts, 2).await;
 
     handle.shutdown_and_wait().await.expect("tree stops");
+}
+
+#[tokio::test]
+async fn cloning_a_declaration_reserves_a_fresh_identity_for_the_copy() {
+    let builder = Runtime::builder().child(ChildSpec::new("task", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let reserved = builder.handle();
+    let tree = builder.into_tree();
+
+    // The clone carries the declaration but not the reservation, so building
+    // and spawning it must not bind the handle taken from the original.
+    let spawned = tree
+        .clone()
+        .build()
+        .expect("cloned declaration builds")
+        .spawn();
+    spawned.wait_started().await.expect("the clone starts");
+    assert!(matches!(
+        reserved
+            .supervisor_handle()
+            .add_child(ChildSpec::new("late", |_| async { Ok(()) }))
+            .await,
+        Err(ControlError::Unavailable)
+    ));
+
+    // Dropping the original declaration abandons the reserved identity.
+    drop(tree);
+    assert_snapshot_stream_closes(&reserved).await;
+
+    spawned.shutdown();
+    spawned.wait().await.expect("the clone stops cleanly");
 }

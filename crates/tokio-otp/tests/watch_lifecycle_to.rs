@@ -197,12 +197,17 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
 
 #[tokio::test]
 async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
-    let (handle, watched, sink, _crasher, _observed) = runtime_with_watched_subtree().await;
+    let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle
         .remove_child("watched")
         .await
         .expect("watched subtree removed");
+    let (_, final_event) = recv_event(&mut observed).await;
+    assert!(matches!(
+        final_event.kind,
+        LifecycleEventKind::Exited { generation: 0, .. }
+    ));
     timeout(Duration::from_secs(2), async {
         while !guard.is_cancelled() {
             tokio::task::yield_now().await;

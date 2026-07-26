@@ -74,14 +74,15 @@ pub struct SupervisorSnapshot {
 pub struct ChildSnapshot {
     /// The child's unique identifier.
     pub id: String,
-    /// Monotonic identity of this membership within the current supervisor
-    /// incarnation.
+    /// Monotonic identity of this membership within the stable supervisor
+    /// identity.
     ///
     /// Unlike [`generation`](Self::generation), this changes when a child is
     /// removed and another child is added under the same id. Restarts of the
-    /// same membership retain the epoch. Epochs are scoped to direct children
-    /// of one supervisor incarnation; nested supervisors maintain independent
-    /// sequences. The counter saturates at [`u64::MAX`].
+    /// same membership retain the epoch. The sequence continues across
+    /// incarnations of a restart-stable nested supervisor; distinct nested
+    /// supervisor identities maintain independent sequences. The counter
+    /// saturates at [`u64::MAX`].
     pub membership_epoch: u64,
     /// Current generation counter. Incremented on each restart.
     pub generation: u64,
@@ -341,11 +342,16 @@ impl NestedSnapshotState {
         self.queued.store(false, Ordering::Release);
     }
 
-    pub(crate) fn replace(&self, snapshot: SupervisorSnapshot) {
-        *self
+    pub(crate) fn replace_if_changed(&self, snapshot: SupervisorSnapshot) -> bool {
+        let mut latest = self
             .latest
             .lock()
-            .expect("nested snapshot state mutex poisoned") = Some(snapshot);
+            .expect("nested snapshot state mutex poisoned");
+        if latest.as_ref() == Some(&snapshot) {
+            return false;
+        }
+        *latest = Some(snapshot);
+        true
     }
 
     pub(crate) fn latest(&self) -> Option<SupervisorSnapshot> {
@@ -392,7 +398,9 @@ impl SnapshotCell {
     }
 
     pub(crate) fn forward(&self, snapshot: SupervisorSnapshot, generation: u64) {
-        self.state.replace(snapshot);
+        if !self.state.replace_if_changed(snapshot) {
+            return;
+        }
         if !self.state.try_queue() {
             return;
         }
@@ -411,7 +419,27 @@ impl SnapshotCell {
 
 #[cfg(all(test, feature = "serde"))]
 mod tests {
-    use super::{ChildSnapshot, ChildStateView};
+    use super::{ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView};
+    use crate::{ScopeKind, Strategy};
+
+    #[test]
+    fn missing_scope_kind_deserializes_as_ordered_for_additive_compatibility() {
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        )
+        .kind(ScopeKind::Dynamic);
+        let mut value = serde_json::to_value(snapshot).expect("supervisor snapshot serializes");
+        value
+            .as_object_mut()
+            .expect("supervisor snapshot serializes as an object")
+            .remove("kind");
+
+        let decoded = serde_json::from_value::<SupervisorSnapshot>(value)
+            .expect("older snapshots without kind remain readable");
+        assert_eq!(decoded.kind, ScopeKind::Ordered);
+    }
 
     #[test]
     fn membership_epoch_is_required_when_deserializing() {

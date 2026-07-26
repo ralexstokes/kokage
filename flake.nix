@@ -35,6 +35,10 @@
             "rustfmt"
           ];
         };
+        nightlyCargo = pkgs.writeShellScriptBin "cargo-nightly" ''
+          export PATH=${nightlyToolchain}/bin:$PATH
+          exec ${nightlyToolchain}/bin/cargo "$@"
+        '';
         cargoChecks = import ./nix/crane-checks.nix {
           inherit
             pkgs
@@ -61,15 +65,16 @@
         // cargoChecks;
 
         devShells.default = pkgs.mkShell {
+          NIGHTLY_CARGO = "${nightlyCargo}/bin/cargo-nightly";
           packages = with pkgs; [
             git
             just
             mdbook
             nixfmt
             ripgrep
-            rustup
             rustToolchain
             nightlyToolchain
+            rustup
           ];
         };
       }

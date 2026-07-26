@@ -15,9 +15,11 @@ Erlang/OTP-like functionality for the `tokio` ecosystem, organized as a Cargo wo
 
 * A development shell is provided via the Nix flake's `nix develop`.
 
-* During development, use `just ci` — a fast local mirror of CI that reuses the cargo cache. It runs fmt, clippy, build, tests (including doctests), nixfmt, and the book build.
+* During development, use `just ci` — the pull-request CI fast lane, which reuses the cargo cache. It runs fmt, clippy, build, tests (including doctests), nixfmt, and the book build.
 
-* If having trouble with CI on Github, `just ci-nix` can mirror the remote checks. It runs `nix flake check`, exactly what GitHub Actions runs. It builds with `--locked` from a clean source tree, so `just ci` passing does not guarantee `just ci-nix` passes.
+* Ordinary pull requests run `nix flake check --no-build` followed by `just ci` inside the development shell. Pushes to `main` and pull requests that change Nix or Rust toolchain definitions run the full clean Nix lane instead.
+
+* If having trouble with the full GitHub CI lane, use `just ci-nix`. It runs `nix flake check`, building with `--locked` from a clean source tree, so `just ci` passing does not guarantee `just ci-nix` passes.
 
 * The `just ci` recipes mirror the check definitions in `nix/crane-checks.nix` — if you change flags in one, update the other.
 

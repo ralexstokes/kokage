@@ -303,6 +303,12 @@ impl RunnableActor {
     /// A hand-written host must call
     /// [`terminate_binding`](Self::terminate_binding) when it gives up after a
     /// policy that left the binding waiting to rebind.
+    ///
+    /// Actors run through this unsupervised entry point receive a terminal
+    /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::ActorContext::supervisor):
+    /// control operations return `ControlError::Unavailable` and observation
+    /// streams are closed. Their [`ActorContext::children`](crate::ActorContext::children)
+    /// value is `None`.
     pub async fn run_until<F>(
         &self,
         shutdown: F,

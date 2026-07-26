@@ -28,7 +28,7 @@ pub struct LifecycleEvent {
     pub seq: u64,
     /// Direct child membership that transitioned.
     pub child_id: String,
-    /// Identity of this child membership within its supervisor incarnation.
+    /// Identity of this child membership within its stable supervisor scope.
     pub membership_epoch: u64,
     /// Stable-scope cumulative restart count at emission.
     pub total_restarts: u64,
@@ -69,7 +69,9 @@ pub enum LifecycleEventKind {
     /// Older transitions were discarded because this watch could not keep up.
     ///
     /// Consumers that maintain edge-derived state must resynchronize from a
-    /// snapshot. Cumulative counters on subsequent events remain reliable.
+    /// snapshot. This marker carries the envelope of the newest discarded
+    /// transition, so its sequence and cumulative counters describe the full
+    /// dropped prefix.
     Lagged {
         /// Number of transitions discarded since the preceding delivered
         /// event.
@@ -106,6 +108,38 @@ impl LifecycleWatch {
                 return None;
             }
             notified.await;
+        }
+    }
+
+    /// Waits for `child_id` to start at a generation above `after_generation`.
+    ///
+    /// Returns `None` once that start can no longer be observed on this watch:
+    /// the membership was removed, the watched supervisor identity became
+    /// terminal, or a [`LifecycleEventKind::Lagged`] marker discarded a prefix
+    /// that may have contained it. This is a convenience for one-shot restart
+    /// waits — it reports that waiting longer is futile, not which of those
+    /// happened. Callers that must distinguish them, or that need to resume
+    /// waiting after lag, should realign from
+    /// [`snapshot`](crate::SupervisorHandle::snapshot).
+    pub async fn wait_started(&mut self, child_id: &str, after_generation: u64) -> Option<u64> {
+        loop {
+            let event = self.next().await?;
+            // Checked before the child filter: a marker's envelope describes
+            // the newest discarded transition, which need not belong to
+            // `child_id` even when the dropped prefix contained its `Started`.
+            if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
+                return None;
+            }
+            if event.child_id != child_id {
+                continue;
+            }
+            match event.kind {
+                LifecycleEventKind::Started { generation } if generation > after_generation => {
+                    return Some(generation);
+                }
+                LifecycleEventKind::Removed => return None,
+                _ => {}
+            }
         }
     }
 
@@ -173,12 +207,23 @@ impl LifecycleQueue {
             events.front().map(|event| &event.kind),
             Some(LifecycleEventKind::Lagged { .. })
         ) {
-            events.remove(1);
+            let newest_dropped = events.remove(1);
             if let Some(LifecycleEvent {
+                seq,
+                child_id,
+                membership_epoch,
+                total_restarts,
+                child_restart_count,
                 kind: LifecycleEventKind::Lagged { dropped },
-                ..
             }) = events.front_mut()
             {
+                if let Some(newest_dropped) = newest_dropped {
+                    *seq = newest_dropped.seq;
+                    *child_id = newest_dropped.child_id;
+                    *membership_epoch = newest_dropped.membership_epoch;
+                    *total_restarts = newest_dropped.total_restarts;
+                    *child_restart_count = newest_dropped.child_restart_count;
+                }
                 *dropped = dropped.saturating_add(1);
             }
         } else if let Some(mut dropped_event) = events.pop_front() {
@@ -209,6 +254,7 @@ impl LifecycleQueue {
 /// supervisor identity.
 pub(crate) struct LifecycleHub {
     seq: AtomicU64,
+    next_membership_epoch: AtomicU64,
     state: Mutex<LifecycleHubState>,
 }
 
@@ -221,6 +267,7 @@ impl LifecycleHub {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             seq: AtomicU64::new(0),
+            next_membership_epoch: AtomicU64::new(0),
             state: Mutex::new(LifecycleHubState {
                 terminal: false,
                 watchers: Vec::new(),
@@ -232,9 +279,37 @@ impl LifecycleHub {
         self.seq.load(Ordering::Acquire)
     }
 
+    /// Mints a membership epoch scoped to this restart-stable supervisor
+    /// identity. The counter intentionally continues across incarnations.
+    pub(crate) fn next_membership_epoch(&self) -> u64 {
+        self.next_membership_epoch
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_add(1))
+            })
+            .unwrap_or_else(|current| current)
+    }
+
+    /// Returns the epoch [`next_membership_epoch`](Self::next_membership_epoch)
+    /// would mint next, without consuming it.
+    pub(crate) fn peek_membership_epoch(&self) -> u64 {
+        self.next_membership_epoch.load(Ordering::Acquire)
+    }
+
+    /// Advances the epoch allocator past a membership projected before this
+    /// hub began minting epochs (the root supervisor's initial snapshot).
+    pub(crate) fn observe_membership_epoch(&self, membership_epoch: u64) {
+        let next = membership_epoch.saturating_add(1);
+        let _ =
+            self.next_membership_epoch
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    (current < next).then_some(next)
+                });
+    }
+
     pub(crate) fn watch(&self) -> LifecycleWatch {
         let queue = LifecycleQueue::new();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.watchers.retain(|watcher| watcher.strong_count() > 0);
         if state.terminal {
             queue.mark_terminal();
         } else {
@@ -286,5 +361,32 @@ impl LifecycleHub {
                 queue.mark_terminal();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LifecycleHub;
+
+    /// `emit` sweeps dropped watchers, but an identity that never emits would
+    /// otherwise accumulate them: per-connection watches on a quiet tree are a
+    /// normal pattern, so registration sweeps too.
+    #[test]
+    fn registering_a_watch_sweeps_dropped_watchers() {
+        let hub = LifecycleHub::new();
+
+        for _ in 0..8 {
+            drop(hub.watch());
+        }
+        let _live = hub.watch();
+
+        assert_eq!(
+            hub.state
+                .lock()
+                .expect("hub state is not poisoned")
+                .watchers
+                .len(),
+            1
+        );
     }
 }

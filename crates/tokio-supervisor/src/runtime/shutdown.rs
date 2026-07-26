@@ -19,6 +19,15 @@ use crate::{
 
 use super::supervision::SupervisorRuntime;
 
+/// How long the ordered drain holds its cursor after issuing an abort.
+///
+/// A normal Tokio abort lands at the aborted task's next poll boundary, so a
+/// short window keeps the common case exit-ordered. It is deliberately not a
+/// teardown budget: a future that has not reached a poll boundary must not
+/// retain the cursor, and whether the drain actually freed the child is
+/// decided afterwards by [`SupervisorRuntime::wait_for_ordered_stragglers`].
+const ORDERED_ABORT_CURSOR_WINDOW: std::time::Duration = std::time::Duration::from_millis(1);
+
 #[derive(Clone, Copy)]
 enum DrainScope<'a> {
     All,
@@ -48,11 +57,7 @@ impl DrainScope<'_> {
     fn is_drained(self, runtime: &SupervisorRuntime) -> bool {
         match self {
             Self::All => runtime.live_tasks == 0,
-            Self::Subset(keys) => !keys.iter().any(|&key| {
-                runtime.children.get(key).is_some_and(|child| {
-                    child.membership != MembershipState::Removed && child.runtime.state.is_active()
-                })
-            }),
+            Self::Subset(keys) => !keys.iter().any(|&key| runtime.is_child_active(key)),
         }
     }
 }
@@ -67,6 +72,7 @@ impl SupervisorRuntime {
 
         async {
             self.state = SupervisorState::Stopping;
+            self.stopping_token.cancel();
             self.send_event(SupervisorEvent::SupervisorStopping);
             if self.meta.kind == ScopeKind::Ordered {
                 self.drain_children_ordered(DrainReason::Shutdown, DrainScope::All)
@@ -140,9 +146,10 @@ impl SupervisorRuntime {
 
     /// Drains one ordered child at a time, in reverse declaration order.
     /// Each cooperative child receives its own complete grace window. The
-    /// next child is not cancelled until the current task has joined (after an
-    /// abort when necessary), so later dependents are fully gone before their
-    /// dependencies begin teardown.
+    /// next child is not cancelled until the current task has joined or has
+    /// been issued an abort, so cooperative dependents are fully gone before
+    /// their dependencies begin teardown without letting a non-yielding task
+    /// stall the supervisor indefinitely.
     async fn drain_children_ordered(
         &mut self,
         reason: DrainReason,
@@ -159,8 +166,12 @@ impl SupervisorRuntime {
             .copied()
             .filter(|&key| scope.contains(key))
             .collect();
+        // Captured before the walk starts, so it covers the children this drain
+        // is about to stop rather than whatever is left once it ends.
+        let backstop = self.max_cooperative_grace(scope);
         let mut deferred = Vec::new();
         let mut timed_out = Vec::new();
+        let mut remaining = Vec::new();
 
         for key in keys {
             let Some(child) = self.children.get(key) else {
@@ -173,6 +184,7 @@ impl SupervisorRuntime {
             let id = child.id.clone();
             let policy = child.runtime.definition.shutdown_policy;
             self.children[key].runtime.state = RuntimeChildState::Stopping;
+            let aborted_immediately = matches!(policy.mode, ShutdownMode::Abort);
             match policy.mode {
                 ShutdownMode::Abort => self.abort_child(key),
                 ShutdownMode::CooperativeStrict | ShutdownMode::CooperativeThenAbort => {
@@ -215,18 +227,106 @@ impl SupervisorRuntime {
                 }
             }
 
-            // Abort-mode children and expired cooperative children still own
-            // the cursor until their join is consumed.
-            self.wait_for_ordered_child(key, None, scope, &mut deferred)
-                .await?;
+            if aborted_immediately || expired {
+                // Give a normal Tokio abort one scheduling turn to complete so
+                // its exit remains ordered. A future that does not reach a
+                // poll boundary must not retain the cursor indefinitely.
+                tokio::task::yield_now().await;
+                let still_active = self
+                    .wait_for_ordered_child(
+                        key,
+                        Some(Instant::now() + ORDERED_ABORT_CURSOR_WINDOW),
+                        scope,
+                        &mut deferred,
+                    )
+                    .await?;
+                if still_active {
+                    remaining.push(key);
+                }
+            }
         }
 
-        self.record_drain_duration(reason, started_at);
-        if timed_out.is_empty() {
-            Ok(deferred)
+        // A restart drain must respawn everything it drained, so a task that is
+        // still running is a hard failure — but only once it has had the same
+        // budget the concurrent drain gives it. The cursor window alone is not
+        // that budget: it exists to keep the walk live, and `ShutdownMode::Abort`
+        // explicitly does not preempt a non-yielding future.
+        let stragglers = if timed_out.is_empty()
+            && !remaining.is_empty()
+            && !matches!(reason, DrainReason::Shutdown)
+        {
+            self.wait_for_ordered_stragglers(&remaining, backstop, scope, &mut deferred)
+                .await?
         } else {
-            Err(SupervisorError::ShutdownTimedOut(timed_out.join(", ")))
+            String::new()
+        };
+
+        self.record_drain_duration(reason, started_at);
+        if !timed_out.is_empty() {
+            return Err(SupervisorError::ShutdownTimedOut(timed_out.join(", ")));
         }
+        if !stragglers.is_empty() {
+            return Err(SupervisorError::ShutdownTimedOut(stragglers));
+        }
+        Ok(deferred)
+    }
+
+    /// Waits for children the cursor window left running, bounded by the same
+    /// budget the concurrent drain applies to its own group: the longest
+    /// cooperative grace among the children being drained. Returns the names
+    /// still running once that budget is spent.
+    async fn wait_for_ordered_stragglers(
+        &mut self,
+        stragglers: &[ChildKey],
+        backstop: Option<std::time::Duration>,
+        scope: DrainScope<'_>,
+        deferred: &mut Vec<ClassifiedExit>,
+    ) -> Result<String, SupervisorError> {
+        if let Some(backstop) = backstop {
+            let deadline = Instant::now() + backstop;
+            while stragglers.iter().any(|&key| self.is_child_active(key)) {
+                tokio::select! {
+                    joined = self.join_set.join_next_with_id() => {
+                        let Some(joined) = joined else { break; };
+                        // Every straggler was the cursor when it was aborted, so
+                        // its exit belongs to the drain rather than to a
+                        // concurrent sibling: pass no cursor and let the normal
+                        // out-of-scope and clean-completion rules apply.
+                        self.handle_join_for_scope(joined, scope, None, deferred)?;
+                    }
+                    _ = sleep_until(deadline) => break,
+                }
+            }
+        }
+
+        Ok(collect_child_names(&self.children, |key, _| {
+            stragglers.contains(&key) && self.is_child_active(key)
+        }))
+    }
+
+    fn is_child_active(&self, key: ChildKey) -> bool {
+        self.children.get(key).is_some_and(|child| {
+            child.membership != MembershipState::Removed && child.runtime.state.is_active()
+        })
+    }
+
+    /// The longest grace any active cooperative child in `scope` is configured
+    /// to receive. `None` when the scope holds no such child, in which case
+    /// nothing in it was promised a wait at all.
+    fn max_cooperative_grace(&self, scope: DrainScope<'_>) -> Option<std::time::Duration> {
+        self.children
+            .iter()
+            .filter(|(key, child)| {
+                scope.contains(*key)
+                    && child.membership != MembershipState::Removed
+                    && child.runtime.state.is_active()
+                    && matches!(
+                        child.runtime.definition.shutdown_policy.mode,
+                        ShutdownMode::CooperativeStrict | ShutdownMode::CooperativeThenAbort
+                    )
+            })
+            .map(|(_, child)| child.runtime.definition.shutdown_policy.grace)
+            .max()
     }
 
     /// Returns `true` when `deadline` expires while `key` is still active.
@@ -238,9 +338,7 @@ impl SupervisorRuntime {
         deferred: &mut Vec<ClassifiedExit>,
     ) -> Result<bool, SupervisorError> {
         loop {
-            if !self.children.get(key).is_some_and(|child| {
-                child.membership != MembershipState::Removed && child.runtime.state.is_active()
-            }) {
+            if !self.is_child_active(key) {
                 return Ok(false);
             }
 
@@ -459,13 +557,10 @@ fn abort_matching_children(
             && predicate(key, child)
             && let Some(abort_handle) = child.runtime.abort_handle.as_ref()
         {
-            child.runtime.nested_abort_cascades.store(
-                !matches!(
-                    child.runtime.definition.shutdown_policy.mode,
-                    ShutdownMode::Abort
-                ),
-                std::sync::atomic::Ordering::Release,
-            );
+            child
+                .runtime
+                .nested_abort_cascades
+                .store(true, std::sync::atomic::Ordering::Release);
             abort_handle.abort();
         }
     }

@@ -6,11 +6,15 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::{
+    sync::{Notify, broadcast, mpsc},
+    time::timeout,
+};
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder,
-    EventPathSegment, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
-    SupervisorBuilder, SupervisorEvent, SupervisorSpec, SupervisorStateView,
+    BackoffPolicy, ChildSpec, ChildStateView, ControlError, ControlOperation,
+    DynamicSupervisorBuilder, EventPathSegment, ExitStatusView, RestartIntensity, RestartPolicy,
+    ScopeKind, ShutdownPolicy, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorSpec,
+    SupervisorStateView,
 };
 
 mod common;
@@ -561,6 +565,8 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let nested_handle = handle
         .supervisor("nested")
         .expect("stable nested handle should exist before the first incarnation starts");
+    let initial_kind = nested_handle.snapshot().kind;
+    assert_eq!(initial_kind, ScopeKind::Ordered);
     let mut nested_events = nested_handle.subscribe();
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
@@ -574,28 +580,18 @@ async fn nested_handle_subscription_survives_parent_restart() {
         }
     }
 
+    let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child("nested")
         .expect("nested child exists")
         .generation;
-    let mut lifecycle = handle.watch_lifecycle();
     fail_first.notify_one();
-    loop {
-        let event = lifecycle
-            .next()
-            .await
-            .expect("outer supervisor remains live");
-        if event.child_id == "nested"
-            && matches!(
-                event.kind,
-                tokio_supervisor::LifecycleEventKind::Started { generation }
-                    if generation > baseline
-            )
-        {
-            break;
-        }
-    }
+    let restarted_generation = lifecycle
+        .wait_started("nested", baseline)
+        .await
+        .expect("outer supervisor remains live");
+    assert_eq!(restarted_generation, baseline + 1);
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
 
     loop {
@@ -607,25 +603,37 @@ async fn nested_handle_subscription_survives_parent_restart() {
         }
     }
 
-    assert_eq!(nested_handle.snapshot().state, SupervisorStateView::Running);
+    let replacement = nested_handle.snapshot();
+    assert_eq!(replacement.state, SupervisorStateView::Running);
+    assert_eq!(replacement.kind, initial_kind);
+    assert_eq!(
+        nested_handle
+            .add_child(ChildSpec::new("rebound", |_| async { Ok(()) }))
+            .await,
+        Err(ControlError::UnsupportedByScopeKind {
+            operation: ControlOperation::AddChild,
+            kind: ScopeKind::Ordered,
+        }),
+        "the stable control channel should bind to the replacement incarnation"
+    );
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
 #[tokio::test]
-async fn explicit_wrapper_abort_signals_nested_shutdown_instead_of_cascading_hard() {
+async fn abort_mode_hard_cascades_through_a_nested_supervisor() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
+    let live = common::LiveFlag::new();
+    let leaf_live = live.clone();
     let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("leaf", move |ctx| {
+        .child(ChildSpec::new("leaf", move |_ctx| {
             let started_tx = started_tx.clone();
-            let cancelled_tx = cancelled_tx.clone();
+            let live = leaf_live.clone();
             async move {
+                let _guard = live.guard();
                 started_tx.send(()).expect("test receiver dropped");
-                ctx.shutdown_token().cancelled().await;
-                cancelled_tx.send(()).expect("test receiver dropped");
-                Ok(())
+                std::future::pending().await
             }
         }))
         .build()
@@ -647,8 +655,14 @@ async fn explicit_wrapper_abort_signals_nested_shutdown_instead_of_cascading_har
     handle
         .remove_child("nested")
         .await
-        .expect("aborting the wrapper should remove the nested child");
-    common::recv_event(&mut cancelled_rx).await;
+        .expect("aborting the wrapper should remove the nested subtree");
+    timeout(common::EVENT_TIMEOUT, async {
+        while live.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("abort mode should not leave the nested subtree detached");
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -728,6 +742,16 @@ async fn control_is_unavailable_between_nested_incarnations() {
     // Once the new incarnation binds, the same stable handle works again.
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
     assert_eq!(nested_handle.snapshot().state, SupervisorStateView::Running);
+    assert_eq!(
+        nested_handle
+            .add_child(ChildSpec::new("rebound", |_| async { Ok(()) }))
+            .await,
+        Err(ControlError::UnsupportedByScopeKind {
+            operation: ControlOperation::AddChild,
+            kind: ScopeKind::Ordered,
+        }),
+        "the stable control channel should bind to the replacement incarnation"
+    );
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -776,6 +800,8 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     let grand_handle = mid_handle
         .supervisor("leafsup")
         .expect("stable grandchild handle reachable through the mid handle");
+    let baseline_seq = grand_handle.snapshot().lifecycle_seq;
+    let mut grand_snapshots = grand_handle.subscribe_snapshots();
     let mut grand_events = grand_handle.subscribe();
 
     common::recv_event(&mut starts_rx).await;
@@ -802,7 +828,102 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     }
     common::recv_event(&mut starts_rx).await;
 
-    assert_eq!(grand_handle.snapshot().state, SupervisorStateView::Running);
+    grand_snapshots
+        .wait_for(|snapshot| {
+            snapshot.state == SupervisorStateView::Running
+                && snapshot.lifecycle_seq > baseline_seq
+                && snapshot
+                    .child("worker")
+                    .is_some_and(|worker| worker.started)
+        })
+        .await
+        .expect("stable snapshot channel should publish the replacement incarnation");
+    assert_eq!(
+        grand_handle
+            .add_child(ChildSpec::new("rebound", |_| async { Ok(()) }))
+            .await,
+        Err(ControlError::UnsupportedByScopeKind {
+            operation: ControlOperation::AddChild,
+            kind: ScopeKind::Ordered,
+        }),
+        "the grandchild control channel should bind to the replacement incarnation"
+    );
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
+}
+
+#[tokio::test]
+async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let live = common::LiveFlag::new();
+    let leaf_live = live.clone();
+    let nested = SupervisorBuilder::new()
+        .child(ChildSpec::new("leaf", move |_ctx| {
+            let started_tx = started_tx.clone();
+            let live = leaf_live.clone();
+            async move {
+                let _guard = live.guard();
+                started_tx.send(()).expect("test receiver dropped");
+                std::future::pending().await
+            }
+        }))
+        .build()
+        .expect("valid nested supervisor");
+    let root = SupervisorBuilder::new()
+        .supervisor("nested", nested)
+        .child(
+            ChildSpec::new("fatal", |_| async { Err(common::test_error("fatal")) })
+                .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("valid root supervisor");
+
+    let handle = root.spawn();
+    common::recv_event(&mut started_rx).await;
+    assert_eq!(
+        handle.wait().await,
+        Err(SupervisorError::RestartIntensityExceeded)
+    );
+    timeout(common::EVENT_TIMEOUT, async {
+        while live.is_live() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("fatal parent failure should not detach a live nested subtree");
+}
+
+/// A parent learns a nested supervisor's snapshot only from publications the
+/// nested incarnation forwards to it; it never reads that state back. A nested
+/// incarnation whose first computed view already matches the baseline its
+/// parent bound must therefore still forward that view, or it stays invisible.
+#[tokio::test]
+async fn nested_supervisor_view_reaches_the_parent_without_diverging_from_its_baseline() {
+    let nested = SupervisorBuilder::new()
+        .build()
+        .expect("valid nested supervisor");
+
+    let outer = SupervisorBuilder::new()
+        .supervisor("nested", SupervisorSpec::new(nested))
+        .build()
+        .expect("valid outer supervisor");
+
+    let handle = outer.spawn();
+    handle.wait_started().await.expect("startup should succeed");
+
+    let mut snapshots = handle.subscribe_snapshots();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for(|snapshot| {
+            snapshot
+                .child("nested")
+                .is_some_and(|child| child.supervisor.is_some())
+        }),
+    )
+    .await
+    .expect("parent snapshot should carry the nested supervisor's view")
+    .expect("snapshot watch should stay open");
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
