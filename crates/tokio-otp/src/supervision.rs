@@ -30,6 +30,7 @@ pub struct SupervisionScope {
     pub default_shutdown: ShutdownPolicy,
     /// Declared child nodes, in semantic order.
     pub children: Vec<SupervisionTree>,
+    invalid_config: Option<&'static str>,
     dynamic_builder: Option<RunnableActorBuilder>,
     reserved_builder: Option<ReservedScopeBuilder>,
     reserved_actors: Option<Arc<ActorRuntimeState>>,
@@ -58,6 +59,7 @@ impl Clone for SupervisionScope {
             default_restart: self.default_restart,
             default_shutdown: self.default_shutdown,
             children: self.children.clone(),
+            invalid_config: self.invalid_config,
             dynamic_builder: self.dynamic_builder.clone(),
             reserved_builder: None,
             reserved_actors: None,
@@ -74,6 +76,7 @@ impl SupervisionScope {
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             children: Vec::new(),
+            invalid_config: None,
             dynamic_builder: None,
             reserved_builder: None,
             reserved_actors: None,
@@ -139,7 +142,7 @@ impl SupervisionScope {
 ///         SupervisionTree::new().actor(graph.actors()[1].clone()),
 ///     );
 ///
-/// let outline = tree.outline();
+/// let outline = tree.outline()?;
 /// assert_eq!(outline.child_ids(), ["ingest", "workers"]);
 /// let runtime = tree.build()?;
 /// # drop(runtime);
@@ -313,58 +316,54 @@ impl SupervisionTree {
     /// Adopts a graph's actor execution settings for runtime-added actors.
     #[must_use]
     pub fn dynamic_defaults(mut self, graph: &Graph) -> Self {
-        self.scope_mut()
-            .expect("execution defaults apply only to scope nodes")
-            .dynamic_builder = Some(graph.dynamic_builder());
+        if let Some(scope) = self.scope_mut() {
+            scope.dynamic_builder = Some(graph.dynamic_builder());
+        }
         self
     }
 
-    /// Returns this scope's immutable kind.
-    ///
-    /// # Panics
-    ///
-    /// Panics when called on a leaf child node.
-    pub fn kind(&self) -> ScopeKind {
+    /// Returns this scope's immutable kind, or `None` for a child node.
+    pub fn kind(&self) -> Option<ScopeKind> {
         match self {
-            Self::Ordered { .. } => ScopeKind::Ordered,
-            Self::Dynamic { .. } => ScopeKind::Dynamic,
-            _ => panic!("scope kind is available only on scope nodes"),
+            Self::Ordered { .. } => Some(ScopeKind::Ordered),
+            Self::Dynamic { .. } => Some(ScopeKind::Dynamic),
+            _ => None,
         }
     }
 
     /// Sets the restart strategy of a scope node.
     #[must_use]
     pub fn strategy(mut self, strategy: Strategy) -> Self {
-        self.scope_mut()
-            .expect("strategy applies only to scope nodes")
-            .strategy = strategy;
+        if let Some(scope) = self.scope_mut() {
+            scope.strategy = strategy;
+        }
         self
     }
 
     /// Sets this scope's default restart intensity.
     #[must_use]
     pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
-        self.scope_mut()
-            .expect("restart intensity applies only to scope nodes")
-            .restart_intensity = Some(intensity);
+        if let Some(scope) = self.scope_mut() {
+            scope.restart_intensity = Some(intensity);
+        }
         self
     }
 
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
     pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
-        self.scope_mut()
-            .expect("default restart applies only to scope nodes")
-            .default_restart = restart;
+        if let Some(scope) = self.scope_mut() {
+            scope.default_restart = restart;
+        }
         self
     }
 
     /// Sets the shutdown policy inherited by actor nodes.
     #[must_use]
     pub fn default_shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
-        self.scope_mut()
-            .expect("default shutdown applies only to scope nodes")
-            .default_shutdown = shutdown;
+        if let Some(scope) = self.scope_mut() {
+            scope.default_shutdown = shutdown;
+        }
         self
     }
 
@@ -384,13 +383,18 @@ impl SupervisionTree {
     #[must_use]
     pub fn subtree(mut self, id: impl Into<String>, tree: impl Into<SupervisionTree>) -> Self {
         let mut tree = tree.into();
-        tree.scope_mut()
-            .expect("a nested subtree must be an ordered or dynamic scope")
-            .id = Some(id.into());
-        self.scope_mut()
-            .expect("subtrees can be appended only to scope nodes")
-            .children
-            .push(tree);
+        let Some(nested_scope) = tree.scope_mut() else {
+            if let Some(scope) = self.scope_mut() {
+                scope
+                    .invalid_config
+                    .get_or_insert("a nested subtree must be an ordered or dynamic scope");
+            }
+            return self;
+        };
+        nested_scope.id = Some(id.into());
+        if let Some(scope) = self.scope_mut() {
+            scope.children.push(tree);
+        }
         self
     }
 
@@ -440,28 +444,34 @@ impl SupervisionTree {
     /// Appends an already constructed recursive child node.
     #[must_use]
     pub fn child(mut self, child: SupervisionTree) -> Self {
-        self.scope_mut()
-            .expect("children can be appended only to scope nodes")
-            .children
-            .push(child);
+        if let Some(scope) = self.scope_mut() {
+            scope.children.push(child);
+        }
         self
     }
 
-    /// Returns declared children in semantic order.
+    /// Returns declared children in semantic order, or an empty slice for a
+    /// child node.
     pub fn children(&self) -> &[SupervisionTree] {
-        &self
-            .scope()
-            .expect("children are available only on scope nodes")
-            .children
+        self.scope().map_or(&[], |scope| scope.children.as_slice())
     }
 
     /// Projects the executable scope to comparable, payload-free data.
-    pub fn outline(&self) -> SupervisionOutline {
-        let scope = self
-            .scope()
-            .expect("an outline root must be an ordered or dynamic scope");
-        SupervisionOutline {
-            kind: self.kind(),
+    pub fn outline(&self) -> Result<SupervisionOutline, SupervisorBuildError> {
+        let (kind, scope) = match self {
+            Self::Ordered { scope } => (ScopeKind::Ordered, scope),
+            Self::Dynamic { scope } => (ScopeKind::Dynamic, scope),
+            _ => {
+                return Err(SupervisorBuildError::InvalidConfig(
+                    "a supervision root must be an ordered or dynamic scope",
+                ));
+            }
+        };
+        if let Some(message) = scope.invalid_config {
+            return Err(SupervisorBuildError::InvalidConfig(message));
+        }
+        Ok(SupervisionOutline {
+            kind,
             strategy: scope.strategy,
             default_restart: scope.default_restart,
             default_shutdown: scope.default_shutdown,
@@ -470,16 +480,16 @@ impl SupervisionTree {
                 .children
                 .iter()
                 .map(|child| child.outline_child(scope.default_restart, scope.default_shutdown))
-                .collect(),
-        }
+                .collect::<Result<_, _>>()?,
+        })
     }
 
     fn outline_child(
         &self,
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
-    ) -> ChildOutline {
-        match self {
+    ) -> Result<ChildOutline, SupervisorBuildError> {
+        Ok(match self {
             Self::Actor(actor) => ChildOutline::Actor {
                 label: actor.label().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
@@ -493,7 +503,7 @@ impl SupervisionTree {
             },
             Self::Ordered { scope } | Self::Dynamic { scope } => ChildOutline::Scope {
                 id: scope.id.clone().unwrap_or_else(|| "<unnamed>".to_owned()),
-                outline: self.outline(),
+                outline: self.outline()?,
             },
             Self::ActorWithScope {
                 id,
@@ -508,10 +518,10 @@ impl SupervisionTree {
                     shutdown: actor.shutdown.unwrap_or(default_shutdown),
                     restart_intensity: actor.restart_intensity,
                 }),
-                children: Box::new(children.outline()),
+                children: Box::new(children.outline()?),
                 strategy: *strategy,
             },
-        }
+        })
     }
 
     /// Validates and lowers this declaration to a runnable actor runtime.
@@ -521,11 +531,18 @@ impl SupervisionTree {
     }
 
     fn lower_scope(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
-        let kind = self.kind();
-        let mut scope = match self {
-            Self::Ordered { scope } | Self::Dynamic { scope } => scope,
-            _ => unreachable!("kind() accepted only a scope node"),
+        let (kind, mut scope) = match self {
+            Self::Ordered { scope } => (ScopeKind::Ordered, scope),
+            Self::Dynamic { scope } => (ScopeKind::Dynamic, scope),
+            _ => {
+                return Err(SupervisorBuildError::InvalidConfig(
+                    "a supervision root must be an ordered or dynamic scope",
+                ));
+            }
         };
+        if let Some(message) = scope.invalid_config {
+            return Err(SupervisorBuildError::InvalidConfig(message));
+        }
         let actor_builder = scope.dynamic_builder.clone().unwrap_or_default();
         let actors = scope.reserved_actors.take().unwrap_or_else(|| {
             Arc::new(ActorRuntimeState::new(
@@ -645,7 +662,13 @@ impl SupervisionTree {
 impl std::fmt::Debug for SupervisionTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Ordered { .. } | Self::Dynamic { .. } => self.outline().fmt(f),
+            Self::Ordered { .. } | Self::Dynamic { .. } => match self.outline() {
+                Ok(outline) => outline.fmt(f),
+                Err(error) => f
+                    .debug_tuple("InvalidSupervisionTree")
+                    .field(&error)
+                    .finish(),
+            },
             Self::Actor(actor) => actor.fmt(f),
             Self::Child(child) => f.debug_tuple("Child").field(&child.id()).finish(),
             Self::ActorWithScope { id, .. } => f

@@ -420,6 +420,37 @@ async fn interval_repeats_until_cancelled() {
 }
 
 #[derive(Clone)]
+struct ZeroInterval {
+    observed: mpsc::UnboundedSender<bool>,
+}
+
+impl RawActor for ZeroInterval {
+    type Msg = ();
+
+    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+        let timer = ctx.interval((), Duration::ZERO);
+        self.observed
+            .send(timer.is_cancelled())
+            .expect("observer alive");
+        while ctx.recv().await.is_some() {}
+        Ok(Continue)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_period_interval_returns_a_cancelled_handle() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, _) = build_runtime(move || ZeroInterval {
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn();
+
+    assert_eq!(observed_rx.recv().await, Some(true));
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[derive(Clone)]
 struct RestartingTimer {
     runs: Arc<AtomicUsize>,
     observed: mpsc::UnboundedSender<&'static str>,

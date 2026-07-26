@@ -265,7 +265,7 @@ backed by the runtime's public snapshots, events, and actor stats:
 let handle = runtime.spawn();
 let console = tokio_otp_console::Console::for_runtime(&handle)
     .bind(([127, 0, 0, 1], 8080))
-    .build()
+    .build()?
     .spawn()
     .await?;
 
@@ -287,7 +287,7 @@ let console = tokio_otp_console::Console::for_runtime(&handle)
     .bind(([0, 0, 0, 0], 8080))
     .access_token("replace-with-a-random-url-safe-token")
     .allowed_host("console.internal:8080")
-    .build()
+    .build()?
     .spawn()
     .await?;
 ```

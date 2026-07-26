@@ -258,8 +258,8 @@ pub mod prelude {
     pub use crate::Topology;
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
-        BoxError, CallError, CancellationHandle, CancellationToken, Down, DownReason, DrainPolicy,
-        DynamicRuntimeBuilder, Flow,
+        BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken, Down,
+        DownReason, DrainPolicy, DynamicRuntimeBuilder, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, MailboxMode, MessageSize, MonitorEvent,
         OffloadDeadline, OffloadHandle, RawActor, Reply, Runtime, RuntimeBuilder, RuntimeHandle,
@@ -280,10 +280,10 @@ pub use tokio_otp_derive::{ActorFactory, Topology};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, BoxError, CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down,
-    DownReason, DrainPolicy, Flow, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize,
-    MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RunnableActor,
-    RunnableActorBuilder, SendError, SupervisorPathSegment, TryRecvError,
+    ActorSlot, ActorStats, BlockingCancelled, BoxError, CallError, CancellationHandle,
+    DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuildError,
+    GraphBuilder, MailboxMode, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor,
+    Reply, RunnableActor, RunnableActorBuilder, SendError, SupervisorPathSegment, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 pub use runtime::{

@@ -60,7 +60,7 @@ async fn stop_graph(stop: CancellationToken, task: JoinHandle<Result<(), ActorRu
 
 #[derive(Clone)]
 struct ReturnsResult {
-    observed: SenderSlot<Result<u32, &'static str>>,
+    observed: SenderSlot<Result<Result<u32, &'static str>, tokio_otp::BlockingCancelled>>,
 }
 
 impl RawActor for ReturnsResult {
@@ -85,7 +85,7 @@ async fn run_blocking_returns_the_closure_result() {
     let graph = builder.build().expect("valid graph");
     let (stop, task) = start_graph(&graph);
 
-    assert_eq!(observed_rx.await.expect("result observed"), Ok(42));
+    assert_eq!(observed_rx.await.expect("result observed"), Ok(Ok(42)));
     stop_graph(stop, task).await;
 }
 
@@ -108,7 +108,8 @@ impl RawActor for WaitsForShutdown {
             }
             send_once(&cancelled, ());
         })
-        .await;
+        .await
+        .expect("blocking task completes");
         Ok(Continue)
     }
 }
@@ -165,7 +166,7 @@ impl RawActor for DropsFuture {
             });
             tokio::pin!(blocking);
             tokio::select! {
-                () = &mut blocking => panic!("blocking closure returned before cancellation"),
+                result = &mut blocking => panic!("blocking closure returned before cancellation: {result:?}"),
                 () = self.drop_future.notified() => {}
             }
         }
@@ -224,7 +225,8 @@ impl RawActor for IgnoresCancellation {
             }
             send_once(&finished, ());
         })
-        .await;
+        .await
+        .expect("blocking task completes");
         Ok(Continue)
     }
 }
@@ -287,7 +289,8 @@ impl RawActor for Panics {
 
     async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
         ctx.run_blocking(|_token| -> () { panic!("blocking panic") })
-            .await;
+            .await
+            .expect("blocking task should panic before returning");
         Ok(Continue)
     }
 }

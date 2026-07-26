@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -30,7 +30,7 @@ impl ReadySignal {
     }
 
     fn send(&self) {
-        if let Some(signal) = self.0.lock().expect("ready signal poisoned").take() {
+        if let Some(signal) = self.0.lock().unwrap_or_else(PoisonError::into_inner).take() {
             let _ = signal.sender.send(signal.ready);
         }
     }

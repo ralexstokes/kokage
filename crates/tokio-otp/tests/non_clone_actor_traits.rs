@@ -54,7 +54,7 @@ impl Actor for HandlerWithSendOnlyMessage {
         message: Self::Msg,
         ctx: &mut ActorContext<Self::Msg>,
     ) -> ActorResult {
-        let value = ctx.run_blocking(move |_| message.get()).await;
+        let value = ctx.run_blocking(move |_| message.get()).await?;
         ctx.continue_with(Cell::new(value));
         Ok(Continue)
     }

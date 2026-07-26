@@ -23,7 +23,7 @@ use crate::actor::{
         MessageSizeObserver, SendOutcome,
     },
     cancellation::CancellationHandle,
-    error::{CallError, OffloadDeadline, SendError, TryRecvError},
+    error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TryRecvError},
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
 };
@@ -855,9 +855,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// restarts. To schedule periodic delivery to another actor, use
     /// [`interval_to`](Self::interval_to).
     ///
-    /// # Panics
-    ///
-    /// Panics if `period` is zero.
+    /// A zero period creates an already-cancelled timer and sends no messages.
     pub fn interval(&self, message: M, period: Duration) -> CancellationHandle
     where
         M: Clone,
@@ -878,9 +876,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// that merely restarts does not stop the timer; later ticks are
     /// delivered to its next incarnation.
     ///
-    /// # Panics
-    ///
-    /// Panics if `period` is zero.
+    /// A zero period creates an already-cancelled timer and sends no messages.
     pub fn interval_to<T>(
         &self,
         target: &ActorRef<T>,
@@ -890,10 +886,12 @@ impl<M: Send + 'static> ActorContext<M> {
     where
         T: Clone + Send + 'static,
     {
-        assert!(!period.is_zero(), "timer period must be non-zero");
-
         let cancellation = self.timers.child_token();
         let timer = CancellationHandle::new(cancellation.clone());
+        if period.is_zero() {
+            timer.cancel();
+            return timer;
+        }
         let target = target.clone();
 
         tokio::spawn(async move {
@@ -982,8 +980,9 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`CancellationToken::is_cancelled`] periodically and return promptly.
     ///
     /// A panic in the closure resumes on the actor task, so supervision treats
-    /// it as an ordinary actor panic. The return value is otherwise opaque to
-    /// the framework; use your own `Result` type when blocking work can fail.
+    /// it as an ordinary actor panic. Otherwise, the closure's return value is
+    /// wrapped in `Ok`; [`BlockingCancelled`] is returned if Tokio shuts down
+    /// before queued blocking work can complete.
     ///
     /// The surrounding host's shutdown bound is the backstop for closures that
     /// ignore cancellation: the explicit bound passed to
@@ -996,7 +995,10 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`tokio::task::spawn_blocking`] directly, and send the outcome back as a
     /// message. The mailbox then acts as the completion mechanism; see the
     /// [`blocking_lifecycle` example](https://github.com/ralexstokes/tokio-otp/blob/main/crates/tokio-otp/examples/blocking_lifecycle.rs).
-    pub fn run_blocking<F, R>(&self, f: F) -> impl Future<Output = R> + Send + 'static
+    pub fn run_blocking<F, R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
     where
         F: FnOnce(&CancellationToken) -> R + Send + 'static,
         R: Send + 'static,
@@ -1007,9 +1009,9 @@ impl<M: Send + 'static> ActorContext<M> {
             let joined = tokio::task::spawn_blocking(move || f(&cancellation)).await;
 
             match joined {
-                Ok(result) => result,
+                Ok(result) => Ok(result),
                 Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-                Err(error) => panic!("blocking task was cancelled: {error}"),
+                Err(_) => Err(BlockingCancelled),
             }
         }
     }

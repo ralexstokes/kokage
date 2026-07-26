@@ -19,7 +19,7 @@ impl Actor for Worker {
         ctx: &mut ActorContext<&'static str>,
     ) -> ActorResult {
         tracing::info!(message, "worker received message");
-        ctx.run_blocking(|_token| ()).await;
+        ctx.run_blocking(|_token| ()).await?;
         self.completed.send(()).expect("receiver alive");
         Ok(Continue)
     }

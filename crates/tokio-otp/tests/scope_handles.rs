@@ -526,7 +526,7 @@ async fn actor_with_scope_defaults_to_rest_for_one() {
         leaders.actors()[0].clone(),
         SupervisionTree::graph(&workers),
     );
-    let outline = tree.outline();
+    let outline = tree.outline().expect("valid tree has an outline");
     assert!(matches!(
         outline.child("owned"),
         Some(tokio_otp::ChildOutline::ActorWithScope {

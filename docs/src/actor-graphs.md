@@ -365,14 +365,15 @@ let engraved = ctx.run_blocking(move |token| {
         return None;
     }
     Some(engrave(input))
-}).await;
+}).await?;
 ```
 
-The closure can return any type, including an application-defined `Result`.
-A panic resumes on the actor task. If a closure ignores cancellation, the
-standalone host bound or supervised child grace remains the backstop; the
-blocking thread then runs detached because Tokio cannot abort blocking work
-after it starts.
+The closure can return any type, including an application-defined `Result`;
+that produces a nested result distinguishing application failure from
+`BlockingCancelled`. A panic resumes on the actor task. If a closure ignores
+cancellation, the standalone host bound or supervised child grace remains the
+backstop; the blocking thread then runs detached because Tokio cannot abort
+blocking work after it starts.
 
 For intentionally detached or concurrent work, clone `ctx.myself()`, call
 `tokio::task::spawn_blocking` directly, and send the result back as a message.

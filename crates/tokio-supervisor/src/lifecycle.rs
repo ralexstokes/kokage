@@ -736,7 +736,7 @@ impl LifecycleTreeSink {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, PoisonError};
 
     use super::{
         LifecycleEventDraft, LifecycleEventKind, LifecycleHub, LifecyclePathSegment,
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!(
             hub.state
                 .lock()
-                .expect("hub state is not poisoned")
+                .unwrap_or_else(PoisonError::into_inner)
                 .watchers
                 .len(),
             1
