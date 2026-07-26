@@ -34,6 +34,9 @@ fn main() {
         "tokio-supervisor common flow benchmarks (warmup={warmup_iters}, measure={measure_iters})"
     );
 
+    // A child contributes both Added and Started to this direct watch. Keep
+    // this case comfortably below the 128-event buffer or teach the helper to
+    // fail explicitly on Lagged before increasing the child count.
     bench_async(
         &runtime,
         warmup_iters,

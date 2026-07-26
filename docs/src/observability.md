@@ -162,14 +162,19 @@ while let Some(event) = tree.next().await {
 
 Each recursive watch has one bounded buffer for the whole watched tree. On
 overflow, the oldest details collapse into an in-band, tree-wide
-`Lagged { dropped }` marker. Consumers maintaining derived tree state must
-read a fresh recursive snapshot and realign the whole tree. Stream closure
-means that the watched stable identity is terminal, after all staged events
-have drained.
+`Lagged { dropped, newest_dropped }` marker. The surrounding event retains the
+newest discarded transition's supervisor path, while `newest_dropped` retains
+its kind and therefore any per-scope sequence and cumulative counters. This
+can cheaply re-anchor those counters, but consumers maintaining derived tree
+state must still read a fresh recursive snapshot and realign the whole tree.
+Stream closure means that the watched stable identity is terminal, after all
+staged events have drained.
 
-Use a direct watch when per-scope sequence alignment or `wait_started` is the
-goal. Use a recursive watch for diagnostics, dashboards, and any observer that
-needs a single tree feed. The `trading_engine` example's breaker consumes
+Use a direct watch when per-scope sequence alignment is the goal. Use a
+recursive watch for diagnostics, dashboards, and any observer that needs a
+single tree feed. Both watch types provide a `wait_started` helper; the
+recursive form additionally takes the exact supervisor path. The
+`trading_engine` example's breaker consumes
 direct `event.total_restarts`; that counter records scheduled restarts — the
 same occurrences as the restart-intensity window, including clean exits
 restarted under `RestartPolicy::Always`. Group-strategy sibling respawns do not

@@ -223,6 +223,11 @@ impl EventWatch {
             RecursiveLifecycleEventKind::Child(event) => match event.kind {
                 LifecycleEventKind::Added => return Ok(None),
                 LifecycleEventKind::Started { generation } => {
+                    // This compatibility shim preserves the removed test-event
+                    // shape. It deliberately assumes runtime generations are
+                    // contiguous when synthesizing `ChildRestarted`. If that
+                    // invariant changes, migrate these assertions to the raw
+                    // lifecycle events instead of extending this fiction.
                     if generation > 0 {
                         pending = Some(ObservedEvent::ChildRestarted {
                             id: event.child_id.clone(),
@@ -261,7 +266,7 @@ impl EventWatch {
             RecursiveLifecycleEventKind::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded
             }
-            RecursiveLifecycleEventKind::Lagged { dropped } => {
+            RecursiveLifecycleEventKind::Lagged { dropped, .. } => {
                 return Err(EventRecvError::Lagged(dropped));
             }
             _ => return Ok(None),

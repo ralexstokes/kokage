@@ -91,7 +91,7 @@ fn print_event(event: &RecursiveLifecycleEvent) {
         RecursiveLifecycleEventKind::RestartIntensityExceeded { total_restarts, .. } => {
             println!("{scope}: restart intensity exceeded after {total_restarts} restarts");
         }
-        RecursiveLifecycleEventKind::Lagged { dropped } => {
+        RecursiveLifecycleEventKind::Lagged { dropped, .. } => {
             println!("{scope}: recursive lifecycle dropped {dropped} events; resync snapshots");
         }
         _ => println!("{scope}: unknown recursive lifecycle event"),

@@ -782,7 +782,7 @@
 
   // --- Rendering: Event Log ---
   function classifyEvent(ev) {
-    const lifecycle = ev.kind;
+    const lifecycle = ev && ev.kind;
     let info;
     if (typeof lifecycle === "string") {
       switch (lifecycle) {
@@ -791,7 +791,7 @@
         case "SupervisorStopped":  info = { kind: "stopped", cls: "kind-muted", msg: "Supervisor stopped" }; break;
         default: info = { kind: "event", cls: "kind-muted", msg: lifecycle };
       }
-    } else if (lifecycle.Child) {
+    } else if (lifecycle && lifecycle.Child) {
       const child = lifecycle.Child;
       const transition = child.kind;
       if (transition === "Added") {
@@ -815,20 +815,21 @@
       } else if (transition.Lagged) {
         info = { kind: "lagged", cls: "kind-critical", msg: "Direct lifecycle stream dropped " + transition.Lagged.dropped + " events" };
       }
-    } else if (lifecycle.RestartScheduled) {
+    } else if (lifecycle && lifecycle.RestartScheduled) {
       info = {
         kind: "scheduled", cls: "kind-accent",
         msg: "Restart scheduled for '" + lifecycle.RestartScheduled.child_id + "' in " +
           formatDuration(lifecycle.RestartScheduled.delay),
       };
-    } else if (lifecycle.RestartIntensityExceeded) {
+    } else if (lifecycle && lifecycle.RestartIntensityExceeded) {
       info = { kind: "intensity", cls: "kind-critical", msg: "Restart intensity exceeded" };
-    } else if (lifecycle.Lagged) {
+    } else if (lifecycle && lifecycle.Lagged) {
       info = { kind: "lagged", cls: "kind-critical", msg: "Lifecycle stream dropped " + lifecycle.Lagged.dropped + " tree events; resynchronize from the latest snapshot" };
     }
-    info = info || { kind: "event", cls: "kind-muted", msg: JSON.stringify(lifecycle) };
-    if (ev.supervisor_path.length > 0) {
-      const prefix = ev.supervisor_path.map(function (segment) {
+    info = info || { kind: "event", cls: "kind-muted", msg: JSON.stringify(lifecycle) || "Unknown lifecycle event" };
+    const supervisorPath = ev && Array.isArray(ev.supervisor_path) ? ev.supervisor_path : [];
+    if (supervisorPath.length > 0) {
+      const prefix = supervisorPath.map(function (segment) {
         return "[" + segment.id + " epoch:" + segment.membership_epoch + " gen:" + segment.generation + "]";
       }).join(" ");
       info.msg = prefix + " " + info.msg;

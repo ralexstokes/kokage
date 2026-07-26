@@ -199,6 +199,7 @@ impl SupervisorObservability {
                 id,
                 generation,
                 delay,
+                ..
             } => warn!(
                 supervisor_name = %self.supervisor_name,
                 supervisor_path = %self.supervisor_path,
@@ -458,8 +459,11 @@ mod tests {
                 root.emit_event(
                     &RuntimeEvent::ChildRestartScheduled {
                         id: "worker".to_owned(),
+                        membership_epoch: 0,
                         generation: 0,
                         delay: Duration::from_millis(10),
+                        total_restarts: 1,
+                        child_restart_count: 1,
                     },
                     0,
                     None,

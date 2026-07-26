@@ -1370,10 +1370,14 @@ impl SupervisorRuntime {
         if allow_restart && restart_policy.should_restart(classified.status.is_failure()) {
             let previous_generation = self.children[classified.key].runtime.generation;
             let delay = self.schedule_restart(classified.key)?;
+            let entry = &self.children[classified.key];
             self.send_event(RuntimeEvent::ChildRestartScheduled {
-                id: self.children[classified.key].id.clone(),
+                id: entry.id.clone(),
+                membership_epoch: entry.instance,
                 generation: previous_generation,
                 delay,
+                total_restarts: self.total_restarts,
+                child_restart_count: entry.runtime.restart_tracker.total_restarts(),
             });
         } else if allow_restart {
             let instance = self.children[classified.key].instance;
@@ -1832,10 +1836,9 @@ impl SupervisorRuntime {
 
     fn send_lifecycle_draft(&self, draft: LifecycleEventDraft) {
         let lifecycle = Arc::clone(&self.lifecycle);
-        if let Some(event) = lifecycle.emit(draft, || self.publish_snapshot()) {
-            self.lifecycle_tree
-                .emit(RecursiveLifecycleEventKind::Child(event));
-        }
+        let event = lifecycle.emit(draft, || self.publish_snapshot());
+        self.lifecycle_tree
+            .emit(RecursiveLifecycleEventKind::Child(event));
     }
 
     pub(crate) fn send_event(&self, event: RuntimeEvent) {
@@ -1856,20 +1859,19 @@ impl SupervisorRuntime {
             RuntimeEvent::SupervisorStopped => Some(RecursiveLifecycleEventKind::SupervisorStopped),
             RuntimeEvent::ChildRestartScheduled {
                 id,
+                membership_epoch,
                 generation,
                 delay,
-            } => self
-                .children_by_id
-                .get(id)
-                .and_then(|&key| self.children.get(key))
-                .map(|entry| RecursiveLifecycleEventKind::RestartScheduled {
-                    child_id: id.clone(),
-                    membership_epoch: entry.instance,
-                    generation: *generation,
-                    delay: *delay,
-                    total_restarts: self.total_restarts,
-                    child_restart_count: entry.runtime.restart_tracker.total_restarts(),
-                }),
+                total_restarts,
+                child_restart_count,
+            } => Some(RecursiveLifecycleEventKind::RestartScheduled {
+                child_id: id.clone(),
+                membership_epoch: *membership_epoch,
+                generation: *generation,
+                delay: *delay,
+                total_restarts: *total_restarts,
+                child_restart_count: *child_restart_count,
+            }),
             RuntimeEvent::RestartIntensityExceeded => {
                 Some(RecursiveLifecycleEventKind::RestartIntensityExceeded {
                     total_restarts: self.total_restarts,
