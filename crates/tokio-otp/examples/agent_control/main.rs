@@ -147,16 +147,27 @@ use tool_host::ToolHost;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
+/// Gateway actors keep the 32-deep mailbox the separate `agent-gateway` graph
+/// gave them before the scopes merged into one graph; core actors keep the
+/// graph-wide default.
+const GATEWAY_MAILBOX: usize = 32;
+
+fn gateway_options<M: Send + 'static>() -> ActorOptions<M> {
+    ActorOptions::new().mailbox_capacity(GATEWAY_MAILBOX)
+}
+
 /// Sequential start: outbound → progress → inbound. `RestForOne` puts the
 /// bridge last, so an inbound panic restarts only inbound while an
 /// outbound/progress failure also recycles the bridge that depends on them.
 #[derive(Topology)]
 #[topology(strategy = Strategy::RestForOne)]
 struct Gateway {
+    #[topology(options = gateway_options())]
     outbound: Outbound,
-    #[topology(options = ActorOptions::new()
+    #[topology(options = gateway_options()
         .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat())))]
     progress: Progress,
+    #[topology(options = gateway_options())]
     inbound: Inbound,
 }
 
@@ -242,7 +253,6 @@ async fn build_app() -> Result<App, AnyError> {
     // ordering between the two scopes.
     let mut builder = GraphBuilder::new();
     builder.name("agent-control");
-    builder.mailbox_capacity(32);
     let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
         gateway: GatewayFactories {
             outbound: {
@@ -487,9 +497,9 @@ async fn phase_3(app: &App) -> Result<(), AnyError> {
             .find(|child| child.id == id)
             .map(|child| child.restart_count)
     };
-    assert_eq!(restarts("gateway.inbound"), Some(1));
-    assert_eq!(restarts("gateway.outbound"), Some(0));
-    assert_eq!(restarts("gateway.progress"), Some(0));
+    assert_eq!(restarts("inbound"), Some(1));
+    assert_eq!(restarts("outbound"), Some(0));
+    assert_eq!(restarts("progress"), Some(0));
     assert_eq!(app.sessions.snapshot().total_restarts, session_restarts);
     println!(
         "PHASE 3 OK — ack-after-append redelivery + RestForOne restart watch (only failed final child restarts)"

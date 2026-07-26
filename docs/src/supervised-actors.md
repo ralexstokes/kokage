@@ -198,6 +198,15 @@ supervision placement is hierarchical. Actor labels are qualified by the scope
 path, so the graph above contains `ingest`, `workers.parse`, and
 `workers.render`.
 
+Supervisor child ids stay local to their scope: `parse` is named `parse` inside
+the `workers` supervisor, giving the path `root.workers.parse` — the label with
+`root.` in front, not a repeated scope name. Snapshot and lifecycle lookups take
+the local id (`workers_handle.snapshot().child("parse")`) while `actor_stats`
+reports the qualified label (`workers.parse`).
+
+Because one graph means one `mailbox_capacity`, set a per-actor override with
+`ActorOptions::mailbox_capacity` where a scope previously had its own graph.
+
 Field order is semantic here in a way it is not for a graph alone: an ordered
 scope starts children in declaration order, and `Strategy::RestForOne` restarts
 the ones that follow. Reordering fields changes restart behaviour.

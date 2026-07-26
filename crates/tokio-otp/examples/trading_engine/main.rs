@@ -160,6 +160,20 @@ fn feed_message_key(message: &FeedMsg) -> &'static str {
     }
 }
 
+/// Venue actors keep the shallower mailbox the separate `trading-venues` graph
+/// gave them before the scopes merged into one graph.
+const VENUE_MAILBOX: usize = 16;
+
+fn venue_options<M: Send + 'static>() -> ActorOptions<M> {
+    ActorOptions::new().mailbox_capacity(VENUE_MAILBOX)
+}
+
+fn feed_options() -> ActorOptions<FeedMsg> {
+    venue_options()
+        .mailbox(MailboxMode::conflate_by_key(feed_message_key))
+        .message_size()
+}
+
 /// One scope per venue-facing pair, restart-budgeted as a group. Labels are
 /// pinned so the qualified ids stay `venues.venue-a-feed` and friends.
 #[derive(Topology)]
@@ -168,17 +182,13 @@ fn feed_message_key(message: &FeedMsg) -> &'static str {
     restart_intensity = RestartIntensity::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
-    #[topology(label = "venue-a-feed", options = ActorOptions::new()
-        .mailbox(MailboxMode::conflate_by_key(feed_message_key))
-        .message_size())]
+    #[topology(label = "venue-a-feed", options = feed_options())]
     venue_a_feed: VenueFeed,
-    #[topology(label = "venue-a-gateway")]
+    #[topology(label = "venue-a-gateway", options = venue_options())]
     venue_a_gateway: VenueGateway,
-    #[topology(label = "venue-b-feed", options = ActorOptions::new()
-        .mailbox(MailboxMode::conflate_by_key(feed_message_key))
-        .message_size())]
+    #[topology(label = "venue-b-feed", options = feed_options())]
     venue_b_feed: VenueFeed,
-    #[topology(label = "venue-b-gateway")]
+    #[topology(label = "venue-b-gateway", options = venue_options())]
     venue_b_gateway: VenueGateway,
 }
 
@@ -452,17 +462,17 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             }
         }
     });
-    let before_b = generation(app, "venues.venue-b-feed");
+    let before_b = generation(app, "venue-b-feed");
     let venues = app
         .handle
         .subtree("venues")
         .expect("venues runtime subtree")
         .supervisor_handle();
-    let (lifecycle, baseline) = restart_observer(&venues, "venues.venue-a-feed");
+    let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
     app.venue_a_feed.send(FeedMsg::Crash).await?;
     tokio::time::timeout(
         PHASE_TIMEOUT,
-        await_restart(lifecycle, "venues.venue-a-feed", baseline),
+        await_restart(lifecycle, "venue-a-feed", baseline),
     )
     .await?;
     await_until(|| async {
@@ -485,7 +495,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     keepalive_stop.cancel();
     keepalive.await?;
     let final_status = status(&app.reconciler).await.expect("reconciler available");
-    assert_eq!(generation(app, "venues.venue-b-feed"), before_b);
+    assert_eq!(generation(app, "venue-b-feed"), before_b);
     assert_eq!(
         final_status.transitions[VENUE_B].len(),
         b_transition_count,
@@ -677,10 +687,10 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
         .expect("venues runtime subtree")
         .supervisor_handle();
     for (id, feed) in [
-        ("venues.venue-a-feed", &app.venue_a_feed),
-        ("venues.venue-b-feed", &app.venue_b_feed),
-        ("venues.venue-a-feed", &app.venue_a_feed),
-        ("venues.venue-b-feed", &app.venue_b_feed),
+        ("venue-a-feed", &app.venue_a_feed),
+        ("venue-b-feed", &app.venue_b_feed),
+        ("venue-a-feed", &app.venue_a_feed),
+        ("venue-b-feed", &app.venue_b_feed),
     ] {
         let (lifecycle, baseline) = restart_observer(&venues, id);
         feed.send(FeedMsg::Crash).await?;

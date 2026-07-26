@@ -51,6 +51,7 @@ pub trait MessageSize {
 pub struct ActorOptions<M> {
     pub(crate) mailbox_mode: MailboxMode<M>,
     pub(crate) size_hint: Option<fn(&M) -> usize>,
+    pub(crate) mailbox_capacity: Option<usize>,
 }
 
 impl<M> Clone for ActorOptions<M> {
@@ -58,6 +59,7 @@ impl<M> Clone for ActorOptions<M> {
         Self {
             mailbox_mode: self.mailbox_mode.clone(),
             size_hint: self.size_hint,
+            mailbox_capacity: self.mailbox_capacity,
         }
     }
 }
@@ -67,6 +69,7 @@ impl<M> fmt::Debug for ActorOptions<M> {
         f.debug_struct("ActorOptions")
             .field("mailbox_mode", &self.mailbox_mode)
             .field("size_hint", &self.size_hint)
+            .field("mailbox_capacity", &self.mailbox_capacity)
             .finish()
     }
 }
@@ -77,7 +80,20 @@ impl<M> ActorOptions<M> {
         Self {
             mailbox_mode: MailboxMode::Queue,
             size_hint: None,
+            mailbox_capacity: None,
         }
+    }
+
+    /// Overrides the graph's mailbox capacity for this actor alone.
+    ///
+    /// The graph-wide default from
+    /// [`GraphBuilder::mailbox_capacity`] applies to every actor that does not
+    /// set this. As there, the value is the FIFO queue capacity and the maximum
+    /// number of distinct unread keys for keyed conflation; unkeyed conflation
+    /// always has capacity 1 and ignores it.
+    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.mailbox_capacity = Some(capacity);
+        self
     }
 
     /// Selects the actor's mailbox storage policy.
@@ -163,6 +179,7 @@ struct Slot {
     actor_id: Arc<str>,
     binding_lifecycle: Arc<dyn BindingLifecycle>,
     runner: Option<Arc<dyn ErasedRunner>>,
+    mailbox_capacity: Option<usize>,
 }
 
 pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
@@ -200,7 +217,8 @@ impl GraphBuilder {
     ///
     /// This is the FIFO queue capacity and the maximum number of distinct
     /// unread keys for keyed conflation. Unkeyed conflation always has
-    /// capacity 1 and ignores this setting.
+    /// capacity 1 and ignores this setting. Individual actors can depart from
+    /// this default with [`ActorOptions::mailbox_capacity`].
     pub fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
         self.mailbox_capacity = capacity;
         self
@@ -225,6 +243,7 @@ impl GraphBuilder {
         let ActorOptions {
             mailbox_mode,
             size_hint,
+            mailbox_capacity,
         } = options;
         let actor_id: Arc<str> = actor_id.into();
         let core = Arc::new(match size_hint {
@@ -233,7 +252,8 @@ impl GraphBuilder {
             }
             None => BindingCore::<M>::new(Arc::clone(&actor_id)),
         });
-        let registration = self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core));
+        let registration =
+            self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core), mailbox_capacity);
         let (index, actor_ref) = match registration {
             Some((index, actor_ref)) => (Some(index), actor_ref),
             None => (None, Self::detached_ref(&actor_id, size_hint)),
@@ -383,7 +403,7 @@ impl GraphBuilder {
                 actor_id: slot.actor_id,
                 binding_lifecycle: slot.binding_lifecycle,
                 runner,
-                mailbox_capacity: self.mailbox_capacity,
+                mailbox_capacity: slot.mailbox_capacity.unwrap_or(self.mailbox_capacity),
                 observability: observability.clone(),
             }));
         }
@@ -407,7 +427,14 @@ impl GraphBuilder {
         &mut self,
         actor_id: Arc<str>,
         core: Arc<BindingCore<M>>,
+        mailbox_capacity: Option<usize>,
     ) -> Option<(usize, ActorRef<M>)> {
+        if mailbox_capacity == Some(0) {
+            self.errors.push(GraphBuildError::InvalidConfig(
+                "actor mailbox capacity must be non-zero",
+            ));
+            return None;
+        }
         if actor_id.is_empty() {
             self.errors
                 .push(GraphBuildError::InvalidConfig("actor id must not be empty"));
@@ -428,6 +455,7 @@ impl GraphBuilder {
             actor_id,
             binding_lifecycle: core,
             runner: None,
+            mailbox_capacity,
         });
         Some((index, actor_ref))
     }

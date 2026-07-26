@@ -299,13 +299,17 @@ fn parse_factory_attributes(
 /// any node — actor or scope — with `#[topology(label = "...")]`; the
 /// override replaces that one path component, so it must not contain `.`.
 ///
-/// Labels are display names, not addresses: they appear in tracing fields,
-/// actor stats, and supervisor child ids — renaming a field renames all of
-/// those, but never affects type checking or message routing. An actor keeps
-/// exactly one name across all of them, so a nested actor's supervisor child
-/// id is its qualified label, making the supervisor path
-/// `workers/workers.parse`. The repetition is deliberate: one key correlates
-/// a snapshot, a stats row, and a tracing span.
+/// Labels are display names, not addresses: they appear in tracing fields and
+/// actor stats, and renaming a field renames both, but never affects type
+/// checking or message routing.
+///
+/// A supervisor child id is local to its scope, so a nested actor is named
+/// `parse` within the `workers` supervisor while its graph label stays
+/// `workers.parse`. Scope names and label components come from the same field
+/// names, so the supervisor path spells the label rather than repeating the
+/// scope: `root.workers.parse`, whose tail past `root.` is exactly the label.
+/// Snapshot and lifecycle lookups therefore take the local id, while
+/// `actor_stats` reports the qualified label.
 ///
 /// # Visibility
 ///
@@ -1193,6 +1197,7 @@ fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
                 .expect("a derived topology places actors it declared")
                 .clone(),
         )
+        .child_id(#name)
     };
     if let Some(restart) = &attrs.restart {
         spec = quote! { #spec.restart(#restart) };

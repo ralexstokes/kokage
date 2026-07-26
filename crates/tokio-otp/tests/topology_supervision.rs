@@ -74,9 +74,9 @@ fn a_nested_scope_becomes_a_named_subtree_with_path_qualified_labels() {
         panic!("expected a scope");
     };
     assert_eq!(workers.strategy, Strategy::OneForAll);
-    // An actor keeps one name everywhere: its qualified graph label is also its
-    // supervisor child id, so stats, tracing, and snapshots share a key.
-    assert_eq!(workers.child_ids(), ["workers.parse", "workers.render"]);
+    // Child ids are local to their scope, so the supervisor path spells the
+    // qualified graph label exactly once: root.workers.parse.
+    assert_eq!(workers.child_ids(), ["parse", "render"]);
 }
 
 #[test]
@@ -102,6 +102,7 @@ async fn a_derived_runtime_runs_actors_across_scope_levels() {
         );
     }
 
+    // Stats report the graph label, which is qualified...
     let mut labels: Vec<_> = handle
         .actor_stats()
         .into_iter()
@@ -109,6 +110,18 @@ async fn a_derived_runtime_runs_actors_across_scope_levels() {
         .collect();
     labels.sort();
     assert_eq!(labels, ["ingest", "workers.parse", "workers.render"]);
+
+    // ...while the supervisor names each child locally, so scope path plus
+    // child id reconstructs the label instead of repeating the scope name.
+    let workers = handle.subtree("workers").expect("workers scope");
+    let mut ids: Vec<_> = workers
+        .snapshot()
+        .children
+        .into_iter()
+        .map(|child| child.id.to_string())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["parse", "render"]);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -227,7 +240,7 @@ fn a_leader_field_lowers_to_an_actor_with_scope_node() {
         panic!("expected an actor-with-scope node");
     };
     assert_eq!(*strategy, Strategy::OneForAll);
-    assert_eq!(leader.id(), "pool.manager");
+    assert_eq!(leader.id(), "manager");
     assert_eq!(children.child_ids(), ["workers"]);
 }
 

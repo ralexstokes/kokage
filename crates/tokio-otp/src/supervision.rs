@@ -183,6 +183,7 @@ pub enum SupervisionTree {
 #[derive(Clone)]
 pub struct ActorSpec {
     actor: RunnableActor,
+    child_id: Option<String>,
     restart: Option<RestartPolicy>,
     shutdown: Option<ShutdownPolicy>,
     restart_intensity: Option<RestartIntensity>,
@@ -193,10 +194,24 @@ impl ActorSpec {
     pub fn new(actor: RunnableActor) -> Self {
         Self {
             actor,
+            child_id: None,
             restart: None,
             shutdown: None,
             restart_intensity: None,
         }
+    }
+
+    /// Names this actor within its enclosing scope.
+    ///
+    /// Child ids are local to one supervisor, while an actor label is unique
+    /// across the whole graph. They coincide by default. A nested derived
+    /// topology sets a local id here so the supervisor path spells the
+    /// qualified label once — `root.workers.parse` rather than
+    /// `root.workers.workers.parse` — instead of repeating the scope name.
+    #[must_use]
+    pub fn child_id(mut self, id: impl Into<String>) -> Self {
+        self.child_id = Some(id.into());
+        self
     }
 
     /// Overrides the enclosing scope's default restart policy.
@@ -220,9 +235,17 @@ impl ActorSpec {
         self
     }
 
-    /// Returns the actor label, which is also its child id.
+    /// Returns the actor label, which is unique across the graph.
     pub fn label(&self) -> &str {
         self.actor.label()
+    }
+
+    /// Returns this actor's id within its enclosing scope.
+    ///
+    /// Defaults to [`label`](Self::label) unless
+    /// [`child_id`](Self::child_id) overrode it.
+    pub fn id(&self) -> &str {
+        self.child_id.as_deref().unwrap_or_else(|| self.label())
     }
 }
 
@@ -235,6 +258,7 @@ impl From<RunnableActor> for ActorSpec {
 impl std::fmt::Debug for ActorSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActorSpec")
+            .field("id", &self.id())
             .field("label", &self.label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
@@ -523,7 +547,7 @@ impl SupervisionTree {
     ) -> Result<ChildOutline, SupervisorBuildError> {
         Ok(match self {
             Self::Actor(actor) => ChildOutline::Actor {
-                label: actor.label().to_owned(),
+                label: actor.id().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
                 restart_intensity: actor.restart_intensity,
@@ -545,7 +569,7 @@ impl SupervisionTree {
             } => ChildOutline::ActorWithScope {
                 id: id.clone(),
                 leader: Box::new(ChildOutline::Actor {
-                    label: actor.label().to_owned(),
+                    label: actor.id().to_owned(),
                     restart: actor.restart.unwrap_or(default_restart),
                     shutdown: actor.shutdown.unwrap_or(default_shutdown),
                     restart_intensity: actor.restart_intensity,
@@ -625,13 +649,14 @@ impl SupervisionTree {
         for child in scope.children {
             builder = match child {
                 Self::Actor(actor) => builder.child(actor_child_spec(
-                    actor.actor,
+                    actor.actor.clone(),
                     &actors,
                     ActorChildOptions::new(
                         actor.restart.unwrap_or(scope.default_restart),
                         actor.shutdown.unwrap_or(scope.default_shutdown),
                     )
-                    .restart_intensity(actor.restart_intensity),
+                    .restart_intensity(actor.restart_intensity)
+                    .child_id(actor.child_id),
                 )),
                 Self::Child(spec) => builder.child(spec),
                 tree @ (Self::Ordered { .. } | Self::Dynamic { .. }) => {
@@ -661,13 +686,14 @@ impl SupervisionTree {
                         Arc::clone(&children_actors),
                     );
                     let leader = actor_child_spec(
-                        actor.actor,
+                        actor.actor.clone(),
                         &owned_actors,
                         ActorChildOptions::new(
                             actor.restart.unwrap_or(scope.default_restart),
                             actor.shutdown.unwrap_or(scope.default_shutdown),
                         )
                         .restart_intensity(actor.restart_intensity)
+                        .child_id(actor.child_id)
                         .children(children_handle),
                     );
                     let owned = SupervisorBuilder::new()

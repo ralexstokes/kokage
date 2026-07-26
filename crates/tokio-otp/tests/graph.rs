@@ -15,7 +15,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
     DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, LiveContext,
     MessageContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
     StopContext, TryRecvError, prelude::Continue,
@@ -992,6 +992,69 @@ fn build_rejects_invalid_graph_definitions() {
             "mailbox capacity must be non-zero"
         ))
     ));
+
+    let mut zero_actor_capacity = GraphBuilder::new();
+    zero_actor_capacity.actor_with_options(
+        "worker",
+        Drain::<()>::new,
+        ActorOptions::new().mailbox_capacity(0),
+    );
+    assert!(matches!(
+        zero_actor_capacity.build(),
+        Err(GraphBuildError::InvalidConfig(
+            "actor mailbox capacity must be non-zero"
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn an_actor_can_depart_from_the_graph_wide_mailbox_capacity() {
+    let mut builder = GraphBuilder::new();
+    builder.mailbox_capacity(2);
+    let shallow = builder.actor("shallow", Drain::<()>::new);
+    let deep = builder.actor_with_options(
+        "deep",
+        Drain::<()>::new,
+        ActorOptions::new().mailbox_capacity(9),
+    );
+    let graph = builder.build().expect("graph builds");
+
+    // Capacity is a property of the bound mailbox, so it is observable only
+    // once an incarnation is running.
+    let stop = CancellationToken::new();
+    let tasks: Vec<_> = graph
+        .actors()
+        .iter()
+        .cloned()
+        .map(|actor| {
+            let stop = stop.clone();
+            tokio::spawn(async move {
+                actor
+                    .run_until(
+                        stop.cancelled(),
+                        RestartPolicy::Never,
+                        DEFAULT_SHUTDOWN_BOUND,
+                    )
+                    .await
+            })
+        })
+        .collect();
+
+    timeout(Duration::from_secs(5), async {
+        while shallow.stats().mailbox_capacity == 0 || deep.stats().mailbox_capacity == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both actors bind");
+
+    assert_eq!(shallow.stats().mailbox_capacity, 2);
+    assert_eq!(deep.stats().mailbox_capacity, 9);
+
+    stop.cancel();
+    for task in tasks {
+        task.await.expect("joined").expect("clean stop");
+    }
 }
 
 #[derive(Clone)]
