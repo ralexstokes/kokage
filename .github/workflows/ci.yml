@@ -58,10 +58,17 @@ jobs:
         if: steps.lane.outputs.full != 'true'
         uses: actions/cache@v4
         with:
-          path: target
-          key: cargo-target-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          path: |
+            target
+            !target/debug/incremental/**
+            !target/doc/**
+            !target/tests/trybuild/**
+          # GitHub caches are immutable. Keep one cache per PR and dependency
+          # set so later commits get an exact hit instead of uploading another
+          # multi-gigabyte target archive for every SHA.
+          key: cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-pr-${{ github.event.pull_request.number }}
           restore-keys: |
-            cargo-target-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-
+            cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-
 
       - name: Validate flake
         if: steps.lane.outputs.full != 'true'
@@ -69,6 +76,10 @@ jobs:
 
       - name: Run fast CI
         if: steps.lane.outputs.full != 'true'
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
         run: nix develop --command just ci
 
       - name: Run full flake checks
