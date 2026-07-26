@@ -71,14 +71,15 @@ pub struct SupervisorSnapshot {
 pub struct ChildSnapshot {
     /// The child's unique identifier.
     pub id: String,
-    /// Monotonic identity of this membership within the current supervisor
-    /// incarnation.
+    /// Monotonic identity of this membership within the stable supervisor
+    /// identity.
     ///
     /// Unlike [`generation`](Self::generation), this changes when a child is
     /// removed and another child is added under the same id. Restarts of the
-    /// same membership retain the epoch. Epochs are scoped to direct children
-    /// of one supervisor incarnation; nested supervisors maintain independent
-    /// sequences. The counter saturates at [`u64::MAX`].
+    /// same membership retain the epoch. The sequence continues across
+    /// incarnations of a restart-stable nested supervisor; distinct nested
+    /// supervisor identities maintain independent sequences. The counter
+    /// saturates at [`u64::MAX`].
     pub membership_epoch: u64,
     /// Current generation counter. Incremented on each restart.
     pub generation: u64,

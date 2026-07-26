@@ -208,7 +208,7 @@ impl StableSupervisorChannels {
         command_tx: mpsc::Sender<SupervisorCommand>,
         done_rx: DoneReceiver,
         mut initial_snapshot: SupervisorSnapshot,
-        initial_attached_children: Vec<AttachedChildState>,
+        mut initial_attached_children: Vec<AttachedChildState>,
     ) -> Option<(StableBindingGuard, watch::Sender<SupervisorSnapshot>)> {
         let mut binding = self.binding.lock().expect("stable control slot poisoned");
         if binding.terminal {
@@ -220,6 +220,20 @@ impl StableSupervisorChannels {
         // is acquired inside the same lifecycle boundary, so `run_as_child`
         // never has to reopen the terminalization race after binding.
         let snapshots = self.snapshots();
+        // Membership epochs belong to the stable supervisor identity, not an
+        // individual incarnation. Assign the new static memberships before
+        // publishing the incarnation baseline so snapshot reducers and later
+        // `Added` events agree on their keys.
+        for child in &mut initial_snapshot.children {
+            let membership_epoch = self.lifecycle.next_membership_epoch();
+            child.membership_epoch = membership_epoch;
+            if let Some(attached) = initial_attached_children
+                .iter_mut()
+                .find(|attached| attached.identity.id == child.id)
+            {
+                attached.identity.membership_epoch = membership_epoch;
+            }
+        }
         // The children belong to the new incarnation, but the aggregate
         // restart counter belongs to the stable supervisor identity.
         initial_snapshot.total_restarts = snapshots.borrow().total_restarts;
@@ -970,7 +984,9 @@ impl SupervisorHandle {
     /// then read [`snapshot`](Self::snapshot), then discard watched events
     /// whose sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
     /// Pre-spawn snapshots already project configured children as `Starting`,
-    /// so apply a later `Added` for that membership as an idempotent upsert.
+    /// so apply a later `Added` for that membership as an idempotent upsert
+    /// keyed by `(child_id, membership_epoch)`. Membership epochs remain
+    /// unique across incarnations of this stable supervisor identity.
     ///
     /// Each watch owns a bounded buffer. Sustained overflow is represented by
     /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged), never

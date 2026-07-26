@@ -364,7 +364,6 @@ where
             tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
-                () = lifecycle.closed() => return,
                 () = target.wait_terminated() => return,
                 sent = target.send_to_incarnation(map(event)) => {
                     if sent.is_err() {
@@ -742,8 +741,8 @@ impl RuntimeHandle {
     /// be observed; a conflating mailbox may discard intermediate messages.
     ///
     /// The pump stops when the returned guard is dropped or cancelled, when
-    /// this runtime's identity becomes terminal, or when the target actor
-    /// permanently terminates.
+    /// this runtime's identity becomes terminal after draining its staged
+    /// events, or when the target actor permanently terminates.
     pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> LifecycleWatchGuard
     where
         M: Send + 'static,

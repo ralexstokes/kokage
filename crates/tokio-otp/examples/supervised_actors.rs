@@ -84,23 +84,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Crash the worker. Each run gets a fresh mailbox, so an order queued
     // behind the jam would be lost with it — wait for the supervisor to
     // restart the worker before sending more.
+    let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child("worker")
         .expect("worker is supervised")
         .generation;
-    let mut lifecycle = handle.watch_lifecycle();
     orders.send("jam".to_owned()).await?;
-    while let Some(event) = lifecycle.next().await {
-        if event.child_id == "worker"
-            && matches!(
-                event.kind,
-                LifecycleEventKind::Started { generation } if generation > baseline
-            )
-        {
-            break;
-        }
-    }
+    lifecycle
+        .wait_started("worker", baseline)
+        .await
+        .ok_or_else(|| io::Error::other("worker removed before restarting"))?;
 
     orders.send("flyers x500".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));

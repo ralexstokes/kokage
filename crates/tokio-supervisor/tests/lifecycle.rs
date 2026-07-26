@@ -81,6 +81,33 @@ async fn restart_is_an_ordered_exit_started_pair() {
 }
 
 #[tokio::test]
+async fn wait_started_reports_membership_removal() {
+    let handle = SupervisorBuilder::new()
+        .child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle.wait_started().await.expect("startup succeeds");
+    let mut lifecycle = handle.watch_lifecycle();
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .generation;
+
+    handle
+        .remove_child("worker")
+        .await
+        .expect("worker removal succeeds");
+    assert_eq!(lifecycle.wait_started("worker", baseline).await, None);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
 async fn readiness_gated_started_is_emitted_only_after_ready() {
     let release = Arc::new(Notify::new());
     let child_release = Arc::clone(&release);
@@ -273,11 +300,13 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     .await;
 
     let lagged = next_event(&mut lifecycle).await;
-    assert_eq!(lagged.seq, 1);
+    assert_eq!(lagged.seq, 35);
     assert!(matches!(
         lagged.kind,
         LifecycleEventKind::Lagged { dropped: 35 }
     ));
+    assert_eq!(lagged.total_restarts, 16);
+    assert_eq!(lagged.child_restart_count, 16);
     let first_retained = next_event(&mut lifecycle).await;
     assert_eq!(first_retained.seq, 36);
     assert_eq!(first_retained.total_restarts, 17);
@@ -380,6 +409,11 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .spawn();
     handle.wait_started().await.expect("startup succeeds");
     let middle = handle.supervisor("middle").expect("middle handle");
+    let initial_worker_epoch = middle
+        .snapshot()
+        .child("worker")
+        .expect("worker is supervised")
+        .membership_epoch;
     let mut lifecycle = middle.watch_lifecycle();
 
     crash_worker.notify_one();
@@ -403,6 +437,8 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
     .await;
     assert_eq!(added.seq, fatal_exit.seq + 1);
     assert!(started.seq > added.seq);
+    assert!(added.membership_epoch > initial_worker_epoch);
+    assert_eq!(started.membership_epoch, added.membership_epoch);
     assert_eq!(added.total_restarts, 2);
     assert_eq!(started.total_restarts, 2);
 

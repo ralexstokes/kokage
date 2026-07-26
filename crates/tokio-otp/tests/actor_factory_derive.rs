@@ -8,31 +8,25 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LifecycleEventKind,
-    LifecycleWatch, Reply, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LifecycleWatch, Reply,
+    RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+    let lifecycle = handle.watch_lifecycle();
     let child = handle
         .snapshot()
         .child(id)
         .expect("child exists")
         .generation;
-    (handle.watch_lifecycle(), child)
+    (lifecycle, child)
 }
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
-    loop {
-        let event = lifecycle.next().await.expect("runtime remains live");
-        if event.child_id == id
-            && matches!(
-                event.kind,
-                LifecycleEventKind::Started { generation } if generation > baseline
-            )
-        {
-            return;
-        }
-    }
+    lifecycle
+        .wait_started(id, baseline)
+        .await
+        .expect("runtime remains live");
 }
 
 enum ProbeMsg {

@@ -83,8 +83,10 @@ child identities.
 Every watch has a bounded 128-event buffer. Sustained overload drops the
 oldest details and collapses the loss into one `Lagged { dropped }` marker at
 the front. Consumers that derive state from edges must fetch a fresh snapshot
-and realign; cumulative counters on subsequent events still account for all
-restarts. Stream closure is terminality, not an event, and is never dropped.
+and realign. The marker carries the newest dropped transition's sequence and
+cumulative counters, so filtering it against a snapshot is sound and restart
+counts resynchronize at the marker. Stream closure is terminality, not an
+event, and is never dropped.
 
 ### Pumping transitions into an actor
 
@@ -110,10 +112,9 @@ lag explicitly. As with every actor send, acceptance is not acknowledgement
 that the handler processed the message.
 
 Keep the returned `LifecycleWatchGuard` alive. Dropping or cancelling it stops
-the pump; permanent target termination or watched-scope terminality also stop
-it. If delivery is blocked on mailbox capacity when the watched scope becomes
-terminal, terminality cancels that delivery rather than waiting to drain into
-a blocked actor.
+the pump, as does permanent target termination. Watched-scope terminality
+closes the pump after its staged events have drained. If the live target's
+mailbox remains full, cancellation or target termination is the escape hatch.
 
 Lifecycle scope is not recursive. Watch each nested runtime handle
 (`handle.subtree(id)`) or raw supervisor handle

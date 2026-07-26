@@ -73,19 +73,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.spawn();
 
     orders.send("business cards x100".into()).await?;
-    let baseline = handle.snapshot().child("press").unwrap().generation;
     let mut lifecycle = handle.watch_lifecycle();
+    let baseline = handle.snapshot().child("press").unwrap().generation;
     orders.send("origami cranes x1000".into()).await?;
-    while let Some(event) = lifecycle.next().await {
-        if event.child_id == "press"
-            && matches!(
-                event.kind,
-                LifecycleEventKind::Started { generation } if generation > baseline
-            )
-        {
-            break;
-        }
-    }
+    lifecycle
+        .wait_started("press", baseline)
+        .await
+        .expect("supervisor remains live");
     orders.send("flyers x500".into()).await?;
 
     handle.shutdown_and_wait().await?;

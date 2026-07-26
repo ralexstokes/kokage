@@ -14,8 +14,8 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch, RawActor, Reply,
-    Runtime, RuntimeHandle, SendError, prelude::Continue,
+    DynamicActorOptions, GraphBuilder, LifecycleWatch, RawActor, Reply, Runtime, RuntimeHandle,
+    SendError, prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -94,24 +94,20 @@ where
 }
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+    let lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child(id)
         .unwrap_or_else(|| panic!("{id} is a direct child"))
         .generation;
-    (handle.watch_lifecycle(), baseline)
+    (lifecycle, baseline)
 }
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) -> u64 {
-    loop {
-        let event = lifecycle.next().await.expect("runtime remains live");
-        if event.child_id == id
-            && let LifecycleEventKind::Started { generation } = event.kind
-            && generation > baseline
-        {
-            return generation;
-        }
-    }
+    lifecycle
+        .wait_started(id, baseline)
+        .await
+        .expect("runtime remains live")
 }
 
 #[tokio::test]

@@ -149,8 +149,9 @@ enum Wake {
 /// Per-child bookkeeping entry stored in the supervisor's slab.
 ///
 /// `instance` is a monotonically increasing identifier that distinguishes
-/// different slab occupants at the same key (e.g. after a child is removed and
-/// a new one is inserted at the recycled key). Combined with `generation`
+/// different memberships in one restart-stable supervisor identity (e.g.
+/// after a child is removed and a new one is inserted at the recycled key, or
+/// after the supervisor itself is reincarnated). Combined with `generation`
 /// (which counts restarts of the *same* child spec), this pair identifies every
 /// task the supervisor has spawned unless the counter reaches its saturating
 /// `u64::MAX` limit. The instance is exposed to observers as
@@ -331,7 +332,6 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) children_by_id: HashMap<String, ChildKey>,
     pub(crate) child_order: Vec<ChildKey>,
     pub(crate) live_tasks: usize,
-    pub(crate) next_child_instance: u64,
     pub(crate) events: broadcast::Sender<SupervisorEvent>,
     pub(crate) lifecycle: Arc<LifecycleHub>,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
@@ -376,7 +376,12 @@ impl SupervisorRuntime {
         let mut children = Slab::with_capacity(config.children.len());
         let mut children_by_id = HashMap::with_capacity(config.children.len());
         let mut child_order = Vec::with_capacity(config.children.len());
-        let mut next_child_instance = 0u64;
+        let declared_membership_epochs: HashMap<_, _> = snapshots
+            .borrow()
+            .children
+            .iter()
+            .map(|child| (child.id.clone(), child.membership_epoch))
+            .collect();
         let mut stable_identities = reconcile_stable_identities(&config.children, &nested_channels);
 
         for spec in config.children {
@@ -390,15 +395,18 @@ impl SupervisorRuntime {
                 ),
                 ChildKind::Task(_) => None,
             };
+            let membership_epoch = *declared_membership_epochs
+                .get(&id)
+                .expect("initial snapshot contains every static child");
+            lifecycle.observe_membership_epoch(membership_epoch);
             let key = children.insert(ChildEntry::new(
                 id.clone(),
                 formatted_path,
                 spec,
                 child_nested_channels,
                 default_restart_intensity,
-                next_child_instance,
+                membership_epoch,
             ));
-            next_child_instance = next_child_instance.saturating_add(1);
             children_by_id.insert(id.clone(), key);
             child_order.push(key);
         }
@@ -432,7 +440,6 @@ impl SupervisorRuntime {
             children_by_id,
             child_order,
             live_tasks: 0,
-            next_child_instance,
             events,
             lifecycle,
             snapshots,
@@ -953,7 +960,7 @@ impl SupervisorRuntime {
 
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
         let definition = child.inner;
-        let membership_epoch = self.next_child_instance;
+        let membership_epoch = self.lifecycle.next_membership_epoch();
         let key = self.children.insert(ChildEntry::new(
             id.clone(),
             formatted_path,
@@ -962,7 +969,6 @@ impl SupervisorRuntime {
             self.meta.default_restart_intensity,
             membership_epoch,
         ));
-        self.next_child_instance = self.next_child_instance.saturating_add(1);
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
         self.send_lifecycle(key, LifecycleEventKind::Added);
@@ -1008,7 +1014,7 @@ impl SupervisorRuntime {
         let stable = supervisor.supervisor.stable_channels(false);
         let definition = Arc::new(ChildDefinition::supervisor(id.clone(), supervisor));
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
-        let membership_epoch = self.next_child_instance;
+        let membership_epoch = self.lifecycle.next_membership_epoch();
         let key = self.children.insert(ChildEntry::new(
             id.clone(),
             formatted_path,
@@ -1017,7 +1023,6 @@ impl SupervisorRuntime {
             self.meta.default_restart_intensity,
             membership_epoch,
         ));
-        self.next_child_instance = self.next_child_instance.saturating_add(1);
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
         self.nested_channels
@@ -1815,8 +1820,14 @@ impl SupervisorRuntime {
         }
         drop(attached_children);
         let snapshot = self.snapshot_view();
-        let _ = self.snapshots.send_replace(snapshot.clone());
-        if let Some(parent_link) = self.meta.parent_link.as_ref() {
+        let changed = self.snapshots.send_if_modified(|current| {
+            if *current == snapshot {
+                return false;
+            }
+            current.clone_from(&snapshot);
+            true
+        });
+        if changed && let Some(parent_link) = self.meta.parent_link.as_ref() {
             parent_link.publish_snapshot(snapshot);
         }
     }
@@ -2090,6 +2101,7 @@ mod tests {
             config,
             shutdown_rx,
             events_tx,
+            LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,
@@ -2135,6 +2147,7 @@ mod tests {
             config,
             shutdown_rx,
             events_tx,
+            LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
             command_rx,

@@ -10,8 +10,7 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, LifecycleEventKind,
-    Runtime, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, Runtime, prelude::Continue,
 };
 use tokio_supervisor::{RestartIntensity, Strategy};
 
@@ -93,23 +92,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     frontend.send("hello".to_owned()).await?;
+    let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child("worker")
         .expect("worker is supervised")
         .generation;
-    let mut lifecycle = handle.watch_lifecycle();
     frontend.send("fail-worker".to_owned()).await?;
-    while let Some(event) = lifecycle.next().await {
-        if event.child_id == "worker"
-            && matches!(
-                event.kind,
-                LifecycleEventKind::Started { generation } if generation > baseline
-            )
-        {
-            break;
-        }
-    }
+    lifecycle
+        .wait_started("worker", baseline)
+        .await
+        .ok_or_else(|| io::Error::other("worker removed before restarting"))?;
     frontend.send("after-restart".to_owned()).await?;
 
     // Wait for the worker to finish the last order before shutting down.

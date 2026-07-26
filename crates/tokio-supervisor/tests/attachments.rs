@@ -184,29 +184,20 @@ async fn reincarnation_never_exposes_a_displaced_nested_attachment_identity() {
             }
         });
 
+        let mut lifecycle = root.watch_lifecycle();
         let baseline = root
             .snapshot()
             .child("middle")
             .expect("middle child exists")
             .generation;
-        let mut lifecycle = root.watch_lifecycle();
         crash.notify_one();
-        timeout(Duration::from_secs(1), async {
-            loop {
-                let event = lifecycle.next().await.expect("root remains live");
-                if event.child_id == "middle"
-                    && matches!(
-                        event.kind,
-                        tokio_supervisor::LifecycleEventKind::Started { generation }
-                            if generation > baseline
-                    )
-                {
-                    break;
-                }
-            }
-        })
+        timeout(
+            Duration::from_secs(1),
+            lifecycle.wait_started("middle", baseline),
+        )
         .await
-        .expect("middle restart completed in time");
+        .expect("middle restart completed in time")
+        .expect("root remains live");
 
         timeout(Duration::from_secs(1), async {
             loop {
