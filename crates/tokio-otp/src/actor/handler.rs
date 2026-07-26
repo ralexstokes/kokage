@@ -8,6 +8,36 @@ use crate::actor::{
 /// How the provided [`Actor`] receive loop treats messages still
 /// queued when shutdown is requested.
 ///
+/// # Choosing a policy
+///
+/// The default is [`Drain`](Self::Drain): an actor that says nothing finishes
+/// the work it already accepted. This is the safer default for the common case
+/// where a queued message represents work no one else will redo, and losing it
+/// silently is worse than taking longer to stop.
+///
+/// Keep [`Drain`](Self::Drain) when a dropped message would lose work that no
+/// one else will redo: writes not yet flushed, positions not yet reported,
+/// [`call`](crate::ActorRef::call)s whose caller is still waiting for a reply.
+/// Drain is not free — see the shutdown budget it spends, below — and it
+/// requires a handler that stays correct while its peers are stopping. An
+/// actor whose `handle` sends to a sibling on the drain path must tolerate
+/// that sibling already being gone, per the ordering rules below.
+///
+/// Choose [`Discard`](Self::Discard) when queued work is already replaceable:
+/// messages that a later run will recompute, a conflating mailbox whose value
+/// is a snapshot, ticks and polls, or anything the sender retries. Discard also
+/// keeps shutdown bounded by the handler currently in flight rather than by the
+/// depth of the queue behind it, and it aborts outstanding
+/// [steps](crate::ActorContext::step) instead of waiting for them — so it
+/// is the right answer for an actor holding long-running work that shutdown
+/// should cut short rather than see through.
+///
+/// Neither policy is a delivery guarantee. A message dropped by `Discard` and a
+/// message handled by `Drain` are equally invisible to the sender, which
+/// observes only [`SendError`](crate::SendError) or
+/// [`ReplyDropped`](crate::CallError::ReplyDropped). End-to-end delivery
+/// ownership belongs in an application acknowledgement and replay protocol.
+///
 /// # Startup and shutdown ordering
 ///
 /// Actors in an ordered runtime initialize in declaration order: each actor's
@@ -23,10 +53,10 @@ pub enum DrainPolicy {
     /// Stop immediately.
     ///
     /// Queued messages are dropped and queued [`call`](crate::ActorRef::call)s
-    /// observe [`ReplyDropped`](crate::CallError::ReplyDropped). This matches
-    /// the behavior of a hand-written `while let Some(message) =
+    /// observe [`ReplyDropped`](crate::CallError::ReplyDropped). Outstanding
+    /// [steps](crate::ActorContext::step) are aborted rather than awaited. This
+    /// matches the behavior of a hand-written `while let Some(message) =
     /// ctx.recv().await` loop.
-    #[default]
     Discard,
     /// Close the mailbox to new sends, handle every message already queued,
     /// then stop.
@@ -37,11 +67,39 @@ pub enum DrainPolicy {
     /// closed mailbox and an awaited `send` waits for the binding's final
     /// lifecycle state. There is no separate sender-visible `Draining` state.
     ///
-    /// The drain is not separately time-bounded; the surrounding host's
-    /// shutdown backstop applies: the explicit bound passed to
+    /// # Shutdown budget
+    ///
+    /// The drain has no clock of its own. It spends the surrounding host's
+    /// shutdown budget, which is set in a different place from this policy:
+    /// the explicit bound passed to
     /// [`RunnableActor::run_until`](crate::RunnableActor::run_until) for a
     /// standalone actor, or the child [`ShutdownPolicy`](crate::ShutdownPolicy)
-    /// under a runtime.
+    /// under a runtime. The two are not checked against each other. Setting
+    /// `Drain` does not extend the budget, and nothing warns when the budget is
+    /// too small for the queue.
+    ///
+    /// When the budget runs out mid-drain, the drain is cut where it stands:
+    /// remaining queued messages are dropped, [`on_stop`](Actor::on_stop) can be
+    /// skipped, and the actor is aborted. There is no per-message signal for the
+    /// messages that were lost — what surfaces is a timed-out exit
+    /// ([`ActorRunError::ShutdownTimedOut`](crate::ActorRunError::ShutdownTimedOut)
+    /// standalone, [`ExitStatusView::ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut)
+    /// under supervision), and under
+    /// [`CooperativeThenAbort`](crate::ShutdownMode::CooperativeThenAbort) not
+    /// even an error from the enclosing shutdown call. A `Drain` actor under a
+    /// too-short grace period therefore behaves like a slower `Discard`, which
+    /// is the failure mode to watch for. In particular,
+    /// [`ShutdownPolicy::abort`](crate::ShutdownPolicy::abort) has a zero grace
+    /// period and leaves effectively no drain window at all.
+    ///
+    /// Size the budget for the whole queued prefix, not one message: roughly
+    /// mailbox depth times worst-case handler latency, plus room for
+    /// [`on_stop`](Actor::on_stop). Ordered siblings stop one at a time, so
+    /// sibling drains add up rather than overlap. Where the drain must finish
+    /// for correctness, prefer
+    /// [`CooperativeStrict`](crate::ShutdownMode::CooperativeStrict), which
+    /// reports the overrun as an error instead of absorbing it.
+    #[default]
     Drain,
 }
 
@@ -117,8 +175,36 @@ pub trait Actor: Send + Sync + 'static {
     }
 
     /// Returns this handler's shutdown drain policy.
+    ///
+    /// Defaults to [`DrainPolicy::Drain`], so a handler that says nothing
+    /// finishes its queued mailbox before stopping. Override with
+    /// [`DrainPolicy::Discard`] for an actor whose queued work is replaceable,
+    /// or one holding long-running [steps](crate::ActorContext::step) that
+    /// shutdown should cut short rather than await.
+    ///
+    /// # Evaluation point
+    ///
+    /// This is called exactly once per run, and late: after the receive loop
+    /// has already exited and external intake has been closed, but before the
+    /// queued mailbox is drained or discarded and before
+    /// [`on_stop`](Self::on_stop) runs. It is not consulted at registration, at
+    /// [`on_start`](Self::on_start), or on any path through
+    /// [`handle`](Self::handle).
+    ///
+    /// Because the receiver is `&self` and the call happens after the last
+    /// `handle`, the answer may depend on state the run accumulated — an actor
+    /// can return [`Drain`](DrainPolicy::Drain) only when it is holding
+    /// unflushed work and [`Discard`](DrainPolicy::Discard) otherwise. Reading
+    /// state here is supported; the value is used immediately and never cached
+    /// across runs. The usual implementation is still a constant, or a field
+    /// carried from the [`ActorFactory`](crate::ActorFactory) so the policy is
+    /// configured once and survives restarts.
+    ///
+    /// The method must not block or panic: it runs on the shutdown path, where
+    /// the budget is already committed and a panic fails a run that was
+    /// otherwise stopping cleanly.
     fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Discard
+        DrainPolicy::Drain
     }
 }
 

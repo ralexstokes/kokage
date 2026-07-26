@@ -323,12 +323,20 @@ unknown-outcome rule for external side effects.
 ## Message Loss at Shutdown and Restart
 
 `Actor` is the usual actor interface: you implement `handle`, and the
-framework owns the receive loop. Its default shutdown behavior is fail-fast:
-when shutdown is requested, queued messages are dropped and queued `call`
-requests see `CallError::ReplyDropped`.
+framework owns the receive loop. Its default shutdown behavior is to drain:
+when shutdown is requested, the actor closes external intake and handles the
+messages its mailbox already accepted before running `on_stop`. The drain
+spends the surrounding shutdown budget — the `run_until` bound standalone, or
+the child `ShutdownPolicy` grace under a runtime — so that budget has to fit
+the queued prefix, not just one message.
 
-If an actor must finish messages already accepted by its mailbox, return
-`DrainPolicy::Drain` from `drain_policy`. Hand-written `RawActor::run` loops are
+If an actor should instead stop at once and drop what is queued, return
+`DrainPolicy::Discard` from `drain_policy`; queued `call` requests then see
+`CallError::ReplyDropped`, and outstanding steps are aborted rather than
+awaited. That is the right choice when queued work is replaceable — recomputed
+next run, conflated into a later snapshot, or retried by the sender.
+
+Hand-written `RawActor::run` loops are
 still available as the escape hatch for custom loop control; after
 `ctx.recv().await` returns `None` because shutdown was requested, such actors
 can use `ctx.try_recv()` to drain immediately queued messages.

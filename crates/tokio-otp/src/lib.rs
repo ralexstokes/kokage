@@ -77,9 +77,11 @@
 //! on [`ActorRef::call`] and [`Reply`], not transport features.
 //!
 //! [`ActorContext::recv`] is fail-fast during shutdown: it returns `None` as
-//! soon as shutdown is requested, even when messages are still queued. Actors
-//! that must finish queued work before stopping implement [`Actor`] with
-//! [`DrainPolicy::Drain`], or drain by hand with [`ActorContext::try_recv`].
+//! soon as shutdown is requested, even when messages are still queued. That is
+//! the primitive, not the default policy: [`Actor`]'s framework-owned loop
+//! defaults to [`DrainPolicy::Drain`] and finishes the queued mailbox before
+//! stopping. A hand-written [`RawActor`] loop opts back in with
+//! [`ActorContext::try_recv`].
 //!
 //! Restarts also lose queued messages: a restarted actor binds a fresh
 //! mailbox, so messages queued behind a poison message are dropped with the

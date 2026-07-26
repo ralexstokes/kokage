@@ -2119,4 +2119,78 @@ mod runnable_actor {
             );
         }
     }
+
+    /// Sets no `drain_policy`, so it drains by default, and propagates the
+    /// sibling send with `?` instead of tolerating it.
+    #[derive(Clone)]
+    struct StrictDrainForwarder {
+        sink: ActorRef<u32>,
+        started: mpsc::UnboundedSender<()>,
+        release: Arc<Notify>,
+    }
+
+    impl Actor for StrictDrainForwarder {
+        type Msg = u32;
+
+        async fn on_start(&mut self, _ctx: &mut ActorContext<u32>) -> ActorResult {
+            self.started.send(()).expect("receiver alive");
+            self.release.notified().await;
+            Ok(Continue)
+        }
+
+        async fn handle(&mut self, message: u32, _ctx: &mut ActorContext<u32>) -> ActorResult {
+            self.sink.send(message).await?;
+            Ok(Continue)
+        }
+    }
+
+    /// The cost of drain-by-default: an actor that never mentions
+    /// `drain_policy` still drains, so a `handle` that propagates a sibling
+    /// `SendError` turns what would have been a clean stop into a failed run.
+    /// This is the counterpart to
+    /// [`drain_tolerates_send_errors_from_a_stopped_sibling`] and the reason
+    /// the ordering rules on `DrainPolicy` require drain handlers to tolerate
+    /// a stopped sibling.
+    #[tokio::test]
+    async fn a_drain_that_propagates_a_sibling_send_error_fails_the_actor() {
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+
+        let mut builder = GraphBuilder::new();
+        let (sink_slot, sink_ref) = builder.slot::<u32>("sink");
+        let forwarder_ref = builder.actor("forwarder", {
+            let release = release.clone();
+            move || StrictDrainForwarder {
+                sink: sink_ref.clone(),
+                started: started_tx.clone(),
+                release: release.clone(),
+            }
+        });
+        builder.define(sink_slot, Drain::<u32>::new);
+        let graph = builder.build().expect("valid graph");
+
+        let (sink_stop, sink_task) = start_actor(single_actor(&graph, "sink"));
+        stop_actor(sink_stop, sink_task)
+            .await
+            .expect("sink stopped cleanly");
+
+        let (forwarder_stop, forwarder_task) = start_actor(single_actor(&graph, "forwarder"));
+        started_rx.recv().await.expect("forwarder started");
+        forwarder_ref.send(1).await.expect("message queued");
+
+        forwarder_stop.cancel();
+        release.notify_one();
+
+        let outcome = timeout(Duration::from_secs(1), forwarder_task)
+            .await
+            .expect("forwarder stopped in time")
+            .expect("forwarder task joined");
+        assert!(
+            matches!(
+                outcome,
+                Err(ActorRunError::Failed { ref actor_id, .. }) if actor_id == "forwarder"
+            ),
+            "propagating the drain send error failed the run: {outcome:?}"
+        );
+    }
 }
