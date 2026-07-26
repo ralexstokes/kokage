@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, Graph,
-    GraphBuildError, GraphBuilder, MailboxMode, MessageSize, RawActor, RestartPolicy, SendError,
-    Topology, prelude::Continue,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError,
+    DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize,
+    RawActor, RestartPolicy, SendError, Topology, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +21,11 @@ fn start_graph(
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(stop.cancelled(), RestartPolicy::Never)
+                    .run_until(
+                        stop.cancelled(),
+                        RestartPolicy::Never,
+                        DEFAULT_SHUTDOWN_BOUND,
+                    )
                     .await
             })
         })
@@ -325,7 +327,6 @@ async fn graph_with_applies_builder_config() {
     let mut builder = GraphBuilder::new();
     builder.name("configured");
     builder.mailbox_capacity(1);
-    builder.actor_shutdown_timeout(Duration::from_millis(50));
 
     let mut park = None;
     let graph = ParkGraph::graph_with(builder, |refs| {

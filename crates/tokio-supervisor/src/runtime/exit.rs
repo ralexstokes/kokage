@@ -11,6 +11,7 @@ pub(crate) enum ExitStatus {
     Failed(BoxError),
     Panicked,
     Aborted,
+    ShutdownTimedOut,
 }
 
 impl ExitStatus {
@@ -31,6 +32,7 @@ impl ExitStatus {
             Self::Failed(err) => ExitStatusView::Failed(err.to_string()),
             Self::Panicked => ExitStatusView::Panicked,
             Self::Aborted => ExitStatusView::Aborted,
+            Self::ShutdownTimedOut => ExitStatusView::ShutdownTimedOut,
         }
     }
 }

@@ -172,8 +172,8 @@ its [`ShutdownPolicy`] governs how:
   and wait up to `grace` for a voluntary exit; abort *and report a timeout
   error* otherwise.
 - **`ShutdownPolicy::cooperative_then_abort(grace)`** (default, 5 s grace) —
-  same, but the fallback Tokio `abort()` is expected and not reported as an
-  error.
+  same, but the enclosing shutdown operation does not return an error. The
+  child's lifecycle exit still reads `ShutdownTimedOut`.
 - **`ShutdownPolicy::abort()`** — abort immediately.
 
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
@@ -191,39 +191,40 @@ first.
 Ordered shutdown latency is also cumulative: each cooperative child receives
 its own grace before the cursor moves to the previous declaration, so the
 worst-case grace budget is their sum (with the default, up to 5 seconds × the
-number of children). Dynamic scopes cancel siblings together and wait under
-one shared maximum-grace deadline.
+number of children). Dynamic scopes cancel siblings together and run every
+child's grace concurrently, so their budget is the longest single grace rather
+than the sum.
 
-### Actor and supervisor deadlines
+### One shutdown clock per child
 
-A supervised actor has two nested shutdown deadlines:
+A supervised actor has one user-facing shutdown deadline: its child
+`ShutdownPolicy` grace. The grace bounds the whole actor drain, including
+queued messages, outstanding steps, and `on_stop`. Step deadlines remain
+independent bounds on individual steps; they do not extend the child grace.
 
-1. `GraphBuilder::actor_shutdown_timeout` belongs to the actor layer. Once the
-   supervisor cancels the child token, `RunnableActor` passes cancellation to
-   the inner actor task, waits for this timeout, and then aborts that inner task.
-   An actor-layer timeout during requested shutdown completes the child cleanly
-   with a `Cancelled` actor exit.
-2. The child's `ShutdownPolicy` belongs to the supervisor layer. It waits for
-   the entire child future. Removal uses that child's grace period. An ordered
-   supervisor shutdown or group restart applies each affected child's grace in
-   reverse declaration order; a dynamic shutdown applies one shared deadline
-   equal to the longest affected grace. If the applicable supervisor deadline
-   expires first, it aborts the outer future; dropping that future also cancels
-   and aborts the inner actor task.
+When a cooperative grace expires, the supervisor records a
+`ShutdownTimedOut` exit and signals the actor wrapper's tidy-abort path. The
+wrapper aborts and joins the inner actor task, terminates its mailbox binding,
+and publishes actor observability before returning. If the wrapper does not
+finish within a short accounting beat — a tenth of the child's own grace,
+clamped to between 1 ms and 10 ms — the supervisor hard-aborts it.
+`cooperative_then_abort` still lets the enclosing shutdown operation succeed;
+`cooperative_strict` also returns a timeout error. Both modes expose the same
+truthful `ShutdownTimedOut` reason in snapshots and lifecycle streams.
 
-For any one actor, these two deadlines run concurrently rather than one after
-the other. To preserve the actor layer's clean completion path, ensure that
-actor's supervisor grace is at least `actor_shutdown_timeout`. If the
-supervisor deadline wins,
-`cooperative_then_abort` still lets supervisor shutdown complete successfully,
-while `cooperative_strict` reports a timeout. In either case the supervised
-Tokio task has been issued an abort and actor bindings are terminated, but—as
-with every Tokio abort—code that never reaches a poll boundary, and blocking
-work already running on the blocking pool, can continue outside that task.
+Ordered scopes stop children in reverse declaration order and give each child
+its complete grace, plus that child's accounting beat if it times out. Dynamic
+scopes start every clock together and stop children concurrently, but each
+child escalates when its own grace expires; a short-grace child cannot borrow a
+longer-grace sibling's budget.
 
-Both defaults are five seconds, so local programs can use `Runtime::builder()`
-without extra shutdown configuration. Customize the pair only when an actor's
-cleanup budget or the host's shutdown deadline requires it.
+Standalone hosts pass an explicit shutdown bound to `RunnableActor::run_until`
+(`DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
+provides the same inner-task backstop without storing execution policy on the
+graph, and an actor that overruns it resolves the run to
+`ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
+abort, code that never reaches a poll boundary, and blocking work already
+running on the blocking pool, can continue outside the actor task.
 
 ## Automatic shutdown for finite work
 
@@ -300,6 +301,24 @@ caller next samples the tree. The reply schedules immediate startup;
 Dynamic supervisors start empty and can have their last child removed. At zero
 children they keep serving control commands and wait for the next `add_child`
 or an explicit shutdown.
+
+### Control-loop migration notes
+
+The control-loop rewrite in [#169] made these breaking changes to operation
+timing and results:
+
+- A terminal startup failure from one child in an ordered startup sequence no
+  longer prevents later siblings from starting.
+- A dynamic add reports success once membership is inserted and startup is
+  scheduled, even if the supervisor stops immediately afterwards. It no longer
+  changes that accepted result to `ControlError::SupervisorStopping`.
+- A `remove_child` accepted before shutdown completes with `Ok(())` when
+  shutdown absorbs the in-flight removal, rather than returning
+  `ControlError::SupervisorStopping`.
+- A second `remove_child` for the same id now fails immediately with
+  `ControlError::ChildRemovalInProgress`; it no longer queues and later returns
+  `ControlError::UnknownChildId`.
+
 We will use a higher-level version of this API in the [Dynamic
 actors](dynamic-actors.md) chapter.
 
@@ -311,3 +330,4 @@ actors](dynamic-actors.md) chapter.
 [`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ShutdownPolicy.html
 [`AutoShutdown`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.AutoShutdown.html
 [`agent_control` example]: https://github.com/ralexstokes/tokio-otp/tree/main/crates/tokio-otp/examples/agent_control
+[#169]: https://github.com/ralexstokes/tokio-otp/pull/169

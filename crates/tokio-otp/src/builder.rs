@@ -198,13 +198,11 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Sets the outer supervisor shutdown policy applied to every actor child.
+    /// Sets the shutdown policy applied to every actor child.
     ///
-    /// The graph's
-    /// [`actor_shutdown_timeout`](crate::GraphBuilder::actor_shutdown_timeout)
-    /// independently governs each inner actor task. Prefer a supervisor grace
-    /// period at least as long as the actor timeout when shutdown must pass
-    /// through the actor layer's clean completion path.
+    /// This grace is the actor's only runtime-owned shutdown clock. On expiry
+    /// the supervisor asks the actor wrapper to abort its inner task and finish
+    /// accounting, then hard-aborts the wrapper after a short fixed beat.
     #[must_use]
     pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
         self.shutdown = shutdown;
@@ -248,12 +246,8 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Overrides the outer supervisor shutdown policy for the actor identified
-    /// by this typed ref.
-    ///
-    /// The graph's
-    /// [`actor_shutdown_timeout`](crate::GraphBuilder::actor_shutdown_timeout)
-    /// still governs the inner actor task.
+    /// Overrides the shutdown policy for the actor identified by this typed
+    /// ref.
     #[must_use]
     pub fn actor_shutdown<M>(mut self, actor: &ActorRef<M>, shutdown: ShutdownPolicy) -> Self {
         self.actor_overrides

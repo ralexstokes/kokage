@@ -201,8 +201,8 @@ fn parse_factory_attributes(
 /// * `Pipeline::graph_with_refs(wire)`, which also returns the generated
 ///   `PipelineRefs` bundle for use as application entry points;
 /// * `Pipeline::graph_with(builder, wire)`, which accepts a preconfigured
-///   `GraphBuilder` — graph name, mailbox capacity, shutdown timeouts, and
-///   any extra actors registered by hand.
+///   `GraphBuilder` — graph name, mailbox capacity, and any extra actors
+///   registered by hand.
 ///
 /// The `wire` closure receives `&PipelineRefs` before any actor incarnation is
 /// constructed, so factories can capture each other's refs even when the graph

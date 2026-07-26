@@ -11,8 +11,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LifecycleWatch, RawActor, Reply,
-    RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
+    LifecycleWatch, RawActor, Reply, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -261,9 +261,16 @@ async fn constructor_panic_uses_the_actor_panic_path() {
     let graph = builder.build().expect("registration does not construct");
     let actor = graph.actors()[0].clone();
 
-    let joined =
-        tokio::spawn(async move { actor.run_until(pending::<()>(), RestartPolicy::Never).await })
-            .await;
+    let joined = tokio::spawn(async move {
+        actor
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
+            .await
+    })
+    .await;
     assert!(joined.expect_err("constructor panic propagates").is_panic());
 }
 

@@ -196,7 +196,7 @@ ids, tracing fields, and stats stay human-readable without participating in
 type checking or message routing. The generated `graph_with_refs` returns both
 the graph and its cloneable typed refs. The generated `graph` preserves the
 graph-only API, and `graph_with` accepts a preconfigured `GraphBuilder` for
-graph name, mailbox capacity, and shutdown timeouts.
+graph name and mailbox capacity.
 
 The derive keeps topology shape in the type system:
 
@@ -363,8 +363,9 @@ let engraved = ctx.run_blocking(move |token| {
 
 The closure can return any type, including an application-defined `Result`.
 A panic resumes on the actor task. If a closure ignores cancellation, the
-actor shutdown timeout remains the backstop; the blocking thread then runs
-detached because Tokio cannot abort blocking work after it starts.
+standalone host bound or supervised child grace remains the backstop; the
+blocking thread then runs detached because Tokio cannot abort blocking work
+after it starts.
 
 For intentionally detached or concurrent work, clone `ctx.myself()`, call
 `tokio::task::spawn_blocking` directly, and send the result back as a message.

@@ -212,7 +212,9 @@ impl SupervisorObservability {
                         strategy = self.strategy_label,
                         "child exited"
                     ),
-                    ExitStatusView::Panicked | ExitStatusView::Aborted => warn!(
+                    ExitStatusView::Panicked
+                    | ExitStatusView::Aborted
+                    | ExitStatusView::ShutdownTimedOut => warn!(
                         supervisor_name = %self.supervisor_name,
                         supervisor_path = %self.supervisor_path,
                         child_id = %id,
@@ -391,6 +393,7 @@ fn exit_status_label(status: &ExitStatusView) -> &'static str {
         ExitStatusView::Failed(_) => "failed",
         ExitStatusView::Panicked => "panicked",
         ExitStatusView::Aborted => "aborted",
+        ExitStatusView::ShutdownTimedOut => "shutdown_timed_out",
     }
 }
 
@@ -521,7 +524,11 @@ mod tests {
                 r#""status":"failed""#,
             ],
         );
-        for status in [ExitStatusView::Panicked, ExitStatusView::Aborted] {
+        for status in [
+            ExitStatusView::Panicked,
+            ExitStatusView::Aborted,
+            ExitStatusView::ShutdownTimedOut,
+        ] {
             let output = capture_tracing_output(|| {
                 root.emit_event(
                     &SupervisorEvent::ChildExited {

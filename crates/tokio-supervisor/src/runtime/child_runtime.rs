@@ -58,6 +58,7 @@ pub(crate) struct ChildRuntime {
     pub(crate) generation: u64,
     pub(crate) state: RuntimeChildState,
     pub(crate) active_token: Option<CancellationToken>,
+    pub(crate) active_abort_token: Option<CancellationToken>,
     pub(crate) abort_handle: Option<AbortHandle>,
     pub(crate) nested_abort_cascades: Arc<AtomicBool>,
     pub(crate) has_started: bool,
@@ -65,6 +66,7 @@ pub(crate) struct ChildRuntime {
     pub(crate) startup_aborted: bool,
     pub(crate) next_restart_deadline: Option<Instant>,
     pub(crate) completion: CompletionFlag,
+    pub(crate) shutdown_timed_out: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +98,7 @@ impl ChildRuntime {
             generation: 0,
             state: RuntimeChildState::Stopped,
             active_token: None,
+            active_abort_token: None,
             abort_handle: None,
             nested_abort_cascades: Arc::new(AtomicBool::new(true)),
             has_started: false,
@@ -103,6 +106,7 @@ impl ChildRuntime {
             startup_aborted: false,
             next_restart_deadline: None,
             completion: CompletionFlag::pending(),
+            shutdown_timed_out: false,
         }
     }
 }

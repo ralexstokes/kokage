@@ -23,7 +23,9 @@ pub use cancellation::CancellationHandle;
 pub use context::{ActorContext, ActorRef, Reply, StepHandle};
 pub use error::{CallError, GraphBuildError, SendError, StepDeadline, TryRecvError};
 pub use factory::ActorFactory;
-pub use graph::{ActorRunError, Graph, RunnableActor, RunnableActorFactory};
+pub use graph::{
+    ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor, RunnableActorFactory,
+};
 pub use handler::{Actor, DrainPolicy};
 pub use monitor::{Down, DownReason, MonitorEvent};
 pub use raw::{ActorResult, BoxError, Flow, RawActor};

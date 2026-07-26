@@ -994,11 +994,12 @@ impl<M: Send + 'static> ActorContext<M> {
     /// it as an ordinary actor panic. The return value is otherwise opaque to
     /// the framework; use your own `Result` type when blocking work can fail.
     ///
-    /// The actor's configured
-    /// [`actor_shutdown_timeout`](crate::GraphBuilder::actor_shutdown_timeout)
-    /// is the backstop for closures that ignore cancellation. Once that timeout
-    /// aborts the actor task, the blocking thread continues detached because
-    /// Tokio blocking tasks cannot be aborted after they start.
+    /// The surrounding host's shutdown bound is the backstop for closures that
+    /// ignore cancellation: the explicit bound passed to
+    /// [`RunnableActor::run_until`](crate::RunnableActor::run_until), or the
+    /// supervised child's [`ShutdownPolicy`](crate::ShutdownPolicy) grace.
+    /// Once that bound aborts the actor task, the blocking thread continues
+    /// detached because Tokio blocking tasks cannot be aborted after they start.
     ///
     /// For detached or concurrent work, clone [`myself`](Self::myself), call
     /// [`tokio::task::spawn_blocking`] directly, and send the outcome back as a
