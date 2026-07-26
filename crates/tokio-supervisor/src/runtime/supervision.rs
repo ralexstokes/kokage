@@ -543,7 +543,7 @@ impl SupervisorRuntime {
                 pending: initial_instances,
             });
         }
-        self.start_children(initial_children)?;
+        self.schedule_start_sequence(initial_children, false)?;
         self.complete_empty_startup_gate();
 
         loop {
@@ -653,18 +653,6 @@ impl SupervisorRuntime {
                 return wake;
             }
         }
-    }
-
-    fn start_children(&mut self, keys: Vec<ChildKey>) -> RuntimeResult<()> {
-        self.schedule_start_sequence(keys, false)
-    }
-
-    fn respawn_sequence(
-        &mut self,
-        keys: Vec<ChildKey>,
-        emit_restart_events: bool,
-    ) -> RuntimeResult<()> {
-        self.schedule_start_sequence(keys, emit_restart_events)
     }
 
     fn schedule_start_sequence(
@@ -943,6 +931,8 @@ impl SupervisorRuntime {
         Ok(())
     }
 
+    /// Keep command dispatch synchronous: it may schedule child transitions,
+    /// but cannot await one and block the control loop behind it.
     fn handle_command(&mut self, command: SupervisorCommand) -> RuntimeResult<()> {
         match command {
             SupervisorCommand::AddChild { child, reply } => {
@@ -958,9 +948,6 @@ impl SupervisorRuntime {
     }
 
     fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
-        if self.state == SupervisorState::Stopping {
-            return Err(ControlError::SupervisorStopping.into());
-        }
         if self.meta.kind == ScopeKind::Ordered {
             return Err(ControlError::UnsupportedByScopeKind {
                 operation: ControlOperation::AddChild,
@@ -1012,7 +999,7 @@ impl SupervisorRuntime {
         self.child_order.push(key);
         self.send_lifecycle(key, LifecycleEventKind::Added);
 
-        self.start_children(vec![key])?;
+        self.schedule_start_sequence(vec![key], false)?;
 
         Ok(membership_epoch)
     }
@@ -1022,9 +1009,6 @@ impl SupervisorRuntime {
         id: String,
         mut pending: PendingSupervisorSpec,
     ) -> CommandResult<u64> {
-        if self.state == SupervisorState::Stopping {
-            return Err(ControlError::SupervisorStopping.into());
-        }
         if self.meta.kind == ScopeKind::Ordered {
             return Err(ControlError::UnsupportedByScopeKind {
                 operation: ControlOperation::AddSupervisor,
@@ -1080,7 +1064,7 @@ impl SupervisorRuntime {
             .insert(id.clone(), stable);
         self.send_lifecycle(key, LifecycleEventKind::Added);
 
-        self.start_children(vec![key])?;
+        self.schedule_start_sequence(vec![key], false)?;
 
         Ok(membership_epoch)
     }
@@ -1147,10 +1131,6 @@ impl SupervisorRuntime {
         id: String,
         reply: oneshot::Sender<Result<(), ControlError>>,
     ) -> RuntimeResult<()> {
-        if self.state == SupervisorState::Stopping {
-            let _ = reply.send(Err(ControlError::SupervisorStopping));
-            return Ok(());
-        }
         if self.meta.kind == ScopeKind::Ordered {
             let _ = reply.send(Err(ControlError::UnsupportedByScopeKind {
                 operation: ControlOperation::RemoveChild,
@@ -1363,7 +1343,9 @@ impl SupervisorRuntime {
             || (check_elapsed_grace
                 && !matches!(pending.mode, ShutdownMode::Abort)
                 && Instant::now() >= pending.grace_deadline);
-        if grace_expired && !pending.grace_expired {
+        let removal_timed_out =
+            grace_expired && matches!(pending.mode, ShutdownMode::CooperativeStrict);
+        if grace_expired && !pending.grace_expired && (failure.is_none() || removal_timed_out) {
             self.meta
                 .observability
                 .record_shutdown_timeout("remove_child", Some(id));
@@ -1373,10 +1355,10 @@ impl SupervisorRuntime {
             pending.initiated_at.elapsed(),
             Some(id),
         );
-        if let Some(error) = failure {
-            Err(map_supervisor_error_to_control(error.clone()))
-        } else if grace_expired && matches!(pending.mode, ShutdownMode::CooperativeStrict) {
+        if removal_timed_out {
             Err(ControlError::ShutdownTimedOut(id.to_owned()))
+        } else if failure.is_some() {
+            Err(ControlError::SupervisorStopping)
         } else {
             Ok(())
         }
@@ -1840,7 +1822,7 @@ impl SupervisorRuntime {
                 sequence.gate = None;
             }
         }
-        self.respawn_sequence(keys, true)?;
+        self.schedule_start_sequence(keys, true)?;
         Ok(deferred)
     }
 
@@ -2166,11 +2148,43 @@ mod tests {
         handle::{attached_children_state, empty_nested_channels},
         supervisor::initial_snapshot,
     };
+    #[cfg(feature = "metrics")]
+    use metrics_util::debugging::DebuggingRecorder;
 
     fn empty_supervisor() -> Supervisor {
         SupervisorBuilder::new()
             .build()
             .expect("empty supervisor config is valid")
+    }
+
+    fn runtime_with_child(id: &'static str) -> SupervisorRuntime {
+        let supervisor = SupervisorBuilder::new()
+            .child(ChildSpec::new(id, |_| async { Ok(()) }))
+            .build()
+            .expect("valid supervisor config");
+        let own_handle = supervisor.handle();
+        let config = supervisor.config.clone();
+        let event_capacity = config.event_channel_capacity;
+        let control_capacity = config.control_channel_capacity;
+        let initial_snapshot = initial_snapshot(&config);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (events_tx, _) = broadcast::channel(event_capacity);
+        let (snapshots_tx, _) = watch::channel(initial_snapshot);
+        let (_command_tx, command_rx) = mpsc::channel(control_capacity);
+        SupervisorRuntime::new(
+            config,
+            shutdown_rx,
+            events_tx,
+            LifecycleHub::new(),
+            snapshots_tx,
+            attached_children_state(None, Vec::new()),
+            command_rx,
+            empty_nested_channels(),
+            Vec::new(),
+            None,
+            false,
+            own_handle,
+        )
     }
 
     #[tokio::test]
@@ -2272,33 +2286,7 @@ mod tests {
 
     #[test]
     fn pending_removal_epilogue_preserves_strict_grace_timeout() {
-        let supervisor = SupervisorBuilder::new()
-            .child(ChildSpec::new("removable", |_| async { Ok(()) }))
-            .build()
-            .expect("valid supervisor config");
-        let own_handle = supervisor.handle();
-        let config = supervisor.config.clone();
-        let event_capacity = config.event_channel_capacity;
-        let control_capacity = config.control_channel_capacity;
-        let initial_snapshot = initial_snapshot(&config);
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (events_tx, _) = broadcast::channel(event_capacity);
-        let (snapshots_tx, _) = watch::channel(initial_snapshot);
-        let (_command_tx, command_rx) = mpsc::channel(control_capacity);
-        let mut runtime = SupervisorRuntime::new(
-            config,
-            shutdown_rx,
-            events_tx,
-            LifecycleHub::new(),
-            snapshots_tx,
-            attached_children_state(None, Vec::new()),
-            command_rx,
-            empty_nested_channels(),
-            Vec::new(),
-            None,
-            false,
-            own_handle,
-        );
+        let mut runtime = runtime_with_child("removable");
         let key = runtime.child_order[0];
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
@@ -2315,6 +2303,90 @@ mod tests {
         assert_eq!(
             reply_rx.try_recv(),
             Ok(Err(ControlError::ShutdownTimedOut("removable".to_owned())))
+        );
+    }
+
+    #[test]
+    fn pending_removal_failure_timeout_uses_the_removed_child_id() {
+        let mut runtime = runtime_with_child("removable");
+        let key = runtime.child_order[0];
+        let (reply, mut reply_rx) = oneshot::channel();
+        runtime.children[key].pending_removal = Some(PendingRemoval {
+            reply,
+            mode: ShutdownMode::CooperativeStrict,
+            grace_deadline: Instant::now(),
+            initiated_at: StdInstant::now(),
+            grace_expired: true,
+            hard_abort_deadline: None,
+        });
+
+        runtime.resolve_pending_removals(Some(&SupervisorError::ShutdownTimedOut(
+            "stuck-sibling".to_owned(),
+        )));
+
+        assert_eq!(
+            reply_rx.try_recv(),
+            Ok(Err(ControlError::ShutdownTimedOut("removable".to_owned())))
+        );
+    }
+
+    #[test]
+    fn pending_removal_group_failure_before_own_grace_reports_stopping() {
+        let mut runtime = runtime_with_child("removable");
+        let key = runtime.child_order[0];
+        let (reply, mut reply_rx) = oneshot::channel();
+        runtime.children[key].pending_removal = Some(PendingRemoval {
+            reply,
+            mode: ShutdownMode::CooperativeStrict,
+            grace_deadline: Instant::now() + Duration::from_secs(60),
+            initiated_at: StdInstant::now(),
+            grace_expired: false,
+            hard_abort_deadline: None,
+        });
+
+        runtime.resolve_pending_removals(Some(&SupervisorError::ShutdownTimedOut(
+            "stuck-sibling".to_owned(),
+        )));
+
+        assert_eq!(
+            reply_rx.try_recv(),
+            Ok(Err(ControlError::SupervisorStopping))
+        );
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn pending_removal_failure_does_not_record_a_nonstrict_timeout() {
+        let runtime = runtime_with_child("removable");
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let (reply, _reply_rx) = oneshot::channel();
+        let pending = PendingRemoval {
+            reply,
+            mode: ShutdownMode::CooperativeThenAbort,
+            grace_deadline: Instant::now(),
+            initiated_at: StdInstant::now(),
+            grace_expired: false,
+            hard_abort_deadline: None,
+        };
+
+        let result = metrics::with_local_recorder(&recorder, || {
+            runtime.pending_removal_result(
+                "removable",
+                &pending,
+                true,
+                Some(&SupervisorError::RestartIntensityExceeded),
+            )
+        });
+
+        assert_eq!(result, Err(ControlError::SupervisorStopping));
+        assert!(
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .iter()
+                .all(|(key, _, _, _)| key.key().name() != "supervisor.shutdown_timeouts"),
+            "a supervisor failure must not be counted as a removal timeout"
         );
     }
 
