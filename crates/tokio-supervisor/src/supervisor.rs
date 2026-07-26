@@ -265,13 +265,8 @@ impl Supervisor {
         });
         // Hard cascade is armed by default: aborting an ancestor runtime drops
         // its JoinSet, each nested wrapper aborts its owned runtime, and the
-        // cascade continues recursively. Explicit `ShutdownMode::Abort` opts
-        // that wrapper incarnation into the older wrapper-only contract: the
-        // shutdown signal is sent, but the nested runtime drains detached. An
-        // ordinary supervisor failure makes the same explicit opt-out before
-        // its JoinSet is dropped. The paired tests are
-        // `explicit_wrapper_abort_signals_nested_shutdown_instead_of_cascading_hard`
-        // and `parent_child_grace_bounds_a_slow_nested_ordered_teardown`.
+        // cascade continues recursively. Cooperative shutdown disarms this
+        // guard after the nested runtime joins normally.
         let mut nested_task_on_drop = NestedTaskOnDrop {
             abort_handle: join_handle.abort_handle(),
             shutdown_tx: shutdown_tx.clone(),

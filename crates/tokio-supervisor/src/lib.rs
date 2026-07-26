@@ -60,12 +60,13 @@
 //!   5 s grace) — cooperative with a fallback Tokio abort.
 //! - **[`Abort`](ShutdownMode::Abort)** — abort the Tokio task immediately.
 //!
-//! Ordered scopes drain in reverse declaration order, giving each child its
-//! own grace period before moving to the previous child. Dynamic scopes drain
-//! all active children concurrently under one shared deadline equal to the
-//! maximum configured grace. Ordered group and full-shutdown drains are atomic
-//! critical sections, so observation never sees a later generation overlap an
-//! earlier one.
+//! Ordered scopes drain in reverse declaration order, giving each cooperative
+//! child its own grace period before moving to the previous child. Once an
+//! abort is issued, the cursor advances promptly even if a non-yielding future
+//! has not reached a poll boundary. Dynamic scopes drain all active children
+//! concurrently under one shared deadline equal to the maximum configured
+//! grace. Ordered group and full-shutdown drains are atomic critical sections,
+//! so observation never sees a later generation overlap an earlier one.
 //!
 //! All shutdown modes are cooperative at Tokio poll boundaries. A non-yielding
 //! future is never forcibly preempted. If you need hard-stop guarantees for
@@ -112,6 +113,11 @@
 //! - Has a restart-stable direct handle whose subscriptions and snapshots
 //!   survive nested restarts.
 //! - Is restarted by the parent according to its [`SupervisorSpec`] policies.
+//! - Is recursively hard-aborted when its wrapper uses [`ShutdownMode::Abort`]
+//!   or when a terminal, non-revivable ancestor fails. A parent-restartable
+//!   failed incarnation lets nested runtimes finish cooperatively before their
+//!   stable identities rebind; a normal cooperative stop likewise applies the
+//!   nested scope's own child policies.
 //!
 //! # Observability
 //!

@@ -130,6 +130,12 @@ at runtime, so add and remove operations return
 empty runtime-written scope; its children start immediately. There is no
 implicit readiness timeout.
 
+Ordered startup latency is cumulative: the scope becomes ready after the sum
+of its declared readiness gates' `on_start` times. This is now the default for
+`SupervisorBuilder` and `Runtime::builder()`; use a dynamic scope when members
+should start independently and immediate runtime insertion is the right
+ownership model.
+
 ## Strategies
 
 The [`Strategy`] decides who is affected when a child fails:
@@ -173,7 +179,16 @@ its [`ShutdownPolicy`] governs how:
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
 A child stuck in a non-yielding loop cannot be preempted — isolate truly
 blocking work behind a blocking pool (as the actor layer's `run_blocking`
-does, see the next chapter) or an external process.
+does, see the next chapter) or an external process. Ordered teardown advances
+after issuing such an abort rather than waiting without a bound. An abort of a
+nested supervisor wrapper hard-cascades through that subtree; cooperative
+shutdown lets the subtree apply its own ordered or dynamic drain first.
+
+Ordered shutdown latency is also cumulative: each cooperative child receives
+its own grace before the cursor moves to the previous declaration, so the
+worst-case grace budget is their sum (with the default, up to 5 seconds × the
+number of children). Dynamic scopes cancel siblings together and wait under
+one shared maximum-grace deadline.
 
 ### Actor and supervisor deadlines
 
@@ -185,15 +200,17 @@ A supervised actor has two nested shutdown deadlines:
    An actor-layer timeout during requested shutdown completes the child cleanly
    with a `Cancelled` actor exit.
 2. The child's `ShutdownPolicy` belongs to the supervisor layer. It waits for
-   the entire child future. During removal this uses that child's grace period;
-   during a supervisor shutdown or group restart, every affected child is
-   drained against the longest configured grace period in that drain group. If
-   the supervisor deadline expires first, it aborts the outer future; dropping
-   that future also cancels and aborts the inner actor task.
+   the entire child future. Removal uses that child's grace period. An ordered
+   supervisor shutdown or group restart applies each affected child's grace in
+   reverse declaration order; a dynamic shutdown applies one shared deadline
+   equal to the longest affected grace. If the applicable supervisor deadline
+   expires first, it aborts the outer future; dropping that future also cancels
+   and aborts the inner actor task.
 
-These deadlines run concurrently rather than one after the other. To preserve
-the actor layer's clean completion path, ensure the applicable supervisor drain
-grace is at least `actor_shutdown_timeout`. If the supervisor deadline wins,
+For any one actor, these two deadlines run concurrently rather than one after
+the other. To preserve the actor layer's clean completion path, ensure that
+actor's supervisor grace is at least `actor_shutdown_timeout`. If the
+supervisor deadline wins,
 `cooperative_then_abort` still lets supervisor shutdown complete successfully,
 while `cooperative_strict` reports a timeout. In either case the supervised
 Tokio task has been issued an abort and actor bindings are terminated, but—as

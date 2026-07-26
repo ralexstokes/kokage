@@ -81,7 +81,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `DynamicActorOptions` carries the new child's restart policy, shutdown policy,
 optional restart intensity, and terminal-removal behavior. A
-`RestartPolicy::Never` actor is removed automatically after either a clean or
+runtime's restart and shutdown defaults are inherited unless the options use
+the `restart(...)` or `shutdown(...)` builder methods to override them. A
+caller migrating from direct `options.restart` or `options.shutdown` field
+assignment should use those methods so the runtime can distinguish an explicit
+override from an inherited default.
+
+A `RestartPolicy::Never` actor is removed automatically after either a clean or
 failed exit, matching OTP temporary-child semantics; other restart policies
 retain a terminal child in the supervisor snapshot by default. Override either
 default with `remove_on_exit(bool)`. Removal only follows an exit the policy

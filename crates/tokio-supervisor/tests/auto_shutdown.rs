@@ -12,9 +12,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    AutoShutdown, ChildSpec, ControlError, ControlOperation, DynamicSupervisorBuilder,
-    ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,
-    SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorSpec,
+    AutoShutdown, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
+    RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError,
+    SupervisorEvent, SupervisorSpec,
 };
 
 mod common;
@@ -61,10 +61,14 @@ async fn any_significant_clean_exit_stops_siblings_and_supervisor() {
                 sequence.push("auto_shutdown");
             }
             SupervisorEvent::SupervisorStopping => sequence.push("stopping"),
+            SupervisorEvent::SupervisorStopped => sequence.push("stopped"),
             _ => {}
         }
     }
-    assert_eq!(sequence, ["exited", "auto_shutdown", "stopping"]);
+    assert_eq!(sequence, ["exited", "auto_shutdown", "stopping", "stopped"]);
+    timeout(common::QUIET_TIMEOUT, events.recv())
+        .await
+        .expect_err("SupervisorStopped must be the final supervisor event");
 }
 
 #[tokio::test]
@@ -206,7 +210,7 @@ async fn significant_nested_supervisor_triggers_parent_auto_shutdown() {
 }
 
 #[tokio::test]
-async fn dynamic_significant_children_are_rejected_by_scope_kind() {
+async fn dynamic_significant_children_report_an_accurate_invalid_config() {
     let handle = DynamicSupervisorBuilder::new()
         .restart(RestartPolicy::Always)
         .build()
@@ -218,10 +222,7 @@ async fn dynamic_significant_children_are_rejected_by_scope_kind() {
         .expect_err("dynamic scopes reject significant children");
     assert_eq!(
         err,
-        ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
-            kind: ScopeKind::Dynamic,
-        }
+        ControlError::InvalidConfig("dynamic scopes do not support significant children")
     );
     let nested = SupervisorBuilder::new()
         .build()
@@ -232,10 +233,7 @@ async fn dynamic_significant_children_are_rejected_by_scope_kind() {
         .expect_err("dynamic scopes reject significant nested supervisors");
     assert_eq!(
         err,
-        ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddSupervisor,
-            kind: ScopeKind::Dynamic,
-        }
+        ControlError::InvalidConfig("dynamic scopes do not support significant children")
     );
     handle
         .shutdown_and_wait()

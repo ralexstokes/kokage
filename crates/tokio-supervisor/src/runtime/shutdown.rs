@@ -55,6 +55,7 @@ impl SupervisorRuntime {
 
         async {
             self.state = SupervisorState::Stopping;
+            self.stopping_token.cancel();
             self.send_event(SupervisorEvent::SupervisorStopping);
             if self.meta.kind == ScopeKind::Ordered {
                 self.drain_children_ordered(DrainReason::Shutdown, DrainScope::All)
@@ -128,9 +129,10 @@ impl SupervisorRuntime {
 
     /// Drains one ordered child at a time, in reverse declaration order.
     /// Each cooperative child receives its own complete grace window. The
-    /// next child is not cancelled until the current task has joined (after an
-    /// abort when necessary), so later dependents are fully gone before their
-    /// dependencies begin teardown.
+    /// next child is not cancelled until the current task has joined or has
+    /// been issued an abort, so cooperative dependents are fully gone before
+    /// their dependencies begin teardown without letting a non-yielding task
+    /// stall the supervisor indefinitely.
     async fn drain_children_ordered(
         &mut self,
         reason: DrainReason,
@@ -149,6 +151,7 @@ impl SupervisorRuntime {
             .collect();
         let mut deferred = Vec::new();
         let mut timed_out = Vec::new();
+        let mut remaining = Vec::new();
 
         for key in keys {
             let Some(child) = self.children.get(key) else {
@@ -161,6 +164,7 @@ impl SupervisorRuntime {
             let id = child.id.clone();
             let policy = child.runtime.definition.shutdown_policy;
             self.children[key].runtime.state = RuntimeChildState::Stopping;
+            let aborted_immediately = matches!(policy.mode, ShutdownMode::Abort);
             match policy.mode {
                 ShutdownMode::Abort => self.abort_child(key),
                 ShutdownMode::CooperativeStrict | ShutdownMode::CooperativeThenAbort => {
@@ -187,23 +191,38 @@ impl SupervisorRuntime {
                         .record_shutdown_timeout("shutdown", Some(&id));
                 }
                 if matches!(policy.mode, ShutdownMode::CooperativeStrict) {
-                    timed_out.push(id);
+                    timed_out.push(id.clone());
                 }
                 self.abort_child(key);
             }
 
-            // Abort-mode children and expired cooperative children still own
-            // the cursor until their join is consumed.
-            self.wait_for_ordered_child(key, None, scope, &mut deferred)
-                .await?;
+            if aborted_immediately || expired {
+                // Give a normal Tokio abort one scheduling turn to complete so
+                // its exit remains ordered. A future that does not reach a
+                // poll boundary must not retain the cursor indefinitely.
+                tokio::task::yield_now().await;
+                let still_active = self
+                    .wait_for_ordered_child(
+                        key,
+                        Some(Instant::now() + std::time::Duration::from_millis(1)),
+                        scope,
+                        &mut deferred,
+                    )
+                    .await?;
+                if still_active {
+                    remaining.push(id);
+                }
+            }
         }
 
         self.record_drain_duration(reason, started_at);
-        if timed_out.is_empty() {
-            Ok(deferred)
-        } else {
-            Err(SupervisorError::ShutdownTimedOut(timed_out.join(", ")))
+        if !timed_out.is_empty() {
+            return Err(SupervisorError::ShutdownTimedOut(timed_out.join(", ")));
         }
+        if !remaining.is_empty() && !matches!(reason, DrainReason::Shutdown) {
+            return Err(SupervisorError::ShutdownTimedOut(remaining.join(", ")));
+        }
+        Ok(deferred)
     }
 
     /// Returns `true` when `deadline` expires while `key` is still active.
@@ -395,13 +414,10 @@ fn abort_matching_children(
             && predicate(key, child)
             && let Some(abort_handle) = child.runtime.abort_handle.as_ref()
         {
-            child.runtime.nested_abort_cascades.store(
-                !matches!(
-                    child.runtime.definition.shutdown_policy.mode,
-                    ShutdownMode::Abort
-                ),
-                std::sync::atomic::Ordering::Release,
-            );
+            child
+                .runtime
+                .nested_abort_cascades
+                .store(true, std::sync::atomic::Ordering::Release);
             abort_handle.abort();
         }
     }

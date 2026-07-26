@@ -819,9 +819,10 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
     let failing_started = Arc::new(Notify::new());
     let fail_now = Arc::new(Notify::new());
 
-    let handle = SupervisorBuilder::new()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
-        .child(
+    let handle = spawn_dynamic(
+        DynamicSupervisorBuilder::new()
+            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1))),
+        [
             ChildSpec::new("removable", {
                 let removable_started = Arc::clone(&removable_started);
                 let removable_cancelled = Arc::clone(&removable_cancelled);
@@ -841,23 +842,22 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
                 Duration::from_secs(5),
                 ShutdownMode::CooperativeThenAbort,
             )),
-        )
-        .child(ChildSpec::new("failing", {
-            let failing_started = Arc::clone(&failing_started);
-            let fail_now = Arc::clone(&fail_now);
-            move |_| {
+            ChildSpec::new("failing", {
                 let failing_started = Arc::clone(&failing_started);
                 let fail_now = Arc::clone(&fail_now);
-                async move {
-                    failing_started.notify_one();
-                    fail_now.notified().await;
-                    Err(common::test_error("fatal restart"))
+                move |_| {
+                    let failing_started = Arc::clone(&failing_started);
+                    let fail_now = Arc::clone(&fail_now);
+                    async move {
+                        failing_started.notify_one();
+                        fail_now.notified().await;
+                        Err(common::test_error("fatal restart"))
+                    }
                 }
-            }
-        }))
-        .build()
-        .expect("valid supervisor")
-        .spawn();
+            }),
+        ],
+    )
+    .await;
 
     removable_started.notified().await;
     failing_started.notified().await;

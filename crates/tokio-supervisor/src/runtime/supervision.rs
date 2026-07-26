@@ -325,6 +325,11 @@ pub(crate) struct RuntimeMeta {
 pub(crate) struct SupervisorRuntime {
     pub(crate) meta: RuntimeMeta,
     pub(crate) state: SupervisorState,
+    /// Supervisor-level stop observation. This is separate from
+    /// `group_token`: ordered shutdown must cancel children one at a time,
+    /// while every child must still observe the supervisor entering its
+    /// stopping state immediately.
+    pub(crate) stopping_token: CancellationToken,
     /// Parent token whose children are the per-child tokens. Cancelling this
     /// token cancels all children at once (used in shutdown and `OneForAll`
     /// restarts).
@@ -438,6 +443,7 @@ impl SupervisorRuntime {
                 revivable,
             },
             state: SupervisorState::Running,
+            stopping_token: CancellationToken::new(),
             group_token: CancellationToken::new(),
             join_set: JoinSet::new(),
             children,
@@ -485,19 +491,22 @@ impl SupervisorRuntime {
                 Err(error)
             }
             Err(ExitReason::Failure(error)) => {
-                // An ordinary supervisor failure preserves the historical
-                // nested lifecycle contract: nested wrapper tasks are dropped,
-                // but their runtimes receive shutdown and finish detached. A
-                // hard abort of *this* runtime bypasses this branch, leaving
-                // the default cascade flag armed recursively.
-                self.detach_nested_children_for_failure();
+                // A parent-restartable incarnation preserves stable nested
+                // lifecycle continuity by letting its nested runtimes finish
+                // cooperatively before the replacement binds. A terminal
+                // root (or otherwise non-revivable incarnation) has no future
+                // supervisor above those runtimes, so keep the hard cascade
+                // armed instead of detaching them past `wait()`.
+                if self.meta.revivable {
+                    self.detach_nested_children_for_revivable_failure();
+                }
                 self.resolve_pending_removals(Some(&error));
                 Err(error)
             }
         }
     }
 
-    fn detach_nested_children_for_failure(&self) {
+    fn detach_nested_children_for_revivable_failure(&self) {
         for (_, child) in self.children.iter() {
             if child.runtime.state.is_active()
                 && matches!(child.runtime.definition.kind, ChildKind::Supervisor(_))
@@ -506,8 +515,8 @@ impl SupervisorRuntime {
                     .runtime
                     .nested_abort_cascades
                     .store(false, std::sync::atomic::Ordering::Release);
+            }
         }
-    }
     }
 
     async fn run_until_exit(
@@ -956,10 +965,9 @@ impl SupervisorRuntime {
             .into());
         }
         if child.is_significant() {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::AddChild,
-                kind: self.meta.kind,
-            }
+            return Err(ControlError::InvalidConfig(
+                "dynamic scopes do not support significant children",
+            )
             .into());
         }
 
@@ -1017,10 +1025,9 @@ impl SupervisorRuntime {
             .into());
         }
         if supervisor.significant {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::AddSupervisor,
-                kind: self.meta.kind,
-            }
+            return Err(ControlError::InvalidConfig(
+                "dynamic scopes do not support significant children",
+            )
             .into());
         }
         supervisor.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
@@ -1232,10 +1239,9 @@ impl SupervisorRuntime {
     pub(crate) fn abort_child(&mut self, key: ChildKey) {
         let child = &self.children[key].runtime;
         child.completion.mark_cancelled();
-        child.nested_abort_cascades.store(
-            !matches!(child.definition.shutdown_policy.mode, ShutdownMode::Abort),
-            std::sync::atomic::Ordering::Release,
-        );
+        child
+            .nested_abort_cascades
+            .store(true, std::sync::atomic::Ordering::Release);
         if let Some(abort_handle) = child.abort_handle.as_ref() {
             abort_handle.abort();
         }
@@ -1862,14 +1868,14 @@ impl SupervisorRuntime {
         }
         drop(attached_children);
         let snapshot = self.snapshot_view();
-        let changed = self.snapshots.send_if_modified(|current| {
+        self.snapshots.send_if_modified(|current| {
             if *current == snapshot {
                 return false;
             }
             current.clone_from(&snapshot);
             true
         });
-        if changed && let Some(parent_link) = self.meta.parent_link.as_ref() {
+        if let Some(parent_link) = self.meta.parent_link.as_ref() {
             parent_link.publish_snapshot(snapshot);
         }
     }

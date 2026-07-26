@@ -50,6 +50,54 @@ async fn external_shutdown_stops_all_children() {
 }
 
 #[tokio::test]
+async fn supervisor_token_observes_ordered_and_dynamic_shutdown() {
+    let observed_child =
+        |id: &'static str,
+         started_tx: mpsc::UnboundedSender<&'static str>,
+         stopping_tx: mpsc::UnboundedSender<&'static str>| {
+            ChildSpec::new(id, move |ctx| {
+                let started_tx = started_tx.clone();
+                let stopping_tx = stopping_tx.clone();
+                async move {
+                    started_tx.send(id).expect("test receiver dropped");
+                    ctx.supervisor_token().cancelled().await;
+                    stopping_tx.send(id).expect("test receiver dropped");
+                    Ok(())
+                }
+            })
+        };
+
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (stopping_tx, mut stopping_rx) = mpsc::unbounded_channel();
+    let ordered = SupervisorBuilder::new()
+        .child(observed_child(
+            "ordered",
+            started_tx.clone(),
+            stopping_tx.clone(),
+        ))
+        .build()
+        .expect("valid ordered supervisor")
+        .spawn();
+    assert_eq!(common::recv_event(&mut started_rx).await, "ordered");
+    ordered.shutdown();
+    assert_eq!(common::recv_event(&mut stopping_rx).await, "ordered");
+    ordered.wait().await.expect("ordered shutdown succeeds");
+
+    let dynamic = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid dynamic supervisor")
+        .spawn();
+    dynamic
+        .add_child(observed_child("dynamic", started_tx, stopping_tx))
+        .await
+        .expect("dynamic child added");
+    assert_eq!(common::recv_event(&mut started_rx).await, "dynamic");
+    dynamic.shutdown();
+    assert_eq!(common::recv_event(&mut stopping_rx).await, "dynamic");
+    dynamic.wait().await.expect("dynamic shutdown succeeds");
+}
+
+#[tokio::test]
 async fn shutdown_is_idempotent_across_handle_clones() {
     let supervisor = SupervisorBuilder::new()
         .child(ChildSpec::new("worker", |ctx| async move {
@@ -186,6 +234,45 @@ async fn stubborn_child_is_aborted_in_cooperative_then_abort_mode() {
     assert!(
         !live_flag.is_live(),
         "task should be dropped before wait resolves"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (blocking_tx, mut blocking_rx) = mpsc::unbounded_channel();
+    let supervisor = SupervisorBuilder::new()
+        .child(
+            ChildSpec::new("non-yielding", move |ctx| {
+                let started_tx = started_tx.clone();
+                let blocking_tx = blocking_tx.clone();
+                async move {
+                    started_tx.send(()).expect("test receiver dropped");
+                    ctx.shutdown_token().cancelled().await;
+                    blocking_tx.send(()).expect("test receiver dropped");
+                    std::thread::sleep(Duration::from_millis(500));
+                    Ok(())
+                }
+            })
+            .shutdown(ShutdownPolicy::cooperative_then_abort(
+                Duration::from_millis(20),
+            )),
+        )
+        .build()
+        .expect("valid supervisor");
+    let handle = supervisor.spawn();
+    common::recv_event(&mut started_rx).await;
+
+    let started_at = Instant::now();
+    handle.shutdown();
+    common::recv_event(&mut blocking_rx).await;
+    timeout(Duration::from_millis(200), handle.wait())
+        .await
+        .expect("ordered shutdown should advance after issuing the abort")
+        .expect("cooperative-then-abort shutdown succeeds");
+    assert!(
+        started_at.elapsed() < Duration::from_millis(200),
+        "the post-abort join must not become an unbounded extra grace"
     );
 }
 

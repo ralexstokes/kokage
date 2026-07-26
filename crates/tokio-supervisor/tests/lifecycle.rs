@@ -83,14 +83,17 @@ async fn restart_is_an_ordered_exit_started_pair() {
 
 #[tokio::test]
 async fn wait_started_reports_membership_removal() {
-    let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("worker is added");
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
@@ -217,6 +220,51 @@ async fn cooperative_remove_publishes_removed_before_reply() {
         .expect("remove succeeds");
     assert!(handle.snapshot().lifecycle_seq >= removed.seq);
     assert!(handle.snapshot().child("worker").is_none());
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
+    let handle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
+    handle
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("dynamic child added");
+    handle.wait_started().await.expect("dynamic child starts");
+
+    let added = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Added)
+    })
+    .await;
+    let started = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+    })
+    .await;
+    handle
+        .remove_child("worker")
+        .await
+        .expect("dynamic child removed");
+    let exited = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+    })
+    .await;
+    let removed = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Removed)
+    })
+    .await;
+
+    assert_eq!(started.seq, added.seq + 1);
+    assert_eq!(exited.seq, started.seq + 1);
+    assert_eq!(removed.seq, exited.seq + 1);
+    assert_eq!(removed.membership_epoch, added.membership_epoch);
 
     shutdown(handle).await;
 }

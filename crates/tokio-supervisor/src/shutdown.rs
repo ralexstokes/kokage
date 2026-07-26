@@ -46,7 +46,9 @@ pub enum ShutdownMode {
     /// Issue a Tokio abort and return promptly.
     ///
     /// Abort remains cooperative at Tokio poll boundaries, so this mode does not
-    /// forcibly preempt a non-yielding future.
+    /// forcibly preempt a non-yielding future. For a nested supervisor child,
+    /// the abort cascades recursively through the nested subtree instead of
+    /// leaving that subtree to drain without a supervisor above it.
     Abort,
 }
 

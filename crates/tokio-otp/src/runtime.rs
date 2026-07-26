@@ -76,14 +76,16 @@ impl RuntimeAttachment {
 ///
 /// These options configure both the actor's mailbox and its supervised-child
 /// lifecycle. The message type is inferred from the factory passed to
-/// [`RuntimeHandle::add_actor`].
+/// [`RuntimeHandle::add_actor`]. Configure restart and shutdown behavior with
+/// [`restart`](Self::restart) and [`shutdown`](Self::shutdown); options left
+/// unset inherit the dynamic runtime's defaults.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct DynamicActorOptions<M = ()> {
-    /// Restart policy for the supervised actor child.
+    // Restart policy for the supervised actor child.
     restart: RestartPolicy,
     restart_is_default: bool,
-    /// Shutdown policy for the supervised actor child.
+    // Shutdown policy for the supervised actor child.
     shutdown: ShutdownPolicy,
     shutdown_is_default: bool,
     /// Optional restart intensity override for this actor child.
@@ -131,7 +133,10 @@ impl<M> DynamicActorOptions<M> {
         Self::default()
     }
 
-    /// Sets the actor's restart policy.
+    /// Sets the restart policy for the supervised actor child.
+    ///
+    /// Without this override, the actor inherits the dynamic runtime's
+    /// configured restart default.
     #[must_use]
     pub fn restart(mut self, restart: RestartPolicy) -> Self {
         self.restart = restart;
@@ -139,7 +144,10 @@ impl<M> DynamicActorOptions<M> {
         self
     }
 
-    /// Sets the actor's shutdown policy.
+    /// Sets the shutdown policy for the supervised actor child.
+    ///
+    /// Without this override, the actor inherits the dynamic runtime's
+    /// configured shutdown default.
     #[must_use]
     pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
         self.shutdown = shutdown;
