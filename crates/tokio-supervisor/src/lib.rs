@@ -216,6 +216,7 @@
 mod attachment;
 mod builder;
 mod child;
+mod completion;
 mod context;
 mod error;
 mod event;
@@ -235,6 +236,7 @@ mod supervisor;
 pub use attachment::{AttachedChild, AttachedChildIdentity};
 pub use builder::{DynamicSupervisorBuilder, SupervisorBuilder};
 pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
+pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::{ChildContext, SupervisorToken};
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::{EventPathSegment, ExitStatusView, SupervisorEvent};
@@ -244,7 +246,7 @@ pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
 pub use monitor::RestartWatch;
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
 pub use scope::{ControlOperation, ScopeKind};
-pub use shutdown::{AutoShutdown, ShutdownMode, ShutdownPolicy};
+pub use shutdown::{ShutdownMode, ShutdownPolicy};
 pub use snapshot::{
     ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
 };

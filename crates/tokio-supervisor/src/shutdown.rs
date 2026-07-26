@@ -18,30 +18,6 @@ pub(crate) fn tidy_abort_beat(grace: Duration) -> Duration {
     (grace / 10).clamp(MIN_TIDY_ABORT_BEAT, MAX_TIDY_ABORT_BEAT)
 }
 
-/// Controls whether clean exits from significant children automatically stop
-/// their supervisor.
-///
-/// A child is marked significant with
-/// [`ChildSpec::significant`](crate::ChildSpec::significant) or
-/// [`SupervisorSpec::significant`](crate::SupervisorSpec::significant).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum AutoShutdown {
-    /// Significant child exits do not stop the supervisor.
-    #[default]
-    Never,
-    /// Stop when any significant child exits cleanly.
-    AnySignificant,
-    /// Stop after every significant child has exited cleanly.
-    ///
-    /// A significant child using [`RestartPolicy::Never`](crate::RestartPolicy::Never)
-    /// that exits with a failure, or is cancelled by a sibling's group
-    /// restart, cannot later satisfy this condition. The supervisor will
-    /// continue running until explicitly stopped.
-    AllSignificant,
-}
-
 /// How the supervisor stops a child task during shutdown or removal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

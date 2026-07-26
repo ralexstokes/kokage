@@ -4,8 +4,8 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, Strategy,
-    SupervisorBuilder, SupervisorSpec,
+    ChildSpec, ChildStateView, CompletionGuard, DynamicSupervisorBuilder, RestartIntensity,
+    RestartPolicy, Strategy, SupervisorBuilder, SupervisorSpec,
 };
 
 mod common;
@@ -545,21 +545,18 @@ async fn group_restart_revives_cleanly_exited_supervisor_child() {
     let crash_sibling = Arc::new(Notify::new());
 
     let complete_for_leaf = complete_leaf.clone();
-    let leaf = SupervisorBuilder::new()
-        .auto_shutdown(tokio_supervisor::AutoShutdown::AnySignificant)
-        .child(
-            ChildSpec::new("worker", move |_ctx| {
-                let complete_leaf = complete_for_leaf.clone();
-                async move {
-                    complete_leaf.notified().await;
-                    Ok(())
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .significant(),
-        )
-        .build()
-        .expect("valid leaf supervisor");
+    let leaf_builder = SupervisorBuilder::new().child(
+        ChildSpec::new("worker", move |_ctx| {
+            let complete_leaf = complete_for_leaf.clone();
+            async move {
+                complete_leaf.notified().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::OnFailure),
+    );
+    let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
+    let leaf = leaf_builder.build().expect("valid leaf supervisor");
     let crash_for_sibling = crash_sibling.clone();
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::OneForAll)
@@ -683,16 +680,12 @@ async fn rest_for_one_first_child_stop_is_final() {
     let complete_head = Arc::new(Notify::new());
     let complete_tail = Arc::new(Notify::new());
 
+    let (head_supervisor, _head_finished) = completing_supervisor(&complete_head);
+    let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::RestForOne)
-        .supervisor(
-            SupervisorSpec::new("head", completing_supervisor(&complete_head))
-                .restart(RestartPolicy::OnFailure),
-        )
-        .supervisor(
-            SupervisorSpec::new("tail", completing_supervisor(&complete_tail))
-                .restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("head", head_supervisor).restart(RestartPolicy::OnFailure))
+        .supervisor(SupervisorSpec::new("tail", tail_supervisor).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -731,23 +724,28 @@ async fn rest_for_one_first_child_stop_is_final() {
     assert_eq!(observed, None);
 }
 
-fn completing_supervisor(complete: &Arc<Notify>) -> tokio_supervisor::Supervisor {
+/// A nested supervisor that stops itself once its worker finishes.
+///
+/// The returned guard must outlive the tree: dropping it cancels the watch.
+fn completing_supervisor(
+    complete: &Arc<Notify>,
+) -> (tokio_supervisor::Supervisor, CompletionGuard) {
     let complete = complete.clone();
-    SupervisorBuilder::new()
-        .auto_shutdown(tokio_supervisor::AutoShutdown::AnySignificant)
-        .child(
-            ChildSpec::new("worker", move |_ctx| {
-                let complete = complete.clone();
-                async move {
-                    complete.notified().await;
-                    Ok(())
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .significant(),
-        )
-        .build()
-        .expect("valid completing supervisor")
+    let builder = SupervisorBuilder::new().child(
+        ChildSpec::new("worker", move |_ctx| {
+            let complete = complete.clone();
+            async move {
+                complete.notified().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::OnFailure),
+    );
+    let finished = builder.handle().shutdown_on_completion(["worker"]);
+    (
+        builder.build().expect("valid completing supervisor"),
+        finished,
+    )
 }
 
 fn middle_supervisor(

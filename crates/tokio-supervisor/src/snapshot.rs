@@ -98,6 +98,14 @@ pub struct ChildSnapshot {
     pub membership: ChildMembershipView,
     /// How the child last exited, if it has exited at least once.
     pub last_exit: Option<ExitStatusView>,
+    /// Whether [`last_exit`](Self::last_exit) was the supervisor stopping the
+    /// child rather than the child reaching its own conclusion.
+    ///
+    /// See [`LifecycleEventKind::Exited`](crate::LifecycleEventKind::Exited)
+    /// for why a cancelled child can still report
+    /// [`ExitStatusView::Completed`].
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub last_exit_cancelled: bool,
     /// Total number of times this child has been restarted.
     pub restart_count: u64,
     /// Time remaining until the next scheduled restart, if a backoff delay is
@@ -190,6 +198,7 @@ impl ChildSnapshot {
             state,
             membership: ChildMembershipView::Active,
             last_exit: None,
+            last_exit_cancelled: false,
             restart_count: 0,
             next_restart_in: None,
             supervisor: None,
@@ -228,6 +237,13 @@ impl ChildSnapshot {
     #[must_use]
     pub fn last_exit(mut self, last_exit: Option<ExitStatusView>) -> Self {
         self.last_exit = last_exit;
+        self
+    }
+
+    /// Records whether the last exit was cancellation-driven.
+    #[must_use]
+    pub fn last_exit_cancelled(mut self, last_exit_cancelled: bool) -> Self {
+        self.last_exit_cancelled = last_exit_cancelled;
         self
     }
 

@@ -8,9 +8,9 @@ use std::{
 
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, DynamicSupervisorBuilder, LifecycleEvent, LifecycleEventKind,
-    RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder,
-    SupervisorSpec,
+    ChildSpec, ChildStateView, CompletionGuard, DynamicSupervisorBuilder, LifecycleEvent,
+    LifecycleEventKind, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy,
+    SupervisorBuilder, SupervisorSpec,
 };
 
 mod common;
@@ -570,21 +570,18 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let complete_leaf = Arc::new(Notify::new());
     let crash_sibling = Arc::new(Notify::new());
     let leaf_complete = Arc::clone(&complete_leaf);
-    let leaf = SupervisorBuilder::new()
-        .auto_shutdown(tokio_supervisor::AutoShutdown::AnySignificant)
-        .child(
-            ChildSpec::new("worker", move |_ctx| {
-                let complete = Arc::clone(&leaf_complete);
-                async move {
-                    complete.notified().await;
-                    Ok(())
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .significant(),
-        )
-        .build()
-        .expect("valid leaf supervisor");
+    let leaf_builder = SupervisorBuilder::new().child(
+        ChildSpec::new("worker", move |_ctx| {
+            let complete = Arc::clone(&leaf_complete);
+            async move {
+                complete.notified().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::OnFailure),
+    );
+    let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
+    let leaf = leaf_builder.build().expect("valid leaf supervisor");
     let sibling_crash = Arc::clone(&crash_sibling);
     let handle = SupervisorBuilder::new()
         .strategy(tokio_supervisor::Strategy::OneForAll)
@@ -799,16 +796,12 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
 async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     let complete_head = Arc::new(Notify::new());
     let complete_tail = Arc::new(Notify::new());
+    let (head_supervisor, _head_finished) = completing_supervisor(&complete_head);
+    let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::RestForOne)
-        .supervisor(
-            SupervisorSpec::new("head", completing_supervisor(&complete_head))
-                .restart(RestartPolicy::OnFailure),
-        )
-        .supervisor(
-            SupervisorSpec::new("tail", completing_supervisor(&complete_tail))
-                .restart(RestartPolicy::OnFailure),
-        )
+        .supervisor(SupervisorSpec::new("head", head_supervisor).restart(RestartPolicy::OnFailure))
+        .supervisor(SupervisorSpec::new("tail", tail_supervisor).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -893,23 +886,28 @@ fn middle_supervisor(
         .expect("valid middle supervisor")
 }
 
-fn completing_supervisor(complete: &Arc<Notify>) -> tokio_supervisor::Supervisor {
+/// A nested supervisor that stops itself once its worker finishes.
+///
+/// The returned guard must outlive the tree: dropping it cancels the watch.
+fn completing_supervisor(
+    complete: &Arc<Notify>,
+) -> (tokio_supervisor::Supervisor, CompletionGuard) {
     let complete = Arc::clone(complete);
-    SupervisorBuilder::new()
-        .auto_shutdown(tokio_supervisor::AutoShutdown::AnySignificant)
-        .child(
-            ChildSpec::new("worker", move |_ctx| {
-                let complete = Arc::clone(&complete);
-                async move {
-                    complete.notified().await;
-                    Ok(())
-                }
-            })
-            .restart(RestartPolicy::OnFailure)
-            .significant(),
-        )
-        .build()
-        .expect("valid completing supervisor")
+    let builder = SupervisorBuilder::new().child(
+        ChildSpec::new("worker", move |_ctx| {
+            let complete = Arc::clone(&complete);
+            async move {
+                complete.notified().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::OnFailure),
+    );
+    let finished = builder.handle().shutdown_on_completion(["worker"]);
+    (
+        builder.build().expect("valid completing supervisor"),
+        finished,
+    )
 }
 
 /// `wait_started` must give up at a `Lagged` marker even when the marker's
