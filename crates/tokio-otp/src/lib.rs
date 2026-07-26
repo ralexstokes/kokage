@@ -237,6 +237,9 @@
 //!   tracing and snapshot observability.
 //! - `examples/json_edge.rs` — decoding byte-oriented JSON frames into typed
 //!   actor messages with `serde_json` at the application boundary.
+//! - `examples/build_farm/` — a batch application: a leader-owned dynamic
+//!   worker pool, a non-actor [`ChildSpec`] sibling, and a runtime whose
+//!   lifetime is bounded by [`RuntimeHandle::shutdown_on_completion`].
 //!
 //! # Cargo features
 //!
