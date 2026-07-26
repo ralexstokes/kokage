@@ -588,3 +588,36 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 
     handle.shutdown_and_wait().await.expect("tree stops");
 }
+
+#[tokio::test]
+async fn cloning_a_declaration_reserves_a_fresh_identity_for_the_copy() {
+    let builder = Runtime::builder().child(ChildSpec::new("task", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let reserved = builder.handle();
+    let tree = builder.into_tree();
+
+    // The clone carries the declaration but not the reservation, so building
+    // and spawning it must not bind the handle taken from the original.
+    let spawned = tree
+        .clone()
+        .build()
+        .expect("cloned declaration builds")
+        .spawn();
+    spawned.wait_started().await.expect("the clone starts");
+    assert!(matches!(
+        reserved
+            .supervisor_handle()
+            .add_child(ChildSpec::new("late", |_| async { Ok(()) }))
+            .await,
+        Err(ControlError::Unavailable)
+    ));
+
+    // Dropping the original declaration abandons the reserved identity.
+    drop(tree);
+    assert_snapshot_stream_closes(&reserved).await;
+
+    spawned.shutdown();
+    spawned.wait().await.expect("the clone stops cleanly");
+}

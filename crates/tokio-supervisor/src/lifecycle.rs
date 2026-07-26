@@ -280,6 +280,12 @@ impl LifecycleHub {
             .unwrap_or_else(|current| current)
     }
 
+    /// Returns the epoch [`next_membership_epoch`](Self::next_membership_epoch)
+    /// would mint next, without consuming it.
+    pub(crate) fn peek_membership_epoch(&self) -> u64 {
+        self.next_membership_epoch.load(Ordering::Acquire)
+    }
+
     /// Advances the epoch allocator past a membership projected before this
     /// hub began minting epochs (the root supervisor's initial snapshot).
     pub(crate) fn observe_membership_epoch(&self, membership_epoch: u64) {

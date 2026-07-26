@@ -289,9 +289,10 @@ async fn build_app() -> Result<App, AnyError> {
     let handle = runtime.spawn();
     let gateway = handle.subtree("gateway").expect("gateway runtime subtree");
     let core = handle.subtree("core").expect("core runtime subtree");
-    let sessions = handle
-        .subtree("sessions")
-        .expect("dynamic sessions mount point");
+    // `sessions_mount` was reserved before the root existed and addresses the
+    // same identity the post-spawn `handle.subtree("sessions")` lookup would
+    // return, so the phases below drive it directly.
+    let sessions = sessions_mount.clone();
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, |event| GuardMsg::BridgeRestarts {
         total: event.total_restarts,
     });

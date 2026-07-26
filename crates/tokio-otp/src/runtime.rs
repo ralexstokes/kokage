@@ -73,11 +73,16 @@ impl ActorRuntimeState {
     where
         F: ActorFactory,
     {
-        self.config
+        // Construction runs the caller's factory, which may reach back into
+        // this runtime. Release the config lock first so that re-entry cannot
+        // deadlock on a non-reentrant mutex.
+        let actor_factory = self
+            .config
             .lock()
             .expect("actor runtime config poisoned")
             .actor_factory
-            .actor_with_options(label, factory, options)
+            .clone();
+        actor_factory.actor_with_options(label, factory, options)
     }
 }
 
@@ -786,11 +791,9 @@ impl RuntimeHandle {
         let child = actor_child_spec(
             actor.clone(),
             &self.actors,
-            options.restart,
-            options.shutdown,
-            options.restart_intensity,
-            options.remove_on_exit,
-            None,
+            ActorChildSpec::new(options.restart, options.shutdown)
+                .restart_intensity(options.restart_intensity)
+                .remove_on_exit(options.remove_on_exit),
         );
         self.supervisor.add_child(child).await?;
 
@@ -991,15 +994,58 @@ pub(crate) struct ActorOverrides {
     pub(crate) shutdown: Option<ShutdownPolicy>,
 }
 
+/// How one actor is supervised as a child of its enclosing scope.
+pub(crate) struct ActorChildSpec {
+    pub(crate) restart: RestartPolicy,
+    pub(crate) shutdown: ShutdownPolicy,
+    pub(crate) restart_intensity: Option<RestartIntensity>,
+    /// Whether the membership disappears when the actor exits, rather than
+    /// resting as an inactive entry.
+    pub(crate) remove_on_exit: bool,
+    /// The scope this actor leads, for an `ActorWithScope` leader. `None` for
+    /// every other actor shape.
+    pub(crate) children: Option<RuntimeHandle>,
+}
+
+impl ActorChildSpec {
+    pub(crate) fn new(restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
+        Self {
+            restart,
+            shutdown,
+            restart_intensity: None,
+            remove_on_exit: false,
+            children: None,
+        }
+    }
+
+    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartIntensity>) -> Self {
+        self.restart_intensity = intensity;
+        self
+    }
+
+    pub(crate) fn remove_on_exit(mut self, remove_on_exit: bool) -> Self {
+        self.remove_on_exit = remove_on_exit;
+        self
+    }
+
+    pub(crate) fn children(mut self, children: RuntimeHandle) -> Self {
+        self.children = Some(children);
+        self
+    }
+}
+
 pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     owner: &Arc<ActorRuntimeState>,
-    restart: RestartPolicy,
-    shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartIntensity>,
-    remove_on_exit: bool,
-    children: Option<RuntimeHandle>,
+    spec: ActorChildSpec,
 ) -> ChildSpec {
+    let ActorChildSpec {
+        restart,
+        shutdown,
+        restart_intensity,
+        remove_on_exit,
+        children,
+    } = spec;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));

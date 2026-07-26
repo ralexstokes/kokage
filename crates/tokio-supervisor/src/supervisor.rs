@@ -34,8 +34,27 @@ use crate::{
 /// A configured supervisor, ready to be spawned or nested as a first-class
 /// supervisor child.
 ///
-/// Cloning a `Supervisor` produces an independent configuration that can be
-/// started separately.
+/// # Cloning reserves a new identity
+///
+/// A `Supervisor` owns the stable identity behind [`handle`](Self::handle),
+/// reserved when its builder was created. Cloning copies the *configuration*
+/// and reserves a **separate** identity for the copy, so a handle taken before
+/// the clone continues to address the original:
+///
+/// ```no_run
+/// # use tokio_supervisor::SupervisorBuilder;
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let supervisor = SupervisorBuilder::new().build()?;
+/// let handle = supervisor.handle();
+///
+/// supervisor.clone().spawn(); // spawns the clone's identity, not `handle`'s
+/// drop(supervisor);           // abandons `handle`'s identity: it goes terminal
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Spawn or nest the same value the handle came from. Handle *clones* are
+/// unaffected — they all address one identity.
 pub struct Supervisor {
     pub(crate) config: SupervisorConfig,
     pub(crate) channels: Arc<StableSupervisorChannels>,
@@ -105,7 +124,7 @@ impl ParentLink {
 
 impl Supervisor {
     pub(crate) fn new(config: SupervisorConfig) -> Self {
-        let channels = stable_channels_for_config(&config, false);
+        let channels = stable_channels_for_config(&config);
         Self {
             config,
             channels,
@@ -394,6 +413,9 @@ impl Supervisor {
 }
 
 impl Clone for Supervisor {
+    /// Copies the configuration and reserves an independent stable identity.
+    /// See the [type-level note](Supervisor#cloning-reserves-a-new-identity):
+    /// a handle taken before the clone still addresses the original.
     fn clone(&self) -> Self {
         let mut config = self.config.clone();
         config.children = self
@@ -437,7 +459,6 @@ fn prepare_nested_channels(config: &SupervisorConfig) -> NestedChannels {
 
 pub(crate) fn stable_channels_for_config(
     config: &SupervisorConfig,
-    statically_configured: bool,
 ) -> Arc<StableSupervisorChannels> {
     let nested_channels = prepare_nested_channels(config);
     let attached_children = initial_attached_children(config, &nested_channels);
@@ -447,22 +468,28 @@ pub(crate) fn stable_channels_for_config(
         config.event_channel_capacity,
         nested_channels,
         attached_children,
-        statically_configured,
     )
 }
 
-pub(crate) fn reset_channels_for_config(
+/// Republishes a reserved identity's declared view after a builder mutation.
+pub(crate) fn refresh_declaration_for_config(
     config: &SupervisorConfig,
     channels: &StableSupervisorChannels,
 ) {
     let nested_channels = prepare_nested_channels(config);
     let attached_children = initial_attached_children(config, &nested_channels);
-    channels.reset_declaration(
-        initial_snapshot(config),
+    channels.reset_declared_view(initial_snapshot(config), nested_channels, attached_children);
+}
+
+/// Applies a finished configuration to a reserved identity, once, at build.
+pub(crate) fn reset_channels_for_config(
+    config: &SupervisorConfig,
+    channels: &StableSupervisorChannels,
+) {
+    refresh_declaration_for_config(config, channels);
+    channels.reset_declared_capacities(
         config.control_channel_capacity,
         config.event_channel_capacity,
-        nested_channels,
-        attached_children,
     );
 }
 

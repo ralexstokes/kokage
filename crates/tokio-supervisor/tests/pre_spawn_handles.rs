@@ -304,3 +304,78 @@ async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
         .expect("original shutdown does not terminalize cloned descendants");
     cloned.shutdown_and_wait().await.expect("clone stops");
 }
+
+#[tokio::test]
+async fn wait_on_a_reserved_handle_waits_for_the_scope_to_run_and_stop() {
+    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let handle = builder.handle();
+
+    // Nothing has bound yet, so `wait` is waiting for a scope that has not
+    // started rather than reporting an unavailable incarnation.
+    let mut waiting = Box::pin(handle.wait());
+    assert!(
+        timeout(Duration::from_millis(50), &mut waiting)
+            .await
+            .is_err(),
+        "wait must not resolve before the reserved identity binds"
+    );
+
+    let spawned = builder.build().expect("builder is valid").spawn();
+    handle
+        .wait_started()
+        .await
+        .expect("reserved identity binds");
+    spawned.shutdown();
+
+    timeout(EVENT_TIMEOUT, waiting)
+        .await
+        .expect("wait observes the spawned root stopping")
+        .expect("root stops cleanly");
+}
+
+#[tokio::test]
+async fn wait_on_an_abandoned_reserved_handle_reports_terminality() {
+    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let handle = builder.handle();
+
+    let mut waiting = Box::pin(handle.wait());
+    assert!(
+        timeout(Duration::from_millis(50), &mut waiting)
+            .await
+            .is_err(),
+        "wait must not resolve before the reserved identity binds"
+    );
+
+    drop(builder);
+
+    let error = timeout(EVENT_TIMEOUT, waiting)
+        .await
+        .expect("wait observes terminalization")
+        .expect_err("an abandoned identity never runs");
+    assert!(matches!(error, SupervisorError::Internal(_)));
+}
+
+#[tokio::test]
+async fn event_capacity_set_before_subscribing_reaches_the_spawned_scope() {
+    // Capacity is applied to the event channel once, at build. A subscriber
+    // taken from a pre-build handle pins the channel it attached to, so the
+    // documented order is: set the capacity, then subscribe.
+    let builder = SupervisorBuilder::new()
+        .event_channel_capacity(4)
+        .child(waiting_child("worker"));
+    let handle = builder.handle();
+    let mut events = handle.subscribe();
+
+    let spawned = builder.build().expect("builder is valid").spawn();
+    handle.wait_started().await.expect("scope starts");
+
+    timeout(EVENT_TIMEOUT, events.recv())
+        .await
+        .expect("a pre-build subscriber keeps receiving after bind")
+        .expect("event channel stays open across bind");
+
+    spawned
+        .shutdown_and_wait()
+        .await
+        .expect("root stops cleanly");
+}

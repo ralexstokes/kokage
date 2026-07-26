@@ -1031,19 +1031,20 @@ impl SupervisorRuntime {
             }
             .into());
         }
-        if pending.spec_mut().significant {
+        // Every early return from here on drops `pending`, which terminalizes
+        // the identity its caller reserved.
+        let spec = pending.spec_mut();
+        if spec.significant {
             return Err(ControlError::InvalidConfig(
                 "dynamic scopes do not support significant children",
             )
             .into());
         }
-        pending
-            .spec_mut()
-            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
+        spec.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
         }
-        if let Some(intensity) = pending.spec_mut().restart_intensity {
+        if let Some(intensity) = spec.restart_intensity {
             intensity
                 .validate()
                 .map_err(|error| map_build_error_to_control(&id, error))?;

@@ -69,7 +69,10 @@ pub struct RuntimeBuilder {
     shutdown: ShutdownPolicy,
     restart_intensity: Option<RestartIntensity>,
     actor_overrides: HashMap<String, ActorOverrides>,
-    supervisor: SupervisorBuilder,
+    /// Always `Some` while the builder is alive; `Option` only so that
+    /// `strategy` can move the reserved builder through `SupervisorBuilder`'s
+    /// by-value setter without minting a throwaway identity to swap in.
+    supervisor: Option<SupervisorBuilder>,
     actors: Arc<ActorRuntimeState>,
 }
 
@@ -89,7 +92,7 @@ impl Default for RuntimeBuilder {
             shutdown: ShutdownPolicy::default(),
             restart_intensity: None,
             actor_overrides: HashMap::new(),
-            supervisor: SupervisorBuilder::new(),
+            supervisor: Some(SupervisorBuilder::new()),
             actors,
         }
     }
@@ -103,9 +106,15 @@ impl RuntimeBuilder {
         Self::default()
     }
 
+    fn supervisor(&self) -> &SupervisorBuilder {
+        self.supervisor
+            .as_ref()
+            .expect("live runtime builder owns its reserved scope builder")
+    }
+
     /// Returns the stable actor-aware handle reserved for this scope.
     pub fn handle(&self) -> RuntimeHandle {
-        RuntimeHandle::new(self.supervisor.handle(), Arc::clone(&self.actors))
+        RuntimeHandle::new(self.supervisor().handle(), Arc::clone(&self.actors))
     }
 
     fn refresh_runtime_state(&self) {
@@ -128,7 +137,7 @@ impl RuntimeBuilder {
         if let Some(graph) = &self.graph {
             ids.extend(graph.actors().iter().map(|actor| actor.label().to_owned()));
         }
-        self.supervisor.project_declared_children(ids);
+        self.supervisor().project_declared_children(ids);
     }
 
     /// Sets the actor graph to run. If omitted, the runtime starts empty.
@@ -172,7 +181,11 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn strategy(mut self, strategy: Strategy) -> Self {
         self.strategy = strategy;
-        self.supervisor = std::mem::take(&mut self.supervisor).strategy(strategy);
+        let supervisor = self
+            .supervisor
+            .take()
+            .expect("live runtime builder owns its reserved scope builder");
+        self.supervisor = Some(supervisor.strategy(strategy));
         self.refresh_snapshot();
         self
     }
@@ -299,7 +312,10 @@ impl RuntimeBuilder {
                 tree = tree.actor(child);
             }
         }
-        tree.with_ordered_builder(supervisor, actors)
+        tree.with_ordered_builder(
+            supervisor.expect("live runtime builder owns its reserved scope builder"),
+            actors,
+        )
     }
 
     /// Validates the configuration and returns a ready-to-run [`Runtime`].
