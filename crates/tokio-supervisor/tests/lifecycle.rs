@@ -946,3 +946,62 @@ fn completing_supervisor(complete: &Arc<Notify>) -> tokio_supervisor::Supervisor
         .build()
         .expect("valid completing supervisor")
 }
+
+/// `wait_started` must give up at a `Lagged` marker even when the marker's
+/// envelope names a different child. The marker stands for a discarded prefix
+/// that may have carried the awaited `Started`, so scanning past it on an id
+/// mismatch would wait for a transition this watch can no longer deliver.
+#[tokio::test]
+async fn wait_started_reports_a_start_lost_to_overflow() {
+    const RESTARTS: usize = 80;
+    let handle = SupervisorBuilder::new()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut lifecycle = handle.watch_lifecycle();
+
+    handle
+        .add_child(ChildSpec::new("quiet", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("dynamic add succeeds");
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let child_attempts = Arc::clone(&attempts);
+    handle
+        .add_child(
+            ChildSpec::new("storm", move |ctx| {
+                let attempts = Arc::clone(&child_attempts);
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) < RESTARTS {
+                        return Err(common::test_error("again"));
+                    }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60))),
+        )
+        .await
+        .expect("dynamic add succeeds");
+
+    let mut snapshots = handle.subscribe_snapshots();
+    wait_for_snapshot(&mut snapshots, |snapshot| {
+        snapshot
+            .child("storm")
+            .is_some_and(|child| child.generation == RESTARTS as u64 && child.started)
+    })
+    .await;
+
+    // The storm has evicted every "quiet" transition, so the marker that now
+    // fronts the buffer is stamped with a "storm" envelope.
+    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.wait_started("quiet", 0))
+        .await
+        .expect("wait_started must not outlive the transitions it awaits");
+    assert_eq!(waited, None);
+
+    shutdown(handle).await;
+}

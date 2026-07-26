@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     lifecycle
         .wait_started("press", baseline)
         .await
-        .expect("supervisor remains live");
+        .expect("press restart is observed");
     orders.send("flyers x500".into()).await?;
 
     handle.shutdown_and_wait().await?;

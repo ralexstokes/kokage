@@ -826,3 +826,38 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
+
+/// A parent learns a nested supervisor's snapshot only from publications the
+/// nested incarnation forwards to it; it never reads that state back. A nested
+/// incarnation whose first computed view already matches the baseline its
+/// parent bound must therefore still forward that view, or it stays invisible.
+#[tokio::test]
+async fn nested_supervisor_view_reaches_the_parent_without_diverging_from_its_baseline() {
+    let nested = SupervisorBuilder::new()
+        .build()
+        .expect("valid nested supervisor");
+
+    let outer = SupervisorBuilder::new()
+        .supervisor("nested", SupervisorSpec::new(nested))
+        .build()
+        .expect("valid outer supervisor");
+
+    let handle = outer.spawn();
+    handle.wait_started().await.expect("startup should succeed");
+
+    let mut snapshots = handle.subscribe_snapshots();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for(|snapshot| {
+            snapshot
+                .child("nested")
+                .is_some_and(|child| child.supervisor.is_some())
+        }),
+    )
+    .await
+    .expect("parent snapshot should carry the nested supervisor's view")
+    .expect("snapshot watch should stay open");
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
+}

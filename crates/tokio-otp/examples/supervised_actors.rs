@@ -94,7 +94,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     lifecycle
         .wait_started("worker", baseline)
         .await
-        .ok_or_else(|| io::Error::other("worker removed before restarting"))?;
+        .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
 
     orders.send("flyers x500".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));
