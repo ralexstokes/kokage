@@ -8,8 +8,9 @@ use std::{
 
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, LifecycleEvent, LifecycleEventKind, RestartIntensity, RestartPolicy,
-    ShutdownMode, ShutdownPolicy, StartMode, Strategy, SupervisorBuilder, SupervisorSpec,
+    ChildSpec, ChildStateView, DynamicSupervisorBuilder, LifecycleEvent, LifecycleEventKind,
+    RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder,
+    SupervisorSpec,
 };
 
 mod common;
@@ -82,14 +83,17 @@ async fn restart_is_an_ordered_exit_started_pair() {
 
 #[tokio::test]
 async fn wait_started_reports_membership_removal() {
-    let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle
+        .add_child(ChildSpec::new("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("worker is added");
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
@@ -187,20 +191,19 @@ async fn remove_on_exit_emits_exited_before_removed() {
 
 #[tokio::test]
 async fn cooperative_remove_publishes_removed_before_reply() {
-    let handle = SupervisorBuilder::new()
-        .child(
-            ChildSpec::new("worker", |ctx| async move {
-                ctx.shutdown_token().cancelled().await;
-                Ok(())
-            })
-            .shutdown(ShutdownPolicy::new(
-                Duration::from_secs(1),
-                ShutdownMode::CooperativeStrict,
-            )),
-        )
+    let worker = ChildSpec::new("worker", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    })
+    .shutdown(ShutdownPolicy::new(
+        Duration::from_secs(1),
+        ShutdownMode::CooperativeStrict,
+    ));
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle.add_child(worker).await.expect("worker added");
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
     let remover = handle.clone();
@@ -222,49 +225,47 @@ async fn cooperative_remove_publishes_removed_before_reply() {
 }
 
 #[tokio::test]
-async fn queued_child_can_be_added_then_removed_without_starting() {
-    let release = Arc::new(Notify::new());
-    let first_release = Arc::clone(&release);
-    let first = ChildSpec::new("first", move |ctx| {
-        let release = Arc::clone(&first_release);
-        async move {
-            release.notified().await;
-            ctx.mark_ready();
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }
-    })
-    .wait_for_ready();
-    let handle = SupervisorBuilder::new()
-        .start_mode(StartMode::Sequential)
-        .child(first)
+async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
     let mut lifecycle = handle.watch_lifecycle();
     handle
-        .add_child(ChildSpec::new("queued", |ctx| async move {
+        .add_child(ChildSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
         .await
-        .expect("queued child insertion succeeds");
-    handle
-        .remove_child("queued")
-        .await
-        .expect("queued child removal succeeds");
+        .expect("dynamic child added");
+    handle.wait_started().await.expect("dynamic child starts");
 
-    let added = next_for(&mut lifecycle, "queued", |kind| {
+    let added = next_for(&mut lifecycle, "worker", |kind| {
         matches!(kind, LifecycleEventKind::Added)
     })
     .await;
-    let removed = next_for(&mut lifecycle, "queued", |kind| {
+    let started = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+    })
+    .await;
+    handle
+        .remove_child("worker")
+        .await
+        .expect("dynamic child removed");
+    let exited = next_for(&mut lifecycle, "worker", |kind| {
+        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+    })
+    .await;
+    let removed = next_for(&mut lifecycle, "worker", |kind| {
         matches!(kind, LifecycleEventKind::Removed)
     })
     .await;
-    assert_eq!(removed.seq, added.seq + 1);
 
-    release.notify_one();
+    assert_eq!(started.seq, added.seq + 1);
+    assert_eq!(exited.seq, started.seq + 1);
+    assert_eq!(removed.seq, exited.seq + 1);
+    assert_eq!(removed.membership_epoch, added.membership_epoch);
+
     shutdown(handle).await;
 }
 
@@ -285,7 +286,7 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60)));
-    let handle = SupervisorBuilder::new()
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -326,7 +327,7 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
 #[tokio::test]
 async fn watch_snapshot_filter_is_gap_free_under_concurrent_churn() {
     const MEMBERS: usize = 12;
-    let handle = SupervisorBuilder::new()
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -467,7 +468,6 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
         .build()
         .expect("valid nested supervisor");
     let handle = SupervisorBuilder::new()
-        .start_mode(StartMode::Sequential)
         .child(gate)
         .supervisor("nested", nested)
         .build()
@@ -542,11 +542,14 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
         }))
         .build()
         .expect("valid nested supervisor");
-    let handle = SupervisorBuilder::new()
-        .supervisor("nested", nested)
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();
+    handle
+        .add_supervisor("nested", nested)
+        .await
+        .expect("nested supervisor added");
     handle.wait_started().await.expect("startup succeeds");
     let nested = handle.supervisor("nested").expect("nested handle");
     let mut lifecycle = nested.watch_lifecycle();
@@ -748,12 +751,27 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
 }
 
 #[tokio::test]
-async fn ancestor_reincarnation_closes_orphaned_and_displaced_dynamic_watches() {
+async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
     let crash_middle = Arc::new(Notify::new());
+    let middle = DynamicSupervisorBuilder::new()
+        .build()
+        .expect("valid dynamic middle supervisor");
+    let handle = SupervisorBuilder::new()
+        .supervisor(
+            "middle",
+            SupervisorSpec::new(middle)
+                .restart(RestartPolicy::OnFailure)
+                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("valid root supervisor")
+        .spawn();
+    handle.wait_started().await.expect("root starts");
+
+    let middle = handle.supervisor("middle").expect("middle handle");
     let bomb_crash = Arc::clone(&crash_middle);
-    let middle_supervisor = SupervisorBuilder::new()
-        .supervisor("slot", idle_supervisor())
-        .child(
+    middle
+        .add_child(
             ChildSpec::new("bomb", move |_ctx| {
                 let crash = Arc::clone(&bomb_crash);
                 async move {
@@ -764,63 +782,24 @@ async fn ancestor_reincarnation_closes_orphaned_and_displaced_dynamic_watches() 
             .restart(RestartPolicy::OnFailure)
             .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
         )
-        .build()
-        .expect("valid middle supervisor");
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            "middle",
-            SupervisorSpec::new(middle_supervisor)
-                .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
-        )
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-    handle.wait_started().await.expect("startup succeeds");
-    let middle = handle.supervisor("middle").expect("middle handle");
-
-    middle
-        .remove_child("slot")
         .await
-        .expect("static slot removal succeeds");
-    middle
-        .add_supervisor("slot", idle_supervisor())
-        .await
-        .expect("dynamic collision add succeeds");
+        .expect("bomb added");
     middle
         .add_supervisor("orphan", idle_supervisor())
         .await
-        .expect("dynamic orphan add succeeds");
-    let displaced = middle.supervisor("slot").expect("dynamic slot handle");
-    let orphaned = middle.supervisor("orphan").expect("dynamic orphan handle");
-    let displaced_lifecycle = displaced.watch_lifecycle();
-    let orphaned_lifecycle = orphaned.watch_lifecycle();
+        .expect("dynamic descendant added");
+    let orphan = middle.supervisor("orphan").expect("orphan handle");
+    let lifecycle = orphan.watch_lifecycle();
     let mut middle_snapshots = middle.subscribe_snapshots();
 
     crash_middle.notify_one();
-    timeout(common::EVENT_TIMEOUT, displaced_lifecycle.closed())
+    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
         .await
-        .expect("static reconciliation closes displaced dynamic identity");
-    timeout(common::EVENT_TIMEOUT, orphaned_lifecycle.closed())
-        .await
-        .expect("ancestor reincarnation closes orphaned dynamic identity");
-
+        .expect("orphaned lifecycle watch closes after ancestor reincarnation");
     wait_for_snapshot(&mut middle_snapshots, |snapshot| {
-        snapshot.total_restarts == 1
-            && snapshot
-                .child("bomb")
-                .is_some_and(|bomb| bomb.state == ChildStateView::Running)
-            && snapshot
-                .descendant(["slot", "worker"])
-                .is_some_and(|worker| worker.state == ChildStateView::Running)
-            && snapshot.child("orphan").is_none()
+        snapshot.total_restarts == 1 && snapshot.child("orphan").is_none()
     })
     .await;
-    let fresh_slot = middle.supervisor("slot").expect("fresh static identity");
-    let fresh_lifecycle = fresh_slot.watch_lifecycle();
-    timeout(common::QUIET_TIMEOUT, fresh_lifecycle.closed())
-        .await
-        .expect_err("fresh static identity remains live");
 
     shutdown(handle).await;
 }
@@ -954,7 +933,7 @@ fn completing_supervisor(complete: &Arc<Notify>) -> tokio_supervisor::Supervisor
 #[tokio::test]
 async fn wait_started_reports_a_start_lost_to_overflow() {
     const RESTARTS: usize = 80;
-    let handle = SupervisorBuilder::new()
+    let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
         .spawn();

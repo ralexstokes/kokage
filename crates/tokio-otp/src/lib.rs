@@ -46,7 +46,7 @@
 //! | Type | Role |
 //! |------|------|
 //! | [`Runtime`] / [`RuntimeBuilder`] | Owns a supervisor and actor factory — the common composition. |
-//! | [`RuntimeHandle`] | Control surface for a spawned runtime (shutdown, dynamic actors, observability). |
+//! | [`RuntimeHandle`] | Control surface for shutdown and observability; dynamic-scope handles also mutate membership. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -58,11 +58,12 @@
 //!
 //! # Composition modes
 //!
-//! - **The integrated runtime** via [`Runtime::builder`]: per-actor
-//!   supervision with per-actor policy overrides, recursive actor-aware
-//!   subtrees, arbitrary non-actor children, and runtime actor creation. Add
-//!   nested builders with [`RuntimeBuilder::subtree`], or omit
-//!   [`RuntimeBuilder::graph`] to start with no direct actors.
+//! - **Ordered actor trees** via [`Runtime::builder`]: per-actor supervision
+//!   with per-actor policy overrides, recursive actor-aware subtrees, and
+//!   arbitrary statically declared non-actor children. Add nested scopes with
+//!   [`RuntimeBuilder::subtree`].
+//! - **Dynamic actor membership** via [`Runtime::dynamic`]: an initially empty
+//!   `OneForOne` scope that accepts actors and subtrees at runtime.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.
@@ -236,6 +237,7 @@
 mod actor;
 mod builder;
 mod runtime;
+mod supervision;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -251,17 +253,18 @@ pub mod prelude {
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
         BoxError, CallError, CancellationHandle, CancellationToken, Down, DownReason, DrainPolicy,
-        Flow,
+        DynamicRuntimeBuilder, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, MailboxMode, MessageSize, MonitorEvent, RawActor,
         Reply, RestartWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StepDeadline,
-        StepHandle,
+        StepHandle, SupervisionTree,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildMembershipView,
-        ChildSnapshot, ChildStateView, ExitStatusView, LifecycleEvent, LifecycleEventKind,
-        LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, StartMode,
-        Strategy, SupervisorEvent, SupervisorSnapshot, SupervisorStateView,
+        ChildSnapshot, ChildStateView, ControlOperation, ExitStatusView, LifecycleEvent,
+        LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind,
+        ShutdownMode, ShutdownPolicy, Strategy, SupervisorEvent, SupervisorSnapshot,
+        SupervisorStateView,
         prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
     };
 }
@@ -276,21 +279,26 @@ pub use actor::{
     Reply, RunnableActor, RunnableActorFactory, SendError, StepDeadline, StepHandle,
     SupervisorPathSegment, TryRecvError,
 };
-pub use builder::RuntimeBuilder;
+pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 #[allow(deprecated)]
 pub use runtime::RestartWatchGuard;
 pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
+};
+pub use supervision::{
+    ActorChild, ChildOutline, SupervisionChild, SupervisionOutline, SupervisionScope,
+    SupervisionTree,
 };
 #[allow(deprecated)]
 pub use tokio_supervisor::RestartWatch;
 pub use tokio_supervisor::{
     AttachedChild, AttachedChildIdentity, AutoShutdown, BackoffPolicy, ChildContext,
     ChildMembershipView, ChildResult, ChildSnapshot, ChildSpec, ChildStateView, ControlError,
-    EventPathSegment, ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy, StartMode, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorEvent, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSpec, SupervisorStateView, SupervisorToken,
+    ControlOperation, DynamicSupervisorBuilder, EventPathSegment, ExitStatusView, LifecycleEvent,
+    LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
+    ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder, SupervisorError,
+    SupervisorEvent, SupervisorHandle, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
+    SupervisorToken,
     prelude::{SupervisorEventReceiverExt, SupervisorSnapshotReceiverExt},
 };
 pub use tokio_util::sync::CancellationToken;

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{Mutex, Notify, watch};
-use tokio_otp::{ChildSpec, SupervisorError, prelude::*};
+use tokio_otp::{ChildSpec, DynamicActorOptions, SupervisorError, prelude::*};
 
 #[derive(Clone)]
 struct Probe {
@@ -76,76 +76,34 @@ impl Actor for AddsChildOnStart {
 }
 
 #[tokio::test]
-async fn actor_on_start_can_await_add_child_on_its_own_supervisor() {
+async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
     let (handle_tx, handle_rx) = watch::channel::<Option<RuntimeHandle>>(None);
     let added_started = Arc::new(Notify::new());
-    let mut graph = GraphBuilder::new();
-    graph.add({
-        let added_started = Arc::clone(&added_started);
-        move || AddsChildOnStart {
-            handle_rx: handle_rx.clone(),
-            added_started: Arc::clone(&added_started),
-        }
-    });
-    let handle = Runtime::builder()
-        .graph(graph.build().expect("valid graph"))
-        .start_mode(StartMode::Sequential)
+    let handle = Runtime::dynamic()
         .build()
-        .expect("valid runtime")
+        .expect("dynamic runtime builds")
         .spawn();
     handle_tx
         .send(Some(handle.clone()))
         .expect("startup actor retains handle receiver");
-
-    tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
+    handle
+        .add_actor(
+            "starter",
+            {
+                let added_started = Arc::clone(&added_started);
+                move || AddsChildOnStart {
+                    handle_rx: handle_rx.clone(),
+                    added_started: Arc::clone(&added_started),
+                }
+            },
+            DynamicActorOptions::default(),
+        )
         .await
-        .expect("on_start add should not deadlock sequential startup")
-        .expect("runtime should become ready");
+        .expect("startup actor added");
+
     tokio::time::timeout(Duration::from_secs(1), added_started.notified())
         .await
-        .expect("added child should start after on_start returns");
-    handle.shutdown_and_wait().await.unwrap();
-}
-
-#[tokio::test]
-async fn add_subtree_returns_its_handle_while_sequentially_queued() {
-    let order = Arc::new(Mutex::new(Vec::new()));
-    let release = Arc::new(Notify::new());
-    let mut graph = GraphBuilder::new();
-    graph.add({
-        let order = Arc::clone(&order);
-        let release = Arc::clone(&release);
-        move || Probe {
-            name: "gate",
-            order: Arc::clone(&order),
-            release: Some(Arc::clone(&release)),
-        }
-    });
-    let handle = Runtime::builder()
-        .graph(graph.build().expect("valid graph"))
-        .start_mode(StartMode::Sequential)
-        .build()
-        .expect("valid runtime")
-        .spawn();
-
-    let subtree = tokio::time::timeout(
-        Duration::from_secs(1),
-        handle.add_subtree("queued-subtree", Runtime::builder()),
-    )
-    .await
-    .expect("add_subtree should resolve on insertion")
-    .expect("queued subtree attachment should be discoverable");
-    assert!(handle.subtree("queued-subtree").is_some());
-    let snapshot = handle.snapshot();
-    let queued = snapshot
-        .child("queued-subtree")
-        .expect("queued subtree is visible in parent membership");
-    assert_eq!(queued.state, tokio_otp::ChildStateView::Starting);
-    assert!(!queued.started);
-    assert!(subtree.snapshot().children.is_empty());
-
-    release.notify_one();
-    handle.wait_started().await.unwrap();
+        .expect("self-scope add_child should not deadlock actor startup");
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -170,7 +128,6 @@ async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() 
 
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
-        .start_mode(StartMode::Sequential)
         .build()
         .unwrap()
         .spawn();

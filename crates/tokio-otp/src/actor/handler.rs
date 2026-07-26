@@ -8,16 +8,13 @@ use crate::actor::{
 /// How the provided [`Actor`] receive loop treats messages still
 /// queued when shutdown is requested.
 ///
-/// # Startup ordering and concurrent shutdown
+/// # Startup and shutdown ordering
 ///
-/// Actors initialize concurrently by default. With
-/// [`StartMode::Sequential`](tokio_supervisor::StartMode::Sequential), each
-/// actor's [`on_start`](Actor::on_start) must finish before the next actor is
-/// spawned. Control operations remain available during `on_start`; successful
-/// adds resolve on membership insertion, while readiness remains observable
-/// through the supervisor handle. At shutdown, every sibling is cancelled at the same time under
-/// one shared grace deadline. A draining actor can therefore
-/// observe a [`SendError`](crate::SendError) from a sibling that has already
+/// Actors in an ordered runtime initialize in declaration order: each actor's
+/// [`on_start`](Actor::on_start) must finish before the next actor is spawned.
+/// Ordered siblings stop in reverse declaration order, one complete child at
+/// a time. A draining actor can therefore
+/// observe a [`SendError`](crate::SendError) from a later sibling that has already
 /// stopped; drain handlers must tolerate that (skip or log the failed send)
 /// rather than propagate it, or the error fails the draining actor itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

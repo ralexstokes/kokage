@@ -60,23 +60,28 @@
 //!   5 s grace) — cooperative with a fallback Tokio abort.
 //! - **[`Abort`](ShutdownMode::Abort)** — abort the Tokio task immediately.
 //!
-//! When the supervisor is draining multiple cooperative children at once
-//! (during shutdown or a [`OneForAll`](Strategy::OneForAll) restart), it uses a
-//! shared deadline equal to the maximum grace period among the active
-//! cooperative children. Group and full-shutdown drains are atomic critical
-//! sections, so control commands wait behind them until the old generation is
-//! gone; ordinary removals, restart backoffs, and readiness gates remain
-//! responsive.
+//! Ordered scopes drain in reverse declaration order, giving each cooperative
+//! child its own grace period before moving to the previous child. Once an
+//! abort is issued, the cursor advances promptly even if a non-yielding future
+//! has not reached a poll boundary. Dynamic scopes drain all active children
+//! concurrently under one shared deadline equal to the maximum configured
+//! grace. Ordered group and full-shutdown drains are atomic critical sections,
+//! so observation never sees a later generation overlap an earlier one.
 //!
 //! All shutdown modes are cooperative at Tokio poll boundaries. A non-yielding
 //! future is never forcibly preempted. If you need hard-stop guarantees for
 //! blocking work, isolate it in a dedicated blocking pool or external process
 //! and supervise the boundary.
 //!
-//! # Dynamic children
+//! # Scope kinds
 //!
-//! Children can be added and removed at runtime through the
-//! [`SupervisorHandle`]:
+//! [`SupervisorBuilder`] creates an ordered scope: a declared sequence with
+//! readiness-gated startup, reverse sequential teardown, and immutable runtime
+//! membership. [`DynamicSupervisorBuilder`] creates an empty dynamic scope:
+//! membership is written at runtime, startup is immediate, teardown is
+//! concurrent, and the strategy is always [`OneForOne`](Strategy::OneForOne).
+//!
+//! Dynamic membership is controlled through the [`SupervisorHandle`]:
 //!
 //! - [`add_child`](SupervisorHandle::add_child) /
 //!   [`remove_child`](SupervisorHandle::remove_child) target that handle's
@@ -85,14 +90,15 @@
 //!   nested supervisor; [`supervisor`](SupervisorHandle::supervisor) returns
 //!   its restart-stable handle.
 //!
-//! Control operations wait when the control channel is full. Successful adds
-//! resolve once membership is inserted and startup is scheduled, which can be
-//! before the child spawns under sequential startup; use
-//! [`SupervisorHandle::wait_started`] for readiness. Active removals resolve
-//! only after detachment, without blocking distinct-id control operations.
+//! Successful dynamic adds resolve once membership is inserted and immediate
+//! startup is scheduled; use [`SupervisorHandle::wait_started`] for readiness.
+//! Active removals resolve only after detachment, without blocking distinct-id
+//! control operations. Ordered handles reject every add/remove operation with
+//! [`ControlError::UnsupportedByScopeKind`].
 //!
-//! Supervisors may start empty or have their last child removed. They idle at
-//! zero children and continue accepting control commands until shutdown.
+//! Dynamic supervisors may start empty or have their last child removed. They
+//! idle at zero children and continue accepting control commands until
+//! shutdown. Empty ordered supervisors remain empty.
 //!
 //! # Nested supervisors
 //!
@@ -107,6 +113,11 @@
 //! - Has a restart-stable direct handle whose subscriptions and snapshots
 //!   survive nested restarts.
 //! - Is restarted by the parent according to its [`SupervisorSpec`] policies.
+//! - Is recursively hard-aborted when its wrapper uses [`ShutdownMode::Abort`]
+//!   or when a terminal, non-revivable ancestor fails. A parent-restartable
+//!   failed incarnation lets nested runtimes finish cooperatively before their
+//!   stable identities rebind; a normal cooperative stop likewise applies the
+//!   nested scope's own child policies.
 //!
 //! # Observability
 //!
@@ -215,13 +226,14 @@ mod observability;
 pub mod prelude;
 mod restart;
 mod runtime;
+mod scope;
 mod shutdown;
 mod snapshot;
 mod strategy;
 mod supervisor;
 
 pub use attachment::{AttachedChild, AttachedChildIdentity};
-pub use builder::{StartMode, SupervisorBuilder};
+pub use builder::{DynamicSupervisorBuilder, SupervisorBuilder};
 pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
 pub use context::{ChildContext, SupervisorToken};
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
@@ -231,6 +243,7 @@ pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
 #[allow(deprecated)]
 pub use monitor::RestartWatch;
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
+pub use scope::{ControlOperation, ScopeKind};
 pub use shutdown::{AutoShutdown, ShutdownMode, ShutdownPolicy};
 pub use snapshot::{
     ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,

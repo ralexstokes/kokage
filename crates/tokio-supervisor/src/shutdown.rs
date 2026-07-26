@@ -26,6 +26,7 @@ pub enum AutoShutdown {
 
 /// How the supervisor stops a child task during shutdown or removal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum ShutdownMode {
     /// Like [`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort), but
@@ -45,7 +46,9 @@ pub enum ShutdownMode {
     /// Issue a Tokio abort and return promptly.
     ///
     /// Abort remains cooperative at Tokio poll boundaries, so this mode does not
-    /// forcibly preempt a non-yielding future.
+    /// forcibly preempt a non-yielding future. For a nested supervisor child,
+    /// the abort cascades recursively through the nested subtree instead of
+    /// leaving that subtree to drain without a supervisor above it.
     Abort,
 }
 
@@ -55,6 +58,7 @@ pub enum ShutdownMode {
 /// The default is [`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort)
 /// with a 5-second grace period.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ShutdownPolicy {
     /// How long to wait for the child to exit after its cancellation token is

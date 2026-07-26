@@ -55,7 +55,7 @@ async fn runtime_with_watched_subtree() -> (
     tokio_otp::ActorRef<()>,
     mpsc::UnboundedReceiver<(u64, LifecycleEvent)>,
 ) {
-    let handle = Runtime::builder().build().expect("runtime builds").spawn();
+    let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = handle

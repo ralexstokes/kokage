@@ -8,7 +8,7 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use crate::{event::ExitStatusView, strategy::Strategy};
+use crate::{event::ExitStatusView, scope::ScopeKind, strategy::Strategy};
 
 /// Point-in-time snapshot of a supervisor's state, including the state of every
 /// child.
@@ -23,6 +23,9 @@ use crate::{event::ExitStatusView, strategy::Strategy};
 pub struct SupervisorSnapshot {
     /// Current lifecycle state of the supervisor.
     pub state: SupervisorStateView,
+    /// The supervisor's immutable membership and ordering model.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub kind: ScopeKind,
     /// The restart strategy in use.
     pub strategy: Strategy,
     /// Cumulative number of restarts this supervisor has scheduled for its
@@ -117,11 +120,19 @@ impl SupervisorSnapshot {
     ) -> Self {
         Self {
             state,
+            kind: ScopeKind::Ordered,
             strategy,
             total_restarts: 0,
             lifecycle_seq: 0,
             children,
         }
+    }
+
+    /// Sets the immutable scope kind represented by this snapshot.
+    #[must_use]
+    pub fn kind(mut self, kind: ScopeKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     /// Sets the cumulative restart count recorded by this supervisor.
@@ -331,11 +342,16 @@ impl NestedSnapshotState {
         self.queued.store(false, Ordering::Release);
     }
 
-    pub(crate) fn replace(&self, snapshot: SupervisorSnapshot) {
-        *self
+    pub(crate) fn replace_if_changed(&self, snapshot: SupervisorSnapshot) -> bool {
+        let mut latest = self
             .latest
             .lock()
-            .expect("nested snapshot state mutex poisoned") = Some(snapshot);
+            .expect("nested snapshot state mutex poisoned");
+        if latest.as_ref() == Some(&snapshot) {
+            return false;
+        }
+        *latest = Some(snapshot);
+        true
     }
 
     pub(crate) fn latest(&self) -> Option<SupervisorSnapshot> {
@@ -382,7 +398,9 @@ impl SnapshotCell {
     }
 
     pub(crate) fn forward(&self, snapshot: SupervisorSnapshot, generation: u64) {
-        self.state.replace(snapshot);
+        if !self.state.replace_if_changed(snapshot) {
+            return;
+        }
         if !self.state.try_queue() {
             return;
         }
@@ -401,7 +419,27 @@ impl SnapshotCell {
 
 #[cfg(all(test, feature = "serde"))]
 mod tests {
-    use super::{ChildSnapshot, ChildStateView};
+    use super::{ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView};
+    use crate::{ScopeKind, Strategy};
+
+    #[test]
+    fn missing_scope_kind_deserializes_as_ordered_for_additive_compatibility() {
+        let snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        )
+        .kind(ScopeKind::Dynamic);
+        let mut value = serde_json::to_value(snapshot).expect("supervisor snapshot serializes");
+        value
+            .as_object_mut()
+            .expect("supervisor snapshot serializes as an object")
+            .remove("kind");
+
+        let decoded = serde_json::from_value::<SupervisorSnapshot>(value)
+            .expect("older snapshots without kind remain readable");
+        assert_eq!(decoded.kind, ScopeKind::Ordered);
+    }
 
     #[test]
     fn membership_epoch_is_required_when_deserializing() {

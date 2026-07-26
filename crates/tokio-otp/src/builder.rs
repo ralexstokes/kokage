@@ -1,23 +1,20 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use crate::{ActorRef, Graph, RunnableActorFactory};
-use tokio_supervisor::{
-    ChildSpec, RestartIntensity, RestartPolicy, ShutdownPolicy, StartMode, Strategy,
-    SupervisorBuilder, SupervisorSpec,
-};
+use crate::{ActorChild, ActorRef, Graph, SupervisionTree};
+use tokio_supervisor::{ChildSpec, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy};
 
-use crate::runtime::{
-    ActorOverrides, ActorRuntimeState, Runtime, RuntimeAttachment, actor_children,
-};
+use crate::runtime::{ActorOverrides, Runtime};
 
 /// One-stop builder for the common supervised-actor setup.
 ///
 /// Wires an actor [`Graph`] into a [`Runtime`] where every actor runs as its
-/// own supervised child. Nested builders added with [`subtree`](Self::subtree)
-/// preserve the same actor-aware runtime behavior recursively. It can also
-/// build a graph-less runtime that starts empty and grows through
-/// [`RuntimeHandle::add_actor`](crate::RuntimeHandle::add_actor). Created via
-/// [`Runtime::builder`].
+/// own supervised child. Nested scopes added with [`subtree`](Self::subtree)
+/// preserve the same actor-aware runtime behavior recursively. These ordered
+/// scopes have static membership. Use [`DynamicRuntimeBuilder`] for a
+/// graph-less runtime whose membership grows through
+/// [`RuntimeHandle::add_actor`](crate::RuntimeHandle::add_actor). Create the
+/// two builders with [`Runtime::builder`] and [`Runtime::dynamic`],
+/// respectively.
 ///
 /// Per-actor policies can be overridden with [`actor_restart`](Self::actor_restart),
 /// [`actor_restart_intensity`](Self::actor_restart_intensity), and
@@ -59,26 +56,12 @@ use crate::runtime::{
 /// # }
 /// ```
 ///
-/// Dynamic-only runtimes can start without a graph:
-///
-/// ```no_run
-/// use tokio_otp::prelude::*;
-///
-/// # #[tokio::main]
-/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let runtime = Runtime::builder().build()?;
-/// let handle = runtime.spawn();
-/// handle.shutdown_and_wait().await?;
-/// # Ok(())
-/// # }
-/// ```
 #[derive(Default)]
 pub struct RuntimeBuilder {
     graph: Option<Graph>,
-    subtrees: Vec<(String, RuntimeBuilder)>,
+    subtrees: Vec<(String, SupervisionTree)>,
     children: Vec<ChildSpec>,
     strategy: Strategy,
-    start_mode: StartMode,
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
     restart_intensity: Option<RestartIntensity>,
@@ -110,8 +93,8 @@ impl RuntimeBuilder {
     /// graph actors, in declaration order, which also determines sequential
     /// startup order.
     #[must_use]
-    pub fn subtree(mut self, id: impl Into<String>, subtree: RuntimeBuilder) -> Self {
-        self.subtrees.push((id.into(), subtree));
+    pub fn subtree(mut self, id: impl Into<String>, subtree: impl Into<SupervisionTree>) -> Self {
+        self.subtrees.push((id.into(), subtree.into()));
         self
     }
 
@@ -130,14 +113,6 @@ impl RuntimeBuilder {
     #[must_use]
     pub fn strategy(mut self, strategy: Strategy) -> Self {
         self.strategy = strategy;
-        self
-    }
-
-    /// Sets whether actors start concurrently or wait for `on_start` in
-    /// declaration order.
-    #[must_use]
-    pub fn start_mode(mut self, start_mode: StartMode) -> Self {
-        self.start_mode = start_mode;
         self
     }
 
@@ -212,49 +187,116 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Validates the configuration and returns a ready-to-run [`Runtime`].
-    ///
-    /// Returns an error if the supervisor configuration is invalid.
-    pub fn build(self) -> Result<Runtime, tokio_supervisor::SupervisorBuildError> {
-        let mut supervisor = SupervisorBuilder::new()
+    /// Converts this builder into its equivalent inspectable declaration.
+    pub fn into_tree(self) -> SupervisionTree {
+        let mut tree = SupervisionTree::new()
             .strategy(self.strategy)
-            .start_mode(self.start_mode);
+            .default_restart(self.restart)
+            .default_shutdown(self.shutdown);
         if let Some(intensity) = self.restart_intensity {
-            supervisor = supervisor.restart_intensity(intensity);
+            tree = tree.restart_intensity(intensity);
         }
-
-        let actor_factory = self
-            .graph
-            .as_ref()
-            .map_or_else(RunnableActorFactory::new, Graph::dynamic_factory);
-        let actors = Arc::new(ActorRuntimeState::new(actor_factory));
-
+        if let Some(graph) = &self.graph {
+            tree = tree.dynamic_defaults(graph);
+        }
         for (id, subtree) in self.subtrees {
-            let (nested_supervisor, nested_actors) = subtree.build()?.into_parts();
-            supervisor = supervisor.supervisor(
-                id,
-                SupervisorSpec::new(nested_supervisor)
-                    .attachment(RuntimeAttachment::subtree(&actors, nested_actors)),
-            );
+            tree = tree.subtree(id, subtree);
         }
-
-        supervisor = self
-            .children
-            .into_iter()
-            .fold(supervisor, |builder, child| builder.child(child));
-
-        if let Some(graph) = self.graph {
-            supervisor = actor_children(
-                &graph,
-                &actors,
-                self.restart,
-                self.shutdown,
-                &self.actor_overrides,
-            )
-            .into_iter()
-            .fold(supervisor, |builder, child| builder.child(child));
+        for child in self.children {
+            tree = tree.task(child);
         }
-        Ok(Runtime::with_actor_tree(supervisor.build()?, actors))
+        if let Some(graph) = &self.graph {
+            for actor in graph.actors() {
+                let overrides = self
+                    .actor_overrides
+                    .get(actor.label())
+                    .copied()
+                    .unwrap_or_default();
+                let mut child = ActorChild::new(actor.clone());
+                if let Some(restart) = overrides.restart {
+                    child = child.restart(restart);
+                }
+                if let Some(shutdown) = overrides.shutdown {
+                    child = child.shutdown(shutdown);
+                }
+                if let Some(intensity) = overrides.restart_intensity {
+                    child = child.restart_intensity(intensity);
+                }
+                tree = tree.actor(child);
+            }
+        }
+        tree
+    }
+
+    /// Validates the configuration and returns a ready-to-run [`Runtime`].
+    pub fn build(self) -> Result<Runtime, tokio_supervisor::SupervisorBuildError> {
+        self.into_tree().build()
+    }
+}
+
+impl From<RuntimeBuilder> for SupervisionTree {
+    fn from(builder: RuntimeBuilder) -> Self {
+        builder.into_tree()
+    }
+}
+
+/// Builder for a graph-less actor runtime with dynamic membership.
+#[derive(Default)]
+pub struct DynamicRuntimeBuilder {
+    restart_intensity: Option<RestartIntensity>,
+    restart: RestartPolicy,
+    shutdown: ShutdownPolicy,
+}
+
+impl DynamicRuntimeBuilder {
+    /// Creates an empty dynamic runtime builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the default supervisor restart intensity.
+    #[must_use]
+    pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
+        self.restart_intensity = Some(intensity);
+        self
+    }
+
+    /// Sets the restart policy inherited by runtime-added actors whose
+    /// [`DynamicActorOptions`](crate::DynamicActorOptions) do not override it.
+    #[must_use]
+    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+        self.restart = restart;
+        self
+    }
+
+    /// Sets the shutdown policy inherited by runtime-added actors whose
+    /// [`DynamicActorOptions`](crate::DynamicActorOptions) do not override it.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+        self.shutdown = shutdown;
+        self
+    }
+
+    /// Converts this builder into an inspectable dynamic tree leaf.
+    pub fn into_tree(self) -> SupervisionTree {
+        let mut tree = SupervisionTree::dynamic()
+            .default_restart(self.restart)
+            .default_shutdown(self.shutdown);
+        if let Some(intensity) = self.restart_intensity {
+            tree = tree.restart_intensity(intensity);
+        }
+        tree
+    }
+
+    /// Validates the configuration and returns an empty dynamic runtime.
+    pub fn build(self) -> Result<Runtime, tokio_supervisor::SupervisorBuildError> {
+        self.into_tree().build()
+    }
+}
+
+impl From<DynamicRuntimeBuilder> for SupervisionTree {
+    fn from(builder: DynamicRuntimeBuilder) -> Self {
+        builder.into_tree()
     }
 }
 
@@ -262,7 +304,6 @@ impl std::fmt::Debug for RuntimeBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeBuilder")
             .field("strategy", &self.strategy)
-            .field("start_mode", &self.start_mode)
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
             .field("restart_intensity", &self.restart_intensity)

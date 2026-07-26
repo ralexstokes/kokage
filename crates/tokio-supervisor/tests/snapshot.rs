@@ -11,9 +11,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView,
-    RestartIntensity, RestartPolicy, SupervisorBuilder, SupervisorEvent, SupervisorSnapshot,
-    SupervisorStateView,
+    BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
+    DynamicSupervisorBuilder, ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind,
+    SupervisorBuilder, SupervisorEvent, SupervisorSnapshot, SupervisorStateView,
 };
 
 mod common;
@@ -49,6 +49,7 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
     let handle = supervisor.spawn();
     let snapshot = handle.snapshot();
 
+    assert_eq!(snapshot.kind, ScopeKind::Ordered);
     assert_eq!(snapshot.state, SupervisorStateView::Running);
     assert_eq!(child_ids(&snapshot), vec!["alpha", "beta"]);
     assert_eq!(snapshot.children[0].membership_epoch, 0);
@@ -60,48 +61,27 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
         assert_eq!(entry.next_restart_in, None);
     }
 
-    let assigned_epoch = handle
-        .add_child(ChildSpec::new("gamma", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .await
-        .expect("dynamic child should be accepted");
-    assert_eq!(assigned_epoch, 2);
-
-    let mut snapshots = handle.subscribe_snapshots();
-    let updated = wait_for_snapshot(&mut snapshots, |snapshot| {
-        child_ids(snapshot) == vec!["alpha", "beta", "gamma"]
-    })
-    .await;
-    assert_eq!(child_ids(&updated), vec!["alpha", "beta", "gamma"]);
-    assert_eq!(
-        child(&updated, "gamma").unwrap().membership_epoch,
-        assigned_epoch
-    );
-
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
 #[tokio::test]
 async fn nested_supervisors_allocate_membership_epochs_independently() {
-    let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("seed", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let nested = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid nested supervisor");
-    let outer = SupervisorBuilder::new()
-        .child(ChildSpec::new("anchor", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let outer = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid outer supervisor");
     let handle = outer.spawn();
 
+    handle
+        .add_child(ChildSpec::new("anchor", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("anchor added");
     handle
         .add_supervisor("nested", nested)
         .await
@@ -109,6 +89,13 @@ async fn nested_supervisors_allocate_membership_epochs_independently() {
     let nested_handle = handle
         .supervisor("nested")
         .expect("nested handle available");
+    nested_handle
+        .add_child(ChildSpec::new("seed", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("nested seed added");
     nested_handle
         .add_child(ChildSpec::new("late", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -251,17 +238,23 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
         }
     });
 
-    let supervisor = SupervisorBuilder::new()
-        .child(removable)
-        .child(ChildSpec::new("keeper", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+    let supervisor = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor");
 
     let handle = supervisor.spawn();
     let mut snapshots = handle.subscribe_snapshots();
+    handle
+        .add_child(removable)
+        .await
+        .expect("removable child should be accepted");
+    handle
+        .add_child(ChildSpec::new("keeper", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("keeper child should be accepted");
 
     common::recv_event(&mut started_rx).await;
 

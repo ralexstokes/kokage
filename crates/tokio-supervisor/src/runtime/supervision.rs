@@ -14,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::{
-    builder::StartMode,
     child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment, SupervisorSpec},
     context::ChildReady,
     error::{ControlError, SupervisorError},
@@ -26,7 +25,8 @@ use crate::{
     lifecycle::{LifecycleEventDraft, LifecycleEventKind, LifecycleHub},
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
-    shutdown::{AutoShutdown, ShutdownMode},
+    scope::{ControlOperation, ScopeKind},
+    shutdown::{AutoShutdown, ShutdownMode, ShutdownPolicy},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, NestedSnapshotNotification,
         NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
@@ -292,9 +292,11 @@ pub(crate) fn reconcile_stable_identities(
 /// Read-only configuration and identity, fixed at construction time.
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
-    pub(crate) start_mode: StartMode,
+    pub(crate) kind: ScopeKind,
     pub(crate) auto_shutdown: AutoShutdown,
     pub(crate) default_restart_intensity: RestartIntensity,
+    pub(crate) default_restart: RestartPolicy,
+    pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
     pub(crate) parent_link: Option<ParentLink>,
@@ -323,6 +325,11 @@ pub(crate) struct RuntimeMeta {
 pub(crate) struct SupervisorRuntime {
     pub(crate) meta: RuntimeMeta,
     pub(crate) state: SupervisorState,
+    /// Supervisor-level stop observation. This is separate from
+    /// `group_token`: ordered shutdown must cancel children one at a time,
+    /// while every child must still observe the supervisor entering its
+    /// stopping state immediately.
+    pub(crate) stopping_token: CancellationToken,
     /// Parent token whose children are the per-child tokens. Cancelling this
     /// token cancels all children at once (used in shutdown and `OneForAll`
     /// restarts).
@@ -371,7 +378,7 @@ impl SupervisorRuntime {
         revivable: bool,
     ) -> Self {
         let default_restart_intensity = config.restart_intensity;
-        let start_mode = config.start_mode;
+        let kind = config.kind;
         let observability = SupervisorObservability::new(path_prefix.clone(), config.strategy);
         let mut children = Slab::with_capacity(config.children.len());
         let mut children_by_id = HashMap::with_capacity(config.children.len());
@@ -425,15 +432,18 @@ impl SupervisorRuntime {
         Self {
             meta: RuntimeMeta {
                 strategy: config.strategy,
-                start_mode,
+                kind,
                 auto_shutdown: config.auto_shutdown,
                 default_restart_intensity,
+                default_restart: config.default_restart,
+                default_shutdown: config.default_shutdown,
                 path_prefix,
                 observability,
                 parent_link,
                 revivable,
             },
             state: SupervisorState::Running,
+            stopping_token: CancellationToken::new(),
             group_token: CancellationToken::new(),
             join_set: JoinSet::new(),
             children,
@@ -481,8 +491,30 @@ impl SupervisorRuntime {
                 Err(error)
             }
             Err(ExitReason::Failure(error)) => {
+                // A parent-restartable incarnation preserves stable nested
+                // lifecycle continuity by letting its nested runtimes finish
+                // cooperatively before the replacement binds. A terminal
+                // root (or otherwise non-revivable incarnation) has no future
+                // supervisor above those runtimes, so keep the hard cascade
+                // armed instead of detaching them past `wait()`.
+                if self.meta.revivable {
+                    self.detach_nested_children_for_revivable_failure();
+                }
                 self.resolve_pending_removals(Some(&error));
                 Err(error)
+            }
+        }
+    }
+
+    fn detach_nested_children_for_revivable_failure(&self) {
+        for (_, child) in self.children.iter() {
+            if child.runtime.state.is_active()
+                && matches!(child.runtime.definition.kind, ChildKind::Supervisor(_))
+            {
+                child
+                    .runtime
+                    .nested_abort_cascades
+                    .store(false, std::sync::atomic::Ordering::Release);
             }
         }
     }
@@ -665,7 +697,7 @@ impl SupervisorRuntime {
                 instance: entry.instance,
                 emit_restart_event: emit_restart_events,
             };
-            if self.meta.start_mode == StartMode::Concurrent {
+            if self.meta.kind == ScopeKind::Dynamic {
                 self.spawn_start_item(item)?;
             } else {
                 let entry = &mut self.children[key];
@@ -679,7 +711,7 @@ impl SupervisorRuntime {
             }
         }
 
-        if self.meta.start_mode == StartMode::Sequential {
+        if self.meta.kind == ScopeKind::Ordered {
             self.publish_snapshot();
             self.advance_start_sequence()?;
         }
@@ -701,7 +733,7 @@ impl SupervisorRuntime {
         }
         let readiness_gated = entry.runtime.definition.readiness == ChildReadiness::Explicit;
         let (old_generation, new_generation) = self.spawn_child(item.key)?;
-        if self.meta.start_mode == StartMode::Sequential && readiness_gated {
+        if self.meta.kind == ScopeKind::Ordered && readiness_gated {
             self.start_sequence
                 .get_or_insert_with(StartSequence::default)
                 .gate = Some(StartGate {
@@ -921,10 +953,26 @@ impl SupervisorRuntime {
         }
     }
 
-    fn add_child(&mut self, child: crate::child::ChildSpec) -> CommandResult<u64> {
+    fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
+        if self.meta.kind == ScopeKind::Ordered {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddChild,
+                kind: self.meta.kind,
+            }
+            .into());
+        }
+        if child.is_significant() {
+            return Err(ControlError::InvalidConfig(
+                "dynamic scopes do not support significant children",
+            )
+            .into());
+        }
+
+        Arc::make_mut(&mut child.inner)
+            .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
 
         if child.id().is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
@@ -935,19 +983,6 @@ impl SupervisorRuntime {
                 .validate()
                 .map_err(|err| map_build_error_to_control(child.id(), err))?;
         }
-        if child.is_significant() && matches!(child.restart_policy(), RestartPolicy::Always) {
-            return Err(ControlError::InvalidConfig(
-                "significant children cannot use RestartPolicy::Always",
-            )
-            .into());
-        }
-        if child.is_significant() && matches!(self.meta.auto_shutdown, AutoShutdown::Never) {
-            return Err(ControlError::InvalidConfig(
-                "significant children require automatic shutdown",
-            )
-            .into());
-        }
-
         let id = child.id().to_owned();
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
@@ -978,10 +1013,24 @@ impl SupervisorRuntime {
         Ok(membership_epoch)
     }
 
-    fn add_supervisor(&mut self, id: String, supervisor: SupervisorSpec) -> CommandResult<u64> {
+    fn add_supervisor(&mut self, id: String, mut supervisor: SupervisorSpec) -> CommandResult<u64> {
         if self.state == SupervisorState::Stopping {
             return Err(ControlError::SupervisorStopping.into());
         }
+        if self.meta.kind == ScopeKind::Ordered {
+            return Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::AddSupervisor,
+                kind: self.meta.kind,
+            }
+            .into());
+        }
+        if supervisor.significant {
+            return Err(ControlError::InvalidConfig(
+                "dynamic scopes do not support significant children",
+            )
+            .into());
+        }
+        supervisor.apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         if id.is_empty() {
             return Err(ControlError::InvalidConfig("child id must not be empty").into());
         }
@@ -989,18 +1038,6 @@ impl SupervisorRuntime {
             intensity
                 .validate()
                 .map_err(|error| map_build_error_to_control(&id, error))?;
-        }
-        if supervisor.significant && matches!(supervisor.restart, RestartPolicy::Always) {
-            return Err(ControlError::InvalidConfig(
-                "significant children cannot use RestartPolicy::Always",
-            )
-            .into());
-        }
-        if supervisor.significant && matches!(self.meta.auto_shutdown, AutoShutdown::Never) {
-            return Err(ControlError::InvalidConfig(
-                "significant children require automatic shutdown",
-            )
-            .into());
         }
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
@@ -1102,6 +1139,13 @@ impl SupervisorRuntime {
             let _ = reply.send(Err(ControlError::SupervisorStopping));
             return Ok(());
         }
+        if self.meta.kind == ScopeKind::Ordered {
+            let _ = reply.send(Err(ControlError::UnsupportedByScopeKind {
+                operation: ControlOperation::RemoveChild,
+                kind: self.meta.kind,
+            }));
+            return Ok(());
+        }
 
         let Some(&key) = self.children_by_id.get(&id) else {
             let _ = reply.send(Err(ControlError::UnknownChildId(id)));
@@ -1185,16 +1229,20 @@ impl SupervisorRuntime {
         cleared_gate
     }
 
-    fn cancel_child(&mut self, key: ChildKey) {
+    pub(crate) fn cancel_child(&mut self, key: ChildKey) {
         self.children[key].runtime.completion.mark_cancelled();
         if let Some(token) = self.children[key].runtime.active_token.as_ref() {
             token.cancel();
         }
     }
 
-    fn abort_child(&mut self, key: ChildKey) {
-        self.children[key].runtime.completion.mark_cancelled();
-        if let Some(abort_handle) = self.children[key].runtime.abort_handle.as_ref() {
+    pub(crate) fn abort_child(&mut self, key: ChildKey) {
+        let child = &self.children[key].runtime;
+        child.completion.mark_cancelled();
+        child
+            .nested_abort_cascades
+            .store(true, std::sync::atomic::Ordering::Release);
+        if let Some(abort_handle) = child.abort_handle.as_ref() {
             abort_handle.abort();
         }
     }
@@ -1827,7 +1875,10 @@ impl SupervisorRuntime {
         // a parent learns a nested snapshot only by being pushed one, so an
         // incarnation whose first view matches its bind baseline would
         // otherwise never populate the parent's cell. Redundant forwards are
-        // already coalesced by `NestedSnapshotState::try_queue`.
+        // coalesced on the far side instead, by `NestedSnapshotState`: a fresh
+        // cell per incarnation always accepts that first view, and thereafter
+        // an unchanged snapshot neither replaces the stored one nor queues a
+        // notification.
         self.snapshots.send_if_modified(|current| {
             if *current == snapshot {
                 return false;
@@ -1902,6 +1953,7 @@ impl SupervisorRuntime {
                 SupervisorState::Stopping => SupervisorStateView::Stopping,
                 SupervisorState::Stopped => SupervisorStateView::Stopped,
             },
+            kind: self.meta.kind,
             strategy: self.meta.strategy,
             total_restarts: self.total_restarts,
             lifecycle_seq: self.lifecycle.seq(),
@@ -2185,7 +2237,6 @@ mod tests {
     #[tokio::test]
     async fn gated_group_restarts_emit_each_generation_before_readiness() {
         let supervisor = SupervisorBuilder::new()
-            .start_mode(StartMode::Sequential)
             .child(
                 ChildSpec::new("gated", |ctx| async move {
                     ctx.shutdown_token().cancelled().await;

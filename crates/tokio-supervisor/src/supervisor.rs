@@ -1,10 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
-    StartMode,
     child::{ChildDefinition, ChildKind, ChildResult},
     context::ChildContext,
     error::SupervisorError,
@@ -16,9 +21,10 @@ use crate::{
     },
     lifecycle::LifecycleHub,
     observability::{format_path, strategy_label, supervisor_name_for_path},
-    restart::RestartIntensity,
+    restart::{RestartIntensity, RestartPolicy},
     runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
-    shutdown::AutoShutdown,
+    scope::ScopeKind,
+    shutdown::{AutoShutdown, ShutdownPolicy},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotCell, SupervisorSnapshot,
         SupervisorStateView,
@@ -38,9 +44,11 @@ pub struct Supervisor {
 
 #[derive(Clone)]
 pub(crate) struct SupervisorConfig {
+    pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) start_mode: StartMode,
     pub(crate) restart_intensity: RestartIntensity,
+    pub(crate) default_restart: RestartPolicy,
+    pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) auto_shutdown: AutoShutdown,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,
@@ -54,6 +62,31 @@ pub(crate) struct ParentLink {
     pub(crate) snapshot_cell: SnapshotCell,
     pub(crate) id: String,
     pub(crate) generation: u64,
+}
+
+struct NestedTaskOnDrop {
+    abort_handle: tokio::task::AbortHandle,
+    shutdown_tx: watch::Sender<bool>,
+    cascade: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl NestedTaskOnDrop {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NestedTaskOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let _ = self.shutdown_tx.send(true);
+        if self.cascade.load(Ordering::Acquire) {
+            self.abort_handle.abort();
+        }
+    }
 }
 
 impl ParentLink {
@@ -70,6 +103,21 @@ impl ParentLink {
 impl Supervisor {
     pub(crate) fn new(config: SupervisorConfig) -> Self {
         Self { config }
+    }
+
+    /// Returns this supervisor's immutable scope kind.
+    pub fn kind(&self) -> ScopeKind {
+        self.config.kind
+    }
+
+    /// Returns the restart policy inherited by runtime-added children.
+    pub fn default_restart_policy(&self) -> RestartPolicy {
+        self.config.default_restart
+    }
+
+    /// Returns the shutdown policy inherited by runtime-added children.
+    pub fn default_shutdown_policy(&self) -> ShutdownPolicy {
+        self.config.default_shutdown
     }
 
     /// Spawns the supervisor as a background Tokio task and returns a handle
@@ -135,6 +183,7 @@ impl Supervisor {
         channels: Arc<StableSupervisorChannels>,
         path: Vec<String>,
         revivable: bool,
+        abort_cascades: Arc<AtomicBool>,
     ) -> ChildResult {
         let generation = ctx.generation();
         let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) =
@@ -214,7 +263,16 @@ impl Supervisor {
             let _ = task_done_tx.send(Some(result.clone()));
             result
         });
-
+        // Hard cascade is armed by default: aborting an ancestor runtime drops
+        // its JoinSet, each nested wrapper aborts its owned runtime, and the
+        // cascade continues recursively. Cooperative shutdown disarms this
+        // guard after the nested runtime joins normally.
+        let mut nested_task_on_drop = NestedTaskOnDrop {
+            abort_handle: join_handle.abort_handle(),
+            shutdown_tx: shutdown_tx.clone(),
+            cascade: abort_cascades,
+            armed: true,
+        };
         tokio::pin!(join_handle);
         let mut shutdown_requested = false;
 
@@ -234,6 +292,7 @@ impl Supervisor {
                 }
             }
         };
+        nested_task_on_drop.disarm();
 
         drop(binding);
         result.map_err(|error| Box::new(error) as crate::BoxError)
@@ -324,6 +383,7 @@ fn prepare_nested_channels(config: &SupervisorConfig) -> NestedChannels {
 pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot {
     SupervisorSnapshot {
         state: SupervisorStateView::Running,
+        kind: config.kind,
         strategy: config.strategy,
         total_restarts: 0,
         lifecycle_seq: 0,

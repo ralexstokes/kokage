@@ -194,11 +194,13 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
             "workers",
             Runtime::builder()
                 .graph(nested_graph.build().expect("valid nested graph"))
+                .subtree("dynamic", Runtime::dynamic())
                 .subtree(
                     "leaf",
                     Runtime::builder().graph(leaf_graph.build().expect("valid leaf graph")),
                 ),
         )
+        .subtree("raw-members", Runtime::dynamic())
         .build()
         .expect("nested runtime builds");
     let handle = runtime.spawn();
@@ -249,7 +251,10 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         [leaf_ref.id()]
     );
 
-    handle
+    let raw_members = handle
+        .subtree("raw-members")
+        .expect("dynamic raw-members subtree");
+    raw_members
         .supervisor_handle()
         .add_supervisor(
             "raw",
@@ -261,7 +266,10 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         .expect("raw supervisor added");
     assert!(handle.subtree("raw").is_none());
 
-    let dynamic = subtree
+    let dynamic_scope = subtree
+        .subtree("dynamic")
+        .expect("declared dynamic subtree");
+    let dynamic = dynamic_scope
         .add_actor(
             "dynamic-worker",
             Drain::<()>::new,
@@ -270,7 +278,7 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         .await
         .expect("nested actor added");
     dynamic.send(()).await.expect("dynamic message sent");
-    let dynamic_epoch = subtree
+    let dynamic_epoch = dynamic_scope
         .snapshot()
         .child("dynamic-worker")
         .expect("dynamic actor snapshot available")
@@ -282,7 +290,7 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         "parent stats recursively include actors added through a subtree handle"
     );
 
-    subtree
+    dynamic_scope
         .supervisor_handle()
         .remove_child("dynamic-worker")
         .await
@@ -294,17 +302,7 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
             .all(|stats| stats.actor_id != "dynamic-worker")
     );
 
-    handle
-        .supervisor_handle()
-        .remove_child("workers")
-        .await
-        .expect("subtree removed through raw handle");
-    let stats = handle.actor_stats();
-    assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].actor_id, root_ref.id());
-    assert!(handle.subtree("workers").is_none());
-
-    handle
+    raw_members
         .remove_child("raw")
         .await
         .expect("raw supervisor removed");
@@ -319,17 +317,22 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
 async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     let mut graph = GraphBuilder::new();
     let static_ref = graph.actor("static-worker", Drain::<()>::new);
-    let root = Runtime::builder().build().expect("runtime builds").spawn();
+    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
 
     let subtree = root
         .add_subtree(
             "workers",
-            Runtime::builder().graph(graph.build().expect("graph builds")),
+            Runtime::builder()
+                .graph(graph.build().expect("graph builds"))
+                .subtree("dynamic", Runtime::dynamic()),
         )
         .await
         .expect("subtree added");
     subtree.wait_started().await.expect("subtree started");
-    let dynamic_ref = subtree
+    let dynamic = subtree
+        .subtree("dynamic")
+        .expect("declared dynamic subtree");
+    let dynamic_ref = dynamic
         .add_actor(
             "dynamic-worker",
             Drain::<()>::new,
@@ -360,13 +363,13 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 
 #[tokio::test]
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
-    let root = Runtime::builder().build().expect("runtime builds").spawn();
+    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
     let middle = root
-        .add_subtree("middle", Runtime::builder())
+        .add_subtree("middle", Runtime::dynamic())
         .await
         .expect("middle subtree added");
     let leaf = middle
-        .add_subtree("leaf", Runtime::builder())
+        .add_subtree("leaf", Runtime::dynamic())
         .await
         .expect("leaf subtree added");
     let actor = leaf
@@ -396,9 +399,9 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 
 #[tokio::test]
 async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
-    let root = Runtime::builder().build().expect("runtime builds").spawn();
+    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
     let first = root
-        .add_subtree("workers", Runtime::builder())
+        .add_subtree("workers", Runtime::dynamic())
         .await
         .expect("first subtree added");
     first
@@ -407,7 +410,7 @@ async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
         .expect("actor added");
 
     let error = root
-        .add_subtree("workers", Runtime::builder())
+        .add_subtree("workers", Runtime::dynamic())
         .await
         .expect_err("duplicate subtree rejected");
     assert_eq!(
@@ -468,7 +471,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
-    let handle = Runtime::builder().build().expect("runtime builds").spawn();
+    let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
     let tracked = handle
         .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
         .await
@@ -532,6 +535,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
             "workers",
             Runtime::builder()
                 .graph(nested_graph.build().expect("valid nested graph"))
+                .subtree("dynamic", Runtime::dynamic())
                 .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
         )
         .build()
@@ -540,7 +544,10 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     handle.wait_started().await.expect("runtime started");
 
     let subtree = handle.subtree("workers").expect("actor-aware subtree");
-    let dynamic_ref = subtree
+    let dynamic = subtree
+        .subtree("dynamic")
+        .expect("declared dynamic subtree");
+    let dynamic_ref = dynamic
         .add_actor(
             "dynamic-worker",
             Drain::<()>::new,
@@ -603,7 +610,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     sampling.store(false, Ordering::Relaxed);
     sampler.await.expect("restart-window sampler completed");
 
-    subtree
+    dynamic
         .supervisor_handle()
         .add_child(ChildSpec::new("dynamic-worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -629,18 +636,22 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
 async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let mut graph = GraphBuilder::new();
     let static_ref = graph.actor("static-worker", || FailOnMessage);
-    let root = Runtime::builder().build().expect("runtime builds").spawn();
+    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
     let subtree = root
         .add_subtree(
             "workers",
             Runtime::builder()
                 .graph(graph.build().expect("graph builds"))
+                .subtree("dynamic", Runtime::dynamic())
                 .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
         )
         .await
         .expect("subtree added");
     subtree.wait_started().await.expect("subtree started");
-    let dynamic_ref = subtree
+    let dynamic = subtree
+        .subtree("dynamic")
+        .expect("declared dynamic subtree");
+    let dynamic_ref = dynamic
         .add_actor(
             "dynamic-worker",
             Drain::<()>::new,
@@ -671,7 +682,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
 }
 
 #[tokio::test]
-async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
+async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     let mut parent_graph = GraphBuilder::new();
     let fuse = parent_graph.actor("fuse", || FailOnMessage);
     let root = Runtime::builder()
@@ -679,6 +690,7 @@ async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
             "parent",
             Runtime::builder()
                 .graph(parent_graph.build().expect("graph builds"))
+                .subtree("dynamic", Runtime::dynamic())
                 .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
         )
         .build()
@@ -687,9 +699,8 @@ async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
     root.wait_started().await.expect("runtime started");
     let parent = root.subtree("parent").expect("parent subtree available");
     let dynamic = parent
-        .add_subtree("dynamic", Runtime::builder())
-        .await
-        .expect("dynamic subtree added");
+        .subtree("dynamic")
+        .expect("declared dynamic subtree available");
     dynamic
         .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
         .await
@@ -714,30 +725,18 @@ async fn parent_restart_drops_dynamic_subtree_and_allows_same_id_replay() {
             .iter()
             .all(|stats| stats.actor_id != "worker")
     );
-    assert!(matches!(
-        dynamic
-            .add_actor("late", Drain::<()>::new, DynamicActorOptions::default())
-            .await,
-        Err(ControlError::Unavailable)
-    ));
     let restarted_parent = root.subtree("parent").expect("parent rebound");
-    assert!(restarted_parent.subtree("dynamic").is_none());
-    let replayed = restarted_parent
-        .add_subtree("dynamic", Runtime::builder())
+    let rebound_dynamic = restarted_parent
+        .subtree("dynamic")
+        .expect("dynamic subtree rebound");
+    rebound_dynamic
+        .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
         .await
         .expect("same id can be replayed");
-    replayed
-        .add_actor(
-            "replacement",
-            Drain::<()>::new,
-            DynamicActorOptions::default(),
-        )
-        .await
-        .expect("replacement actor added");
     assert!(
         root.actor_stats()
             .iter()
-            .any(|stats| stats.actor_id == "replacement")
+            .any(|stats| stats.actor_id == "worker")
     );
 
     root.shutdown_and_wait().await.expect("clean shutdown");
@@ -1206,7 +1205,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
 
 #[test]
 fn runtime_builder_allows_an_empty_runtime() {
-    Runtime::builder().build().expect("empty runtime builds");
+    Runtime::dynamic().build().expect("empty runtime builds");
 }
 
 #[tokio::test]
@@ -1325,10 +1324,16 @@ async fn aborting_supervisor_deadline_can_complete_before_actor_deadline() {
 #[tokio::test]
 async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || Observe {
+    let mut graph = GraphBuilder::new();
+    let worker_ref = graph.actor("worker", move || Observe {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = Runtime::builder()
+        .graph(graph.build().expect("valid graph"))
+        .subtree("dynamic", Runtime::dynamic())
+        .build()
+        .expect("mixed runtime builds")
+        .spawn();
 
     worker_ref
         .send("count me".to_owned())
@@ -1345,7 +1350,8 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
         .expect("graph actor reported in runtime stats");
     assert_eq!(worker.messages_accepted, 1);
 
-    let extra = handle
+    let dynamic = handle.subtree("dynamic").expect("declared dynamic subtree");
+    let extra = dynamic
         .add_actor("extra", Drain::<()>::new, DynamicActorOptions::default())
         .await
         .expect("actor added");
@@ -1359,7 +1365,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
         .expect("runtime-added actor reported in runtime stats");
     assert_eq!(extra_stats.messages_accepted, 1);
 
-    handle.remove_child("extra").await.expect("actor removed");
+    dynamic.remove_child("extra").await.expect("actor removed");
     let stats = handle.actor_stats();
     assert!(
         stats.iter().all(|stats| stats.actor_id != "extra"),

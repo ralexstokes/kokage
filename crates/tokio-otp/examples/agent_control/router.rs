@@ -9,8 +9,8 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ControlError, GraphBuilder, Runtime, RuntimeHandle,
-    StartMode, Strategy, prelude::Continue,
+    Actor, ActorContext, ActorRef, ActorResult, ControlError, GraphBuilder, RuntimeHandle,
+    Strategy, SupervisionTree, prelude::Continue,
 };
 
 use crate::{
@@ -114,6 +114,7 @@ impl Router {
             },
         );
         let graph = graph.build().expect("session graph builds");
+        let session_actor = graph.actors()[0].clone();
         let mount = self.mount();
         let step_id = subtree_id.clone();
         ctx.step_or(
@@ -127,14 +128,19 @@ impl Router {
                 let subtree = mount
                     .add_subtree(
                         step_id,
-                        Runtime::builder()
-                            .graph(graph)
-                            .strategy(Strategy::OneForAll)
-                            .start_mode(StartMode::Sequential),
+                        SupervisionTree::new().actor_with_scope(
+                            "session-runtime",
+                            session_actor,
+                            SupervisionTree::dynamic(),
+                            Strategy::OneForAll,
+                        ),
                     )
                     .await;
                 match subtree {
-                    Ok(subtree) => subtree_cell.set(subtree).is_ok(),
+                    Ok(subtree) => subtree
+                        .subtree("session-runtime")
+                        .and_then(|scope| scope.subtree("children"))
+                        .is_some_and(|runs| subtree_cell.set(runs).is_ok()),
                     Err(_) => false,
                 }
             },

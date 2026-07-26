@@ -92,15 +92,12 @@ the supported detection primitive: they let an application observe correlated
 restarts across a subtree reliably, but they are detection, not a budget, and
 do not change this decision.
 
-### Shutdown remains concurrent
+### Shutdown follows the scope kind
 
-Sibling shutdown remains concurrent under a shared deadline rather than OTP's
-reverse-order sequential shutdown. Applications with dependencies must stage
-shutdown explicitly: stop new work, drain the order path, then stop venue and
-supporting actors.
-
-The proving example must demonstrate staged shutdown rather than implying that
-`DrainPolicy::Drain` alone orders sibling teardown.
+Ordered scopes stop siblings in reverse declaration order, waiting within each
+child's own grace before advancing. Dynamic scopes retain concurrent shutdown
+under one shared maximum-grace deadline. Applications choose the scope kind
+that matches their ownership and dependency structure.
 
 ### Urgent control traffic uses a separate path
 
@@ -483,8 +480,8 @@ Big shapes that neither application covers, roughly in priority order:
    semantics: `AutoShutdown::AnySignificant`/`AllSignificant`, the
    clean-exit-is-not-restarted half of `RestartPolicy::OnFailure` (the
    default policy), `Strategy::OneForAll` fate-sharing in a real pipeline,
-   `StartMode::Concurrent` (also the default — both applications start
-   `Sequential`), and finishing via `handle.wait()` rather than
+   ordered-startup failure and rollback (both applications cover successful
+   sequential startup only), and finishing via `handle.wait()` rather than
    `shutdown_and_wait()`.
 2. **Supervision without actors.** `tokio-supervisor` is independently
    usable, but both applications go through `Runtime` + actors everywhere.

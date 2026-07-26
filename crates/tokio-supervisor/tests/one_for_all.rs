@@ -5,7 +5,7 @@ use std::sync::{
 
 use tokio::{
     sync::{Barrier, Notify, mpsc},
-    time::{Duration, sleep, timeout},
+    time::{Duration, timeout},
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -15,188 +15,107 @@ use tokio_supervisor::{
 mod common;
 
 #[tokio::test]
-async fn group_restart_finalizes_and_skips_a_removing_sibling() {
-    let trigger_failure = Arc::new(Notify::new());
-    let removing_cancelled = Arc::new(Notify::new());
-    let release_removing = Arc::new(Notify::new());
-    let peer_cancelled = Arc::new(Notify::new());
-    let removing_attempts = Arc::new(AtomicUsize::new(0));
-    let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
+async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates() {
+    let fail = Arc::new(Notify::new());
+    let release_tail = Arc::new(Notify::new());
+    let release_middle = Arc::new(Notify::new());
+    let release_middle_ready = Arc::new(Notify::new());
+    let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
+    let (middle_started_tx, mut middle_started_rx) = mpsc::unbounded_channel();
+    let (tail_started_tx, mut tail_started_rx) = mpsc::unbounded_channel();
 
-    let trigger = ChildSpec::new("trigger", {
-        let trigger_failure = Arc::clone(&trigger_failure);
-        move |ctx| {
-            let trigger_failure = Arc::clone(&trigger_failure);
-            let trigger_tx = trigger_tx.clone();
-            async move {
-                trigger_tx
-                    .send(ctx.generation())
-                    .expect("test receiver dropped");
-                if ctx.generation() == 0 {
-                    trigger_failure.notified().await;
-                    Err(common::test_error("restart group"))
-                } else {
-                    ctx.shutdown_token().cancelled().await;
-                    Ok(())
-                }
-            }
-        }
-    })
-    .restart(RestartPolicy::OnFailure);
-    let removing = ChildSpec::new("removing", {
-        let removing_cancelled = Arc::clone(&removing_cancelled);
-        let release_removing = Arc::clone(&release_removing);
-        let removing_attempts = Arc::clone(&removing_attempts);
-        move |ctx| {
-            let removing_cancelled = Arc::clone(&removing_cancelled);
-            let release_removing = Arc::clone(&release_removing);
-            let removing_attempts = Arc::clone(&removing_attempts);
-            async move {
-                removing_attempts.fetch_add(1, Ordering::SeqCst);
+    let trigger_fail = Arc::clone(&fail);
+    let trigger = ChildSpec::new("trigger", move |ctx| {
+        let fail = Arc::clone(&trigger_fail);
+        async move {
+            if ctx.generation() == 0 {
+                fail.notified().await;
+                Err(common::test_error("restart group"))
+            } else {
                 ctx.shutdown_token().cancelled().await;
-                removing_cancelled.notify_one();
-                release_removing.notified().await;
-                Ok(())
-            }
-        }
-    })
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_secs(1),
-        ShutdownMode::CooperativeStrict,
-    ));
-    let peer = ChildSpec::new("peer", {
-        let peer_cancelled = Arc::clone(&peer_cancelled);
-        move |ctx| {
-            let peer_cancelled = Arc::clone(&peer_cancelled);
-            async move {
-                ctx.shutdown_token().cancelled().await;
-                peer_cancelled.notify_one();
                 Ok(())
             }
         }
     });
+    let middle_cancelled_tx = cancelled_tx.clone();
+    let middle_release = Arc::clone(&release_middle);
+    let middle_ready = Arc::clone(&release_middle_ready);
+    let middle = ChildSpec::new("middle", move |ctx| {
+        let cancelled_tx = middle_cancelled_tx.clone();
+        let release_middle = Arc::clone(&middle_release);
+        let release_middle_ready = Arc::clone(&middle_ready);
+        let middle_started_tx = middle_started_tx.clone();
+        async move {
+            middle_started_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            if ctx.generation() > 0 {
+                release_middle_ready.notified().await;
+            }
+            ctx.mark_ready();
+            ctx.shutdown_token().cancelled().await;
+            cancelled_tx.send("middle").expect("test receiver dropped");
+            release_middle.notified().await;
+            Ok(())
+        }
+    })
+    .wait_for_ready();
+    let tail_release = Arc::clone(&release_tail);
+    let tail = ChildSpec::new("tail", move |ctx| {
+        let cancelled_tx = cancelled_tx.clone();
+        let release_tail = Arc::clone(&tail_release);
+        let tail_started_tx = tail_started_tx.clone();
+        async move {
+            tail_started_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            ctx.mark_ready();
+            ctx.shutdown_token().cancelled().await;
+            cancelled_tx.send("tail").expect("test receiver dropped");
+            release_tail.notified().await;
+            Ok(())
+        }
+    })
+    .wait_for_ready();
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::OneForAll)
         .child(trigger)
-        .child(removing)
-        .child(peer)
+        .child(middle)
+        .child(tail)
         .build()
-        .expect("valid supervisor")
+        .expect("ordered group builds")
         .spawn();
-    assert_eq!(common::recv_event(&mut trigger_rx).await, 0);
-
-    let remove_handle = handle.clone();
-    let remove_task = tokio::spawn(async move { remove_handle.remove_child("removing").await });
-    removing_cancelled.notified().await;
-    trigger_failure.notify_one();
-    timeout(Duration::from_secs(1), peer_cancelled.notified())
+    handle
+        .wait_started()
         .await
-        .expect("group drain should include the active sibling");
-    release_removing.notify_one();
+        .expect("initial sequence starts");
+    assert_eq!(common::recv_event(&mut middle_started_rx).await, 0);
+    assert_eq!(common::recv_event(&mut tail_started_rx).await, 0);
 
-    timeout(Duration::from_secs(1), remove_task)
-        .await
-        .expect("group drain should resolve pending removal")
-        .expect("remove task should join")
-        .expect("removal completed within its grace");
-    assert_eq!(common::recv_event(&mut trigger_rx).await, 1);
-    assert_eq!(removing_attempts.load(Ordering::SeqCst), 1);
-    assert!(handle.snapshot().child("removing").is_none());
-
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
-}
-
-#[tokio::test]
-async fn group_drain_reports_a_removals_own_expired_strict_grace() {
-    let trigger_failure = Arc::new(Notify::new());
-    let removing_cancelled = Arc::new(Notify::new());
-    let peer_cancelled = Arc::new(Notify::new());
-    let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
-
-    let trigger = ChildSpec::new("trigger", {
-        let trigger_failure = Arc::clone(&trigger_failure);
-        move |ctx| {
-            let trigger_failure = Arc::clone(&trigger_failure);
-            let trigger_tx = trigger_tx.clone();
-            async move {
-                trigger_tx
-                    .send(ctx.generation())
-                    .expect("test receiver dropped");
-                if ctx.generation() == 0 {
-                    trigger_failure.notified().await;
-                    Err(common::test_error("restart group"))
-                } else {
-                    ctx.shutdown_token().cancelled().await;
-                    Ok(())
-                }
-            }
-        }
-    })
-    .restart(RestartPolicy::OnFailure);
-    let removing = ChildSpec::new("removing", {
-        let removing_cancelled = Arc::clone(&removing_cancelled);
-        move |ctx| {
-            let removing_cancelled = Arc::clone(&removing_cancelled);
-            async move {
-                ctx.shutdown_token().cancelled().await;
-                removing_cancelled.notify_one();
-                std::future::pending::<()>().await;
-                Ok(())
-            }
-        }
-    })
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_millis(50),
-        ShutdownMode::CooperativeStrict,
-    ));
-    let peer = ChildSpec::new("peer", {
-        let peer_cancelled = Arc::clone(&peer_cancelled);
-        move |ctx| {
-            let peer_cancelled = Arc::clone(&peer_cancelled);
-            async move {
-                ctx.shutdown_token().cancelled().await;
-                if ctx.generation() == 0 {
-                    peer_cancelled.notify_one();
-                    std::future::pending::<()>().await;
-                }
-                Ok(())
-            }
-        }
-    })
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_millis(150),
-        ShutdownMode::CooperativeThenAbort,
-    ));
-    let handle = SupervisorBuilder::new()
-        .strategy(Strategy::OneForAll)
-        .child(trigger)
-        .child(removing)
-        .child(peer)
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-    assert_eq!(common::recv_event(&mut trigger_rx).await, 0);
-
-    let remove_handle = handle.clone();
-    let remove_task = tokio::spawn(async move { remove_handle.remove_child("removing").await });
-    removing_cancelled.notified().await;
-    trigger_failure.notify_one();
-    timeout(Duration::from_secs(1), peer_cancelled.notified())
-        .await
-        .expect("group drain should start before the individual grace expires");
-
-    let error = timeout(Duration::from_secs(1), remove_task)
-        .await
-        .expect("group drain should finalize the removal")
-        .expect("remove task should join")
-        .expect_err("the removal's strict grace expired during the group drain");
-    assert_eq!(
-        error,
-        tokio_supervisor::ControlError::ShutdownTimedOut("removing".to_owned())
+    fail.notify_one();
+    assert_eq!(common::recv_event(&mut cancelled_rx).await, "tail");
+    assert!(
+        timeout(common::QUIET_TIMEOUT, cancelled_rx.recv())
+            .await
+            .is_err()
     );
-    assert_eq!(common::recv_event(&mut trigger_rx).await, 1);
+    release_tail.notify_one();
+    assert_eq!(common::recv_event(&mut cancelled_rx).await, "middle");
+    release_middle.notify_one();
 
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+    assert_eq!(common::recv_event(&mut middle_started_rx).await, 1);
+    assert!(
+        timeout(common::QUIET_TIMEOUT, tail_started_rx.recv())
+            .await
+            .is_err()
+    );
+    release_middle_ready.notify_one();
+    assert_eq!(common::recv_event(&mut tail_started_rx).await, 1);
+
+    handle.shutdown();
+    release_tail.notify_one();
+    release_middle.notify_one();
+    handle.wait().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -245,74 +164,6 @@ async fn restartable_child_failure_restarts_the_whole_group() {
 
     assert_eq!(common::recv_n(&mut trigger_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut peer_rx, 2).await, vec![0, 1]);
-
-    handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
-}
-
-#[tokio::test]
-async fn control_plane_remains_available_after_group_restart() {
-    let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
-    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
-    let (dynamic_tx, mut dynamic_rx) = mpsc::unbounded_channel();
-    let trigger_attempts = Arc::new(AtomicUsize::new(0));
-
-    let trigger = ChildSpec::new("trigger", move |ctx| {
-        let trigger_attempts = trigger_attempts.clone();
-        let trigger_tx = trigger_tx.clone();
-        async move {
-            trigger_tx
-                .send(ctx.generation())
-                .expect("test receiver dropped");
-            if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                return Err(common::test_error("restart group"));
-            }
-
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }
-    })
-    .restart(RestartPolicy::OnFailure);
-
-    let peer = ChildSpec::new("peer", move |ctx| {
-        let peer_tx = peer_tx.clone();
-        async move {
-            peer_tx
-                .send(ctx.generation())
-                .expect("test receiver dropped");
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }
-    })
-    .restart(RestartPolicy::Always);
-
-    let supervisor = SupervisorBuilder::new()
-        .strategy(Strategy::OneForAll)
-        .child(trigger)
-        .child(peer)
-        .build()
-        .expect("valid supervisor");
-
-    let handle = supervisor.spawn();
-
-    assert_eq!(common::recv_n(&mut trigger_rx, 2).await, vec![0, 1]);
-    assert_eq!(common::recv_n(&mut peer_rx, 2).await, vec![0, 1]);
-
-    handle
-        .add_child(ChildSpec::new("dynamic", move |ctx| {
-            let dynamic_tx = dynamic_tx.clone();
-            async move {
-                dynamic_tx
-                    .send(ctx.generation())
-                    .expect("test receiver dropped");
-                ctx.shutdown_token().cancelled().await;
-                Ok(())
-            }
-        }))
-        .await
-        .expect("control plane should remain available after group restart");
-
-    assert_eq!(common::recv_event(&mut dynamic_rx).await, 0);
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -520,6 +371,74 @@ async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_pee
         !peer_live_flag.is_live(),
         "stubborn peer should be dropped before wait resolves"
     );
+}
+
+/// `ShutdownMode::Abort` promises an abort, not preemption of a non-yielding
+/// future, so a child whose next poll boundary is past the ordered drain's
+/// cursor window must not fail the group restart. It is reconciled against the
+/// drain group's longest grace, exactly as a dynamic scope would.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
+    let release_failure = Arc::new(Notify::new());
+    let trigger_attempts = Arc::new(AtomicUsize::new(0));
+    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
+
+    let cooperative = ChildSpec::new("cooperative", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    });
+
+    let release_failure_for_child = release_failure.clone();
+    let trigger = ChildSpec::new("trigger", move |ctx| {
+        let release_failure = release_failure_for_child.clone();
+        let trigger_attempts = trigger_attempts.clone();
+        async move {
+            if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                release_failure.notified().await;
+                return Err(common::test_error("restart group"));
+            }
+
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::OnFailure);
+
+    // Blocks between polls, so its abort cannot land inside the cursor window.
+    let late_peer = ChildSpec::new("late-abort-peer", move |ctx| {
+        let peer_tx = peer_tx.clone();
+        async move {
+            peer_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            loop {
+                std::thread::sleep(Duration::from_millis(50));
+                tokio::task::yield_now().await;
+            }
+        }
+    })
+    .restart(RestartPolicy::Always)
+    .shutdown(ShutdownPolicy::abort());
+
+    let handle = SupervisorBuilder::new()
+        .strategy(Strategy::OneForAll)
+        .child(cooperative)
+        .child(trigger)
+        .child(late_peer)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    assert_eq!(common::recv_event(&mut peer_rx).await, 0);
+    release_failure.notify_one();
+    assert_eq!(
+        common::recv_event(&mut peer_rx).await,
+        1,
+        "the group restart should complete rather than fail the supervisor"
+    );
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -801,70 +720,6 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
         peer_started < peer_restarted,
         "peer restart event ordering regressed: {sequence:?}"
     );
-
-    handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
-}
-
-#[tokio::test]
-async fn removing_failed_child_abandons_pending_group_restart() {
-    let (replacement_tx, mut replacement_rx) = mpsc::unbounded_channel();
-    let backoff = Duration::from_millis(80);
-
-    let trigger = ChildSpec::new("trigger", |_ctx| async move {
-        Err(common::test_error("restart group later"))
-    })
-    .restart(RestartPolicy::OnFailure);
-
-    let peer = ChildSpec::new("peer", |ctx| async move {
-        ctx.shutdown_token().cancelled().await;
-        Ok(())
-    })
-    .restart(RestartPolicy::Always);
-
-    let handle = SupervisorBuilder::new()
-        .strategy(Strategy::OneForAll)
-        .restart_intensity(
-            RestartIntensity::new(2, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(backoff)),
-        )
-        .child(trigger)
-        .child(peer)
-        .build()
-        .expect("valid supervisor")
-        .spawn();
-    let mut events = handle.subscribe();
-
-    loop {
-        if matches!(
-            common::recv_supervisor_event(&mut events).await,
-            SupervisorEvent::ChildRestartScheduled { ref id, .. } if id == "trigger"
-        ) {
-            break;
-        }
-    }
-
-    handle
-        .remove_child("trigger")
-        .await
-        .expect("failed child removal should succeed during group backoff");
-    handle
-        .add_child(ChildSpec::new("replacement", move |ctx| {
-            let replacement_tx = replacement_tx.clone();
-            async move {
-                replacement_tx
-                    .send(ctx.generation())
-                    .expect("test receiver dropped");
-                ctx.shutdown_token().cancelled().await;
-                Ok(())
-            }
-        }))
-        .await
-        .expect("replacement child should be accepted");
-
-    assert_eq!(common::recv_event(&mut replacement_rx).await, 0);
-    sleep(backoff + common::QUIET_TIMEOUT).await;
-    common::assert_no_event(&mut replacement_rx).await;
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");

@@ -99,9 +99,8 @@ for the press.
 
 ## Ordered startup and readiness
 
-Supervisors start children concurrently by default. For dependency-ordered
-pipelines, select `StartMode::Sequential` and opt each plain task into a
-readiness signal:
+`SupervisorBuilder` creates an ordered scope. It starts the declared child
+sequence one at a time, waiting at each opted-in readiness signal:
 
 ```rust,ignore
 let database = ChildSpec::new("database", |ctx| async move {
@@ -113,7 +112,6 @@ let database = ChildSpec::new("database", |ctx| async move {
 .wait_for_ready();
 
 let supervisor = SupervisorBuilder::new()
-    .start_mode(StartMode::Sequential)
     .child(database)
     .child(api)
     .build()?;
@@ -126,12 +124,17 @@ children are gated automatically: their `on_start` hook is the readiness
 boundary. Use `ActorContext::continue_with(message)` inside `on_start` to queue
 expensive follow-up work as the actor's next message without delaying later
 siblings. Call `handle.wait_started().await` when code outside the tree needs
-to wait until all current children are running. Readiness gates do not block
-the control loop: a child may await a control operation on its own supervisor
-before reporting ready. An add resolves when membership is inserted and startup
-is scheduled. If a sequential sequence is already in progress, the inserted
-child is visible as `Starting` with `started == false` and waits behind earlier
-members. There is no implicit readiness timeout.
+to wait until all current children are running. Ordered membership is immutable
+at runtime, so add and remove operations return
+`ControlError::UnsupportedByScopeKind`. Use `DynamicSupervisorBuilder` for an
+empty runtime-written scope; its children start immediately. There is no
+implicit readiness timeout.
+
+Ordered startup latency is cumulative: the scope becomes ready after the sum
+of its declared readiness gates' `on_start` times. This is now the default for
+`SupervisorBuilder` and `Runtime::builder()`; use a dynamic scope when members
+should start independently and immediate runtime insertion is the right
+ownership model.
 
 ## Strategies
 
@@ -176,7 +179,20 @@ its [`ShutdownPolicy`] governs how:
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
 A child stuck in a non-yielding loop cannot be preempted — isolate truly
 blocking work behind a blocking pool (as the actor layer's `run_blocking`
-does, see the next chapter) or an external process.
+does, see the next chapter) or an external process. Ordered teardown advances
+after issuing such an abort rather than waiting without a bound. A group
+restart is stricter than a shutdown, because it has to respawn what it drained:
+a child that is still running when the drain ends fails the restart, but only
+after the whole drain group's longest grace has been spent waiting for it. An
+abort of a nested supervisor wrapper hard-cascades through that subtree;
+cooperative shutdown lets the subtree apply its own ordered or dynamic drain
+first.
+
+Ordered shutdown latency is also cumulative: each cooperative child receives
+its own grace before the cursor moves to the previous declaration, so the
+worst-case grace budget is their sum (with the default, up to 5 seconds × the
+number of children). Dynamic scopes cancel siblings together and wait under
+one shared maximum-grace deadline.
 
 ### Actor and supervisor deadlines
 
@@ -188,15 +204,17 @@ A supervised actor has two nested shutdown deadlines:
    An actor-layer timeout during requested shutdown completes the child cleanly
    with a `Cancelled` actor exit.
 2. The child's `ShutdownPolicy` belongs to the supervisor layer. It waits for
-   the entire child future. During removal this uses that child's grace period;
-   during a supervisor shutdown or group restart, every affected child is
-   drained against the longest configured grace period in that drain group. If
-   the supervisor deadline expires first, it aborts the outer future; dropping
-   that future also cancels and aborts the inner actor task.
+   the entire child future. Removal uses that child's grace period. An ordered
+   supervisor shutdown or group restart applies each affected child's grace in
+   reverse declaration order; a dynamic shutdown applies one shared deadline
+   equal to the longest affected grace. If the applicable supervisor deadline
+   expires first, it aborts the outer future; dropping that future also cancels
+   and aborts the inner actor task.
 
-These deadlines run concurrently rather than one after the other. To preserve
-the actor layer's clean completion path, ensure the applicable supervisor drain
-grace is at least `actor_shutdown_timeout`. If the supervisor deadline wins,
+For any one actor, these two deadlines run concurrently rather than one after
+the other. To preserve the actor layer's clean completion path, ensure that
+actor's supervisor grace is at least `actor_shutdown_timeout`. If the
+supervisor deadline wins,
 `cooperative_then_abort` still lets supervisor shutdown complete successfully,
 while `cooperative_strict` reports a timeout. In either case the supervised
 Tokio task has been issued an abort and actor bindings are terminated, but—as
@@ -259,8 +277,8 @@ tree.
 
 ## Dynamic children
 
-Children can also be added and removed while the supervisor is running,
-through the handle:
+`DynamicSupervisorBuilder` creates an empty scope whose children are added and
+removed while it is running:
 
 ```rust,ignore
 let membership_epoch = handle
@@ -268,21 +286,20 @@ let membership_epoch = handle
     .await?;
 handle.remove_child("night-shift-press").await?;
 
-// Control a nested supervisor through its restart-stable handle:
-let pressroom = handle.supervisor("pressroom").expect("configured above");
+// A dynamic nested scope has its own restart-stable handle:
+let pressroom = handle.supervisor("pressroom").expect("added dynamically");
 pressroom.add_child(child).await?;
 ```
 
 `add_child` returns the membership epoch allocated atomically for that
 insertion. It is the same value published in the child's snapshot and remains
 the identity of that membership if the id is removed and reused before the
-caller next samples the tree. The reply is an insertion contract, not a
-readiness contract: in sequential mode the child can still be queued behind an
-earlier gate. `wait_started()` observes the stronger readiness boundary.
+caller next samples the tree. The reply schedules immediate startup;
+`wait_started()` observes the stronger readiness boundary.
 
-Supervisors can start empty or have their last child removed. At zero children
-they keep serving control commands and wait for the next `add_child` or an
-explicit shutdown.
+Dynamic supervisors start empty and can have their last child removed. At zero
+children they keep serving control commands and wait for the next `add_child`
+or an explicit shutdown.
 We will use a higher-level version of this API in the [Dynamic
 actors](dynamic-actors.md) chapter.
 

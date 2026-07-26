@@ -42,6 +42,15 @@ pub enum SupervisorError {
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ControlError {
+    /// The operation is incompatible with the supervisor's immutable scope
+    /// kind.
+    #[error("{operation} is unsupported by {kind} scopes")]
+    UnsupportedByScopeKind {
+        /// The rejected operation.
+        operation: crate::ControlOperation,
+        /// The immutable kind of the target scope.
+        kind: crate::ScopeKind,
+    },
     /// A child with this id already exists in the supervisor.
     #[error("duplicate child id: {0}")]
     DuplicateChildId(String),

@@ -6,6 +6,7 @@ use crate::error::SupervisorBuildError;
 ///
 /// The default is [`OnFailure`](RestartPolicy::OnFailure).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum RestartPolicy {
     /// Always restart the child, regardless of exit status. Equivalent to
@@ -35,6 +36,7 @@ impl RestartPolicy {
 ///
 /// The default is [`None`](BackoffPolicy::None) (immediate restart).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum BackoffPolicy {
     /// Restart immediately with no delay.
@@ -98,6 +100,7 @@ impl BackoffPolicy {
 ///
 /// [`SupervisorError::RestartIntensityExceeded`]: crate::SupervisorError::RestartIntensityExceeded
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RestartIntensity {
     /// Maximum number of restarts allowed inside the sliding window.

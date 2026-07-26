@@ -86,6 +86,16 @@ impl ChildContext {
     }
 
     /// Returns a read-only view of the supervisor's cancellation state.
+    ///
+    /// This fires when the supervisor begins a shutdown, in both ordered and
+    /// dynamic scopes, and independently of when this particular child is
+    /// cancelled. It does not fire when a supervisor dies of its own failure
+    /// (for example [`SupervisorError::RestartIntensityExceeded`]): that path
+    /// drops the child tasks rather than stopping them. Use it to observe an
+    /// orderly stop, not as a general liveness signal for the supervisor.
+    ///
+    /// [`SupervisorError::RestartIntensityExceeded`]:
+    ///     crate::SupervisorError::RestartIntensityExceeded
     pub fn supervisor_token(&self) -> &SupervisorToken {
         &self.supervisor
     }
