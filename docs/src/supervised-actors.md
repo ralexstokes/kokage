@@ -90,6 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `Runtime::builder()` is the front door for the common case: it turns every
 graph actor into its own supervised child and packages
 the result into a `Runtime` with a supervisor and dynamic actor support.
+The builder lowers through an inspectable `SupervisionTree`; the next chapter
+shows when and how to work with that declaration directly.
 
 Nested actor graphs stay on that path too. Build each graph independently so
 typed refs can cross graph boundaries, then attach a configured nested runtime

@@ -81,12 +81,71 @@ impl SupervisionScope {
     }
 }
 
-/// A recursive supervision declaration.
+/// A recursive, executable supervision declaration.
 ///
-/// Ordered and dynamic scopes are explicit node kinds rather than a flag on a
-/// level. This is the stable shape consumed by the future `Topology` derive:
-/// declaration order is semantic only for [`Ordered`](Self::Ordered), while a
-/// [`Dynamic`](Self::Dynamic) node is an empty runtime-written leaf.
+/// [`RuntimeBuilder`](crate::RuntimeBuilder) is the convenient front door for
+/// the common case, but it describes a tree through method calls. Calling
+/// [`RuntimeBuilder::into_tree`](crate::RuntimeBuilder::into_tree) exposes the
+/// equivalent declaration as data before anything runs; `RuntimeBuilder::build`
+/// itself lowers through that same tree. Constructing a `SupervisionTree`
+/// directly also lets one graph's actors occupy different scope levels while
+/// retaining the typed wiring established by the graph.
+///
+/// [`outline`](Self::outline) removes factories and other executable payloads,
+/// producing a [`SupervisionOutline`] that can be compared, debug-printed, and,
+/// with the `serde` feature, serialized. The outline is the declared companion
+/// to a running [`SupervisorSnapshot`](tokio_supervisor::SupervisorSnapshot).
+///
+/// # Scope kinds and child order
+///
+/// A runnable tree has an [`Ordered`](Self::Ordered) or
+/// [`Dynamic`](Self::Dynamic) root. Ordered scopes contain a declared child
+/// sequence; its order controls readiness-gated startup, reverse-order
+/// shutdown, and [`Strategy::RestForOne`] restart scope. Dynamic scopes are
+/// empty leaves whose membership is written through a
+/// [`RuntimeHandle`](crate::RuntimeHandle) after spawn.
+///
+/// [`Actor`](Self::Actor), [`Child`](Self::Child), and
+/// [`ActorWithScope`](Self::ActorWithScope) are child nodes. Add them beneath a
+/// scope with [`actor`](Self::actor), [`task`](Self::task),
+/// [`subtree`](Self::subtree), or [`actor_with_scope`](Self::actor_with_scope).
+///
+/// # Example
+///
+/// ```
+/// use tokio_otp::{ActorSpec, SupervisionTree, prelude::*};
+///
+/// struct Worker;
+///
+/// impl Actor for Worker {
+///     type Msg = ();
+///
+///     async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+///         Ok(Continue)
+///     }
+/// }
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut graph = GraphBuilder::new();
+/// let _ingest = graph.actor("ingest", || Worker);
+/// let _parse = graph.actor("parse", || Worker);
+/// let graph = graph.build()?;
+///
+/// let tree = SupervisionTree::new()
+///     .strategy(Strategy::RestForOne)
+///     .actor(ActorSpec::new(graph.actors()[0].clone()).restart(RestartPolicy::Never))
+///     .subtree(
+///         "workers",
+///         SupervisionTree::new().actor(graph.actors()[1].clone()),
+///     );
+///
+/// let outline = tree.outline();
+/// assert_eq!(outline.child_ids(), ["ingest", "workers"]);
+/// let runtime = tree.build()?;
+/// # drop(runtime);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum SupervisionTree {
