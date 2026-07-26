@@ -67,6 +67,7 @@
         devShells.default = pkgs.mkShell {
           NIGHTLY_CARGO = "${nightlyCargo}/bin/cargo-nightly";
           packages = with pkgs; [
+            cargo-nextest
             git
             just
             mdbook

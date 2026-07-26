@@ -19,7 +19,9 @@ build:
     cargo build --locked --workspace --all-targets --all-features
 
 test:
-    cargo test --locked --workspace --all-targets --all-features
+    cargo nextest run --locked --workspace --all-features --lib --bins --tests --examples
+    # Custom benchmark harnesses are not compatible with nextest's test listing.
+    cargo test --locked --workspace --all-features --bench '*'
     cargo test --locked --workspace --doc --all-features
 
 doc-check:
