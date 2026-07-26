@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::SupervisorHandle;
+
 #[derive(Debug)]
 pub(crate) struct ChildReady {
     pub(crate) key: usize,
@@ -46,6 +48,7 @@ pub struct ChildContext {
     generation: u64,
     token: CancellationToken,
     supervisor: SupervisorToken,
+    scope: SupervisorHandle,
     ready: Option<ReadySignal>,
 }
 
@@ -55,6 +58,7 @@ impl ChildContext {
         generation: u64,
         token: CancellationToken,
         supervisor: SupervisorToken,
+        scope: SupervisorHandle,
         ready: Option<ReadySignal>,
     ) -> Self {
         Self {
@@ -62,6 +66,7 @@ impl ChildContext {
             generation,
             token,
             supervisor,
+            scope,
             ready,
         }
     }
@@ -98,6 +103,23 @@ impl ChildContext {
     ///     crate::SupervisorError::RestartIntensityExceeded
     pub fn supervisor_token(&self) -> &SupervisorToken {
         &self.supervisor
+    }
+
+    /// Returns the stable handle for this child's enclosing supervisor scope.
+    ///
+    /// Awaiting control operations on the enclosing scope is safe. The
+    /// remaining self-deadlock is awaiting removal of a sibling whose drain
+    /// depends on this child draining its own input; pipeline that operation
+    /// instead of awaiting it inline.
+    ///
+    /// A readiness-gated child must also not await
+    /// [`SupervisorHandle::wait_started`](crate::SupervisorHandle::wait_started)
+    /// on this enclosing scope before it calls [`mark_ready`](Self::mark_ready):
+    /// the child itself is preventing that scope from becoming ready. Launch
+    /// the wait as pipelined work, report readiness, and only then consume its
+    /// result.
+    pub fn supervisor(&self) -> SupervisorHandle {
+        self.scope.clone()
     }
 
     /// Reports that this child has completed initialization.

@@ -18,16 +18,20 @@ use tokio_supervisor::RestartPolicy;
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::Instrument;
 
-use crate::actor::{
-    binding::{
-        ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef, mailbox,
+use crate::{
+    RuntimeHandle,
+    actor::{
+        binding::{
+            ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
+            mailbox,
+        },
+        builder::{ActorOptions, DEFAULT_ACTOR_SHUTDOWN_TIMEOUT, DEFAULT_MAILBOX_CAPACITY},
+        context::{ActorContext, ActorRef, ActorSteps, ActorTimers},
+        factory::ActorFactory,
+        monitor::{DownReason, MonitorExitGuard},
+        observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
+        raw::{BoxError, RawActor},
     },
-    builder::{ActorOptions, DEFAULT_ACTOR_SHUTDOWN_TIMEOUT, DEFAULT_MAILBOX_CAPACITY},
-    context::{ActorContext, ActorRef, ActorSteps, ActorTimers},
-    factory::ActorFactory,
-    monitor::{DownReason, MonitorExitGuard},
-    observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
-    raw::{BoxError, RawActor},
 };
 
 pub(crate) type BoxedActorFuture =
@@ -39,6 +43,8 @@ pub(crate) struct RunnerStart {
     pub(crate) observability: GraphObservability,
     pub(crate) restart_policy: RestartPolicy,
     pub(crate) ready: oneshot::Sender<()>,
+    pub(crate) supervisor: RuntimeHandle,
+    pub(crate) children: Option<RuntimeHandle>,
 }
 
 /// Type-erased actor runner.
@@ -95,6 +101,8 @@ where
                 ready: Some(start.ready),
                 continuations: Default::default(),
                 steps,
+                supervisor: start.supervisor,
+                children: start.children,
             };
             let mut monitor_exit = MonitorExitGuard::new(monitor_hub);
             // Binding is deliberately deferred until this actor future's first
@@ -293,6 +301,12 @@ impl RunnableActor {
     /// A hand-written host must call
     /// [`terminate_binding`](Self::terminate_binding) when it gives up after a
     /// policy that left the binding waiting to rebind.
+    ///
+    /// Actors run through this unsupervised entry point receive a terminal
+    /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::ActorContext::supervisor):
+    /// control operations return `ControlError::Unavailable` and observation
+    /// streams are closed. Their [`ActorContext::children`](crate::ActorContext::children)
+    /// value is `None`.
     pub async fn run_until<F>(
         &self,
         shutdown: F,
@@ -301,13 +315,16 @@ impl RunnableActor {
     where
         F: Future<Output = ()>,
     {
-        self.run_until_ready(shutdown, restart, || {}).await
+        self.run_until_ready(shutdown, restart, RuntimeHandle::unavailable(), None, || {})
+            .await
     }
 
     pub(crate) async fn run_until_ready<F, R>(
         &self,
         shutdown: F,
         restart: RestartPolicy,
+        supervisor: RuntimeHandle,
+        children: Option<RuntimeHandle>,
         ready: R,
     ) -> Result<(), ActorRunError>
     where
@@ -329,6 +346,8 @@ impl RunnableActor {
                     observability: self.inner.observability.clone(),
                     restart_policy: restart,
                     ready: ready_tx,
+                    supervisor,
+                    children,
                 })
                 .instrument(actor_span),
         ));

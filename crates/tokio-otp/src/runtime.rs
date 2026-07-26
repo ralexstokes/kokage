@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 use crate::{
@@ -21,6 +21,11 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 pub(crate) struct ActorRuntimeState {
+    config: Mutex<ActorRuntimeConfig>,
+}
+
+#[derive(Debug)]
+struct ActorRuntimeConfig {
     actor_factory: RunnableActorFactory,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
@@ -33,10 +38,51 @@ impl ActorRuntimeState {
         default_shutdown: ShutdownPolicy,
     ) -> Self {
         Self {
+            config: Mutex::new(ActorRuntimeConfig {
+                actor_factory,
+                default_restart,
+                default_shutdown,
+            }),
+        }
+    }
+
+    pub(crate) fn configure(
+        &self,
+        actor_factory: RunnableActorFactory,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) {
+        *self.config.lock().expect("actor runtime config poisoned") = ActorRuntimeConfig {
             actor_factory,
             default_restart,
             default_shutdown,
-        }
+        };
+    }
+
+    fn actor_defaults(&self) -> (RestartPolicy, ShutdownPolicy) {
+        let config = self.config.lock().expect("actor runtime config poisoned");
+        (config.default_restart, config.default_shutdown)
+    }
+
+    fn make_actor<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+        options: ActorOptions<<F::Actor as RawActor>::Msg>,
+    ) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
+    where
+        F: ActorFactory,
+    {
+        // Construction runs the caller's factory, which may reach back into
+        // this runtime. Release the config lock first so that re-entry cannot
+        // deadlock on a non-reentrant mutex.
+        let actor_factory = self
+            .config
+            .lock()
+            .expect("actor runtime config poisoned")
+            .actor_factory
+            .clone();
+        actor_factory.actor_with_options(label, factory, options)
     }
 }
 
@@ -508,6 +554,11 @@ impl Runtime {
         (self.supervisor, self.actors)
     }
 
+    /// Returns this runtime's stable actor-aware handle before it is spawned.
+    pub fn handle(&self) -> RuntimeHandle {
+        RuntimeHandle::new(self.supervisor.handle(), Arc::clone(&self.actors))
+    }
+
     /// Returns the underlying [`Supervisor`] for first-class nesting.
     ///
     /// This discards the actor factories and recursive actor metadata, so
@@ -563,9 +614,9 @@ impl std::fmt::Debug for Runtime {
 
 /// Cheaply cloneable runtime control surface.
 ///
-/// By delegation to the underlying [`SupervisorHandle`], dropping the last
-/// handle clone requests graceful shutdown. Other clones keep the runtime
-/// alive, so fire-and-forget operation requires keeping a handle alive.
+/// For a spawned root runtime, dropping the last public handle clone requests
+/// graceful shutdown. A handle scoped to a nested runtime does not own that
+/// runtime's lifecycle; dropping it leaves the parent-owned subtree running.
 #[derive(Clone)]
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
@@ -585,8 +636,28 @@ pub enum AddSubtreeError {
 }
 
 impl RuntimeHandle {
-    fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
+    pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
         Self { supervisor, actors }
+    }
+
+    pub(crate) fn unavailable() -> Self {
+        static UNAVAILABLE: OnceLock<RuntimeHandle> = OnceLock::new();
+
+        UNAVAILABLE
+            .get_or_init(|| {
+                let builder = tokio_supervisor::DynamicSupervisorBuilder::new();
+                let supervisor = builder.handle();
+                drop(builder);
+                Self::new(
+                    supervisor,
+                    Arc::new(ActorRuntimeState::new(
+                        RunnableActorFactory::new(),
+                        RestartPolicy::default(),
+                        ShutdownPolicy::default(),
+                    )),
+                )
+            })
+            .clone()
     }
 
     /// Returns a clone of the underlying supervisor handle.
@@ -705,12 +776,10 @@ impl RuntimeHandle {
     where
         F: ActorFactory,
     {
+        let (default_restart, default_shutdown) = self.actors.actor_defaults();
         let (actor_options, dynamic_options) =
-            options.into_parts(self.actors.default_restart, self.actors.default_shutdown);
-        let actor = self
-            .actors
-            .actor_factory
-            .actor_with_options(label, factory, actor_options);
+            options.into_parts(default_restart, default_shutdown);
+        let actor = self.actors.make_actor(label, factory, actor_options);
         self.add_constructed_actor(actor, dynamic_options).await
     }
 
@@ -722,10 +791,9 @@ impl RuntimeHandle {
         let child = actor_child_spec(
             actor.clone(),
             &self.actors,
-            options.restart,
-            options.shutdown,
-            options.restart_intensity,
-            options.remove_on_exit,
+            ActorChildSpec::new(options.restart, options.shutdown)
+                .restart_intensity(options.restart_intensity)
+                .remove_on_exit(options.remove_on_exit),
         );
         self.supervisor.add_child(child).await?;
 
@@ -926,25 +994,76 @@ pub(crate) struct ActorOverrides {
     pub(crate) shutdown: Option<ShutdownPolicy>,
 }
 
+/// How one actor is supervised as a child of its enclosing scope.
+pub(crate) struct ActorChildSpec {
+    pub(crate) restart: RestartPolicy,
+    pub(crate) shutdown: ShutdownPolicy,
+    pub(crate) restart_intensity: Option<RestartIntensity>,
+    /// Whether the membership disappears when the actor exits, rather than
+    /// resting as an inactive entry.
+    pub(crate) remove_on_exit: bool,
+    /// The scope this actor leads, for an `ActorWithScope` leader. `None` for
+    /// every other actor shape.
+    pub(crate) children: Option<RuntimeHandle>,
+}
+
+impl ActorChildSpec {
+    pub(crate) fn new(restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
+        Self {
+            restart,
+            shutdown,
+            restart_intensity: None,
+            remove_on_exit: false,
+            children: None,
+        }
+    }
+
+    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartIntensity>) -> Self {
+        self.restart_intensity = intensity;
+        self
+    }
+
+    pub(crate) fn remove_on_exit(mut self, remove_on_exit: bool) -> Self {
+        self.remove_on_exit = remove_on_exit;
+        self
+    }
+
+    pub(crate) fn children(mut self, children: RuntimeHandle) -> Self {
+        self.children = Some(children);
+        self
+    }
+}
+
 pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     owner: &Arc<ActorRuntimeState>,
-    restart: RestartPolicy,
-    shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartIntensity>,
-    remove_on_exit: bool,
+    spec: ActorChildSpec,
 ) -> ChildSpec {
+    let ActorChildSpec {
+        restart,
+        shutdown,
+        restart_intensity,
+        remove_on_exit,
+        children,
+    } = spec;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
+    let actor_owner = Arc::clone(owner);
     let mut child = ChildSpec::new(actor_id, move |ctx| {
         let actor = child_guard.actor.clone();
+        let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
+        let children = children.clone();
         async move {
             actor
-                .run_until_ready(ctx.shutdown_token().cancelled(), restart, || {
-                    ctx.mark_ready()
-                })
+                .run_until_ready(
+                    ctx.shutdown_token().cancelled(),
+                    restart,
+                    supervisor,
+                    children,
+                    || ctx.mark_ready(),
+                )
                 .await
                 .map_err(Into::into)
         }
@@ -972,6 +1091,14 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unavailable_runtime_handle_is_cached() {
+        let first = super::RuntimeHandle::unavailable();
+        let second = super::RuntimeHandle::unavailable();
+
+        assert!(std::sync::Arc::ptr_eq(&first.actors, &second.actors));
+    }
+
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
         let root = crate::Runtime::dynamic()

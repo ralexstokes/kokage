@@ -235,6 +235,8 @@ pub enum ToolHostMsg {
 
 #[derive(Debug)]
 pub enum RouterMsg {
+    /// Ordered membership transition from the sessions mount alignment watch.
+    MountLifecycle(tokio_otp::LifecycleEvent),
     UserMessage {
         envelope: EnvelopeId,
         chat: ChatId,

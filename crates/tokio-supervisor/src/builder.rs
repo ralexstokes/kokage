@@ -3,10 +3,14 @@ use std::{collections::HashSet, sync::Arc};
 use crate::{
     child::{ChildDefinition, ChildSpec, SupervisorSpec},
     error::SupervisorBuildError,
+    handle::{StableSupervisorChannels, SupervisorHandle},
     restart::{RestartIntensity, RestartPolicy},
     shutdown::{AutoShutdown, ShutdownPolicy},
     strategy::Strategy,
-    supervisor::{Supervisor, SupervisorConfig},
+    supervisor::{
+        Supervisor, SupervisorConfig, refresh_declaration_for_config, reset_channels_for_config,
+        stable_channels_for_config,
+    },
 };
 
 /// Builder for constructing a [`Supervisor`] with validated configuration.
@@ -36,6 +40,7 @@ pub struct SupervisorBuilder {
     children: Vec<Arc<ChildDefinition>>,
     control_channel_capacity: usize,
     event_channel_capacity: usize,
+    channels: Option<Arc<StableSupervisorChannels>>,
 }
 
 /// Builder for a dynamic supervisor whose membership is written at runtime.
@@ -49,6 +54,7 @@ pub struct DynamicSupervisorBuilder {
     default_shutdown: ShutdownPolicy,
     control_channel_capacity: usize,
     event_channel_capacity: usize,
+    channels: Option<Arc<StableSupervisorChannels>>,
 }
 
 /// The immutable membership and ordering model of a supervisor scope.
@@ -77,20 +83,65 @@ impl SupervisorBuilder {
     /// Creates a new builder with default settings: [`OneForOne`](Strategy::OneForOne)
     /// strategy, default [`RestartIntensity`], and no children.
     pub fn new() -> Self {
-        Self {
+        let mut builder = Self {
             strategy: Strategy::default(),
             restart_intensity: RestartIntensity::default(),
             auto_shutdown: AutoShutdown::default(),
             children: Vec::new(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
             event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
+            channels: None,
+        };
+        let config = builder.config();
+        builder.channels = Some(stable_channels_for_config(&config));
+        builder
+    }
+
+    fn config(&self) -> SupervisorConfig {
+        SupervisorConfig {
+            kind: ScopeKind::Ordered,
+            strategy: self.strategy,
+            restart_intensity: self.restart_intensity,
+            default_restart: RestartPolicy::default(),
+            default_shutdown: ShutdownPolicy::default(),
+            auto_shutdown: self.auto_shutdown,
+            children: self.children.clone(),
+            control_channel_capacity: self.control_channel_capacity,
+            event_channel_capacity: self.event_channel_capacity,
         }
+    }
+
+    fn channels(&self) -> &Arc<StableSupervisorChannels> {
+        self.channels
+            .as_ref()
+            .expect("live supervisor builder owns channels")
+    }
+
+    fn refresh_declaration(&self) {
+        refresh_declaration_for_config(&self.config(), self.channels());
+    }
+
+    /// Returns the stable handle reserved for this scope.
+    pub fn handle(&self) -> SupervisorHandle {
+        self.channels().handle()
+    }
+
+    /// Projects `ids` as this scope's declared children in its pre-spawn
+    /// snapshot.
+    ///
+    /// Not part of the public contract: this exists so `tokio-otp` can project
+    /// the membership its own higher-level builders will lower to, and is
+    /// superseded by the real declaration once the scope is built.
+    #[doc(hidden)]
+    pub fn project_declared_children(&self, ids: Vec<String>) {
+        self.channels().project_declared_children(ids);
     }
 
     /// Sets the restart strategy. See [`Strategy`] for options.
     #[must_use]
     pub fn strategy(mut self, strategy: Strategy) -> Self {
         self.strategy = strategy;
+        self.refresh_declaration();
         self
     }
 
@@ -114,6 +165,7 @@ impl SupervisorBuilder {
     #[must_use]
     pub fn child(mut self, child: ChildSpec) -> Self {
         self.children.push(child.inner);
+        self.refresh_declaration();
         self
     }
 
@@ -132,6 +184,7 @@ impl SupervisorBuilder {
             id.into(),
             supervisor.into(),
         )));
+        self.refresh_declaration();
         self
     }
 
@@ -147,6 +200,12 @@ impl SupervisorBuilder {
     /// subscribers that fall behind this limit will receive a
     /// [`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)
     /// error. Defaults to 256.
+    ///
+    /// Set this before subscribing through a pre-build
+    /// [`handle`](Self::handle). Capacity is applied to the event channel at
+    /// [`build`](Self::build), and an existing subscriber pins the channel it
+    /// is attached to, so a later change cannot resize it without leaving that
+    /// subscriber permanently closed.
     #[must_use]
     pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
         self.event_channel_capacity = capacity;
@@ -163,7 +222,7 @@ impl SupervisorBuilder {
     /// - Any restart intensity or backoff configuration is invalid.
     /// - A significant child uses [`RestartPolicy::Always`](crate::RestartPolicy::Always).
     /// - A child is significant while automatic shutdown is disabled.
-    pub fn build(self) -> Result<Supervisor, SupervisorBuildError> {
+    pub fn build(mut self) -> Result<Supervisor, SupervisorBuildError> {
         self.restart_intensity.validate()?;
         if self.control_channel_capacity == 0 {
             return Err(SupervisorBuildError::InvalidConfig(
@@ -201,17 +260,13 @@ impl SupervisorBuilder {
             }
         }
 
-        Ok(Supervisor::new(SupervisorConfig {
-            kind: ScopeKind::Ordered,
-            strategy: self.strategy,
-            restart_intensity: self.restart_intensity,
-            default_restart: RestartPolicy::default(),
-            default_shutdown: ShutdownPolicy::default(),
-            auto_shutdown: self.auto_shutdown,
-            children: self.children,
-            control_channel_capacity: self.control_channel_capacity,
-            event_channel_capacity: self.event_channel_capacity,
-        }))
+        let config = self.config();
+        let channels = self
+            .channels
+            .take()
+            .expect("valid supervisor builder owns channels");
+        reset_channels_for_config(&config, &channels);
+        Ok(Supervisor::with_channels(config, channels))
     }
 }
 
@@ -225,13 +280,43 @@ impl DynamicSupervisorBuilder {
     /// Creates an empty dynamic supervisor with the default restart intensity
     /// and channel capacities.
     pub fn new() -> Self {
-        Self {
+        let mut builder = Self {
             restart_intensity: RestartIntensity::default(),
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
             event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
+            channels: None,
+        };
+        let config = builder.config();
+        builder.channels = Some(stable_channels_for_config(&config));
+        builder
+    }
+
+    fn config(&self) -> SupervisorConfig {
+        SupervisorConfig {
+            kind: ScopeKind::Dynamic,
+            strategy: Strategy::OneForOne,
+            restart_intensity: self.restart_intensity,
+            default_restart: self.default_restart,
+            default_shutdown: self.default_shutdown,
+            auto_shutdown: AutoShutdown::Never,
+            children: Vec::new(),
+            control_channel_capacity: self.control_channel_capacity,
+            event_channel_capacity: self.event_channel_capacity,
         }
+    }
+
+    /// Returns the stable handle reserved for this scope.
+    ///
+    /// A dynamic scope declares no children, so nothing a mutator can change
+    /// is visible in the pre-build view; the configuration is applied once, at
+    /// [`build`](Self::build).
+    pub fn handle(&self) -> SupervisorHandle {
+        self.channels
+            .as_ref()
+            .expect("live dynamic supervisor builder owns channels")
+            .handle()
     }
 
     /// Sets the default restart intensity for dynamically added children that
@@ -266,6 +351,11 @@ impl DynamicSupervisorBuilder {
     }
 
     /// Sets the bounded capacity of the event broadcast channel.
+    ///
+    /// Set this before subscribing through a pre-build
+    /// [`handle`](Self::handle); see
+    /// [`SupervisorBuilder::event_channel_capacity`] for why an existing
+    /// subscriber pins the channel.
     #[must_use]
     pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
         self.event_channel_capacity = capacity;
@@ -273,7 +363,7 @@ impl DynamicSupervisorBuilder {
     }
 
     /// Validates the configuration and returns an empty dynamic supervisor.
-    pub fn build(self) -> Result<Supervisor, SupervisorBuildError> {
+    pub fn build(mut self) -> Result<Supervisor, SupervisorBuildError> {
         self.restart_intensity.validate()?;
         if self.control_channel_capacity == 0 {
             return Err(SupervisorBuildError::InvalidConfig(
@@ -286,16 +376,28 @@ impl DynamicSupervisorBuilder {
             ));
         }
 
-        Ok(Supervisor::new(SupervisorConfig {
-            kind: ScopeKind::Dynamic,
-            strategy: Strategy::OneForOne,
-            restart_intensity: self.restart_intensity,
-            default_restart: self.default_restart,
-            default_shutdown: self.default_shutdown,
-            auto_shutdown: AutoShutdown::Never,
-            children: Vec::new(),
-            control_channel_capacity: self.control_channel_capacity,
-            event_channel_capacity: self.event_channel_capacity,
-        }))
+        let config = self.config();
+        let channels = self
+            .channels
+            .take()
+            .expect("valid dynamic supervisor builder owns channels");
+        reset_channels_for_config(&config, &channels);
+        Ok(Supervisor::with_channels(config, channels))
+    }
+}
+
+impl Drop for SupervisorBuilder {
+    fn drop(&mut self) {
+        if let Some(channels) = self.channels.take() {
+            channels.terminal();
+        }
+    }
+}
+
+impl Drop for DynamicSupervisorBuilder {
+    fn drop(&mut self) {
+        if let Some(channels) = self.channels.take() {
+            channels.terminal();
+        }
     }
 }
