@@ -62,6 +62,104 @@ The request id is still necessary when multiple fetches can overlap. A hand
 rolled incarnation or turn tag used only to reject results after restart is
 not.
 
+## Pipelining calls from a handler
+
+The most common slow await inside a handler is a `call` to another actor,
+which blocks the caller's own mailbox for the full round-trip — see
+[head-of-line blocking](request-reply.md#head-of-line-blocking-calls-from-inside-a-handler).
+A routing actor avoids that by validating and recording intent on the handle
+loop, then starting a step for the call itself. The continuation maps the
+outcome back to an ordinary message, so the state update and the original
+caller's reply still happen on the serial loop:
+
+```rust,no_run
+use std::{collections::HashMap, time::Duration};
+use tokio_otp::prelude::*;
+
+enum VenueMsg {
+    Place { order: u64, reply: Reply<bool> },
+}
+
+enum RouterMsg {
+    Submit {
+        venue: &'static str,
+        order: u64,
+        reply: Reply<bool>,
+    },
+    // Internal: the pipelined call's outcome.
+    Resolved {
+        order: u64,
+        accepted: bool,
+        reply: Reply<bool>,
+    },
+}
+
+struct Router {
+    venues: HashMap<&'static str, ActorRef<VenueMsg>>,
+    in_flight: HashMap<u64, &'static str>,
+}
+
+impl Actor for Router {
+    type Msg = RouterMsg;
+
+    async fn handle(
+        &mut self,
+        message: RouterMsg,
+        ctx: &mut ActorContext<RouterMsg>,
+    ) -> ActorResult {
+        match message {
+            RouterMsg::Submit { venue, order, reply } => {
+                // Validate and record intent on the handle loop...
+                self.in_flight.insert(order, venue);
+                let gateway = self.venues[venue].clone();
+                // ...then move the slow call off it.
+                ctx.step_or(
+                    Duration::from_millis(250),
+                    async move {
+                        matches!(
+                            gateway
+                                .call(Duration::from_millis(250), |reply| {
+                                    VenueMsg::Place { order, reply }
+                                })
+                                .await,
+                            Ok(true)
+                        )
+                    },
+                    false,
+                    move |accepted| RouterMsg::Resolved {
+                        order,
+                        accepted,
+                        reply,
+                    },
+                );
+            }
+            RouterMsg::Resolved { order, accepted, reply } => {
+                // Back on the handle loop: apply the outcome to actor state.
+                self.in_flight.remove(&order);
+                if !accepted {
+                    // schedule reconciliation, raise an alert, ...
+                }
+                reply.send(accepted);
+            }
+        }
+        Ok(tokio_otp::prelude::Continue)
+    }
+}
+```
+
+Reply ownership is what keeps this observationally equivalent to the inline
+version: `Reply` moves into the continuation message, so the actor applies its
+state update before answering, and a caller follow-up is ordered after that
+update in the FIFO mailbox. Incarnation ownership and the order id play the
+roles described above — a racing postback is dropped after a restart, while
+the domain request id still says which of several concurrent steps completed.
+
+When per-callee state outgrows what a resolution message can carry, promote
+the callee to a dedicated child actor and let supervision manage its lifecycle
+instead. The `trading_engine` example's order router demonstrates the full
+pattern, including a phase that proves an order for a healthy venue completes
+while another venue's call is still waiting out its timeout.
+
 ## Abort is not undo
 
 `StepHandle::abort`, timeout, actor failure, and discard shutdown all abandon
