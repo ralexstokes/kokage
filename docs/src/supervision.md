@@ -180,9 +180,13 @@ One caveat inherited from Tokio itself: aborts take effect at `.await` points.
 A child stuck in a non-yielding loop cannot be preempted — isolate truly
 blocking work behind a blocking pool (as the actor layer's `run_blocking`
 does, see the next chapter) or an external process. Ordered teardown advances
-after issuing such an abort rather than waiting without a bound. An abort of a
-nested supervisor wrapper hard-cascades through that subtree; cooperative
-shutdown lets the subtree apply its own ordered or dynamic drain first.
+after issuing such an abort rather than waiting without a bound. A group
+restart is stricter than a shutdown, because it has to respawn what it drained:
+a child that is still running when the drain ends fails the restart, but only
+after the whole drain group's longest grace has been spent waiting for it. An
+abort of a nested supervisor wrapper hard-cascades through that subtree;
+cooperative shutdown lets the subtree apply its own ordered or dynamic drain
+first.
 
 Ordered shutdown latency is also cumulative: each cooperative child receives
 its own grace before the cursor moves to the previous declaration, so the

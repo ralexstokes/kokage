@@ -373,6 +373,74 @@ async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_pee
     );
 }
 
+/// `ShutdownMode::Abort` promises an abort, not preemption of a non-yielding
+/// future, so a child whose next poll boundary is past the ordered drain's
+/// cursor window must not fail the group restart. It is reconciled against the
+/// drain group's longest grace, exactly as a dynamic scope would.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
+    let release_failure = Arc::new(Notify::new());
+    let trigger_attempts = Arc::new(AtomicUsize::new(0));
+    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
+
+    let cooperative = ChildSpec::new("cooperative", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    });
+
+    let release_failure_for_child = release_failure.clone();
+    let trigger = ChildSpec::new("trigger", move |ctx| {
+        let release_failure = release_failure_for_child.clone();
+        let trigger_attempts = trigger_attempts.clone();
+        async move {
+            if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                release_failure.notified().await;
+                return Err(common::test_error("restart group"));
+            }
+
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::OnFailure);
+
+    // Blocks between polls, so its abort cannot land inside the cursor window.
+    let late_peer = ChildSpec::new("late-abort-peer", move |ctx| {
+        let peer_tx = peer_tx.clone();
+        async move {
+            peer_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            loop {
+                std::thread::sleep(Duration::from_millis(50));
+                tokio::task::yield_now().await;
+            }
+        }
+    })
+    .restart(RestartPolicy::Always)
+    .shutdown(ShutdownPolicy::abort());
+
+    let handle = SupervisorBuilder::new()
+        .strategy(Strategy::OneForAll)
+        .child(cooperative)
+        .child(trigger)
+        .child(late_peer)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    assert_eq!(common::recv_event(&mut peer_rx).await, 0);
+    release_failure.notify_one();
+    assert_eq!(
+        common::recv_event(&mut peer_rx).await,
+        1,
+        "the group restart should complete rather than fail the supervisor"
+    );
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
+}
+
 #[tokio::test]
 async fn superseded_group_failure_leaves_latest_child_exits_completed() {
     let release_failure = Arc::new(Notify::new());
