@@ -302,23 +302,6 @@ Dynamic supervisors start empty and can have their last child removed. At zero
 children they keep serving control commands and wait for the next `add_child`
 or an explicit shutdown.
 
-### Control-loop migration notes
-
-The control-loop rewrite in [#169] made these breaking changes to operation
-timing and results:
-
-- A terminal startup failure from one child in an ordered startup sequence no
-  longer prevents later siblings from starting.
-- A dynamic add reports success once membership is inserted and startup is
-  scheduled, even if the supervisor stops immediately afterwards. It no longer
-  changes that accepted result to `ControlError::SupervisorStopping`.
-- A `remove_child` accepted before shutdown completes with `Ok(())` when
-  shutdown absorbs the in-flight removal, rather than returning
-  `ControlError::SupervisorStopping`.
-- A second `remove_child` for the same id now fails immediately with
-  `ControlError::ChildRemovalInProgress`; it no longer queues and later returns
-  `ControlError::UnknownChildId`.
-
 We will use a higher-level version of this API in the [Dynamic
 actors](dynamic-actors.md) chapter.
 
@@ -330,4 +313,3 @@ actors](dynamic-actors.md) chapter.
 [`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ShutdownPolicy.html
 [`AutoShutdown`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.AutoShutdown.html
 [`agent_control` example]: https://github.com/ralexstokes/tokio-otp/tree/main/crates/tokio-otp/examples/agent_control
-[#169]: https://github.com/ralexstokes/tokio-otp/pull/169
