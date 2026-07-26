@@ -10,7 +10,8 @@ use std::{
 use tokio::sync::{Notify, mpsc};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorResult, CallError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy,
-    GraphBuilder, MailboxMode, MessageSize, RawActor, Reply, RestartPolicy, prelude::Continue,
+    GraphBuilder, HandleContext, MailboxMode, MessageSize, RawActor, Reply, RestartPolicy,
+    StartContext, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -412,14 +413,14 @@ struct GatedDrainActor {
 impl Actor for GatedDrainActor {
     type Msg = u64;
 
-    async fn handle(&mut self, message: u64, _ctx: &mut ActorContext<u64>) -> ActorResult {
+    async fn handle(&mut self, message: u64, _ctx: &mut HandleContext<'_, u64>) -> ActorResult {
         self.received
             .send(message)
             .expect("test receives drained message");
         Ok(Continue)
     }
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<u64>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, u64>) -> ActorResult {
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         Ok(Continue)

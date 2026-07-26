@@ -1,4 +1,5 @@
 use std::{collections::HashMap, time::Duration};
+use tokio_otp::ActorScope;
 
 use tokio::time::Instant;
 use tokio_otp::prelude::*;
@@ -53,7 +54,7 @@ impl Reconciler {
         }
     }
 
-    fn watch(&self, venue: VenueId, ctx: &ActorContext<ReconcilerMsg>) {
+    fn watch(&self, venue: VenueId, ctx: &impl ActorScope<ReconcilerMsg>) {
         let feed = self.feeds.get(venue).expect("known venue");
         ctx.watch(feed, move |event| ReconcilerMsg::Feed { venue, event });
     }
@@ -66,7 +67,7 @@ impl Reconciler {
         }
     }
 
-    fn rearm(&mut self, ctx: &mut ActorContext<ReconcilerMsg>) {
+    fn rearm(&mut self, ctx: &mut impl ActorScope<ReconcilerMsg>) {
         let now = Instant::now();
         let earliest = self
             .venues
@@ -88,7 +89,7 @@ impl Reconciler {
 impl Actor for Reconciler {
     type Msg = ReconcilerMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<ReconcilerMsg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, ReconcilerMsg>) -> ActorResult {
         for (venue, exchange) in &self.sessions {
             assert!(
                 exchange.feed_sessions(venue) >= 1,
@@ -108,7 +109,7 @@ impl Actor for Reconciler {
     async fn handle(
         &mut self,
         message: ReconcilerMsg,
-        ctx: &mut ActorContext<ReconcilerMsg>,
+        ctx: &mut HandleContext<'_, ReconcilerMsg>,
     ) -> ActorResult {
         match message {
             ReconcilerMsg::Market(snapshot) => {

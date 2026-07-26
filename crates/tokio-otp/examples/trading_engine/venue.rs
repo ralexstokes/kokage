@@ -5,7 +5,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::prelude::*;
+use tokio_otp::{ActorScope, prelude::*};
 
 use crate::{
     messages::{
@@ -177,12 +177,16 @@ pub struct VenueFeed {
 impl Actor for VenueFeed {
     type Msg = FeedMsg;
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<FeedMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, FeedMsg>) -> ActorResult {
         self.exchange.open_feed_session(self.venue);
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: FeedMsg, _ctx: &mut ActorContext<FeedMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: FeedMsg,
+        _ctx: &mut HandleContext<'_, FeedMsg>,
+    ) -> ActorResult {
         let started = Instant::now();
         match message {
             FeedMsg::Tick(snapshot) => {
@@ -226,7 +230,7 @@ impl VenueGateway {
 impl Actor for VenueGateway {
     type Msg = GatewayMsg;
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<GatewayMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, GatewayMsg>) -> ActorResult {
         // Stalled replies belong to the actor session. A restart drops them,
         // allowing abandoned callers to observe the incarnation boundary.
         self.stalled_replies
@@ -240,7 +244,7 @@ impl Actor for VenueGateway {
     async fn handle(
         &mut self,
         message: GatewayMsg,
-        ctx: &mut ActorContext<GatewayMsg>,
+        ctx: &mut HandleContext<'_, GatewayMsg>,
     ) -> ActorResult {
         let started = Instant::now();
         match message {

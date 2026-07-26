@@ -1,6 +1,6 @@
 # Compile-fail UI tests
 
-`actor-factory/` and `topology/` hold
+`actor-factory/`, `topology/`, and `lifecycle-stages/` hold
 [trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
 `tests/topology_ui.rs`. The former covers the `#[derive(ActorFactory)]` shape
 and attribute contract. The latter covers the `#[derive(Topology)]` contract,
@@ -10,6 +10,13 @@ typed factory return/completeness checks, plus the two token-API guarantees
 spans included. The corresponding `*-pass/` directories cover supported
 derive attributes, visibility, constructor functions, and capturing
 factories.
+
+`lifecycle-stages/` covers the guarantees bought by splitting `ActorContext`
+into per-stage views: `on_start` cannot await its own readiness through
+`StartingScope`, `on_stop` cannot queue a continuation that would be dropped,
+a handler cannot read the mailbox the provided loop owns, and a `RawActor`
+cannot queue a continuation nothing drains. Each was legal code — deadlocking
+or silently doing nothing — when all four hooks shared one context type.
 
 ## Updating snapshots on a toolchain bump
 

@@ -9,7 +9,7 @@ use std::{
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
-    Actor, ActorContext, ActorResult, DynamicActorOptions, GraphBuilder, LifecycleEvent,
+    Actor, ActorResult, DynamicActorOptions, GraphBuilder, HandleContext, LifecycleEvent,
     LifecycleEventKind, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
@@ -26,7 +26,11 @@ struct Sink {
 impl Actor for Sink {
     type Msg = SinkMsg;
 
-    async fn handle(&mut self, message: SinkMsg, _ctx: &mut ActorContext<SinkMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: SinkMsg,
+        _ctx: &mut HandleContext<'_, SinkMsg>,
+    ) -> ActorResult {
         match message {
             SinkMsg::Lifecycle(event) => self
                 .observed
@@ -43,7 +47,7 @@ struct Crasher;
 impl Actor for Crasher {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
         Err(io::Error::other("crash requested").into())
     }
 }

@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use tokio_otp::{ActorContext, ActorResult, Actor, Topology};
+use tokio_otp::{HandleContext, ActorResult, Actor, Topology};
 
 #[derive(Clone)]
 struct Worker;
@@ -8,7 +8,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

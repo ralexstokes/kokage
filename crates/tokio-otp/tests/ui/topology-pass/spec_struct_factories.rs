@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_otp::{Actor, ActorContext, ActorFactory, ActorResult, Topology};
+use tokio_otp::{Actor, HandleContext, ActorFactory, ActorResult, Topology};
 
 struct SpecActor {
     _configuration: Arc<str>,
@@ -9,7 +9,7 @@ struct SpecActor {
 impl Actor for SpecActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut HandleContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }
@@ -33,7 +33,7 @@ struct ClosureActor;
 impl Actor for ClosureActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut HandleContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

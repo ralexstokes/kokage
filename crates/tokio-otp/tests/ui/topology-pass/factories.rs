@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_otp::{Actor, ActorContext, ActorResult, Topology};
+use tokio_otp::{Actor, HandleContext, ActorResult, Topology};
 
 struct ConstructorActor;
 
@@ -13,7 +13,7 @@ impl ConstructorActor {
 impl Actor for ConstructorActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut HandleContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }
@@ -25,7 +25,7 @@ struct CapturingActor {
 impl Actor for CapturingActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut HandleContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

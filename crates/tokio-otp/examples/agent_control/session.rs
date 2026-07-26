@@ -10,8 +10,8 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, RestartPolicy, prelude::Continue,
+    Actor, ActorRef, ActorResult, ActorScope, CancellationHandle, CancellationToken, DrainPolicy,
+    DynamicActorOptions, HandleContext, RestartPolicy, StartContext, prelude::Continue,
 };
 
 use crate::{
@@ -74,7 +74,7 @@ impl Session {
         Ok(Continue)
     }
 
-    fn arm_idle(&mut self, ctx: &mut ActorContext<SessionMsg>) {
+    fn arm_idle(&mut self, ctx: &mut impl ActorScope<SessionMsg>) {
         ctx.state_timeout(SessionMsg::IdleSweep, IDLE_TIMEOUT);
     }
 
@@ -84,7 +84,7 @@ impl Session {
         role: Role,
         attempt: u64,
         input: PendingInput,
-        ctx: &mut ActorContext<SessionMsg>,
+        ctx: &mut HandleContext<'_, SessionMsg>,
     ) -> ActorResult {
         ctx.clear_state_timeout();
         if self.heartbeat.is_none() {
@@ -151,7 +151,7 @@ impl Session {
     async fn start_input(
         &mut self,
         input: PendingInput,
-        ctx: &mut ActorContext<SessionMsg>,
+        ctx: &mut HandleContext<'_, SessionMsg>,
     ) -> ActorResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
@@ -161,7 +161,7 @@ impl Session {
         &mut self,
         task: TaskId,
         approved: bool,
-        ctx: &mut ActorContext<SessionMsg>,
+        ctx: &mut impl ActorScope<SessionMsg>,
     ) -> ActorResult {
         let text = format!(
             "task {task} complete (approved={approved}, prior-context={})",
@@ -196,7 +196,7 @@ impl Session {
 impl Actor for Session {
     type Msg = SessionMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         let mut proof = self.proof.lock().expect("proof lock poisoned");
         proof.session_ready_at.insert(self.chat, Instant::now());
         proof.session_generations.insert(self.chat, self.generation);
@@ -215,7 +215,7 @@ impl Actor for Session {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             SessionMsg::Rehydrate => {

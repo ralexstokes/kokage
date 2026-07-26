@@ -36,7 +36,7 @@ use crate::runtime::{ActorOverrides, ActorRuntimeState, Runtime};
 /// impl Actor for Echo {
 ///     type Msg = String;
 ///
-///     async fn handle(&mut self, message: String, _ctx: &mut ActorContext<String>) -> ActorResult {
+///     async fn handle(&mut self, message: String, _ctx: &mut HandleContext<'_, String>) -> ActorResult {
 ///         println!("{message}");
 ///         Ok(tokio_otp::prelude::Continue)
 ///     }

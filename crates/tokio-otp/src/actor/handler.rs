@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::actor::{
-    context::ActorContext,
+    context::{ActorContext, HandleContext, StartContext, StopContext},
     raw::{ActorResult, BoxError, Flow, RawActor},
 };
 
@@ -137,7 +137,7 @@ pub trait Actor: Send + Sync + 'static {
     fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> impl Future<Output = ActorResult> + Send;
 
     /// Runs once before the first message of each actor run.
@@ -151,7 +151,7 @@ pub trait Actor: Send + Sync + 'static {
     /// supervision it is an ordinary restartable failure.
     fn on_start(
         &mut self,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut StartContext<'_, Self::Msg>,
     ) -> impl Future<Output = ActorResult> + Send {
         async { Ok(Flow::Continue) }
     }
@@ -169,7 +169,7 @@ pub trait Actor: Send + Sync + 'static {
     /// error.
     fn on_stop(
         &mut self,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut StopContext<'_, Self::Msg>,
     ) -> impl Future<Output = Result<(), BoxError>> + Send {
         async { Ok(()) }
     }
@@ -216,7 +216,7 @@ impl<H: Actor> RawActor for H {
     }
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let start_flow = self.on_start(&mut ctx).await?;
+        let start_flow = self.on_start(&mut StartContext::new(&mut ctx)).await?;
         ctx.mark_ready();
 
         let mut stopping = start_flow == Flow::Stop;
@@ -244,7 +244,10 @@ impl<H: Actor> RawActor for H {
             };
             ctx.myself.record_received();
             ctx.observability.emit_message_received(&ctx.id);
-            stopping = self.handle(message, &mut ctx).await? == Flow::Stop;
+            stopping = self
+                .handle(message, &mut HandleContext::new(&mut ctx))
+                .await?
+                == Flow::Stop;
         }
 
         ctx.close_external_intake();
@@ -282,13 +285,15 @@ impl<H: Actor> RawActor for H {
                 // Once stopping begins, flow values do not change the drain
                 // decision. Continuations queued by drain handlers are left
                 // for the context to drop with the incarnation.
-                let _ = self.handle(message, &mut ctx).await?;
+                let _ = self
+                    .handle(message, &mut HandleContext::new(&mut ctx))
+                    .await?;
             }
         } else {
             ctx.abort_offloads();
         }
 
-        self.on_stop(&mut ctx).await?;
+        self.on_stop(&mut StopContext::new(&mut ctx)).await?;
         Ok(Flow::Stop)
     }
 }

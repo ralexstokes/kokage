@@ -21,7 +21,7 @@ struct Coordinator {
 impl Actor for Coordinator {
     type Msg = CoordinatorMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         ctx.watch(&self.worker, CoordinatorMsg::Worker);
         Ok(Continue)
     }
@@ -29,7 +29,7 @@ impl Actor for Coordinator {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         let CoordinatorMsg::Worker(event) = message;
         match event {

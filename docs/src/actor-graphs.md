@@ -43,7 +43,7 @@ struct FrontDesk {
 impl Actor for FrontDesk {
     type Msg = Order;
 
-    async fn handle(&mut self, order: Order, _ctx: &mut ActorContext<Order>) -> ActorResult {
+    async fn handle(&mut self, order: Order, _ctx: &mut HandleContext<'_, Order>) -> ActorResult {
         self.press.send(order).await?;
         Ok(Continue)
     }
@@ -56,7 +56,7 @@ struct Press {
 impl Actor for Press {
     type Msg = Order;
 
-    async fn handle(&mut self, Order(order): Order, _ctx: &mut ActorContext<Order>) -> ActorResult {
+    async fn handle(&mut self, Order(order): Order, _ctx: &mut HandleContext<'_, Order>) -> ActorResult {
         self.shipping
             .send(ShippingMsg::Ship(Parcel(format!("printed[{order}]"))))
             .await?;
@@ -75,7 +75,7 @@ impl Actor for Shipping {
     async fn handle(
         &mut self,
         message: ShippingMsg,
-        _ctx: &mut ActorContext<ShippingMsg>,
+        _ctx: &mut HandleContext<'_, ShippingMsg>,
     ) -> ActorResult {
         match message {
             ShippingMsg::Ship(Parcel(parcel)) => {

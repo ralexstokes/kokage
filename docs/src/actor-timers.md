@@ -25,13 +25,13 @@ struct Worker {
 impl Actor for Worker {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Message>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Message>) -> ActorResult {
         self.reconnect = Some(ctx.send_after(Message::Reconnect, Duration::from_secs(5)));
         self.reconcile = Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: Message, _ctx: &mut ActorContext<Message>) -> ActorResult {
+    async fn handle(&mut self, message: Message, _ctx: &mut HandleContext<'_, Message>) -> ActorResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
             Message::Reconcile => { /* reconcile periodically */ }
@@ -108,12 +108,12 @@ enum Order {
 impl Actor for Order {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Message>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Message>) -> ActorResult {
         ctx.state_timeout(Message::FillTimedOut, Duration::from_millis(500));
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: Message, ctx: &mut ActorContext<Message>) -> ActorResult {
+    async fn handle(&mut self, message: Message, ctx: &mut HandleContext<'_, Message>) -> ActorResult {
         match (&*self, message) {
             (Order::PendingFill, Message::Filled) => {
                 ctx.clear_state_timeout();

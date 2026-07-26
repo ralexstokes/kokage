@@ -289,9 +289,8 @@ impl<M> ActorRef<M> {
     /// fan-out or routing actors it turns one slow callee into head-of-line
     /// blocking for all traffic through the intermediary. Pipeline the
     /// bounded call back into an ordinary message with
-    /// [`ActorContext::offload`], or move the slow
-    /// dependency behind a dedicated child actor. The book's request/reply
-    /// chapter covers the pattern.
+    /// [`ActorScope::offload`], or move the slow dependency behind a dedicated
+    /// child actor. The book's request/reply chapter covers the pattern.
     pub async fn call<T>(
         &self,
         timeout: Duration,
@@ -477,13 +476,23 @@ impl<T> fmt::Debug for Reply<T> {
     }
 }
 
-/// Runtime context passed to a graph actor each time the graph is run.
+/// Runtime context passed to a [`RawActor`](crate::RawActor) each time the
+/// graph is run.
 ///
-/// Provides the actor's incoming [`mailbox`](Self::recv), message
-/// [`timers`](Self::send_after), a
-/// bounded [`offload`](Self::offload) primitive for asynchronous postbacks, a
+/// This is the widest context: a `RawActor` owns its receive loop, so it gets
+/// the incoming [`mailbox`](Self::recv) and explicit
+/// [`mark_ready`](Self::mark_ready) alongside the ambient capabilities —
+/// message [`timers`](Self::send_after), a bounded
+/// [`offload`](Self::offload) primitive for asynchronous postbacks, a
 /// [`shutdown_token`](Self::shutdown_token) for cooperative shutdown, and
 /// [`run_blocking`](Self::run_blocking) for blocking work.
+///
+/// Handler-style [`Actor`](crate::Actor) implementations do not see this type.
+/// The framework owns their loop and hands each lifecycle hook a narrower view
+/// of the same context: [`StartContext`], [`HandleContext`], and
+/// [`StopContext`]. Those views omit what the stage cannot act on, so
+/// mailbox-stealing `recv` calls and no-op `continue_with` calls are compile
+/// errors rather than silent misbehavior.
 pub struct ActorContext<M> {
     pub(crate) id: Arc<str>,
     pub(crate) mailbox: MailboxReceiver<M>,
@@ -518,15 +527,7 @@ impl<M: Send + 'static> ActorContext<M> {
         self.continuations.pop_front()
     }
 
-    /// Queues initialization follow-up work as the actor's next message.
-    ///
-    /// Calls made from [`Actor::on_start`](crate::Actor::on_start) are
-    /// processed after startup readiness is reported and before ordinary
-    /// mailbox messages. This keeps expensive warm-up work out of the
-    /// readiness-critical initialization path. Continuations count as
-    /// received messages in [`ActorStats`](crate::ActorStats), but not as
-    /// externally accepted mailbox messages.
-    pub fn continue_with(&mut self, message: M) {
+    pub(crate) fn push_continuation(&mut self, message: M) {
         self.continuations.push_back(message);
     }
 
@@ -1014,6 +1015,445 @@ impl<M: Send + 'static> ActorContext<M> {
                 Err(_) => Err(BlockingCancelled),
             }
         }
+    }
+}
+
+mod sealed {
+    pub trait Sealed<M> {
+        fn cx(&self) -> &super::ActorContext<M>;
+        fn cx_mut(&mut self) -> &mut super::ActorContext<M>;
+    }
+}
+
+/// The capabilities an actor has while it is running, independent of which
+/// lifecycle stage it is in.
+///
+/// Implemented by [`StartContext`] and [`HandleContext`] — the two stages that
+/// can still queue work for this incarnation. It is the type a shared helper
+/// should take when it is called from both `on_start` and `handle`:
+///
+/// ```no_run
+/// use tokio_otp::{ActorScope, CancellationHandle};
+/// use std::time::Duration;
+///
+/// # enum Msg { Tick }
+/// fn arm(ctx: &mut impl ActorScope<Msg>) -> CancellationHandle {
+///     ctx.state_timeout(Msg::Tick, Duration::from_secs(5))
+/// }
+/// ```
+///
+/// [`StopContext`] deliberately does not implement it: after the receive loop
+/// has exited, nothing here has anyone left to deliver to.
+///
+/// This trait is sealed. It exists to name the shared surface, not to let
+/// callers substitute their own context.
+pub trait ActorScope<M: Send + 'static>: sealed::Sealed<M> {
+    /// Returns the actor's unique identifier within the graph.
+    fn id(&self) -> &str {
+        self.cx().id()
+    }
+
+    /// Returns a sender targeting this actor's own mailbox.
+    fn myself(&self) -> ActorRef<M> {
+        self.cx().myself()
+    }
+
+    /// Returns the shared graph shutdown token.
+    fn shutdown_token(&self) -> &CancellationToken {
+        self.cx().shutdown_token()
+    }
+
+    /// Returns `true` if graph shutdown has been requested.
+    fn is_shutting_down(&self) -> bool {
+        self.cx().is_shutting_down()
+    }
+
+    /// Queues follow-up work as the actor's next message.
+    ///
+    /// Continuations are taken ahead of the mailbox on every iteration of the
+    /// provided receive loop, so they are a priority self-send that does not
+    /// consume mailbox capacity. Calls made from
+    /// [`Actor::on_start`](crate::Actor::on_start) are processed after startup
+    /// readiness is reported and before ordinary mailbox messages, which keeps
+    /// expensive warm-up work out of the readiness-critical initialization
+    /// path.
+    ///
+    /// Continuations count as received messages in
+    /// [`ActorStats`](crate::ActorStats), but not as externally accepted
+    /// mailbox messages. They are abandoned once the actor begins stopping,
+    /// which is why [`StopContext`] is outside this trait.
+    fn continue_with(&mut self, message: M) {
+        self.cx_mut().push_continuation(message);
+    }
+
+    /// Watches the target logical actor across restarts.
+    ///
+    /// See [`ActorContext::watch`].
+    fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> CancellationHandle
+    where
+        T: Send + 'static,
+        F: FnMut(MonitorEvent) -> M + Send + 'static,
+    {
+        self.cx().watch(target, map)
+    }
+
+    /// Sends `message` to this actor after `delay` has elapsed.
+    ///
+    /// See [`ActorContext::send_after`].
+    fn send_after(&self, message: M, delay: Duration) -> CancellationHandle {
+        self.cx().send_after(message, delay)
+    }
+
+    /// Sends `message` to `target` after `delay` has elapsed.
+    ///
+    /// See [`ActorContext::send_after_to`].
+    fn send_after_to<T: Send + 'static>(
+        &self,
+        target: &ActorRef<T>,
+        message: T,
+        delay: Duration,
+    ) -> CancellationHandle {
+        self.cx().send_after_to(target, message, delay)
+    }
+
+    /// Sends `message` after `delay`, replacing the current state timeout.
+    ///
+    /// See [`ActorContext::state_timeout`].
+    fn state_timeout(&mut self, message: M, delay: Duration) -> CancellationHandle {
+        self.cx_mut().state_timeout(message, delay)
+    }
+
+    /// Cancels and clears the current state timeout, if any.
+    ///
+    /// See [`ActorContext::clear_state_timeout`].
+    fn clear_state_timeout(&mut self) {
+        self.cx_mut().clear_state_timeout()
+    }
+
+    /// Sends a clone of `message` to this actor after every `period`.
+    ///
+    /// See [`ActorContext::interval`].
+    fn interval(&self, message: M, period: Duration) -> CancellationHandle
+    where
+        M: Clone,
+    {
+        self.cx().interval(message, period)
+    }
+
+    /// Sends a clone of `message` to `target` after every `period`.
+    ///
+    /// See [`ActorContext::interval_to`].
+    fn interval_to<T>(
+        &self,
+        target: &ActorRef<T>,
+        message: T,
+        period: Duration,
+    ) -> CancellationHandle
+    where
+        T: Clone + Send + 'static,
+    {
+        self.cx().interval_to(target, message, period)
+    }
+
+    /// Runs a bounded future and substitutes `fallback` when its deadline
+    /// expires.
+    ///
+    /// See [`ActorContext::offload_or`].
+    fn offload_or<F, T, C>(
+        &self,
+        deadline: Duration,
+        future: F,
+        fallback: T,
+        continuation: C,
+    ) -> OffloadHandle
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        C: FnOnce(T) -> M + Send + 'static,
+    {
+        self.cx()
+            .offload_or(deadline, future, fallback, continuation)
+    }
+
+    /// Runs a bounded future without blocking this actor's receive loop.
+    ///
+    /// See [`ActorContext::offload`].
+    fn offload<F, T, C>(&self, deadline: Duration, future: F, continuation: C) -> OffloadHandle
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        C: FnOnce(Result<T, OffloadDeadline>) -> M + Send + 'static,
+    {
+        self.cx().offload(deadline, future, continuation)
+    }
+
+    /// Runs blocking work on Tokio's blocking pool.
+    ///
+    /// See [`ActorContext::run_blocking`].
+    fn run_blocking<F, R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
+    where
+        F: FnOnce(&CancellationToken) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.cx().run_blocking(f)
+    }
+}
+
+macro_rules! actor_scope {
+    ($view:ident) => {
+        impl<M> sealed::Sealed<M> for $view<'_, M> {
+            fn cx(&self) -> &ActorContext<M> {
+                self.cx
+            }
+
+            fn cx_mut(&mut self) -> &mut ActorContext<M> {
+                self.cx
+            }
+        }
+
+        impl<M: Send + 'static> ActorScope<M> for $view<'_, M> {}
+    };
+}
+
+/// The enclosing scope handle as seen from
+/// [`Actor::on_start`](crate::Actor::on_start).
+///
+/// This is a [`RuntimeHandle`] with the lifecycle-awaiting operations withheld.
+/// An actor cannot report ready until its `on_start` returns, so awaiting any
+/// operation that blocks on another child's lifecycle — the scope starting, a
+/// child completing, the scope shutting down — deadlocks the actor against
+/// itself. Those methods are absent here rather than documented as forbidden.
+///
+/// The pattern for a wait that must happen is to launch it as pipelined work
+/// and consume the result after startup. Take the full handle with
+/// [`after_start`](Self::after_start) and move it into the spawned future.
+#[derive(Clone, Debug)]
+pub struct StartingScope {
+    handle: RuntimeHandle,
+}
+
+impl StartingScope {
+    fn new(handle: RuntimeHandle) -> Self {
+        Self { handle }
+    }
+
+    /// Releases the full [`RuntimeHandle`] for use after `on_start` returns.
+    ///
+    /// Move the returned handle into a [`tokio::spawn`] or an
+    /// [`offload`](ActorScope::offload) continuation. Awaiting its lifecycle
+    /// operations inline, before `on_start` returns, is the deadlock this type
+    /// exists to make explicit.
+    pub fn after_start(self) -> RuntimeHandle {
+        self.handle
+    }
+
+    /// Returns the underlying supervisor handle.
+    pub fn supervisor_handle(&self) -> tokio_supervisor::SupervisorHandle {
+        self.handle.supervisor_handle()
+    }
+
+    /// Returns a point-in-time snapshot of the scope.
+    pub fn snapshot(&self) -> tokio_supervisor::SupervisorSnapshot {
+        self.handle.snapshot()
+    }
+
+    /// Returns per-actor message counters for this scope.
+    pub fn actor_stats(&self) -> Vec<ActorStats> {
+        self.handle.actor_stats()
+    }
+
+    /// Subscribes to scope snapshots.
+    pub fn subscribe_snapshots(&self) -> watch::Receiver<tokio_supervisor::SupervisorSnapshot> {
+        self.handle.subscribe_snapshots()
+    }
+
+    /// Returns a handle to a nested subtree by id.
+    pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
+        self.handle.subtree(id)
+    }
+
+    /// Inserts an actor into this scope.
+    ///
+    /// Safe to await here: insertion schedules startup rather than waiting for
+    /// it, so it cannot block on a child whose start depends on this one.
+    /// See [`RuntimeHandle::add_actor`].
+    pub async fn add_actor<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+        options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
+    ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
+    where
+        F: crate::ActorFactory,
+    {
+        self.handle.add_actor(label, factory, options).await
+    }
+
+    /// Inserts a subtree into this scope.
+    ///
+    /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
+    /// See [`RuntimeHandle::add_subtree`].
+    pub async fn add_subtree(
+        &self,
+        id: impl Into<String>,
+        builder: impl Into<crate::SupervisionTree>,
+    ) -> Result<RuntimeHandle, crate::AddSubtreeError> {
+        self.handle.add_subtree(id, builder).await
+    }
+
+    /// Observes lifecycle transitions of this scope's direct children.
+    pub fn watch_lifecycle(&self) -> tokio_supervisor::LifecycleWatch {
+        self.handle.watch_lifecycle()
+    }
+
+    /// Observes lifecycle transitions of this scope and everything beneath it.
+    pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::RecursiveLifecycleWatch {
+        self.handle.watch_lifecycle_recursive()
+    }
+
+    /// Requests shutdown of this scope without waiting for it.
+    pub fn shutdown(&self) {
+        self.handle.shutdown()
+    }
+}
+
+/// Context handed to [`Actor::on_start`](crate::Actor::on_start).
+///
+/// Adds [`continue_with`](Self::continue_with) to the ambient capabilities and
+/// narrows the scope handles to [`StartingScope`], which withholds the
+/// lifecycle waits that would deadlock an actor that has not reported ready.
+///
+/// The mailbox is deliberately absent: the provided receive loop owns it, and
+/// readiness is reported by the framework once this hook returns.
+pub struct StartContext<'a, M> {
+    cx: &'a mut ActorContext<M>,
+}
+
+/// Context handed to [`Actor::handle`](crate::Actor::handle).
+///
+/// The ambient capabilities plus [`continue_with`](Self::continue_with) and
+/// full scope handles. The mailbox is absent because the provided receive loop
+/// owns it; a handler that reads it directly would bypass drain accounting and
+/// the continuation queue.
+pub struct HandleContext<'a, M> {
+    cx: &'a mut ActorContext<M>,
+}
+
+/// Context handed to [`Actor::on_stop`](crate::Actor::on_stop).
+///
+/// A deliberately narrow surface. The hook runs after the receive loop has
+/// exited and the mailbox has been drained or discarded, so anything that
+/// queues future work for this incarnation — timers, intervals, watches,
+/// offloads, state timeouts, continuations — has no one left to deliver to and
+/// is withheld. What remains is identity, the shutdown token, the scope
+/// handles, and [`run_blocking`](Self::run_blocking) for synchronous teardown.
+pub struct StopContext<'a, M> {
+    cx: &'a mut ActorContext<M>,
+}
+
+actor_scope!(StartContext);
+actor_scope!(HandleContext);
+
+impl<'a, M: Send + 'static> StartContext<'a, M> {
+    pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
+        Self { cx }
+    }
+
+    /// Returns this actor's enclosing scope, restricted for the startup stage.
+    ///
+    /// See [`StartingScope`] for why the lifecycle waits are withheld here and
+    /// how to pipeline one that must happen.
+    pub fn supervisor(&self) -> StartingScope {
+        StartingScope::new(self.cx.supervisor())
+    }
+
+    /// Returns this leader's declared child scope, restricted for the startup
+    /// stage.
+    ///
+    /// The child scope starts only after this hook returns, so awaiting its
+    /// readiness inline can never succeed. See [`StartingScope`].
+    pub fn children(&self) -> Option<StartingScope> {
+        self.cx.children().map(StartingScope::new)
+    }
+}
+
+impl<'a, M: Send + 'static> HandleContext<'a, M> {
+    pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
+        Self { cx }
+    }
+
+    /// Returns the actor-aware handle for this actor's enclosing scope.
+    ///
+    /// See [`ActorContext::supervisor`].
+    pub fn supervisor(&self) -> RuntimeHandle {
+        self.cx.supervisor()
+    }
+
+    /// Returns the actor-aware handle for this leader's declared child scope.
+    ///
+    /// See [`ActorContext::children`].
+    pub fn children(&self) -> Option<RuntimeHandle> {
+        self.cx.children()
+    }
+}
+
+impl<'a, M: Send + 'static> StopContext<'a, M> {
+    pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
+        Self { cx }
+    }
+
+    /// Returns the actor's unique identifier within the graph.
+    pub fn id(&self) -> &str {
+        self.cx.id()
+    }
+
+    /// Returns a sender targeting this actor's own mailbox.
+    ///
+    /// The mailbox is no longer being read by this incarnation. This is here
+    /// so teardown can hand the ref to something else, not so the actor can
+    /// post to itself.
+    pub fn myself(&self) -> ActorRef<M> {
+        self.cx.myself()
+    }
+
+    /// Returns the shared graph shutdown token.
+    pub fn shutdown_token(&self) -> &CancellationToken {
+        self.cx.shutdown_token()
+    }
+
+    /// Returns `true` if graph shutdown has been requested.
+    ///
+    /// This is `false` when the actor is stopping on its own
+    /// [`Flow::Stop`](crate::Flow) rather than on graph shutdown.
+    pub fn is_shutting_down(&self) -> bool {
+        self.cx.is_shutting_down()
+    }
+
+    /// Returns the actor-aware handle for this actor's enclosing scope.
+    pub fn supervisor(&self) -> RuntimeHandle {
+        self.cx.supervisor()
+    }
+
+    /// Returns the actor-aware handle for this leader's declared child scope.
+    pub fn children(&self) -> Option<RuntimeHandle> {
+        self.cx.children()
+    }
+
+    /// Runs blocking teardown work on Tokio's blocking pool.
+    ///
+    /// See [`ActorContext::run_blocking`].
+    pub fn run_blocking<F, R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
+    where
+        F: FnOnce(&CancellationToken) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.cx.run_blocking(f)
     }
 }
 

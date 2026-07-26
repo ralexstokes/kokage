@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{Mutex, Notify, watch};
-use tokio_otp::{ChildSpec, DynamicActorOptions, SupervisorError, prelude::*};
+use tokio_otp::{ActorScope, ChildSpec, DynamicActorOptions, SupervisorError, prelude::*};
 
 #[derive(Clone)]
 struct Probe {
@@ -13,7 +13,7 @@ struct Probe {
 impl Actor for Probe {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         self.order.lock().await.push(self.name);
         if let Some(release) = &self.release {
             release.notified().await;
@@ -27,7 +27,7 @@ impl Actor for Probe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.order.lock().await.push(message);
         Ok(Continue)
@@ -43,7 +43,7 @@ struct AddsChildOnStart {
 impl Actor for AddsChildOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         let handle = {
             let ready = self
                 .handle_rx
@@ -70,7 +70,7 @@ impl Actor for AddsChildOnStart {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, Self::Msg>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -168,11 +168,11 @@ struct FailsOnStart;
 impl Actor for FailsOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         Err(std::io::Error::other("actor init failed").into())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, Self::Msg>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -211,7 +211,7 @@ impl Actor for DrainContinuation {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" || message == "hold-and-continue" {
@@ -305,7 +305,7 @@ struct StopsOnStart {
 impl Actor for StopsOnStart {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         ctx.continue_with("continuation");
         self.started.notify_one();
         self.release.notified().await;
@@ -315,13 +315,13 @@ impl Actor for StopsOnStart {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.events.lock().await.push(message);
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self::Msg>) -> Result<(), BoxError> {
         self.events.lock().await.push("stopped");
         Ok(())
     }
@@ -463,7 +463,7 @@ impl Actor for DefaultPolicy {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" {

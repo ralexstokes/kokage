@@ -10,7 +10,7 @@ use std::{
 };
 
 use tokio::sync::{Notify, mpsc};
-use tokio_otp::prelude::*;
+use tokio_otp::{ActorScope, prelude::*};
 
 #[derive(Debug)]
 enum OutcomeMsg {
@@ -28,7 +28,7 @@ struct Outcomes {
 impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
         ctx.offload(
             Duration::from_millis(10),
@@ -53,7 +53,7 @@ impl Actor for Outcomes {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.observed.send(message).unwrap();
         Ok(Continue)
@@ -157,7 +157,7 @@ impl Actor for StaleActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             StaleMsg::Start => {
@@ -240,7 +240,7 @@ impl Actor for AbortActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             AbortMsg::Start => {
@@ -318,7 +318,7 @@ impl Actor for ShutdownActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             DrainMsg::Start => {
@@ -421,7 +421,7 @@ impl Actor for BackpressureActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             BackpressureMsg::Start => {
@@ -543,7 +543,7 @@ impl Actor for DeadlineDrainActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut HandleContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             DeadlineDrainMsg::Start => {
