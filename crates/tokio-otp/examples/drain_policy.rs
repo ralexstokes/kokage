@@ -33,6 +33,9 @@ impl Actor for Worker {
         Ok(Continue)
     }
 
+    // Drain is the default; spelled out here because it is what this example
+    // demonstrates. Actors that should drop queued work at shutdown instead
+    // return `DrainPolicy::Discard`.
     fn drain_policy(&self) -> DrainPolicy {
         DrainPolicy::Drain
     }

@@ -448,3 +448,79 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
     ));
     handle.shutdown_and_wait().await.unwrap();
 }
+
+/// Overrides nothing: exercises the [`Actor`] trait's default drain policy.
+#[derive(Clone)]
+struct DefaultPolicy {
+    handled: Arc<Mutex<Vec<&'static str>>>,
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl Actor for DefaultPolicy {
+    type Msg = &'static str;
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut ActorContext<Self::Msg>,
+    ) -> ActorResult {
+        self.handled.lock().await.push(message);
+        if message == "hold" {
+            self.started.notify_one();
+            self.release.notified().await;
+            while !ctx.shutdown_token().is_cancelled() {
+                tokio::task::yield_now().await;
+            }
+        }
+        Ok(Continue)
+    }
+}
+
+#[test]
+fn the_default_drain_policy_is_drain() {
+    assert_eq!(DrainPolicy::default(), DrainPolicy::Drain);
+}
+
+/// A handler that never mentions `drain_policy` finishes the mailbox its
+/// incarnation already accepted. Flipping this default back to `Discard` is a
+/// silent message-loss change, so it is pinned here rather than left to the
+/// tests that set a policy explicitly.
+#[tokio::test]
+async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
+    let handled = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut graph = GraphBuilder::new();
+    let actor_handled = handled.clone();
+    let actor_started = started.clone();
+    let actor_release = release.clone();
+    let actor = graph.add(move || DefaultPolicy {
+        handled: actor_handled.clone(),
+        started: actor_started.clone(),
+        release: actor_release.clone(),
+    });
+    let handle = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .build()
+        .unwrap()
+        .spawn();
+    handle.wait_started().await.unwrap();
+
+    // Park the handler so the next sends land in the mailbox rather than being
+    // consumed by the ordinary receive loop.
+    actor.send("hold").await.unwrap();
+    started.notified().await;
+    actor.send("queued-first").await.unwrap();
+    actor.send("queued-second").await.unwrap();
+
+    handle.shutdown();
+    release.notify_one();
+    handle.shutdown_and_wait().await.unwrap();
+
+    assert_eq!(
+        &*handled.lock().await,
+        &["hold", "queued-first", "queued-second"],
+        "the default policy dropped messages the mailbox had already accepted"
+    );
+}
