@@ -1,10 +1,10 @@
 use thiserror::Error;
 
-/// Indicates that an [`ActorContext::step`](crate::ActorContext::step)
+/// Indicates that an [`ActorContext::offload`](crate::ActorContext::offload)
 /// future did not complete before its required deadline.
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
-#[error("actor step deadline elapsed")]
-pub struct StepDeadline;
+#[error("actor offload deadline elapsed")]
+pub struct OffloadDeadline;
 
 /// Errors returned by [`ActorContext::try_recv`](crate::ActorContext::try_recv).
 ///

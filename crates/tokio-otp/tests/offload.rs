@@ -14,8 +14,8 @@ use tokio_otp::prelude::*;
 
 #[derive(Debug)]
 enum OutcomeMsg {
-    Success(Result<u32, StepDeadline>),
-    Timeout(Result<(), StepDeadline>),
+    Success(Result<u32, OffloadDeadline>),
+    Timeout(Result<(), OffloadDeadline>),
     OrSuccess(u32),
     OrFallback(u32),
 }
@@ -29,19 +29,19 @@ impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
     async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
-        ctx.step(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
-        ctx.step(
+        ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
+        ctx.offload(
             Duration::from_millis(10),
             pending::<()>(),
             OutcomeMsg::Timeout,
         );
-        ctx.step_or(
+        ctx.offload_or(
             Duration::from_secs(1),
             async { 42 },
             0,
             OutcomeMsg::OrSuccess,
         );
-        ctx.step_or(
+        ctx.offload_or(
             Duration::from_millis(10),
             pending::<u32>(),
             7,
@@ -61,7 +61,7 @@ impl Actor for Outcomes {
 }
 
 #[tokio::test]
-async fn step_and_step_or_post_total_and_fallback_outcomes() {
+async fn offload_and_offload_or_post_total_and_fallback_outcomes() {
     let (observed, mut outcomes) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.add(move || Outcomes {
@@ -91,7 +91,7 @@ async fn step_and_step_or_post_total_and_fallback_outcomes() {
     assert!(
         observed
             .iter()
-            .any(|message| matches!(message, OutcomeMsg::Timeout(Err(StepDeadline))))
+            .any(|message| matches!(message, OutcomeMsg::Timeout(Err(OffloadDeadline))))
     );
     assert!(
         observed
@@ -162,7 +162,7 @@ impl Actor for StaleActor {
         match message {
             StaleMsg::Start => {
                 assert_eq!(self.incarnation, 0);
-                ctx.step(
+                ctx.offload(
                     Duration::from_secs(1),
                     SlowDropFuture {
                         drop_started: self.drop_started.clone(),
@@ -170,7 +170,7 @@ impl Actor for StaleActor {
                     },
                     |_| StaleMsg::Done,
                 );
-                return Err(std::io::Error::other("restart after starting step").into());
+                return Err(std::io::Error::other("restart after starting offload").into());
             }
             StaleMsg::Done => {
                 self.done.fetch_add(1, Ordering::Relaxed);
@@ -181,7 +181,7 @@ impl Actor for StaleActor {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn step_is_aborted_and_never_posts_to_a_fresh_incarnation() {
+async fn offload_is_aborted_and_never_posts_to_a_fresh_incarnation() {
     let constructed = Arc::new(AtomicUsize::new(0));
     let drop_started = Arc::new(AtomicBool::new(false));
     let release_drop = Arc::new(AtomicBool::new(false));
@@ -215,7 +215,7 @@ async fn step_is_aborted_and_never_posts_to_a_fresh_incarnation() {
     })
     .await
     .unwrap();
-    assert_eq!(actor.stats().outstanding_steps, 0);
+    assert_eq!(actor.stats().outstanding_offloads, 0);
     release_drop.store(true, Ordering::Release);
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert_eq!(done.load(Ordering::Relaxed), 0);
@@ -230,7 +230,7 @@ enum AbortMsg {
 
 #[derive(Clone)]
 struct AbortActor {
-    handle: Arc<Mutex<Option<StepHandle>>>,
+    handle: Arc<Mutex<Option<OffloadHandle>>>,
     done: Arc<AtomicUsize>,
 }
 
@@ -244,7 +244,8 @@ impl Actor for AbortActor {
     ) -> ActorResult {
         match message {
             AbortMsg::Start => {
-                let handle = ctx.step(Duration::from_secs(1), pending::<()>(), |_| AbortMsg::Done);
+                let handle =
+                    ctx.offload(Duration::from_secs(1), pending::<()>(), |_| AbortMsg::Done);
                 *self.handle.lock().unwrap() = Some(handle);
             }
             AbortMsg::Done => {
@@ -256,7 +257,7 @@ impl Actor for AbortActor {
 }
 
 #[tokio::test]
-async fn step_handle_aborts_and_updates_the_outstanding_gauge() {
+async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
     let handle_slot = Arc::new(Mutex::new(None));
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
@@ -276,16 +277,16 @@ async fn step_handle_aborts_and_updates_the_outstanding_gauge() {
     runtime.wait_started().await.unwrap();
     actor.send(AbortMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while actor.stats().outstanding_steps != 1 {
+        while actor.stats().outstanding_offloads != 1 {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    let step = handle_slot.lock().unwrap().take().unwrap();
-    step.abort();
+    let offload = handle_slot.lock().unwrap().take().unwrap();
+    offload.abort();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !step.is_finished() || actor.stats().outstanding_steps != 0 {
+        while !offload.is_finished() || actor.stats().outstanding_offloads != 0 {
             tokio::task::yield_now().await;
         }
     })
@@ -323,7 +324,7 @@ impl Actor for ShutdownActor {
             DrainMsg::Start => {
                 let release = self.release.clone();
                 let entered = self.entered.clone();
-                ctx.step(
+                ctx.offload(
                     Duration::from_secs(1),
                     async move {
                         entered.notify_one();
@@ -334,7 +335,7 @@ impl Actor for ShutdownActor {
             }
             DrainMsg::Queued => {
                 self.observed.send("queued").unwrap();
-                ctx.step(Duration::from_secs(1), async {}, |_| DrainMsg::Nested);
+                ctx.offload(Duration::from_secs(1), async {}, |_| DrainMsg::Nested);
             }
             DrainMsg::Nested => self.observed.send("nested").unwrap(),
             DrainMsg::Done => self.observed.send("done").unwrap(),
@@ -387,7 +388,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
 }
 
 #[tokio::test]
-async fn drain_interleaves_a_full_mailbox_with_step_completion() {
+async fn drain_interleaves_a_full_mailbox_with_offload_completion() {
     let observed = shutdown_case(DrainPolicy::Drain).await;
     assert_eq!(observed.first(), Some(&"queued"));
     assert!(observed.contains(&"nested"));
@@ -395,7 +396,7 @@ async fn drain_interleaves_a_full_mailbox_with_step_completion() {
 }
 
 #[tokio::test]
-async fn discard_aborts_steps_at_stop_initiation() {
+async fn discard_aborts_offloads_at_stop_initiation() {
     assert!(!shutdown_case(DrainPolicy::Discard).await.contains(&"done"));
 }
 
@@ -409,8 +410,8 @@ enum BackpressureMsg {
 #[derive(Clone)]
 struct BackpressureActor {
     handler_release: Arc<Notify>,
-    step_release: Arc<Notify>,
-    step_registered: Arc<Notify>,
+    offload_release: Arc<Notify>,
+    offload_registered: Arc<Notify>,
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
@@ -424,13 +425,13 @@ impl Actor for BackpressureActor {
     ) -> ActorResult {
         match message {
             BackpressureMsg::Start => {
-                let release = self.step_release.clone();
-                ctx.step(
+                let release = self.offload_release.clone();
+                ctx.offload(
                     Duration::from_secs(1),
                     async move { release.notified().await },
                     |_| BackpressureMsg::Done,
                 );
-                self.step_registered.notify_one();
+                self.offload_registered.notify_one();
                 self.handler_release.notified().await;
             }
             BackpressureMsg::Fill => self.observed.send("fill").unwrap(),
@@ -441,21 +442,21 @@ impl Actor for BackpressureActor {
 }
 
 #[tokio::test]
-async fn step_postback_uses_mailbox_backpressure() {
+async fn offload_postback_uses_mailbox_backpressure() {
     let handler_release = Arc::new(Notify::new());
-    let step_release = Arc::new(Notify::new());
-    let step_registered = Arc::new(Notify::new());
+    let offload_release = Arc::new(Notify::new());
+    let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
     let actor = graph.add({
         let handler_release = handler_release.clone();
-        let step_release = step_release.clone();
-        let step_registered = step_registered.clone();
+        let offload_release = offload_release.clone();
+        let offload_registered = offload_registered.clone();
         move || BackpressureActor {
             handler_release: handler_release.clone(),
-            step_release: step_release.clone(),
-            step_registered: step_registered.clone(),
+            offload_release: offload_release.clone(),
+            offload_registered: offload_registered.clone(),
             observed: observed.clone(),
         }
     });
@@ -466,13 +467,13 @@ async fn step_postback_uses_mailbox_backpressure() {
         .spawn();
     runtime.wait_started().await.unwrap();
     actor.send(BackpressureMsg::Start).await.unwrap();
-    step_registered.notified().await;
+    offload_registered.notified().await;
     actor.send(BackpressureMsg::Fill).await.unwrap();
-    step_release.notify_one();
+    offload_release.notify_one();
     tokio::task::yield_now().await;
     let stats = actor.stats();
     assert_eq!(stats.mailbox_depth, 1);
-    assert_eq!(stats.outstanding_steps, 1);
+    assert_eq!(stats.outstanding_offloads, 1);
     handler_release.notify_one();
     assert_eq!(receiver.recv().await, Some("fill"));
     assert_eq!(receiver.recv().await, Some("done"));
@@ -480,22 +481,22 @@ async fn step_postback_uses_mailbox_backpressure() {
 }
 
 #[tokio::test]
-async fn step_postback_uses_conflating_mailbox_policy() {
+async fn offload_postback_uses_conflating_mailbox_policy() {
     let handler_release = Arc::new(Notify::new());
-    let step_release = Arc::new(Notify::new());
-    let step_registered = Arc::new(Notify::new());
+    let offload_release = Arc::new(Notify::new());
+    let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     let actor = graph.actor_with_options(
-        "conflating-step",
+        "conflating-offload",
         {
             let handler_release = handler_release.clone();
-            let step_release = step_release.clone();
-            let step_registered = step_registered.clone();
+            let offload_release = offload_release.clone();
+            let offload_registered = offload_registered.clone();
             move || BackpressureActor {
                 handler_release: handler_release.clone(),
-                step_release: step_release.clone(),
-                step_registered: step_registered.clone(),
+                offload_release: offload_release.clone(),
+                offload_registered: offload_registered.clone(),
                 observed: observed.clone(),
             }
         },
@@ -508,11 +509,11 @@ async fn step_postback_uses_conflating_mailbox_policy() {
         .spawn();
     runtime.wait_started().await.unwrap();
     actor.send(BackpressureMsg::Start).await.unwrap();
-    step_registered.notified().await;
+    offload_registered.notified().await;
     actor.send(BackpressureMsg::Fill).await.unwrap();
-    step_release.notify_one();
+    offload_release.notify_one();
     tokio::time::timeout(Duration::from_secs(1), async {
-        while actor.stats().messages_conflated != 1 || actor.stats().outstanding_steps != 0 {
+        while actor.stats().messages_conflated != 1 || actor.stats().outstanding_offloads != 0 {
             tokio::task::yield_now().await;
         }
     })
@@ -527,13 +528,13 @@ async fn step_postback_uses_conflating_mailbox_policy() {
 #[derive(Debug)]
 enum DeadlineDrainMsg {
     Start,
-    Done(Result<(), StepDeadline>),
+    Done(Result<(), OffloadDeadline>),
 }
 
 #[derive(Clone)]
 struct DeadlineDrainActor {
     registered: Arc<Notify>,
-    observed: mpsc::UnboundedSender<Result<(), StepDeadline>>,
+    observed: mpsc::UnboundedSender<Result<(), OffloadDeadline>>,
 }
 
 impl Actor for DeadlineDrainActor {
@@ -546,7 +547,7 @@ impl Actor for DeadlineDrainActor {
     ) -> ActorResult {
         match message {
             DeadlineDrainMsg::Start => {
-                ctx.step(
+                ctx.offload(
                     Duration::from_millis(100),
                     pending::<()>(),
                     DeadlineDrainMsg::Done,
@@ -564,7 +565,7 @@ impl Actor for DeadlineDrainActor {
 }
 
 #[tokio::test]
-async fn drain_waits_for_step_deadline_and_handles_its_postback() {
+async fn drain_waits_for_offload_deadline_and_handles_its_postback() {
     let registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
@@ -588,6 +589,6 @@ async fn drain_waits_for_step_deadline_and_handles_its_postback() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(outcome, Err(StepDeadline)));
+    assert!(matches!(outcome, Err(OffloadDeadline)));
     shutdown.await.unwrap().unwrap();
 }

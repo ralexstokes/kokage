@@ -240,7 +240,7 @@ dynamic scope; an ordered scope returns
 `ControlError::UnsupportedByScopeKind`. Awaiting ordinary scope operations is
 safe, with one residual cycle to avoid: do not await removal of a sibling whose
 drain needs this actor to keep consuming its own mailbox. Pipeline that removal
-with `ctx.step`. Startup readiness has the same rule: awaiting the enclosing
+with `ctx.offload`. Startup readiness has the same rule: awaiting the enclosing
 scope's `wait_started()` from `on_start` waits on the current actor's own
 readiness and therefore deadlocks. Pipeline the wait and let `on_start` return.
 
@@ -260,7 +260,7 @@ inner scope's pre-spawn handle without changing the actor factory signature.
 The inner scope starts after the leader reports ready and stops before the
 leader is cancelled. Consequently, work launched during `on_start` must be
 pipelined: let `on_start` return, wait for `children.wait_started()` in the
-step, then add members. A normal handler can await `children.add_actor(...)`
+offload, then add members. A normal handler can await `children.add_actor(...)`
 directly once the node is ready.
 
 `actor_with_scope` defaults to `RestForOne`: leader failure recycles the leader

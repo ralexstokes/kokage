@@ -199,8 +199,8 @@ than the sum.
 
 A supervised actor has one user-facing shutdown deadline: its child
 `ShutdownPolicy` grace. The grace bounds the whole actor drain, including
-queued messages, outstanding steps, and `on_stop`. Step deadlines remain
-independent bounds on individual steps; they do not extend the child grace.
+queued messages, outstanding offloads, and `on_stop`. Offload deadlines remain
+independent bounds on individual offloads; they do not extend the child grace.
 
 When a cooperative grace expires, the supervisor records a
 `ShutdownTimedOut` exit and signals the actor wrapper's tidy-abort path. The

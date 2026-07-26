@@ -60,7 +60,7 @@ impl AgentRun {
         };
         let model = self.model.clone();
         let cancel = self.cancel.clone();
-        ctx.step_or(
+        ctx.offload_or(
             MODEL_DEADLINE,
             model.turn(request, cancel),
             Err(ModelError::Deadline),
@@ -79,13 +79,13 @@ impl AgentRun {
             })
             .await?;
         let tool_host = self.tool_host.clone();
-        let step_key = key.clone();
-        ctx.step_or(
+        let offload_key = key.clone();
+        ctx.offload_or(
             TOOL_DEADLINE + PHASE_TIMEOUT,
             async move {
                 let execute = tool_host
                     .call(TOOL_DEADLINE, |reply| ToolHostMsg::Execute {
-                        key: step_key.clone(),
+                        key: offload_key.clone(),
                         call,
                         reply,
                     })
@@ -98,7 +98,7 @@ impl AgentRun {
                         // so this deterministically reconciles the completed key.
                         match tool_host
                             .call(PHASE_TIMEOUT, |reply| ToolHostMsg::Query {
-                                key: step_key,
+                                key: offload_key,
                                 reply,
                             })
                             .await

@@ -26,7 +26,7 @@ use crate::{
 // A cooperative removal resolves only after the departing subtree drains. If
 // that drain bounces messages through this router, awaiting removal here would
 // stop the router from making the drain progress. Removal therefore remains a
-// pipelined step. Distinct-id additions are now dispatched during that drain
+// pipelined offload. Distinct-id additions are now dispatched during that drain
 // and resolve on insertion; this example retains a symmetric Mounting step so
 // every membership transition uses the same explicit completion-message shape.
 enum SessionSlot {
@@ -149,8 +149,8 @@ impl Router {
         let graph = graph.build().expect("session graph builds");
         let session_actor = graph.actors()[0].clone();
         let mount = self.mount();
-        let step_id = subtree_id.clone();
-        ctx.step_or(
+        let offload_id = subtree_id.clone();
+        ctx.offload_or(
             PHASE_TIMEOUT,
             async move {
                 // OneForAll: a session panic tears its transient runs down
@@ -160,7 +160,7 @@ impl Router {
                 // the session.
                 let subtree = mount
                     .add_subtree(
-                        step_id,
+                        offload_id,
                         SupervisionTree::new().actor_with_scope_strategy(
                             "session-runtime",
                             session_actor,
@@ -188,7 +188,7 @@ impl Router {
     fn pipeline_remove(&self, chat: ChatId, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
-        ctx.step_or(
+        ctx.offload_or(
             PHASE_TIMEOUT,
             async move {
                 matches!(
@@ -212,7 +212,7 @@ impl Router {
     fn pipeline_sweep(&self, subtree_id: String, ctx: &ActorContext<RouterMsg>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
-        ctx.step_or(
+        ctx.offload_or(
             PHASE_TIMEOUT,
             async move {
                 matches!(
@@ -354,7 +354,7 @@ impl Actor for Router {
             }
             RouterMsg::Mounted { chat, ok } => {
                 if !ok {
-                    // The mount step failed or deadlined; restarting the
+                    // The mount offload failed or deadlined; restarting the
                     // router is the example's recovery: buffered traffic is
                     // lost with this incarnation, and any half-mounted
                     // subtree retires itself through the Evict-by-id path.

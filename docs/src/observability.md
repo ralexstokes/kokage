@@ -210,8 +210,8 @@ child has an empty path. Stats sampled directly from an `ActorRef`,
 `RunnableActor`, or standalone `Graph` report `None` for both runtime-scoped
 identity fields because those surfaces have no supervisor context.
 
-`ActorStats::outstanding_steps` is a point-in-time gauge of bounded futures
-owned by the current actor incarnation. It rises when `ActorContext::step`
+`ActorStats::outstanding_offloads` is a point-in-time gauge of bounded futures
+owned by the current actor incarnation. It rises when `ActorContext::offload`
 starts work and returns to zero on completion, timeout, or abort, making actors
 with in-flight requests visible without inspecting anonymous Tokio tasks.
 

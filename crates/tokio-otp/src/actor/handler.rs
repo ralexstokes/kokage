@@ -28,7 +28,7 @@ use crate::actor::{
 /// is a snapshot, ticks and polls, or anything the sender retries. Discard also
 /// keeps shutdown bounded by the handler currently in flight rather than by the
 /// depth of the queue behind it, and it aborts outstanding
-/// [steps](crate::ActorContext::step) instead of waiting for them — so it
+/// [offloads](crate::ActorContext::offload) instead of waiting for them — so it
 /// is the right answer for an actor holding long-running work that shutdown
 /// should cut short rather than see through.
 ///
@@ -54,7 +54,7 @@ pub enum DrainPolicy {
     ///
     /// Queued messages are dropped and queued [`call`](crate::ActorRef::call)s
     /// observe [`ReplyDropped`](crate::CallError::ReplyDropped). Outstanding
-    /// [steps](crate::ActorContext::step) are aborted rather than awaited. This
+    /// [offloads](crate::ActorContext::offload) are aborted rather than awaited. This
     /// matches the behavior of a hand-written `while let Some(message) =
     /// ctx.recv().await` loop.
     Discard,
@@ -179,7 +179,7 @@ pub trait Actor: Send + Sync + 'static {
     /// Defaults to [`DrainPolicy::Drain`], so a handler that says nothing
     /// finishes its queued mailbox before stopping. Override with
     /// [`DrainPolicy::Discard`] for an actor whose queued work is replaceable,
-    /// or one holding long-running [steps](crate::ActorContext::step) that
+    /// or one holding long-running [offloads](crate::ActorContext::offload) that
     /// shutdown should cut short rather than await.
     ///
     /// # Evaluation point
@@ -249,9 +249,9 @@ impl<H: Actor> RawActor for H {
 
         ctx.close_external_intake();
         if self.drain_policy() == DrainPolicy::Drain {
-            // Waiting for every step before receiving would deadlock when a
+            // Waiting for every offload before receiving would deadlock when a
             // full FIFO mailbox backpressures a completion. Drain externally
-            // accepted messages and incarnation-local step completions
+            // accepted messages and incarnation-local offload completions
             // together until both sources are quiescent. Continuations are
             // deliberately ignored once stopping begins.
             loop {
@@ -259,17 +259,17 @@ impl<H: Actor> RawActor for H {
                     Ok(message) => Some(message),
                     Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-                        if ctx.outstanding_steps() == 0 =>
+                        if ctx.outstanding_offloads() == 0 =>
                     {
-                        // A final step can enqueue its postback after the
+                        // A final offload can enqueue its postback after the
                         // first poll and then decrement the gauge before this
-                        // check. The step's Release decrement synchronizes
+                        // check. The offload's Release decrement synchronizes
                         // with the Acquire load that observed zero, so re-poll
                         // before declaring the mailbox quiescent.
                         ctx.mailbox.try_recv().ok()
                     }
                     Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        let changed = ctx.step_change_notify();
+                        let changed = ctx.offload_change_notify();
                         tokio::select! {
                             message = ctx.mailbox.recv() => message,
                             () = changed.notified() => continue,
@@ -285,7 +285,7 @@ impl<H: Actor> RawActor for H {
                 let _ = self.handle(message, &mut ctx).await?;
             }
         } else {
-            ctx.abort_steps();
+            ctx.abort_offloads();
         }
 
         self.on_stop(&mut ctx).await?;

@@ -23,7 +23,7 @@ use crate::actor::{
         MessageSizeObserver, SendOutcome,
     },
     cancellation::CancellationHandle,
-    error::{CallError, SendError, StepDeadline, TryRecvError},
+    error::{CallError, OffloadDeadline, SendError, TryRecvError},
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
 };
@@ -115,15 +115,15 @@ impl<M> ActorRef<M> {
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     pub fn stats(&self) -> ActorStats {
-        let (outstanding_steps, depth, capacity) = match &*self.binding.borrow() {
+        let (outstanding_offloads, depth, capacity) = match &*self.binding.borrow() {
             BindingState::Bound(mailbox) => {
                 let (depth, capacity) = mailbox.usage();
-                (mailbox.outstanding_steps(), depth, capacity)
+                (mailbox.outstanding_offloads(), depth, capacity)
             }
             BindingState::Unbound | BindingState::Terminated => (0, 0, 0),
         };
         self.stats
-            .snapshot(&self.actor_id, outstanding_steps, depth, capacity)
+            .snapshot(&self.actor_id, outstanding_offloads, depth, capacity)
     }
 
     fn current_mailbox(&self) -> Result<MailboxRef<M>, SendError> {
@@ -289,7 +289,7 @@ impl<M> ActorRef<M> {
     /// fan-out or routing actors it turns one slow callee into head-of-line
     /// blocking for all traffic through the intermediary. Pipeline the
     /// bounded call back into an ordinary message with
-    /// [`ActorContext::step`], or move the slow
+    /// [`ActorContext::offload`], or move the slow
     /// dependency behind a dedicated child actor. The book's request/reply
     /// chapter covers the pattern.
     pub async fn call<T>(
@@ -438,25 +438,25 @@ pub struct Reply<T> {
     sender: oneshot::Sender<T>,
 }
 
-/// Handle for one bounded future started by [`ActorContext::step`].
+/// Handle for one bounded future started by [`ActorContext::offload`].
 ///
-/// Dropping the handle does not affect the step. [`abort`](Self::abort)
+/// Dropping the handle does not affect the offload. [`abort`](Self::abort)
 /// abandons the future and prevents its continuation message from being
 /// posted. Aborting a request only abandons the local wait: it cannot retract
 /// work that another actor or external service already accepted.
 #[derive(Clone, Debug)]
-pub struct StepHandle {
+pub struct OffloadHandle {
     cancellation: CancellationToken,
     finished: Arc<AtomicBool>,
 }
 
-impl StepHandle {
-    /// Aborts the step and suppresses its continuation message.
+impl OffloadHandle {
+    /// Aborts the offload and suppresses its continuation message.
     pub fn abort(&self) {
         self.cancellation.cancel();
     }
 
-    /// Returns whether the step has finished or its abort has been observed.
+    /// Returns whether the offload has finished or its abort has been observed.
     pub fn is_finished(&self) -> bool {
         self.finished.load(Ordering::Acquire)
     }
@@ -481,7 +481,7 @@ impl<T> fmt::Debug for Reply<T> {
 ///
 /// Provides the actor's incoming [`mailbox`](Self::recv), message
 /// [`timers`](Self::send_after), a
-/// bounded [`step`](Self::step) primitive for asynchronous postbacks, a
+/// bounded [`offload`](Self::offload) primitive for asynchronous postbacks, a
 /// [`shutdown_token`](Self::shutdown_token) for cooperative shutdown, and
 /// [`run_blocking`](Self::run_blocking) for blocking work.
 pub struct ActorContext<M> {
@@ -496,7 +496,7 @@ pub struct ActorContext<M> {
     pub(crate) monitors: Arc<ActorMonitors>,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
-    pub(crate) steps: ActorSteps,
+    pub(crate) offloads: ActorOffloads,
     pub(crate) supervisor: RuntimeHandle,
     pub(crate) children: Option<RuntimeHandle>,
 }
@@ -534,23 +534,23 @@ impl<M: Send + 'static> ActorContext<M> {
     /// expires, then posts the resulting value back as an ordinary message.
     ///
     /// This is the usual way to pipeline bounded work from an actor. A timed
-    /// out step may already have initiated an external effect, so `fallback`
+    /// out offload may already have initiated an external effect, so `fallback`
     /// should represent an unknown outcome that the actor can reconcile.
-    /// Use [`Self::step`] when the continuation needs to distinguish a
+    /// Use [`Self::offload`] when the continuation needs to distinguish a
     /// deadline from a value returned by the future.
-    pub fn step_or<F, T, C>(
+    pub fn offload_or<F, T, C>(
         &self,
         deadline: Duration,
         future: F,
         fallback: T,
         continuation: C,
-    ) -> StepHandle
+    ) -> OffloadHandle
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
         C: FnOnce(T) -> M + Send + 'static,
     {
-        self.step(deadline, future, move |outcome| {
+        self.offload(deadline, future, move |outcome| {
             continuation(outcome.unwrap_or(fallback))
         })
     }
@@ -558,45 +558,45 @@ impl<M: Send + 'static> ActorContext<M> {
     /// Runs a bounded future without blocking this actor's receive loop and
     /// posts its total outcome back as an ordinary message.
     ///
-    /// This is the lower-level form of [`Self::step_or`]. The continuation is
-    /// total: it receives either the future's value or [`StepDeadline`] and
+    /// This is the lower-level form of [`Self::offload_or`]. The continuation is
+    /// total: it receives either the future's value or [`OffloadDeadline`] and
     /// must produce a message in both cases. Delivery uses this actor's normal
     /// mailbox policy and FIFO backpressure. It is stamped to this exact
     /// incarnation, so a completion racing a restart is silently dropped
     /// rather than delivered to fresh state.
     ///
-    /// Steps are incarnation-owned. They are aborted when the incarnation
+    /// Offloads are incarnation-owned. They are aborted when the incarnation
     /// fails, restarts, or uses [`DrainPolicy::Discard`](crate::DrainPolicy).
-    /// A draining handler actor keeps processing queued messages and step
+    /// A draining handler actor keeps processing queued messages and offload
     /// completions until both are exhausted; the required deadline bounds
-    /// every step's future during that drain.
+    /// every offload's future during that drain.
     ///
-    /// Aborting or timing out a step is not undo. If the future sent a request
+    /// Aborting or timing out an offload is not undo. If the future sent a request
     /// before being dropped, the receiver may still perform it and the outcome
     /// is unknown. Put effects behind actors and use idempotency keys plus
-    /// reconciliation; step futures should initiate requests, not mutate
+    /// reconciliation; offload futures should initiate requests, not mutate
     /// untracked local state directly. Domain cancellation can still be
     /// captured explicitly in `future`.
     ///
-    /// `step` lives on the shared context type, but its drain integration is
+    /// `offload` lives on the shared context type, but its drain integration is
     /// provided by the framework-owned [`Actor`](crate::Actor) loop. A custom
     /// [`RawActor`](crate::RawActor) remains responsible for its own shutdown
     /// and draining protocol.
-    pub fn step<F, T, C>(&self, deadline: Duration, future: F, continuation: C) -> StepHandle
+    pub fn offload<F, T, C>(&self, deadline: Duration, future: F, continuation: C) -> OffloadHandle
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
-        C: FnOnce(Result<T, StepDeadline>) -> M + Send + 'static,
+        C: FnOnce(Result<T, OffloadDeadline>) -> M + Send + 'static,
     {
-        let (cancellation, finished) = self.steps.start();
-        let handle = StepHandle {
+        let (cancellation, finished) = self.offloads.start();
+        let handle = OffloadHandle {
             cancellation: cancellation.clone(),
             finished: Arc::clone(&finished),
         };
-        let steps = self.steps.inner();
+        let offloads = self.offloads.inner();
         let myself = self.myself.clone();
         let incarnation = self.incarnation.clone();
-        let guard = StepGuard { steps, finished };
+        let guard = OffloadGuard { offloads, finished };
         tokio::spawn(async move {
             // Constructed before spawning so dropping an unpolled task still
             // decrements the outstanding count and marks its handle finished.
@@ -604,7 +604,7 @@ impl<M: Send + 'static> ActorContext<M> {
             let outcome = tokio::select! {
                 biased;
                 () = cancellation.cancelled() => return,
-                outcome = timeout(deadline, future) => outcome.map_err(|_| StepDeadline),
+                outcome = timeout(deadline, future) => outcome.map_err(|_| OffloadDeadline),
             };
             let message = continuation(outcome);
             tokio::select! {
@@ -620,16 +620,16 @@ impl<M: Send + 'static> ActorContext<M> {
         self.mailbox.close_external();
     }
 
-    pub(crate) fn abort_steps(&self) {
-        self.steps.abort_all();
+    pub(crate) fn abort_offloads(&self) {
+        self.offloads.abort_all();
     }
 
-    pub(crate) fn outstanding_steps(&self) -> usize {
-        self.steps.outstanding()
+    pub(crate) fn outstanding_offloads(&self) -> usize {
+        self.offloads.outstanding()
     }
 
-    pub(crate) fn step_change_notify(&self) -> Arc<Notify> {
-        self.steps.change_notify()
+    pub(crate) fn offload_change_notify(&self) -> Arc<Notify> {
+        self.offloads.change_notify()
     }
 
     /// Returns the actor's unique identifier within the graph.
@@ -647,7 +647,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// Awaiting control operations on the enclosing scope is safe. The
     /// remaining self-deadlock is awaiting removal of a sibling whose drain
     /// depends on this actor draining its own mailbox; pipeline that operation
-    /// with [`step`](Self::step) instead.
+    /// with [`offload`](Self::offload) instead.
     ///
     /// Do not await this scope's `wait_started()` from
     /// [`Actor::on_start`](crate::Actor::on_start): this actor cannot report
@@ -1015,25 +1015,25 @@ impl<M: Send + 'static> ActorContext<M> {
     }
 }
 
-pub(crate) struct ActorSteps {
-    inner: Arc<ActorStepsInner>,
+pub(crate) struct ActorOffloads {
+    inner: Arc<ActorOffloadsInner>,
     cancellation: CancellationToken,
 }
 
-struct ActorStepsInner {
+struct ActorOffloadsInner {
     changed: Arc<Notify>,
     outstanding: Arc<AtomicU64>,
 }
 
-impl ActorSteps {
+impl ActorOffloads {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Arc::new(ActorStepsInner {
+            inner: Arc::new(ActorOffloadsInner {
                 changed: Arc::new(Notify::new()),
                 outstanding: Arc::new(AtomicU64::new(0)),
             }),
             // Unlike timers, this token is independent from graph shutdown:
-            // Drain actors keep their steps until their own deadlines.
+            // Drain actors keep their offloads until their own deadlines.
             cancellation: CancellationToken::new(),
         }
     }
@@ -1044,7 +1044,7 @@ impl ActorSteps {
         (cancellation, Arc::new(AtomicBool::new(false)))
     }
 
-    fn inner(&self) -> Arc<ActorStepsInner> {
+    fn inner(&self) -> Arc<ActorOffloadsInner> {
         Arc::clone(&self.inner)
     }
 
@@ -1065,22 +1065,22 @@ impl ActorSteps {
     }
 }
 
-impl Drop for ActorSteps {
+impl Drop for ActorOffloads {
     fn drop(&mut self) {
         self.cancellation.cancel();
     }
 }
 
-struct StepGuard {
-    steps: Arc<ActorStepsInner>,
+struct OffloadGuard {
+    offloads: Arc<ActorOffloadsInner>,
     finished: Arc<AtomicBool>,
 }
 
-impl Drop for StepGuard {
+impl Drop for OffloadGuard {
     fn drop(&mut self) {
-        self.steps.outstanding.fetch_sub(1, Ordering::Release);
+        self.offloads.outstanding.fetch_sub(1, Ordering::Release);
         self.finished.store(true, Ordering::Release);
-        self.steps.changed.notify_one();
+        self.offloads.changed.notify_one();
     }
 }
 
