@@ -5,8 +5,8 @@
 //! per-conversation subtrees added and removed at runtime via
 //! `RuntimeHandle::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
-//! a readiness-gated `RawActor` bridge, and a `#[derive(Topology)]` core
-//! graph with a real budget ↔ guard cycle.
+//! a readiness-gated `RawActor` bridge, and a `#[derive(Topology)]` supervision
+//! tree with a real budget ↔ guard cycle.
 //!
 //! # Modules
 //!
@@ -31,16 +31,22 @@
 //!
 //! # Supervision topology
 //!
+//! The static shape below is one `#[derive(Topology)]` declaration
+//! (`AgentControl`), so struct nesting is scope nesting and every actor label
+//! is qualified by its scope path (`gateway.inbound`, `core.journal`).
+//!
 //! ```text
-//! root (OneForOne)
+//! root (OneForOne)                     — struct AgentControl
 //! ├── gateway   RestForOne, sequential start: outbound → progress → inbound
 //! │             (inbound is last: its panic restarts only inbound; an
 //! │              outbound/progress failure also restarts the bridge)
-//! ├── core      OneForOne, wired with #[derive(Topology)]
+//! ├── core      OneForOne
 //! │             journal · budget · guard · tool_host · router
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
 //! └── sessions  empty subtree mount; per-conversation subtrees at runtime
+//!               (appended with `SupervisionTree::subtree`, not derived: the
+//!                router needs its mount handle at wiring time)
 //!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
 //!         │                        every incarnation's id unique, so respawn
 //!         │                        never races a predecessor's removal
@@ -141,7 +147,23 @@ use tool_host::ToolHost;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
+/// Sequential start: outbound → progress → inbound. `RestForOne` puts the
+/// bridge last, so an inbound panic restarts only inbound while an
+/// outbound/progress failure also recycles the bridge that depends on them.
 #[derive(Topology)]
+#[topology(strategy = Strategy::RestForOne)]
+struct Gateway {
+    outbound: Outbound,
+    #[topology(options = ActorOptions::new()
+        .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat())))]
+    progress: Progress,
+    inbound: Inbound,
+}
+
+/// The budget↔guard cycle is what justifies deriving rather than ordering
+/// registrations by hand.
+#[derive(Topology)]
+#[topology(strategy = Strategy::OneForOne)]
 struct Core {
     #[topology(options = ActorOptions::new().message_size())]
     journal: Journal,
@@ -149,6 +171,18 @@ struct Core {
     guard: Guard,
     tool_host: ToolHost,
     router: Router,
+}
+
+/// The application's static shape. `sessions` is deliberately absent: its mount
+/// handle must be reserved before wiring (see `build_app`), so it is appended
+/// to the derived tree rather than declared as a `#[topology(dynamic)]` field.
+#[derive(Topology)]
+#[topology(strategy = Strategy::OneForOne)]
+struct AgentControl {
+    #[topology(scope)]
+    gateway: Gateway,
+    #[topology(scope)]
+    core: Core,
 }
 
 struct App {
@@ -202,53 +236,63 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions_mount = sessions_runtime.handle();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
-    // The gateway slots exist first, providing stable refs that the derived
-    // core topology can capture. Once the derive has minted core refs, the
-    // gateway factories are filled with journal/router refs.
-    let mut gateway_graph = GraphBuilder::new();
-    gateway_graph.name("agent-gateway");
-    gateway_graph.mailbox_capacity(32);
-    let (outbound_slot, outbound) = gateway_graph.slot::<OutboundMsg>("outbound");
-    let (progress_slot, progress) = gateway_graph.slot_with_options(
-        "progress",
-        ActorOptions::new().mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| {
-            message.chat()
-        })),
-    );
-    let (inbound_slot, _inbound) = gateway_graph.slot::<InboundMsg>("inbound");
-
-    let (core_graph, refs) = Core::graph_with_refs(|refs| CoreFactories {
-        journal: Journal::default,
-        budget: {
-            let refs = refs.clone();
-            move || Budget::new(refs.guard.clone())
+    // Every actor joins one graph, so the wiring closure sees gateway and core
+    // refs together: the bridge captures `core.router` and the router captures
+    // `gateway.outbound` in the same literal, with no slot/define split and no
+    // ordering between the two scopes.
+    let mut builder = GraphBuilder::new();
+    builder.name("agent-control");
+    builder.mailbox_capacity(32);
+    let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
+        gateway: GatewayFactories {
+            outbound: {
+                let chat = chat.clone();
+                move || Outbound::new(chat.clone())
+            },
+            progress: {
+                let chat = chat.clone();
+                move || Progress::new(chat.clone())
+            },
+            inbound: {
+                let chat = chat.clone();
+                let journal = refs.core.journal.clone();
+                let router = refs.core.router.clone();
+                move || Inbound::new(chat.clone(), journal.clone(), router.clone())
+            },
         },
-        guard: {
-            let refs = refs.clone();
-            let model = model.clone();
-            let gate = gate.clone();
-            move || {
-                Guard::new(
-                    refs.budget.clone(),
-                    refs.router.clone(),
-                    model.clone(),
-                    gate.clone(),
-                )
-            }
-        },
-        tool_host: ToolHost::default,
-        router: RouterFactory {
-            mount: sessions_mount.clone(),
-            journal: refs.journal.clone(),
-            budget: refs.budget.clone(),
-            tool_host: refs.tool_host.clone(),
-            guard: refs.guard.clone(),
-            outbound: outbound.clone(),
-            progress: progress.clone(),
-            gate: gate.clone(),
-            model: model_client.clone(),
-            session_epoch: session_epoch.clone(),
-            proof: proof.clone(),
+        core: CoreFactories {
+            journal: Journal::default,
+            budget: {
+                let refs = refs.core.clone();
+                move || Budget::new(refs.guard.clone())
+            },
+            guard: {
+                let refs = refs.core.clone();
+                let model = model.clone();
+                let gate = gate.clone();
+                move || {
+                    Guard::new(
+                        refs.budget.clone(),
+                        refs.router.clone(),
+                        model.clone(),
+                        gate.clone(),
+                    )
+                }
+            },
+            tool_host: ToolHost::default,
+            router: RouterFactory {
+                mount: sessions_mount.clone(),
+                journal: refs.core.journal.clone(),
+                budget: refs.core.budget.clone(),
+                tool_host: refs.core.tool_host.clone(),
+                guard: refs.core.guard.clone(),
+                outbound: refs.gateway.outbound.clone(),
+                progress: refs.gateway.progress.clone(),
+                gate: gate.clone(),
+                model: model_client.clone(),
+                session_epoch: session_epoch.clone(),
+                proof: proof.clone(),
+            },
         },
     })?;
     let CoreRefs {
@@ -257,34 +301,12 @@ async fn build_app() -> Result<App, AnyError> {
         guard,
         tool_host,
         router,
-    } = refs;
+    } = refs.core;
 
-    gateway_graph.define(outbound_slot, {
-        let chat = chat.clone();
-        move || Outbound::new(chat.clone())
-    });
-    gateway_graph.define(progress_slot, {
-        let chat = chat.clone();
-        move || Progress::new(chat.clone())
-    });
-    gateway_graph.define(inbound_slot, {
-        let chat = chat.clone();
-        let journal = journal.clone();
-        let router = router.clone();
-        move || Inbound::new(chat.clone(), journal.clone(), router.clone())
-    });
-
-    let gateway_runtime = Runtime::builder()
-        .graph(gateway_graph.build()?)
-        .strategy(Strategy::RestForOne);
-    let core_runtime = Runtime::builder()
-        .graph(core_graph)
-        .strategy(Strategy::OneForOne);
-    let runtime = Runtime::builder()
-        .strategy(Strategy::OneForOne)
-        .subtree("gateway", gateway_runtime)
-        .subtree("core", core_runtime)
-        .subtree("sessions", sessions_runtime)
+    // The sessions mount was reserved before anything was built, so it is
+    // appended to the derived declaration rather than declared as a field.
+    let runtime = tree
+        .subtree("sessions", sessions_runtime.into_tree())
         .build()?;
     let handle = runtime.spawn();
     let gateway = handle.subtree("gateway").expect("gateway runtime subtree");
@@ -465,9 +487,9 @@ async fn phase_3(app: &App) -> Result<(), AnyError> {
             .find(|child| child.id == id)
             .map(|child| child.restart_count)
     };
-    assert_eq!(restarts("inbound"), Some(1));
-    assert_eq!(restarts("outbound"), Some(0));
-    assert_eq!(restarts("progress"), Some(0));
+    assert_eq!(restarts("gateway.inbound"), Some(1));
+    assert_eq!(restarts("gateway.outbound"), Some(0));
+    assert_eq!(restarts("gateway.progress"), Some(0));
     assert_eq!(app.sessions.snapshot().total_restarts, session_restarts);
     println!(
         "PHASE 3 OK — ack-after-append redelivery + RestForOne restart watch (only failed final child restarts)"
@@ -518,7 +540,7 @@ async fn phase_5(app: &App) -> Result<(), AnyError> {
         .gateway
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "progress")
+        .find(|stats| stats.actor_id == "gateway.progress")
         .expect("progress actor stats");
     assert!(progress_stats.messages_received < progress_stats.messages_accepted);
     assert!(progress_stats.messages_conflated > 0);
@@ -724,7 +746,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
         .core
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "journal")
+        .find(|stats| stats.actor_id == "core.journal")
         .expect("journal stats");
     assert!(
         journal_stats
