@@ -59,35 +59,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.watch_lifecycle_recursive();
 
     loop {
-        let event = timeout(Duration::from_secs(2), events.recv()).await??;
+        let event = timeout(Duration::from_secs(2), events.next())
+            .await?
+            .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        match event {
-            SupervisorEvent::ChildRestartScheduled {
-                id,
+        match event.kind {
+            RecursiveLifecycleEventKind::RestartScheduled {
+                child_id,
                 generation,
                 delay,
                 ..
-            } if id == "warm-cache" => {
+            } if child_id == "warm-cache" => {
                 println!(
                     "warm-cache generation {} is allowed one delayed restart: {delay:?}",
                     generation
                 );
             }
-            SupervisorEvent::ChildRestarted {
-                id,
-                old_generation,
-                new_generation,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id,
+                kind: LifecycleEventKind::Started { generation: 1 },
                 ..
-            } if id == "warm-cache" => {
-                assert_eq!(old_generation, 0);
-                assert_eq!(new_generation, 1);
+            }) if child_id == "warm-cache" => {
                 break;
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            RecursiveLifecycleEventKind::RestartIntensityExceeded { .. } => {
                 return Err(std::io::Error::other(
                     "unexpected restart intensity failure in example",
                 )

@@ -9,10 +9,11 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorEvent,
+    ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder,
 };
 
 mod common;
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates() {
@@ -625,7 +626,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
         .build()
         .expect("valid supervisor")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     let mut sequence = Vec::new();
     let mut saw_trigger_restart = false;
@@ -633,12 +634,12 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
 
     while !(saw_trigger_restart && saw_peer_restart) {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildExited { id, generation, .. }
+            ObservedEvent::ChildExited { id, generation, .. }
                 if id == "trigger" && generation == 0 =>
             {
                 sequence.push("trigger_exited");
             }
-            SupervisorEvent::ChildRestartScheduled {
+            ObservedEvent::ChildRestartScheduled {
                 id,
                 generation,
                 delay,
@@ -647,12 +648,12 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
                 assert_eq!(delay, Duration::from_millis(40));
                 sequence.push("trigger_restart_scheduled");
             }
-            SupervisorEvent::ChildStarted { id, generation, .. }
+            ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "trigger" && generation == 1 =>
             {
                 sequence.push("trigger_started");
             }
-            SupervisorEvent::ChildRestarted {
+            ObservedEvent::ChildRestarted {
                 id,
                 old_generation,
                 new_generation,
@@ -661,12 +662,12 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
                 saw_trigger_restart = true;
                 sequence.push("trigger_restarted");
             }
-            SupervisorEvent::ChildStarted { id, generation, .. }
+            ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "peer" && generation == 1 =>
             {
                 sequence.push("peer_started");
             }
-            SupervisorEvent::ChildRestarted {
+            ObservedEvent::ChildRestarted {
                 id,
                 old_generation,
                 new_generation,
@@ -774,7 +775,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
         .build()
         .expect("valid supervisor")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     release_trigger_failure.notify_one();
 
@@ -784,10 +785,10 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
 
     while !(saw_trigger_restart && saw_peer_restart) {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestartScheduled { id, .. } if id == "trigger" => {
+            ObservedEvent::ChildRestartScheduled { id, .. } if id == "trigger" => {
                 trigger_restart_scheduled += 1;
             }
-            SupervisorEvent::ChildRestarted {
+            ObservedEvent::ChildRestarted {
                 id,
                 old_generation,
                 new_generation,
@@ -795,7 +796,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
             } if id == "trigger" && old_generation == 0 && new_generation == 1 => {
                 saw_trigger_restart = true;
             }
-            SupervisorEvent::ChildRestarted {
+            ObservedEvent::ChildRestarted {
                 id,
                 old_generation,
                 new_generation,

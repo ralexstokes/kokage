@@ -307,7 +307,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     let release_gated = Arc::new(Notify::new());
     let later_started = Arc::new(Notify::new());
 
-    let mut root = SupervisorBuilder::new().event_channel_capacity(1_024);
+    let mut root = SupervisorBuilder::new();
     for index in 0..4 {
         let attempts = Arc::clone(&noisy_attempts);
         let nested = SupervisorBuilder::new()

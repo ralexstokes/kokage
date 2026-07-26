@@ -327,9 +327,8 @@ The three maintained documentation surfaces must agree on:
   concrete blind spot rather than a scope note: a shared-cause failure that
   crash-loops many children can stay under every per-child budget and never
   escalate, so applications own correlated-failure detection until an
-  aggregate budget exists — via lifecycle events' cumulative counters, not
-  the lossy event broadcast (the book's observability chapter now draws this
-  distinction);
+  aggregate budget exists — via lifecycle events' cumulative counters (the
+  book's observability chapter draws this distinction);
 - concurrent sibling shutdown and staged-shutdown guidance;
 - the bounded-call contract; and
 - the stable versus experimental crate surface.

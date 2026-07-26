@@ -92,9 +92,9 @@
 //!    submitter and sends `SubmitResolved` back to the router; a timed-out
 //!    call marks the intent unknown until `ReconcileAll` resolves it
 //!    against the exchange.
-//! 3. Safety: venue transitions flow from the supervisor's reliable lifecycle
-//!    stream (deliberately not the lossy event broadcast) through a mailbox
-//!    pump into `Health`; cumulative event counters drive the breaker, which
+//! 3. Safety: venue transitions flow from the supervisor's lifecycle stream
+//!    through a mailbox pump into `Health`; cumulative event counters drive
+//!    the breaker, which
 //!    trips `Control`'s kill switch:
 //!    intake closes and open orders are cancelled.
 //!
@@ -315,8 +315,8 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 
     let background_stop = CancellationToken::new();
     let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));
-    // The aggregate restart breaker is a safety mechanism, so it is fed from
-    // the reliable lifecycle stream rather than the lossy event broadcast.
+    // The aggregate restart breaker is fed from the lifecycle stream's
+    // cumulative counters rather than inferring restarts from event pairs.
     // Every event carries the venues supervisor's cumulative restart counter;
     // even a `Lagged` gap loses transition detail but not the next count. The
     // scope is direct children, so nested per-venue supervisors would each

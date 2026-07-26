@@ -869,7 +869,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         })
         .await
         .expect("runtime reported running");
-    let _events = control.supervisor_handle().subscribe();
+    let _lifecycle = control.watch_lifecycle_recursive();
     assert_eq!(control.snapshot().children.len(), 1);
 
     worker_ref

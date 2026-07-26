@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::{
+    collections::VecDeque,
     fmt::Debug,
     sync::{
         Arc,
@@ -10,12 +11,13 @@ use std::{
 };
 
 use tokio::{
-    sync::{Notify, broadcast, mpsc, watch},
+    sync::{Notify, mpsc, watch},
     time::timeout,
 };
 use tokio_supervisor::{
-    BoxError, ChildSnapshot, ChildSpec, ChildStateView, RestartIntensity, RestartPolicy,
-    SupervisorEvent, SupervisorHandle, SupervisorSnapshot,
+    BoxError, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView, LifecycleEventKind,
+    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
+    RestartIntensity, RestartPolicy, SupervisorHandle, SupervisorSnapshot,
 };
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -82,18 +84,225 @@ impl Drop for LiveGuard {
     }
 }
 
-pub async fn recv_supervisor_event(
-    events: &mut broadcast::Receiver<SupervisorEvent>,
-) -> SupervisorEvent {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedPathSegment {
+    pub id: String,
+    pub membership_epoch: u64,
+    pub generation: u64,
+}
+
+impl ObservedPathSegment {
+    pub fn new(id: impl Into<String>, generation: u64) -> Self {
+        Self {
+            id: id.into(),
+            membership_epoch: 0,
+            generation,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObservedEvent {
+    SupervisorStarted,
+    SupervisorStopping,
+    SupervisorStopped,
+    Nested {
+        id: String,
+        membership_epoch: u64,
+        generation: u64,
+        event: Box<Self>,
+    },
+    ChildStarted {
+        id: String,
+        generation: u64,
+    },
+    ChildRemoved {
+        id: String,
+    },
+    ChildExited {
+        id: String,
+        generation: u64,
+        status: ExitStatusView,
+    },
+    ChildRestartScheduled {
+        id: String,
+        generation: u64,
+        delay: Duration,
+    },
+    ChildRestarted {
+        id: String,
+        old_generation: u64,
+        new_generation: u64,
+    },
+    RestartIntensityExceeded,
+}
+
+impl ObservedEvent {
+    pub fn path(&self) -> Vec<ObservedPathSegment> {
+        let mut path = Vec::new();
+        let mut event = self;
+        while let Self::Nested {
+            id,
+            membership_epoch,
+            generation,
+            event: inner,
+        } = event
+        {
+            path.push(ObservedPathSegment {
+                id: id.clone(),
+                membership_epoch: *membership_epoch,
+                generation: *generation,
+            });
+            event = inner;
+        }
+        path
+    }
+
+    pub fn leaf(&self) -> &Self {
+        match self {
+            Self::Nested { event, .. } => event.leaf(),
+            event => event,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventRecvError {
+    Lagged(u64),
+    Closed,
+}
+
+pub struct EventWatch {
+    lifecycle: RecursiveLifecycleWatch,
+    pending: VecDeque<ObservedEvent>,
+}
+
+pub fn event_watch(handle: &SupervisorHandle) -> EventWatch {
+    EventWatch {
+        lifecycle: handle.watch_lifecycle_recursive(),
+        pending: VecDeque::new(),
+    }
+}
+
+impl EventWatch {
+    pub async fn recv(&mut self) -> Result<ObservedEvent, EventRecvError> {
+        if let Some(event) = self.pending.pop_front() {
+            return Ok(event);
+        }
+        loop {
+            let event = self.lifecycle.next().await.ok_or(EventRecvError::Closed)?;
+            match self.convert(event) {
+                Ok(Some(event)) => return Ok(event),
+                Ok(None) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub async fn wait_for_event(
+        &mut self,
+        mut predicate: impl FnMut(&ObservedEvent) -> bool,
+    ) -> Result<ObservedEvent, EventRecvError> {
+        loop {
+            let event = self.recv().await?;
+            if predicate(&event) {
+                return Ok(event);
+            }
+        }
+    }
+
+    fn convert(
+        &mut self,
+        event: RecursiveLifecycleEvent,
+    ) -> Result<Option<ObservedEvent>, EventRecvError> {
+        let mut pending = None;
+        let leaf = match event.kind {
+            RecursiveLifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
+            RecursiveLifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
+            RecursiveLifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
+            RecursiveLifecycleEventKind::Child(event) => match event.kind {
+                LifecycleEventKind::Added => return Ok(None),
+                LifecycleEventKind::Started { generation } => {
+                    // This compatibility shim preserves the removed test-event
+                    // shape. It deliberately assumes runtime generations are
+                    // contiguous when synthesizing `ChildRestarted`. If that
+                    // invariant changes, migrate these assertions to the raw
+                    // lifecycle events instead of extending this fiction.
+                    if generation > 0 {
+                        pending = Some(ObservedEvent::ChildRestarted {
+                            id: event.child_id.clone(),
+                            old_generation: generation - 1,
+                            new_generation: generation,
+                        });
+                    }
+                    ObservedEvent::ChildStarted {
+                        id: event.child_id,
+                        generation,
+                    }
+                }
+                LifecycleEventKind::Exited {
+                    generation, reason, ..
+                } => ObservedEvent::ChildExited {
+                    id: event.child_id,
+                    generation,
+                    status: reason,
+                },
+                LifecycleEventKind::Removed => ObservedEvent::ChildRemoved { id: event.child_id },
+                LifecycleEventKind::Lagged { dropped } => {
+                    return Err(EventRecvError::Lagged(dropped));
+                }
+                _ => return Ok(None),
+            },
+            RecursiveLifecycleEventKind::RestartScheduled {
+                child_id,
+                generation,
+                delay,
+                ..
+            } => ObservedEvent::ChildRestartScheduled {
+                id: child_id,
+                generation,
+                delay,
+            },
+            RecursiveLifecycleEventKind::RestartIntensityExceeded { .. } => {
+                ObservedEvent::RestartIntensityExceeded
+            }
+            RecursiveLifecycleEventKind::Lagged { dropped, .. } => {
+                return Err(EventRecvError::Lagged(dropped));
+            }
+            _ => return Ok(None),
+        };
+        let path = event.supervisor_path;
+        if let Some(pending) = pending {
+            self.pending.push_back(wrap_event(pending, &path));
+        }
+        Ok(Some(wrap_event(leaf, &path)))
+    }
+}
+
+fn wrap_event(
+    event: ObservedEvent,
+    path: &[tokio_supervisor::LifecyclePathSegment],
+) -> ObservedEvent {
+    path.iter()
+        .rev()
+        .fold(event, |event, segment| ObservedEvent::Nested {
+            id: segment.id.clone(),
+            membership_epoch: segment.membership_epoch,
+            generation: segment.generation,
+            event: Box::new(event),
+        })
+}
+
+pub async fn recv_supervisor_event(events: &mut EventWatch) -> ObservedEvent {
     match timeout(EVENT_TIMEOUT, events.recv())
         .await
         .expect("timed out waiting for supervisor event")
     {
         Ok(event) => event,
-        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+        Err(EventRecvError::Lagged(skipped)) => {
             panic!("lagged while reading supervisor events: skipped {skipped}");
         }
-        Err(broadcast::error::RecvError::Closed) => {
+        Err(EventRecvError::Closed) => {
             panic!("supervisor event stream closed unexpectedly");
         }
     }

@@ -4,6 +4,7 @@ use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::prelude::*;
 
 mod common;
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn prelude_supports_handle_event_and_snapshot_helpers() {
@@ -24,7 +25,7 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
         .expect("valid supervisor")
         .spawn();
 
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     let mut snapshots = handle.subscribe_snapshots();
 
     assert_eq!(common::recv_event(&mut started_rx).await, 0);
@@ -34,7 +35,7 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
         events.wait_for_event(|event| {
             matches!(
                 event,
-                SupervisorEvent::ChildStarted { id, generation: 0 , .. } if id == "worker"
+                ObservedEvent::ChildStarted { id, generation: 0 , .. } if id == "worker"
             )
         }),
     )
@@ -43,7 +44,7 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
     .expect("event stream should remain open");
     assert!(matches!(
         started,
-        SupervisorEvent::ChildStarted {
+        ObservedEvent::ChildStarted {
             ref id,
             generation: 0,
             ..

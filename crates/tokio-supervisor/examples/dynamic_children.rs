@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = handle.watch_lifecycle_recursive();
 
     wait_for_child_started(&mut events, "api").await?;
 
@@ -100,107 +100,120 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn wait_for_child_started(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
+    events: &mut RecursiveLifecycleWatch,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let event = timeout(
-        Duration::from_secs(2),
-        events.wait_for_event(
-            |event| matches!(event, SupervisorEvent::ChildStarted { id, .. } if id == child_id),
-        ),
-    )
-    .await??;
+    let event = wait_for_event(events, |event| {
+        event.supervisor_path.is_empty()
+            && matches!(
+                &event.kind,
+                RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                    child_id: id,
+                    kind: LifecycleEventKind::Started { .. },
+                    ..
+                }) if id == child_id
+            )
+    })
+    .await?;
     println!("event: {event:?}");
     Ok(())
 }
 
 async fn wait_for_child_removed(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
+    events: &mut RecursiveLifecycleWatch,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let event = timeout(
-        Duration::from_secs(2),
-        events.wait_for_event(
-            |event| matches!(event, SupervisorEvent::ChildRemoved { id , .. } if id == child_id),
-        ),
-    )
-    .await??;
+    let event = wait_for_event(events, |event| {
+        event.supervisor_path.is_empty()
+            && matches!(
+                &event.kind,
+                RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                    child_id: id,
+                    kind: LifecycleEventKind::Removed,
+                    ..
+                }) if id == child_id
+            )
+    })
+    .await?;
     println!("event: {event:?}");
     Ok(())
 }
 
 async fn wait_for_nested_supervisor_started(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
+    events: &mut RecursiveLifecycleWatch,
     nested_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let event = timeout(
-        Duration::from_secs(2),
-        events.wait_for_event(|event| {
-            matches!(
-                event,
-                SupervisorEvent::Nested {
-                    id,
-                    generation: 0,
-                    event,
-                .. } if id == nested_id && matches!(**event, SupervisorEvent::SupervisorStarted)
-            )
-        }),
-    )
-    .await??;
+    let event = wait_for_event(events, |event| {
+        matches!(
+            event.supervisor_path.as_slice(),
+            [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
+        ) && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+    })
+    .await?;
     println!("event: {event:?}");
     Ok(())
 }
 
 async fn wait_for_nested_child_started(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
+    events: &mut RecursiveLifecycleWatch,
     nested_id: &str,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let event = timeout(
-        Duration::from_secs(2),
-        events.wait_for_event(|event| {
-            matches!(
-                event,
-                SupervisorEvent::Nested {
-                    id,
-                    generation: 0,
-                    event,
-                .. } if id == nested_id
-                    && matches!(
-                        **event,
-                        SupervisorEvent::ChildStarted {
-                            ref id,
-                            generation: 0,
-                        .. } if id == child_id
-                    )
-            )
-        }),
-    )
-    .await??;
+    let event = wait_for_event(events, |event| {
+        matches!(
+            event.supervisor_path.as_slice(),
+            [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
+        ) && matches!(
+            &event.kind,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id: id,
+                kind: LifecycleEventKind::Started { generation: 0 },
+                ..
+            }) if id == child_id
+        )
+    })
+    .await?;
     println!("event: {event:?}");
     Ok(())
 }
 
 async fn wait_for_nested_child_removed(
-    events: &mut tokio::sync::broadcast::Receiver<SupervisorEvent>,
+    events: &mut RecursiveLifecycleWatch,
     nested_id: &str,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let event = timeout(
-        Duration::from_secs(2),
-        events.wait_for_event(|event| {
-            matches!(
-                event,
-                SupervisorEvent::Nested {
-                    id,
-                    generation: 0,
-                    event,
-                .. } if id == nested_id
-                    && matches!(**event, SupervisorEvent::ChildRemoved { ref id , .. } if id == child_id)
-            )
-        }),
-    )
-    .await??;
+    let event = wait_for_event(events, |event| {
+        matches!(
+            event.supervisor_path.as_slice(),
+            [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
+        ) && matches!(
+            &event.kind,
+            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                child_id: id,
+                kind: LifecycleEventKind::Removed,
+                ..
+            }) if id == child_id
+        )
+    })
+    .await?;
     println!("event: {event:?}");
     Ok(())
+}
+
+async fn wait_for_event(
+    events: &mut RecursiveLifecycleWatch,
+    mut predicate: impl FnMut(&RecursiveLifecycleEvent) -> bool,
+) -> Result<RecursiveLifecycleEvent, Box<dyn std::error::Error>> {
+    Ok(timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events
+                .next()
+                .await
+                .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
+            if predicate(&event) {
+                return Ok::<_, std::io::Error>(event);
+            }
+        }
+    })
+    .await??)
 }

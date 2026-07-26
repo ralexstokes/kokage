@@ -19,11 +19,11 @@ use tokio::{
 };
 use tokio_supervisor::{
     ChildSpec, CompletionOutcome, DynamicSupervisorBuilder, ExitStatusView, RestartIntensity,
-    RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorEvent,
-    SupervisorSpec,
+    RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
 };
 
 mod common;
+use common::ObservedEvent;
 
 struct NotifyOnDrop(Arc<Notify>);
 
@@ -50,30 +50,22 @@ async fn a_completed_child_stops_siblings_and_supervisor() {
     let supervisor = builder.build().expect("valid supervisor");
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     handle.wait().await.expect("completion should stop cleanly");
     common::recv_event(&mut cancelled_rx).await;
 
     let mut sequence = Vec::new();
-    while let Ok(event) = events.try_recv() {
+    while let Ok(event) = events.recv().await {
         match event {
-            SupervisorEvent::ChildExited { id, .. } if id == "trigger" => {
+            ObservedEvent::ChildExited { id, .. } if id == "trigger" => {
                 sequence.push("exited");
             }
-            SupervisorEvent::SupervisorStopping => sequence.push("stopping"),
-            SupervisorEvent::SupervisorStopped => sequence.push("stopped"),
+            ObservedEvent::SupervisorStopping => sequence.push("stopping"),
+            ObservedEvent::SupervisorStopped => sequence.push("stopped"),
             _ => {}
         }
     }
     assert_eq!(sequence, ["exited", "stopping", "stopped"]);
-    let after_stopped = timeout(common::QUIET_TIMEOUT, events.recv()).await;
-    assert!(
-        matches!(
-            after_stopped,
-            Err(_) | Ok(Err(tokio::sync::broadcast::error::RecvError::Closed))
-        ),
-        "SupervisorStopped must be the final supervisor event: {after_stopped:?}"
-    );
 }
 
 #[tokio::test]
@@ -203,12 +195,12 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
         .expect("valid parent supervisor");
 
     let handle = parent.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     let event = loop {
         let event = common::recv_supervisor_event(&mut events).await;
         if matches!(
             &event,
-            SupervisorEvent::ChildExited {
+            ObservedEvent::ChildExited {
                 id,
                 status: ExitStatusView::Completed,
                 ..
@@ -217,7 +209,7 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
             break event;
         }
     };
-    assert!(matches!(event, SupervisorEvent::ChildExited { .. }));
+    assert!(matches!(event, ObservedEvent::ChildExited { .. }));
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
         "parent should continue after clean child exit"

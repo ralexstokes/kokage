@@ -4,10 +4,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use tokio::{
-    sync::{broadcast, watch},
+    sync::watch,
     time::{self, Duration},
 };
-use tokio_supervisor::{SupervisorEvent, SupervisorSnapshot};
+use tokio_supervisor::{RecursiveLifecycleEvent, SupervisorSnapshot};
 
 use crate::{ActorStatsView, server::AppState};
 
@@ -56,7 +56,7 @@ fn snapshot_message(snapshot: SupervisorSnapshot) -> Message {
     )
 }
 
-fn event_message(event: SupervisorEvent) -> Message {
+fn event_message(event: RecursiveLifecycleEvent) -> Message {
     Message::Text(
         serde_json::json!({ "type": "event", "data": event })
             .to_string()
@@ -80,7 +80,7 @@ async fn send_snapshot(
     socket.send(snapshot_message(snapshot)).await.is_ok()
 }
 
-async fn send_event(socket: &mut WebSocket, event: SupervisorEvent) -> bool {
+async fn send_event(socket: &mut WebSocket, event: RecursiveLifecycleEvent) -> bool {
     socket.send(event_message(event)).await.is_ok()
 }
 
@@ -103,7 +103,7 @@ async fn send_stats(
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let mut snapshots = state.snapshots.clone();
-    let mut events = (state.events)();
+    let mut lifecycle = (state.lifecycle)();
 
     // Send current snapshot immediately on connect.
     if !send_snapshot(&mut socket, &mut snapshots).await {
@@ -127,19 +127,14 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     break;
                 }
             }
-            result = events.recv() => {
-                match result {
-                    Ok(event) => {
+            event = lifecycle.next() => {
+                match event {
+                    Some(event) => {
                         if !send_event(&mut socket, event).await {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "console websocket event receiver lagged");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
+                    None => break,
                 }
             }
             _ = stats_tick.tick() => {

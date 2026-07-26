@@ -6,19 +6,18 @@ use std::{
     },
 };
 
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
     child::{ChildDefinition, ChildKind, ChildResult},
     context::ChildContext,
     error::SupervisorError,
-    event::{EventSink, SupervisorEvent},
     handle::{
         AttachedChildState, AttachedChildrenState, BoundIncarnation, NestedChannels, RootExtra,
         StableSupervisorChannels, SupervisorCommand, SupervisorHandle, empty_nested_channels,
     },
-    lifecycle::LifecycleHub,
+    lifecycle::{LifecycleHub, LifecycleTreeSink},
     observability::{format_path, strategy_label, supervisor_name_for_path},
     restart::{RestartIntensity, RestartPolicy},
     runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
@@ -73,15 +72,15 @@ pub(crate) struct SupervisorConfig {
     pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
     pub(crate) control_channel_capacity: usize,
-    pub(crate) event_channel_capacity: usize,
 }
 
 /// Explicit connection from one nested supervisor incarnation to its parent.
 #[derive(Clone)]
 pub(crate) struct ParentLink {
-    pub(crate) event_sink: EventSink,
+    pub(crate) lifecycle_tree: LifecycleTreeSink,
     pub(crate) snapshot_cell: SnapshotCell,
     pub(crate) id: String,
+    pub(crate) membership_epoch: u64,
     pub(crate) generation: u64,
 }
 
@@ -113,11 +112,6 @@ impl Drop for NestedTaskOnDrop {
 impl ParentLink {
     pub(crate) fn publish_snapshot(&self, snapshot: SupervisorSnapshot) {
         self.snapshot_cell.forward(snapshot, self.generation);
-    }
-
-    pub(crate) fn forward_event(&self, event: SupervisorEvent) {
-        self.event_sink
-            .forward(self.id.clone(), self.generation, event);
     }
 }
 
@@ -181,7 +175,6 @@ impl Supervisor {
         let BoundIncarnation {
             guard: binding,
             snapshots: snapshots_tx,
-            events: events_tx,
             lifecycle,
         } = channels
             .bind(
@@ -206,7 +199,6 @@ impl Supervisor {
             let result = self
                 .run_with_channels(
                     shutdown_rx,
-                    events_tx,
                     lifecycle,
                     snapshots_tx,
                     task_attached_children,
@@ -282,7 +274,6 @@ impl Supervisor {
         let Some(BoundIncarnation {
             guard: binding,
             snapshots: snapshots_tx,
-            events: events_tx,
             lifecycle,
         }) = channels.bind(
             generation,
@@ -304,7 +295,6 @@ impl Supervisor {
             let result = self
                 .run_with_channels(
                     shutdown_rx,
-                    events_tx,
                     lifecycle,
                     snapshots_tx,
                     attached_children,
@@ -367,7 +357,6 @@ impl Supervisor {
     async fn run_with_channels(
         self,
         shutdown_rx: watch::Receiver<bool>,
-        events_tx: broadcast::Sender<SupervisorEvent>,
         lifecycle: Arc<LifecycleHub>,
         snapshots_tx: watch::Sender<SupervisorSnapshot>,
         attached_children: AttachedChildrenState,
@@ -385,7 +374,6 @@ impl Supervisor {
         let mut runtime = SupervisorRuntime::new(
             self.config.clone(),
             shutdown_rx,
-            events_tx,
             lifecycle,
             snapshots_tx,
             attached_children,
@@ -472,7 +460,6 @@ pub(crate) fn stable_channels_for_config(
     StableSupervisorChannels::new(
         initial_snapshot(config),
         config.control_channel_capacity,
-        config.event_channel_capacity,
         nested_channels,
         attached_children,
     )
@@ -494,10 +481,7 @@ pub(crate) fn reset_channels_for_config(
     channels: &StableSupervisorChannels,
 ) {
     refresh_declaration_for_config(config, channels);
-    channels.reset_declared_capacities(
-        config.control_channel_capacity,
-        config.event_channel_capacity,
-    );
+    channels.reset_declared_capacities(config.control_channel_capacity);
 }
 
 pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot {

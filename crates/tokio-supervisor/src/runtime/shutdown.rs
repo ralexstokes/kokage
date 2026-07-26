@@ -6,7 +6,7 @@ use tracing::{Instrument, info_span};
 
 use crate::{
     error::SupervisorError,
-    event::SupervisorEvent,
+    event::RuntimeEvent,
     runtime::{
         child_runtime::RuntimeChildState,
         supervision::{
@@ -73,7 +73,7 @@ impl SupervisorRuntime {
         async {
             self.state = SupervisorState::Stopping;
             self.stopping_token.cancel();
-            self.send_event(SupervisorEvent::SupervisorStopping);
+            self.send_event(RuntimeEvent::SupervisorStopping);
             if self.meta.kind == ScopeKind::Ordered {
                 self.drain_children_ordered(DrainReason::Shutdown, DrainScope::All)
                     .await?;

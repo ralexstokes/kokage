@@ -38,9 +38,9 @@ mod ws;
 
 use std::{net::SocketAddr, sync::Arc};
 
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 use tokio_otp::{ActorStats, RuntimeHandle};
-use tokio_supervisor::{SupervisorEvent, SupervisorSnapshot};
+use tokio_supervisor::{RecursiveLifecycleWatch, SupervisorSnapshot};
 
 /// Display-oriented snapshot of one actor's message and mailbox statistics.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -96,12 +96,12 @@ impl From<ActorStats> for ActorStatsView {
 }
 
 type StatsSource = Arc<dyn Fn() -> Vec<ActorStatsView> + Send + Sync>;
-type EventSource = Arc<dyn Fn() -> broadcast::Receiver<SupervisorEvent> + Send + Sync>;
+type LifecycleSource = Arc<dyn Fn() -> RecursiveLifecycleWatch + Send + Sync>;
 
 /// Builder for configuring a [`Console`] server.
 pub struct ConsoleBuilder {
     snapshots: Option<watch::Receiver<SupervisorSnapshot>>,
-    events: Option<EventSource>,
+    lifecycle: Option<LifecycleSource>,
     stats: StatsSource,
     bind: SocketAddr,
     access_token: Option<String>,
@@ -112,7 +112,7 @@ impl ConsoleBuilder {
     fn new() -> Self {
         Self {
             snapshots: None,
-            events: None,
+            lifecycle: None,
             stats: Arc::new(Vec::new),
             bind: ([127, 0, 0, 1], 9100).into(),
             access_token: None,
@@ -126,18 +126,13 @@ impl ConsoleBuilder {
         self
     }
 
-    /// Sets the event broadcast sender. Each WebSocket connection will call
-    /// `subscribe()` to get its own receiver.
-    pub fn events(mut self, tx: broadcast::Sender<SupervisorEvent>) -> Self {
-        self.events = Some(Arc::new(move || tx.subscribe()));
-        self
-    }
-
-    fn event_source(
+    /// Sets the recursive lifecycle-watch source. The console calls this once
+    /// for each WebSocket connection.
+    pub fn lifecycle(
         mut self,
-        source: impl Fn() -> broadcast::Receiver<SupervisorEvent> + Send + Sync + 'static,
+        source: impl Fn() -> RecursiveLifecycleWatch + Send + Sync + 'static,
     ) -> Self {
-        self.events = Some(Arc::new(source));
+        self.lifecycle = Some(Arc::new(source));
         self
     }
 
@@ -184,8 +179,9 @@ impl ConsoleBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if `snapshots` or `events` have not been set, a non-loopback bind
-    /// has no access token, or the access token contains non-URL-safe bytes.
+    /// Panics if `snapshots` or `lifecycle` have not been set, a non-loopback
+    /// bind has no access token, or the access token contains non-URL-safe
+    /// bytes.
     pub fn build(self) -> Console {
         assert!(
             self.bind.ip().is_loopback() || self.access_token.is_some(),
@@ -202,7 +198,7 @@ impl ConsoleBuilder {
         }
         Console {
             snapshots: self.snapshots.expect("ConsoleBuilder: snapshots required"),
-            events: self.events.expect("ConsoleBuilder: events required"),
+            lifecycle: self.lifecycle.expect("ConsoleBuilder: lifecycle required"),
             stats: self.stats,
             bind: self.bind,
             access_token: self.access_token,
@@ -214,7 +210,7 @@ impl ConsoleBuilder {
 /// A configured console server ready to start.
 pub struct Console {
     snapshots: watch::Receiver<SupervisorSnapshot>,
-    events: EventSource,
+    lifecycle: LifecycleSource,
     stats: StatsSource,
     bind: SocketAddr,
     access_token: Option<String>,
@@ -231,14 +227,14 @@ impl Console {
     /// surfaces.
     ///
     /// The console remains an application-side observer: it subscribes to
-    /// snapshots and events and samples actor stats without adding a console
+    /// snapshots and lifecycle events and samples actor stats without adding a console
     /// dependency or feature to `tokio-otp`.
     pub fn for_runtime(handle: &RuntimeHandle) -> ConsoleBuilder {
-        let events = handle.supervisor_handle();
+        let lifecycle = handle.supervisor_handle();
         let stats = handle.clone();
         Console::builder()
             .snapshots(handle.subscribe_snapshots())
-            .event_source(move || events.subscribe())
+            .lifecycle(move || lifecycle.watch_lifecycle_recursive())
             .actor_stats(move || stats.actor_stats().into_iter().map(Into::into).collect())
     }
 
@@ -249,7 +245,7 @@ impl Console {
     pub async fn spawn(self) -> std::io::Result<ConsoleHandle> {
         server::spawn(
             self.snapshots,
-            self.events,
+            self.lifecycle,
             self.stats,
             self.bind,
             self.access_token,
@@ -262,7 +258,7 @@ impl Console {
     pub async fn run(self) -> std::io::Result<()> {
         server::run(
             self.snapshots,
-            self.events,
+            self.lifecycle,
             self.stats,
             self.bind,
             self.access_token,

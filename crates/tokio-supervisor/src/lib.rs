@@ -106,8 +106,9 @@
 //! [`SupervisorBuilder::supervisor`] or
 //! [`SupervisorHandle::add_supervisor`]. The nested supervisor:
 //!
-//! - Forwards lifecycle events to the parent as
-//!   [`SupervisorEvent::Nested`] wrappers.
+//! - Appears in ancestor
+//!   [`watch_lifecycle_recursive`](SupervisorHandle::watch_lifecycle_recursive)
+//!   streams with a path that identifies each exact supervisor incarnation.
 //! - Publishes its snapshot into the parent's
 //!   [`ChildSnapshot::supervisor`] field.
 //! - Has a restart-stable direct handle whose subscriptions and snapshots
@@ -126,10 +127,11 @@
 //!
 //! - **[`SupervisorSnapshot`] state** — current state and cumulative counters,
 //!   read directly or through [`SupervisorHandle::subscribe_snapshots`].
-//! - **[`LifecycleEvent`] streams** — ordered, reliable direct-child
-//!   transitions from [`SupervisorHandle::watch_lifecycle`].
-//! - **[`SupervisorEvent`] subscriptions** — a lossy broadcast for logging and
-//!   dashboards via [`SupervisorHandle::subscribe`].
+//! - **Lifecycle streams** — ordered direct-child [`LifecycleEvent`]s from
+//!   [`SupervisorHandle::watch_lifecycle`], or the whole tree (including
+//!   supervisor transitions and scheduled restarts) from
+//!   [`SupervisorHandle::watch_lifecycle_recursive`]. Both report overflow
+//!   explicitly rather than losing events silently.
 //! - **`tracing` spans and logs** — automatic structured output for every
 //!   lifecycle event. The supervisor runs inside an `info_span!("supervisor")`
 //!   and each child inside an `info_span!("child")`, both carrying
@@ -138,23 +140,16 @@
 //!   feature) — lowest-cardinality view, best for dashboards and alerting.
 //!   Emits `supervisor.children.running`, `supervisor.children.started`,
 //!   `supervisor.children.exited`, `supervisor.restarts`,
-//!   `supervisor.restart_intensity_exceeded`, `supervisor.events.dropped`,
-//!   `supervisor.shutdown_timeouts`, and `supervisor.child_shutdown.duration`.
+//!   `supervisor.restart_intensity_exceeded`, `supervisor.shutdown_timeouts`,
+//!   and `supervisor.child_shutdown.duration`.
 //!
 //! ## Snapshot/lifecycle alignment
 //!
 //! Create a lifecycle watch first, then read a snapshot, then discard watched
 //! events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
-//! state-plus-stream view without replay. Lifecycle overflow is explicit as
-//! [`LifecycleEventKind::Lagged`]; the event broadcast can lose nested
-//! forwarded events without an equivalent end-to-end marker.
-//!
-//! ## Nested event forwarding
-//!
-//! Forwarding of nested supervisor events to the parent is best-effort. If a
-//! nested supervisor's event receiver lags behind, the runtime logs a warning
-//! and increments the `supervisor.events.dropped` counter (when the `metrics`
-//! feature is enabled).
+//! state-plus-stream view without replay. Direct lifecycle overflow is
+//! explicit as [`LifecycleEventKind::Lagged`]; recursive stream overflow is a
+//! tree-wide [`RecursiveLifecycleEventKind::Lagged`] marker.
 //!
 //! # Deliberate dependency coupling
 //!
@@ -208,7 +203,8 @@
 //! - `examples/per_child_restart_intensity.rs` — per-child intensity overrides.
 //! - `examples/shutdown_with_cancellation_token.rs` — graceful shutdown driven
 //!   by a signal.
-//! - `examples/subscribe_to_events.rs` — reacting to lifecycle events.
+//! - `examples/watch_lifecycle_recursive.rs` — reacting to tree lifecycle
+//!   events.
 //! - `examples/subscribe_to_snapshots.rs` — polling supervisor state.
 //! - `examples/tracing.rs` — structured logging output.
 //! - `examples/metrics.rs` — Prometheus metrics (requires `--features metrics`).
@@ -238,9 +234,12 @@ pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
 pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::{ChildContext, SupervisorToken};
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
-pub use event::{EventPathSegment, ExitStatusView, SupervisorEvent};
+pub use event::ExitStatusView;
 pub use handle::SupervisorHandle;
-pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
+pub use lifecycle::{
+    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
+    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
+};
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
 pub use scope::{ControlOperation, ScopeKind};
 pub use shutdown::{ShutdownMode, ShutdownPolicy};

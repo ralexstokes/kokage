@@ -10,10 +10,11 @@ use tokio::{
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
     LifecycleEventKind, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
-    SupervisorBuilder, SupervisorError, SupervisorEvent,
+    SupervisorBuilder, SupervisorError,
 };
 
 mod common;
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn external_shutdown_stops_all_children() {
@@ -138,7 +139,7 @@ async fn dropping_last_handle_clone_requests_graceful_shutdown() {
         .expect("valid supervisor");
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     let last_handle = handle.clone();
 
     assert_eq!(common::recv_event(&mut lifecycle_rx).await, "started");
@@ -150,7 +151,7 @@ async fn dropping_last_handle_clone_requests_graceful_shutdown() {
     assert_eq!(common::recv_event(&mut lifecycle_rx).await, "cancelled");
 
     loop {
-        if common::recv_supervisor_event(&mut events).await == SupervisorEvent::SupervisorStopped {
+        if common::recv_supervisor_event(&mut events).await == ObservedEvent::SupervisorStopped {
             break;
         }
     }
@@ -163,12 +164,12 @@ async fn dropping_last_handle_stops_a_supervisor_idling_at_zero_children() {
         .expect("empty supervisor builds");
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     drop(handle);
 
     loop {
-        if common::recv_supervisor_event(&mut events).await == SupervisorEvent::SupervisorStopped {
+        if common::recv_supervisor_event(&mut events).await == ObservedEvent::SupervisorStopped {
             break;
         }
     }
@@ -633,16 +634,16 @@ async fn shutdown_preempts_zero_delay_restart() {
         .expect("valid supervisor");
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestartScheduled { delay, .. } => {
+            ObservedEvent::ChildRestartScheduled { delay, .. } => {
                 assert!(delay.is_zero(), "test requires zero-delay restart");
                 handle.shutdown();
                 break;
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            ObservedEvent::RestartIntensityExceeded => {
                 panic!("shutdown lost to zero-delay restart");
             }
             _ => {}
@@ -651,11 +652,11 @@ async fn shutdown_preempts_zero_delay_restart() {
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::SupervisorStopping => break,
-            SupervisorEvent::ChildRestarted { .. } => {
+            ObservedEvent::SupervisorStopping => break,
+            ObservedEvent::ChildRestarted { .. } => {
                 panic!("child restarted after shutdown was requested");
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            ObservedEvent::RestartIntensityExceeded => {
                 panic!("shutdown lost to zero-delay restart");
             }
             _ => {}
@@ -699,11 +700,11 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
         .expect("valid supervisor");
 
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestartScheduled { id, delay, .. } if id == "flaky" => {
+            ObservedEvent::ChildRestartScheduled { id, delay, .. } if id == "flaky" => {
                 assert!(
                     delay >= Duration::from_millis(200),
                     "test requires a non-zero delayed restart"
@@ -711,7 +712,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
                 handle.shutdown();
                 break;
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            ObservedEvent::RestartIntensityExceeded => {
                 panic!("shutdown lost to delayed restart");
             }
             _ => {}
@@ -720,11 +721,11 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::SupervisorStopping => break,
-            SupervisorEvent::ChildRestarted { id, .. } if id == "flaky" => {
+            ObservedEvent::SupervisorStopping => break,
+            ObservedEvent::ChildRestarted { id, .. } if id == "flaky" => {
                 panic!("child restarted after shutdown was requested");
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            ObservedEvent::RestartIntensityExceeded => {
                 panic!("shutdown lost to delayed restart");
             }
             _ => {}

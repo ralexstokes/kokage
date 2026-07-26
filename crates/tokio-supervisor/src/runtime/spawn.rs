@@ -4,7 +4,7 @@ use crate::{
     child::{ChildKind, ChildReadiness},
     context::{ChildContext, ChildReady, ReadySignal, SupervisorToken},
     error::SupervisorError,
-    event::{EventSink, SupervisorEvent},
+    event::RuntimeEvent,
     handle::StableSupervisorChannels,
     runtime::{
         child_runtime::{CompletionFlag, RuntimeChildState},
@@ -152,12 +152,7 @@ impl SupervisorRuntime {
             })?;
             Some((
                 ParentLink {
-                    event_sink: EventSink::new(
-                        self.nested_event_tx.clone(),
-                        key,
-                        instance,
-                        self.meta.observability.clone(),
-                    ),
+                    lifecycle_tree: self.lifecycle_tree.clone(),
                     snapshot_cell: SnapshotCell::new(
                         self.nested_snapshot_tx.clone(),
                         snapshot_state,
@@ -165,6 +160,7 @@ impl SupervisorRuntime {
                         instance,
                     ),
                     id: child_id.clone(),
+                    membership_epoch: instance,
                     generation,
                 },
                 channels,
@@ -238,7 +234,7 @@ impl SupervisorRuntime {
         );
         if self.children[key].runtime.state == RuntimeChildState::Running {
             self.send_lifecycle(key, crate::LifecycleEventKind::Started { generation });
-            self.send_event(SupervisorEvent::ChildStarted {
+            self.send_event(RuntimeEvent::ChildStarted {
                 id: child_id,
                 generation,
             });

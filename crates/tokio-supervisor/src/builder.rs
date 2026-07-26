@@ -38,7 +38,6 @@ pub struct SupervisorBuilder {
     restart_intensity: RestartIntensity,
     children: Vec<Arc<ChildDefinition>>,
     control_channel_capacity: usize,
-    event_channel_capacity: usize,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
 
@@ -52,7 +51,6 @@ pub struct DynamicSupervisorBuilder {
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
     control_channel_capacity: usize,
-    event_channel_capacity: usize,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
 
@@ -70,7 +68,6 @@ pub enum ScopeKind {
 }
 
 const DEFAULT_CONTROL_CHANNEL_CAPACITY: usize = 64;
-const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 256;
 
 impl Default for SupervisorBuilder {
     fn default() -> Self {
@@ -87,7 +84,6 @@ impl SupervisorBuilder {
             restart_intensity: RestartIntensity::default(),
             children: Vec::new(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
-            event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
             channels: None,
         };
         let config = builder.config();
@@ -104,7 +100,6 @@ impl SupervisorBuilder {
             default_shutdown: ShutdownPolicy::default(),
             children: self.children.clone(),
             control_channel_capacity: self.control_channel_capacity,
-            event_channel_capacity: self.event_channel_capacity,
         }
     }
 
@@ -180,29 +175,13 @@ impl SupervisorBuilder {
         self
     }
 
-    /// Sets the bounded capacity of the event broadcast channel. Slow
-    /// subscribers that fall behind this limit will receive a
-    /// [`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)
-    /// error. Defaults to 256.
-    ///
-    /// Set this before subscribing through a pre-build
-    /// [`handle`](Self::handle). Capacity is applied to the event channel at
-    /// [`build`](Self::build), and an existing subscriber pins the channel it
-    /// is attached to, so a later change cannot resize it without leaving that
-    /// subscriber permanently closed.
-    #[must_use]
-    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
-        self.event_channel_capacity = capacity;
-        self
-    }
-
     /// Validates the configuration and returns a ready-to-run [`Supervisor`].
     ///
     /// # Errors
     ///
     /// Returns [`SupervisorBuildError`] if:
     /// - Two children share the same id.
-    /// - Any channel capacity is zero.
+    /// - The control channel capacity is zero.
     /// - Any restart intensity or backoff configuration is invalid.
     pub fn build(mut self) -> Result<Supervisor, SupervisorBuildError> {
         self.restart_intensity.validate()?;
@@ -211,12 +190,6 @@ impl SupervisorBuilder {
                 "control channel capacity must be non-zero",
             ));
         }
-        if self.event_channel_capacity == 0 {
-            return Err(SupervisorBuildError::InvalidConfig(
-                "event channel capacity must be non-zero",
-            ));
-        }
-
         let mut ids = HashSet::new();
         for child in &self.children {
             if child.id.is_empty() {
@@ -250,14 +223,13 @@ impl Default for DynamicSupervisorBuilder {
 
 impl DynamicSupervisorBuilder {
     /// Creates an empty dynamic supervisor with the default restart intensity
-    /// and channel capacities.
+    /// and control-channel capacity.
     pub fn new() -> Self {
         let mut builder = Self {
             restart_intensity: RestartIntensity::default(),
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
-            event_channel_capacity: DEFAULT_EVENT_CHANNEL_CAPACITY,
             channels: None,
         };
         let config = builder.config();
@@ -274,7 +246,6 @@ impl DynamicSupervisorBuilder {
             default_shutdown: self.default_shutdown,
             children: Vec::new(),
             control_channel_capacity: self.control_channel_capacity,
-            event_channel_capacity: self.event_channel_capacity,
         }
     }
 
@@ -321,18 +292,6 @@ impl DynamicSupervisorBuilder {
         self
     }
 
-    /// Sets the bounded capacity of the event broadcast channel.
-    ///
-    /// Set this before subscribing through a pre-build
-    /// [`handle`](Self::handle); see
-    /// [`SupervisorBuilder::event_channel_capacity`] for why an existing
-    /// subscriber pins the channel.
-    #[must_use]
-    pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
-        self.event_channel_capacity = capacity;
-        self
-    }
-
     /// Validates the configuration and returns an empty dynamic supervisor.
     pub fn build(mut self) -> Result<Supervisor, SupervisorBuildError> {
         self.restart_intensity.validate()?;
@@ -341,12 +300,6 @@ impl DynamicSupervisorBuilder {
                 "control channel capacity must be non-zero",
             ));
         }
-        if self.event_channel_capacity == 0 {
-            return Err(SupervisorBuildError::InvalidConfig(
-                "event channel capacity must be non-zero",
-            ));
-        }
-
         let config = self.config();
         let channels = self
             .channels

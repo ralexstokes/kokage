@@ -7,10 +7,11 @@ use tokio::{
 use tokio_supervisor::{
     ChildSpec, ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView,
     RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, SupervisorBuilder,
-    SupervisorError, SupervisorEvent, SupervisorHandle, SupervisorSpec,
+    SupervisorError, SupervisorHandle, SupervisorSpec,
 };
 
 mod common;
+use common::ObservedEvent;
 
 async fn spawn_dynamic(
     builder: DynamicSupervisorBuilder,
@@ -95,7 +96,7 @@ async fn empty_supervisor_starts_empty_and_accepts_children() {
         .build()
         .expect("empty supervisor builds");
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     assert!(handle.snapshot().children.is_empty());
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
@@ -111,15 +112,15 @@ async fn empty_supervisor_starts_empty_and_accepts_children() {
     let mut saw_exited = false;
     while !saw_exited {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildStarted { id, .. } if id == "dynamic" => {
+            ObservedEvent::ChildStarted { id, .. } if id == "dynamic" => {
                 saw_started = true;
             }
-            SupervisorEvent::ChildExited { id, status, .. } if id == "dynamic" => {
+            ObservedEvent::ChildExited { id, status, .. } if id == "dynamic" => {
                 assert!(saw_started, "child should start before exiting");
                 assert_eq!(status, ExitStatusView::Completed);
                 saw_exited = true;
             }
-            SupervisorEvent::SupervisorStopped => {
+            ObservedEvent::SupervisorStopped => {
                 panic!("empty supervisor stopped instead of idling");
             }
             _ => {}
@@ -187,7 +188,7 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
         .build()
         .expect("empty supervisor builds");
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     handle
         .add_child(
@@ -201,8 +202,8 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
     let mut exited = false;
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildExited { id, .. } if id == "temporary" => exited = true,
-            SupervisorEvent::ChildRemoved { id, .. } if id == "temporary" => {
+            ObservedEvent::ChildExited { id, .. } if id == "temporary" => exited = true,
+            ObservedEvent::ChildRemoved { id, .. } if id == "temporary" => {
                 assert!(exited, "exit is published before membership removal");
                 break;
             }
@@ -250,12 +251,12 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
         .build()
         .expect("ordered group supervisor builds");
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     trigger.notify_one();
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRemoved { id, .. } if id == "temporary" => break,
+            ObservedEvent::ChildRemoved { id, .. } if id == "temporary" => break,
             _ => {}
         }
     }
@@ -312,13 +313,13 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
         .build()
         .expect("ordered group supervisor builds");
     let handle = supervisor.spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     assert_eq!(common::recv_event(&mut temporary_starts_rx).await, 0);
     finish_temporary.notify_one();
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRemoved { id, .. } if id == "temporary" => break,
+            ObservedEvent::ChildRemoved { id, .. } if id == "temporary" => break,
             _ => {}
         }
     }
@@ -326,7 +327,7 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
     fail_trigger.notify_one();
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestarted {
+            ObservedEvent::ChildRestarted {
                 id,
                 new_generation: 1,
                 ..
@@ -433,7 +434,7 @@ async fn remove_last_child_and_readd_same_id() {
         .expect("last child removal should be allowed");
     assert!(handle.snapshot().children.is_empty());
 
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     let replacement_epoch = handle
         .add_child(ChildSpec::new("dynamic", move |_ctx| {
             let starts_tx = starts_tx.clone();
@@ -457,11 +458,11 @@ async fn remove_last_child_and_readd_same_id() {
     assert_eq!(replacement.membership_epoch, replacement_epoch);
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildExited { id, status, .. } if id == "dynamic" => {
+            ObservedEvent::ChildExited { id, status, .. } if id == "dynamic" => {
                 assert_eq!(status, ExitStatusView::Completed);
                 break;
             }
-            SupervisorEvent::SupervisorStopped => {
+            ObservedEvent::SupervisorStopped => {
                 panic!("supervisor stopped after re-added child exited");
             }
             _ => {}
@@ -494,17 +495,17 @@ async fn transient_success_idles_until_shutdown() {
         .restart(RestartPolicy::OnFailure)],
     )
     .await;
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     common::recv_event(&mut started_rx).await;
     release.notify_one();
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildExited { id, status, .. } if id == "transient" => {
+            ObservedEvent::ChildExited { id, status, .. } if id == "transient" => {
                 assert_eq!(status, ExitStatusView::Completed);
                 break;
             }
-            SupervisorEvent::SupervisorStopped => {
+            ObservedEvent::SupervisorStopped => {
                 panic!("supervisor stopped on transient completion");
             }
             _ => {}
@@ -542,17 +543,17 @@ async fn terminal_failure_remains_visible_while_idle() {
         .restart(RestartPolicy::Never)],
     )
     .await;
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     common::recv_event(&mut started_rx).await;
     release.notify_one();
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildExited { id, status, .. } if id == "fails" => {
+            ObservedEvent::ChildExited { id, status, .. } if id == "fails" => {
                 assert!(matches!(status, ExitStatusView::Failed(_)));
                 break;
             }
-            SupervisorEvent::SupervisorStopped => {
+            ObservedEvent::SupervisorStopped => {
                 panic!("supervisor stopped on terminal failure");
             }
             _ => {}
@@ -630,7 +631,7 @@ async fn remove_child_stops_it_without_restarting() {
         ],
     )
     .await;
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
 
@@ -642,7 +643,7 @@ async fn remove_child_stops_it_without_restarting() {
     let mut saw_removed = false;
     while !saw_removed {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRemoved { id, .. } if id == "removable" => {
+            ObservedEvent::ChildRemoved { id, .. } if id == "removable" => {
                 saw_removed = true;
             }
             _ => {}
@@ -1093,13 +1094,13 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
         ],
     )
     .await;
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
+            ObservedEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
                 assert!(
                     delay >= std::time::Duration::from_secs(1),
                     "test requires a long restart backoff"
@@ -1118,10 +1119,10 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
     let mut saw_removed = false;
     while !saw_removed {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRemoved { id, .. } if id == "removable" => {
+            ObservedEvent::ChildRemoved { id, .. } if id == "removable" => {
                 saw_removed = true;
             }
-            SupervisorEvent::ChildStarted { id, generation, .. }
+            ObservedEvent::ChildStarted { id, generation, .. }
                 if id == "removable" && generation > 0 =>
             {
                 panic!("removed child restarted while removal was pending");
@@ -1158,16 +1159,16 @@ async fn remove_child_preempts_zero_delay_restart() {
         .restart(RestartPolicy::OnFailure)],
     )
     .await;
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
+            ObservedEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
                 assert!(delay.is_zero(), "test requires zero-delay restart");
                 break;
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            ObservedEvent::RestartIntensityExceeded => {
                 panic!("remove command lost to zero-delay restarts");
             }
             _ => {}
@@ -1197,7 +1198,7 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
         .build()
         .expect("valid dynamic supervisor")
         .spawn();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
     handle
         .add_child(
             ChildSpec::new("removable", |_ctx| async move {
@@ -1210,11 +1211,11 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
 
     loop {
         match common::recv_supervisor_event(&mut events).await {
-            SupervisorEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
+            ObservedEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
                 assert!(delay.is_zero(), "test requires zero-delay restart");
                 break;
             }
-            SupervisorEvent::RestartIntensityExceeded => {
+            ObservedEvent::RestartIntensityExceeded => {
                 panic!("commands lost to zero-delay restarts");
             }
             _ => {}
@@ -1236,14 +1237,14 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
     let interleaved_restart = timeout(common::QUIET_TIMEOUT, async {
         loop {
             match events.recv().await {
-                Ok(SupervisorEvent::ChildRestarted { id, .. }) if id == "removable" => {
+                Ok(ObservedEvent::ChildRestarted { id, .. }) if id == "removable" => {
                     return true;
                 }
                 Ok(_) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                Err(common::EventRecvError::Lagged(skipped)) => {
                     panic!("lagged while checking command ordering: skipped {skipped}");
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+                Err(common::EventRecvError::Closed) => return false,
             }
         }
     })
@@ -1288,14 +1289,14 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
         ],
     )
     .await;
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     assert_eq!(common::recv_event(&mut removable_rx).await, 0);
 
     loop {
         if matches!(
             common::recv_supervisor_event(&mut events).await,
-            SupervisorEvent::ChildRestartScheduled { id, .. } if id == "removable"
+            ObservedEvent::ChildRestartScheduled { id, .. } if id == "removable"
         ) {
             break;
         }

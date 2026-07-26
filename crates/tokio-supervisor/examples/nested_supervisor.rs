@@ -57,19 +57,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nested_handle = handle
         .supervisor("nested-pipeline")
         .expect("newly added nested supervisor has a stable handle");
-    let mut nested_events = nested_handle.subscribe();
+    let mut nested_lifecycle = nested_handle.watch_lifecycle();
 
     loop {
-        let event = timeout(Duration::from_secs(2), nested_events.recv()).await??;
+        let event = timeout(Duration::from_secs(2), nested_lifecycle.next())
+            .await?
+            .ok_or_else(|| std::io::Error::other("nested lifecycle stream closed"))?;
         println!("nested event: {event:?}");
-        if matches!(
-            event,
-            SupervisorEvent::ChildRestarted {
-                ref id,
-                old_generation: 0,
-                new_generation: 1,
-            .. } if id == "nested-worker"
-        ) {
+        if event.child_id == "nested-worker"
+            && matches!(event.kind, LifecycleEventKind::Started { generation: 1 })
+        {
             break;
         }
     }

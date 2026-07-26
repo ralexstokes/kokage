@@ -6,6 +6,8 @@ use tokio_supervisor::{
     Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
 };
 
+mod common;
+
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn waiting_child(id: &str) -> ChildSpec {
@@ -110,7 +112,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
         let builder = SupervisorBuilder::new().child(waiting_child("worker"));
         let handle = builder.handle();
         let mut snapshots = handle.subscribe_snapshots();
-        let mut events = handle.subscribe();
+        let mut events = common::event_watch(&handle);
         let lifecycle = handle.watch_lifecycle();
 
         match abandonment {
@@ -358,23 +360,18 @@ async fn wait_on_an_abandoned_reserved_handle_reports_terminality() {
 }
 
 #[tokio::test]
-async fn event_capacity_set_before_subscribing_reaches_the_spawned_scope() {
-    // Capacity is applied to the event channel once, at build. A subscriber
-    // taken from a pre-build handle pins the channel it attached to, so the
-    // documented order is: set the capacity, then subscribe.
-    let builder = SupervisorBuilder::new()
-        .event_channel_capacity(4)
-        .child(waiting_child("worker"));
+async fn recursive_lifecycle_watch_created_before_build_reaches_the_spawned_scope() {
+    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
     let handle = builder.handle();
-    let mut events = handle.subscribe();
+    let mut events = common::event_watch(&handle);
 
     let spawned = builder.build().expect("builder is valid").spawn();
     handle.wait_started().await.expect("scope starts");
 
     timeout(EVENT_TIMEOUT, events.recv())
         .await
-        .expect("a pre-build subscriber keeps receiving after bind")
-        .expect("event channel stays open across bind");
+        .expect("a pre-build watch keeps receiving after bind")
+        .expect("lifecycle stream stays open across bind");
 
     spawned
         .shutdown_and_wait()

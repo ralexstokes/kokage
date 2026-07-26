@@ -28,7 +28,7 @@ cargo run -p <crate> --example <name>
 | `dynamic_children` | Adding and removing children at runtime. |
 | `per_child_restart_intensity` | Per-child intensity overrides. |
 | `shutdown_with_cancellation_token` | Graceful shutdown driven by a signal. |
-| `subscribe_to_events` | Reacting to lifecycle events. |
+| `watch_lifecycle_recursive` | Reacting to lifecycle events across a tree. |
 | `subscribe_to_snapshots` | Polling supervisor state. |
 | `tracing` | Structured logging output. |
 | `metrics` | Prometheus metrics (needs `--features metrics`). |
@@ -67,10 +67,9 @@ Things this tutorial glossed over that matter in production:
 - **Restart budgets are your circuit breakers.** Tune `RestartIntensity` so a
   persistent fault escalates to something (a parent supervisor, your process
   manager, an alert) instead of looping forever.
-- **Application-level breakers must not count events.** The event subscription
-  is lossy observability; a breaker that counts `ChildRestarted` events can
-  silently under-count. Drive it from `watch_lifecycle()` and the cumulative
-  counters on its event envelope, or from snapshots — see the observability
-  chapter.
+- **Application-level breakers must not infer restarts from event pairs.** A
+  lag marker means transition detail was dropped. Drive a breaker from
+  `watch_lifecycle()` and the cumulative counters on its event envelope, or
+  from snapshots — see the observability chapter.
 - **Blocking work needs cancellation checks.** Cooperative shutdown is only as
   graceful as your `token.is_cancelled()` checks are frequent.
