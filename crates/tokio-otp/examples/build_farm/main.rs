@@ -6,6 +6,10 @@
 //! store; and a plain supervised task renews the build lease. The scheduler's
 //! clean stop is the signal that shuts down the whole tree.
 //!
+//! `#[derive(Supervision)]` wires the statically known actors and their cyclic
+//! references. Tree placement stays explicit because the root also contains a
+//! plain [`ChildSpec`](tokio_otp::ChildSpec) and an actor-owned dynamic scope.
+//!
 //! ```text
 //! build-farm (ordered, one-for-one)
 //! ├── progress         keyed conflating mailbox
@@ -34,15 +38,14 @@ use std::{
 };
 
 use tokio_otp::{
-    ActorSpec, ChildOutline, RunnableActor, SupervisionOutline,
+    ActorSpec, ChildOutline, SupervisionOutline,
     prelude::{
-        ActorOptions, ActorRef, CompletionGuard, Graph, GraphBuilder, MailboxMode,
-        RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, Strategy,
-        SupervisionTree,
+        ActorOptions, CompletionGuard, GraphBuilder, MailboxMode, RestartIntensity, RestartPolicy,
+        Runtime, RuntimeHandle, ScopeKind, Strategy, Supervision, SupervisionTree,
     },
 };
 
-use cas::CasFactory;
+use cas::{Cas, CasFactory};
 use lease::{LEASE_ID, Lease};
 use messages::{
     BuildStatus, CALL_DEADLINE, Phase, PoolMsg, ProgressMsg, SchedulerMsg, TargetState,
@@ -68,23 +71,30 @@ struct Durable {
     plan: Arc<BuildPlan>,
 }
 
-struct Refs {
-    scheduler: ActorRef<SchedulerMsg>,
-    pool: ActorRef<PoolMsg>,
-    progress: ActorRef<ProgressMsg>,
+/// The statically known actor graph. Its supervision placement stays manual:
+/// the root also contains a plain task and an actor-owned dynamic scope, two
+/// shapes the derive deliberately does not model.
+#[derive(Supervision)]
+struct BuildFarmActors {
+    #[supervision(options = ActorOptions::new()
+        .mailbox(MailboxMode::conflate_by_key(progress_key)))]
+    progress: Progress,
+    cas: Cas,
+    pool: Pool,
+    scheduler: Scheduler,
 }
 
 struct Blueprint {
     runtime: Runtime,
     outline: SupervisionOutline,
-    refs: Refs,
+    refs: BuildFarmActorsRefs,
     journal: Arc<BuildJournal>,
     lease: Arc<Lease>,
 }
 
 struct Farm {
     handle: RuntimeHandle,
-    refs: Refs,
+    refs: BuildFarmActorsRefs,
     journal: Arc<BuildJournal>,
     lease: Arc<Lease>,
     _completion: CompletionGuard,
@@ -127,83 +137,77 @@ fn assemble(durable: &Durable, fail_first_lease: bool) -> Result<Blueprint, AnyE
     builder.name("build-farm");
     builder.mailbox_capacity(32);
 
-    let progress = builder.actor_with_options(
-        PROGRESS_ID,
-        {
-            let journal = Arc::clone(&journal);
-            move || Progress::new(Arc::clone(&journal))
-        },
-        ActorOptions::new().mailbox(MailboxMode::conflate_by_key(progress_key)),
-    );
-    let cas = builder.actor(
-        CAS_ID,
-        CasFactory {
-            store: Arc::clone(&durable.store),
-        },
-    );
+    let (graph, refs) = BuildFarmActors::graph_with(builder, |refs| {
+        let worker_factory = WorkerFactory {
+            cas: refs.cas.clone(),
+            progress: refs.progress.clone(),
+            attempts: Arc::clone(&durable.attempts),
+        };
+        BuildFarmActorsFactories {
+            progress: {
+                let journal = Arc::clone(&journal);
+                move || Progress::new(Arc::clone(&journal))
+            },
+            cas: CasFactory {
+                store: Arc::clone(&durable.store),
+            },
+            pool: {
+                let scheduler = refs.scheduler.clone();
+                let progress = refs.progress.clone();
+                let journal = Arc::clone(&journal);
+                let labels = Arc::clone(&durable.labels);
+                move || {
+                    Pool::new(
+                        scheduler.clone(),
+                        progress.clone(),
+                        worker_factory.clone(),
+                        Arc::clone(&journal),
+                        Arc::clone(&labels),
+                    )
+                }
+            },
+            scheduler: {
+                let plan = Arc::clone(&durable.plan);
+                let pool = refs.pool.clone();
+                let lease = Arc::clone(&lease);
+                let journal = Arc::clone(&journal);
+                move || {
+                    Scheduler::new(
+                        Arc::clone(&plan),
+                        pool.clone(),
+                        Arc::clone(&lease),
+                        Arc::clone(&journal),
+                    )
+                }
+            },
+        }
+    })?;
 
-    let (pool_slot, pool) = builder.slot::<PoolMsg>(POOL_LEADER_ID);
-    let (scheduler_slot, scheduler) = builder.slot::<SchedulerMsg>(SCHEDULER_ID);
-    let worker_factory = WorkerFactory {
-        cas,
-        progress: progress.clone(),
-        attempts: Arc::clone(&durable.attempts),
+    let actor = |label| {
+        graph
+            .actor(label)
+            .unwrap_or_else(|| panic!("{label} is declared by BuildFarmActors"))
+            .clone()
     };
-
-    builder.define(pool_slot, {
-        let scheduler = scheduler.clone();
-        let progress = progress.clone();
-        let worker_factory = worker_factory.clone();
-        let journal = Arc::clone(&journal);
-        let labels = Arc::clone(&durable.labels);
-        move || {
-            Pool::new(
-                scheduler.clone(),
-                progress.clone(),
-                worker_factory.clone(),
-                Arc::clone(&journal),
-                Arc::clone(&labels),
-            )
-        }
-    });
-    builder.define(scheduler_slot, {
-        let plan = Arc::clone(&durable.plan);
-        let pool = pool.clone();
-        let lease = Arc::clone(&lease);
-        let journal = Arc::clone(&journal);
-        move || {
-            Scheduler::new(
-                Arc::clone(&plan),
-                pool.clone(),
-                Arc::clone(&lease),
-                Arc::clone(&journal),
-            )
-        }
-    });
-    let graph = builder.build()?;
 
     let tree = SupervisionTree::new()
         .strategy(Strategy::OneForOne)
-        .actor(runnable(&graph, PROGRESS_ID))
-        .actor(runnable(&graph, CAS_ID))
+        .actor(actor(PROGRESS_ID))
+        .actor(actor(CAS_ID))
         .task(lease::renewer(Arc::clone(&lease), fail_first_lease))
         .actor_with_scope_strategy(
             POOL_NODE_ID,
-            ActorSpec::new(runnable(&graph, POOL_LEADER_ID)).restart(RestartPolicy::Always),
+            ActorSpec::new(actor(POOL_LEADER_ID)).restart(RestartPolicy::Always),
             SupervisionTree::dynamic()
                 .restart_intensity(RestartIntensity::new(8, Duration::from_secs(30))),
             Strategy::OneForAll,
         )
-        .actor(ActorSpec::new(runnable(&graph, SCHEDULER_ID)).restart(RestartPolicy::OnFailure));
+        .actor(ActorSpec::new(actor(SCHEDULER_ID)).restart(RestartPolicy::OnFailure));
 
     Ok(Blueprint {
         outline: tree.outline()?,
         runtime: tree.build()?,
-        refs: Refs {
-            scheduler,
-            pool,
-            progress,
-        },
+        refs,
         journal,
         lease,
     })
@@ -366,13 +370,4 @@ fn assert_complete(status: &BuildStatus, cached: bool) {
             .values()
             .all(|state| matches!(state, TargetState::Built { cached: hit, .. } if *hit == cached))
     );
-}
-
-fn runnable(graph: &Graph, label: &str) -> RunnableActor {
-    graph
-        .actors()
-        .iter()
-        .find(|actor| actor.label() == label)
-        .unwrap_or_else(|| panic!("{label} is registered in the graph"))
-        .clone()
 }
