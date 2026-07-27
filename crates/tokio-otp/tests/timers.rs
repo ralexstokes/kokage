@@ -12,8 +12,9 @@ use tokio::{
     time::{Instant, advance, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorFactory, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Runtime,
-    StateTimeoutSlot, prelude::Continue,
+    Actor, ActorFactory, ActorRef, ActorResult, BoxError, CancellationHandle, GraphBuilder,
+    LiveContext, MessageContext, RawActor, Runtime, StartContext, TimerKey, prelude::Continue,
+    timers,
 };
 use tokio_supervisor::Strategy;
 
@@ -32,27 +33,32 @@ where
     (runtime, actor_ref)
 }
 
-#[derive(Clone)]
 struct OneShot {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for OneShot {
+impl Actor for OneShot {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         let _timer = ctx.send_after("tick", Duration::from_millis(20));
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn send_after_fires_once() {
+async fn send_after_fires_once_without_using_mailbox_capacity() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || OneShot {
+    let (runtime, actor_ref) = build_runtime(move || OneShot {
         observed: observed_tx.clone(),
     });
     let handle = runtime.spawn();
@@ -69,25 +75,33 @@ async fn send_after_fires_once() {
             .is_err(),
         "one-shot timer must not fire twice"
     );
+    let stats = actor_ref.stats();
+    assert_eq!(stats.messages_accepted, 0);
+    assert_eq!(stats.messages_received, 1);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
 struct CancelledTimer {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for CancelledTimer {
+impl Actor for CancelledTimer {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         let timer = ctx.send_after("cancelled", Duration::from_millis(20));
         timer.cancel();
         assert!(timer.is_cancelled());
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
@@ -110,291 +124,285 @@ async fn cancelling_send_after_prevents_delivery() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct StateTimeout {
+struct DefaultTimeout {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for StateTimeout {
+impl Actor for DefaultTimeout {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut slot = StateTimeoutSlot::new();
-        let _timer = slot.set(ctx.send_after_retractable("timeout", Duration::from_millis(20)));
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        assert!(!ctx.timeout_armed());
+        ctx.clear_timeout();
+        ctx.set_timeout("old", Duration::from_millis(20));
+        assert!(ctx.timeout_armed());
+        ctx.set_timeout("new", Duration::from_millis(40));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        assert!(!ctx.timeout_armed());
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn state_timeout_fires() {
+async fn setting_default_timeout_replaces_the_previous_entry() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || StateTimeout {
+    let (runtime, _) = build_runtime(move || DefaultTimeout {
         observed: observed_tx.clone(),
     });
     let handle = runtime.spawn();
 
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("state timeout fired"),
-        Some("timeout")
-    );
-
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[derive(Clone)]
-struct ReplacedStateTimeout {
-    observed: mpsc::UnboundedSender<&'static str>,
-}
-
-impl RawActor for ReplacedStateTimeout {
-    type Msg = &'static str;
-
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut slot = StateTimeoutSlot::new();
-        let old = slot.set(ctx.send_after_retractable("old", Duration::from_millis(20)));
-        let _new = slot.set(ctx.send_after_retractable("new", Duration::from_millis(40)));
-        assert!(old.is_cancelled());
-
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
-        Ok(Continue)
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn new_state_timeout_cancels_previous_timeout() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || ReplacedStateTimeout {
-        observed: observed_tx.clone(),
-    });
-    let handle = runtime.spawn();
-
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("replacement state timeout fired"),
-        Some("new")
-    );
-    assert!(
-        timeout(Duration::from_millis(40), observed_rx.recv())
-            .await
-            .is_err(),
-        "replaced state timeout delivered a stale message"
-    );
-
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[derive(Clone)]
-struct QueuedStateTimeoutReplacement {
-    started: mpsc::UnboundedSender<()>,
-    release: Arc<Notify>,
-    observed: mpsc::UnboundedSender<&'static str>,
-}
-
-impl RawActor for QueuedStateTimeoutReplacement {
-    type Msg = &'static str;
-
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut slot = StateTimeoutSlot::new();
-        slot.set(ctx.send_after_retractable("old", Duration::from_millis(20)));
-        self.started.send(()).expect("test receives start signal");
-        self.release.notified().await;
-
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-            if message == "replace" {
-                slot.set(ctx.send_after_retractable("new", Duration::from_millis(40)));
-            }
-        }
-        Ok(Continue)
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn replacing_state_timeout_filters_already_queued_message() {
-    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let release = Arc::new(Notify::new());
-    let (runtime, actor_ref) = build_runtime({
-        let release = release.clone();
-        move || QueuedStateTimeoutReplacement {
-            started: started_tx.clone(),
-            release: release.clone(),
-            observed: observed_tx.clone(),
-        }
-    });
-    let handle = runtime.spawn();
-    started_rx.recv().await.expect("actor started");
-
-    actor_ref.send("replace").await.expect("replacement queued");
-    advance(Duration::from_millis(20)).await;
-    for _ in 0..10 {
-        if actor_ref.stats().messages_accepted >= 2 {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    assert_eq!(actor_ref.stats().messages_accepted, 2);
-    release.notify_one();
-
-    assert_eq!(observed_rx.recv().await, Some("replace"));
     assert_eq!(
         timeout(Duration::from_secs(1), observed_rx.recv())
             .await
             .expect("replacement timeout fired"),
         Some("new")
     );
-    assert!(observed_rx.try_recv().is_err(), "stale timeout was handled");
+    assert!(observed_rx.try_recv().is_err());
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct ClearedStateTimeout {
-    observed: mpsc::UnboundedSender<&'static str>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OrderedMsg {
+    Clear,
+    Replace,
+    Old,
+    New,
 }
 
-impl RawActor for ClearedStateTimeout {
-    type Msg = &'static str;
+struct OrderedTimeout {
+    started: mpsc::UnboundedSender<()>,
+    release: Arc<Notify>,
+    observed: mpsc::UnboundedSender<OrderedMsg>,
+    replace: bool,
+}
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut slot = StateTimeoutSlot::new();
-        let timer = slot.set(ctx.send_after_retractable("stale", Duration::from_millis(20)));
-        slot.clear();
-        assert!(timer.is_cancelled());
-        assert!(!slot.is_armed());
+impl Actor for OrderedTimeout {
+    type Msg = OrderedMsg;
 
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        ctx.set_timeout(OrderedMsg::Old, Duration::from_millis(20));
+        self.started.send(()).expect("test receives start signal");
+        self.release.notified().await;
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
+        match message {
+            OrderedMsg::Clear => ctx.clear_timeout(),
+            OrderedMsg::Replace if self.replace => {
+                ctx.set_timeout(OrderedMsg::New, Duration::from_millis(40));
+            }
+            _ => {}
         }
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn clearing_state_timeout_prevents_delivery() {
+async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || ClearedStateTimeout {
-        observed: observed_tx.clone(),
+    let release = Arc::new(Notify::new());
+    let (runtime, actor_ref) = build_runtime({
+        let release = release.clone();
+        move || OrderedTimeout {
+            started: started_tx.clone(),
+            release: release.clone(),
+            observed: observed_tx.clone(),
+            replace: false,
+        }
     });
     let handle = runtime.spawn();
+    started_rx.recv().await.expect("actor started");
 
+    actor_ref
+        .send(OrderedMsg::Clear)
+        .await
+        .expect("clear queued");
+    advance(Duration::from_millis(20)).await;
+    release.notify_one();
+
+    assert_eq!(observed_rx.recv().await, Some(OrderedMsg::Clear));
     assert!(
         timeout(Duration::from_millis(60), observed_rx.recv())
             .await
             .is_err(),
-        "cleared state timeout delivered a message"
+        "elapsed timeout survived a pre-fire clear"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct SequentialStateTimeouts {
+#[tokio::test(start_paused = true)]
+async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let (runtime, actor_ref) = build_runtime({
+        let release = release.clone();
+        move || OrderedTimeout {
+            started: started_tx.clone(),
+            release: release.clone(),
+            observed: observed_tx.clone(),
+            replace: true,
+        }
+    });
+    let handle = runtime.spawn();
+    started_rx.recv().await.expect("actor started");
+
+    actor_ref
+        .send(OrderedMsg::Replace)
+        .await
+        .expect("replacement queued");
+    advance(Duration::from_millis(20)).await;
+    release.notify_one();
+
+    assert_eq!(observed_rx.recv().await, Some(OrderedMsg::Replace));
+    assert_eq!(
+        timeout(Duration::from_secs(1), observed_rx.recv())
+            .await
+            .expect("replacement fired"),
+        Some(OrderedMsg::New)
+    );
+    assert!(observed_rx.try_recv().is_err());
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+struct KeyedTimeouts {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for SequentialStateTimeouts {
+impl Actor for KeyedTimeouts {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut slot = StateTimeoutSlot::new();
-        slot.set(ctx.send_after_retractable("first", Duration::from_millis(20)));
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-            if message == "first" {
-                slot.set(ctx.send_after_retractable("second", Duration::from_millis(20)));
-            }
-        }
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        let first = TimerKey::new("first");
+        let second = TimerKey::new("second");
+        ctx.set_timeout_keyed(first, "stale", Duration::from_millis(10));
+        ctx.set_timeout_keyed(first, "first", Duration::from_millis(20));
+        ctx.set_timeout_keyed(second, "second", Duration::from_millis(40));
+        ctx.clear_timeout_keyed(TimerKey::new("absent"));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn state_timeout_can_be_rescheduled_after_firing() {
+async fn keyed_timeouts_replace_per_key_and_remain_independent() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || SequentialStateTimeouts {
+    let (runtime, _) = build_runtime(move || KeyedTimeouts {
         observed: observed_tx.clone(),
     });
     let handle = runtime.spawn();
 
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("first state timeout fired"),
-        Some("first")
-    );
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("second state timeout fired"),
-        Some("second")
-    );
+    assert_eq!(observed_rx.recv().await, Some("first"));
+    assert_eq!(observed_rx.recv().await, Some("second"));
+    assert!(observed_rx.try_recv().is_err());
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct ClearsEmptyStateTimeout {
+struct ElapsedCancellation {
+    timer: mpsc::UnboundedSender<CancellationHandle>,
+    release: Arc<Notify>,
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for ClearsEmptyStateTimeout {
+impl Actor for ElapsedCancellation {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let mut slot = StateTimeoutSlot::new();
-        slot.clear();
-        slot.set(ctx.send_after_retractable("timeout", Duration::from_millis(20)));
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        let timer = ctx.send_after("stale", Duration::from_millis(20));
+        self.timer.send(timer).expect("test receives timer");
+        self.release.notified().await;
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn clearing_empty_state_timeout_is_a_noop() {
+async fn send_after_can_be_cancelled_after_its_deadline_until_delivery() {
+    let (timer_tx, mut timer_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || ClearsEmptyStateTimeout {
-        observed: observed_tx.clone(),
+    let release = Arc::new(Notify::new());
+    let (runtime, _) = build_runtime({
+        let release = release.clone();
+        move || ElapsedCancellation {
+            timer: timer_tx.clone(),
+            release: release.clone(),
+            observed: observed_tx.clone(),
+        }
     });
     let handle = runtime.spawn();
 
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
+    let timer = timer_rx.recv().await.expect("timer armed");
+    advance(Duration::from_millis(20)).await;
+    timer.cancel();
+    release.notify_one();
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
             .await
-            .expect("state timeout fired after empty clear"),
-        Some("timeout")
+            .is_err(),
+        "cancelled elapsed timer was delivered"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct Interval {
+struct IntervalActor {
     observed: mpsc::UnboundedSender<usize>,
+    timer: Option<CancellationHandle>,
+    ticks: usize,
 }
 
-impl RawActor for Interval {
+impl Actor for IntervalActor {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let timer = ctx.interval((), Duration::from_millis(10));
-        let mut ticks = 0;
-        while ctx.recv().await.is_some() {
-            ticks += 1;
-            self.observed.send(ticks).expect("observer alive");
-            if ticks == 3 {
-                timer.cancel();
-            }
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        (): Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.ticks += 1;
+        self.observed.send(self.ticks).expect("observer alive");
+        if self.ticks == 3 {
+            self.timer.as_ref().expect("timer armed").cancel();
         }
         Ok(Continue)
     }
@@ -403,18 +411,15 @@ impl RawActor for Interval {
 #[tokio::test(start_paused = true)]
 async fn interval_repeats_until_cancelled() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || Interval {
+    let (runtime, _) = build_runtime(move || IntervalActor {
         observed: observed_tx.clone(),
+        timer: None,
+        ticks: 0,
     });
     let handle = runtime.spawn();
 
     for expected in 1..=3 {
-        assert_eq!(
-            timeout(Duration::from_secs(1), observed_rx.recv())
-                .await
-                .expect("interval ticked"),
-            Some(expected)
-        );
+        assert_eq!(observed_rx.recv().await, Some(expected));
     }
     assert!(
         timeout(Duration::from_millis(50), observed_rx.recv())
@@ -426,62 +431,100 @@ async fn interval_repeats_until_cancelled() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct ZeroInterval {
-    observed: mpsc::UnboundedSender<bool>,
+struct SlowInterval {
+    observed: mpsc::UnboundedSender<Duration>,
+    release: Arc<Notify>,
+    started: Option<Instant>,
+    ticks: usize,
+    timer: Option<CancellationHandle>,
 }
 
-impl RawActor for ZeroInterval {
+impl Actor for SlowInterval {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let timer = ctx.interval((), Duration::ZERO);
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        self.started = Some(Instant::now());
+        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        (): Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.ticks += 1;
         self.observed
-            .send(timer.is_cancelled())
+            .send(Instant::now().duration_since(self.started.expect("started")))
             .expect("observer alive");
-        while ctx.recv().await.is_some() {}
+        if self.ticks == 1 {
+            self.release.notified().await;
+        } else if self.ticks == 3 {
+            self.timer.as_ref().expect("timer armed").cancel();
+        }
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn zero_period_interval_returns_a_cancelled_handle() {
+async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || ZeroInterval {
-        observed: observed_tx.clone(),
+    let release = Arc::new(Notify::new());
+    let (runtime, _) = build_runtime({
+        let release = release.clone();
+        move || SlowInterval {
+            observed: observed_tx.clone(),
+            release: release.clone(),
+            started: None,
+            ticks: 0,
+            timer: None,
+        }
     });
     let handle = runtime.spawn();
 
-    assert_eq!(observed_rx.recv().await, Some(true));
+    assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(10)));
+    advance(Duration::from_millis(100)).await;
+    release.notify_one();
+    assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(110)));
+    assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(120)));
+    assert!(observed_rx.try_recv().is_err(), "missed ticks piled up");
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
 struct RestartingTimer {
     runs: Arc<AtomicUsize>,
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for RestartingTimer {
+impl Actor for RestartingTimer {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            let _old_timer = ctx.send_after("old", Duration::from_millis(150));
+            ctx.set_timeout("old", Duration::from_millis(150));
+            ctx.continue_with("crash");
+        } else {
+            ctx.set_timeout("new", Duration::from_millis(10));
+        }
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        if message == "crash" {
             return Err::<_, BoxError>(Box::new(io::Error::other("restart")));
         }
-
-        let _new_timer = ctx.send_after("new", Duration::from_millis(10));
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn restart_cancels_previous_incarnations_timers() {
+async fn restart_drops_the_previous_incarnations_timer_table() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let runs = Arc::new(AtomicUsize::new(0));
     let (runtime, _) = build_runtime(move || RestartingTimer {
@@ -490,182 +533,30 @@ async fn restart_cancels_previous_incarnations_timers() {
     });
     let handle = runtime.spawn();
 
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("new incarnation timer fired"),
-        Some("new")
-    );
+    assert_eq!(observed_rx.recv().await, Some("new"));
     assert!(
         timeout(Duration::from_millis(200), observed_rx.recv())
             .await
             .is_err(),
-        "a previous incarnation delivered a stale timer message"
+        "a previous incarnation delivered a stale timer"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
-struct RestartingStateTimeout {
-    runs: Arc<AtomicUsize>,
-    observed: mpsc::UnboundedSender<&'static str>,
-}
-
-impl RawActor for RestartingStateTimeout {
-    type Msg = &'static str;
-
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            let mut slot = StateTimeoutSlot::new();
-            let _old = slot.set(ctx.send_after_retractable("old", Duration::from_millis(150)));
-            return Err::<_, BoxError>(Box::new(io::Error::other("restart")));
-        }
-
-        let mut slot = StateTimeoutSlot::new();
-        let _new = slot.set(ctx.send_after_retractable("new", Duration::from_millis(10)));
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
-        Ok(Continue)
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn restart_cancels_previous_incarnations_state_timeout() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let runs = Arc::new(AtomicUsize::new(0));
-    let (runtime, _) = build_runtime(move || RestartingStateTimeout {
-        runs: runs.clone(),
-        observed: observed_tx.clone(),
-    });
-    let handle = runtime.spawn();
-
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("new incarnation state timeout fired"),
-        Some("new")
-    );
-    assert!(
-        timeout(Duration::from_millis(200), observed_rx.recv())
-            .await
-            .is_err(),
-        "a previous incarnation delivered a stale state timeout message"
-    );
-
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BackpressureMsg {
-    Occupied,
-    Tick,
-}
-
-#[derive(Clone)]
-struct BackpressureInterval {
-    ready: Arc<Notify>,
-    release: Arc<Notify>,
-    observed: mpsc::UnboundedSender<Vec<(BackpressureMsg, Duration)>>,
-}
-
-impl RawActor for BackpressureInterval {
-    type Msg = BackpressureMsg;
-
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let started = Instant::now();
-        let _timer = ctx.interval(BackpressureMsg::Tick, Duration::from_millis(10));
-        self.ready.notify_one();
-        self.release.notified().await;
-
-        let mut messages = Vec::new();
-        for _ in 0..4 {
-            let message = ctx.recv().await.expect("message before shutdown");
-            messages.push((message, Instant::now().duration_since(started)));
-        }
-        self.observed.send(messages).expect("observer alive");
-
-        while ctx.recv().await.is_some() {}
-        Ok(Continue)
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn interval_waits_for_mailbox_capacity_and_skips_missed_ticks() {
-    let ready = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-
-    let mut builder = GraphBuilder::new();
-    builder.mailbox_capacity(1);
-    let actor_ref = builder.actor("timer", {
-        let ready = ready.clone();
-        let release = release.clone();
-        move || BackpressureInterval {
-            ready: ready.clone(),
-            release: release.clone(),
-            observed: observed_tx.clone(),
-        }
-    });
-    let graph = builder.build().expect("valid graph");
-    let runtime = Runtime::builder()
-        .graph(graph)
-        .strategy(Strategy::OneForOne)
-        .build()
-        .expect("runtime builds");
-    let handle = runtime.spawn();
-
-    ready.notified().await;
-    actor_ref
-        .send(BackpressureMsg::Occupied)
-        .await
-        .expect("mailbox filled");
-    advance(Duration::from_millis(100)).await;
-    tokio::task::yield_now().await;
-
-    let stats = actor_ref.stats();
-    assert_eq!(stats.mailbox_depth, 1);
-    assert_eq!(stats.messages_accepted, 1, "timer must await capacity");
-
-    release.notify_one();
-    let messages = observed_rx.recv().await.expect("actor reported messages");
-    assert_eq!(
-        messages
-            .iter()
-            .map(|(message, _)| *message)
-            .collect::<Vec<_>>(),
-        vec![
-            BackpressureMsg::Occupied,
-            BackpressureMsg::Tick,
-            BackpressureMsg::Tick,
-            BackpressureMsg::Tick,
-        ]
-    );
-    assert_eq!(messages[0].1, Duration::from_millis(100));
-    assert_eq!(messages[1].1, Duration::from_millis(100));
-    assert_eq!(
-        messages[2].1,
-        Duration::from_millis(110),
-        "missed ticks must not burst after capacity becomes available"
-    );
-    assert_eq!(messages[3].1, Duration::from_millis(120));
-
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[derive(Clone)]
 struct Sink {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl RawActor for Sink {
+impl Actor for Sink {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        while let Some(message) = ctx.recv().await {
-            self.observed.send(message).expect("observer alive");
-        }
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
@@ -695,23 +586,31 @@ where
     (runtime, scheduler_ref, observed_rx)
 }
 
-#[derive(Clone)]
 struct CrossScheduler {
     target: ActorRef<&'static str>,
 }
 
-impl RawActor for CrossScheduler {
+impl Actor for CrossScheduler {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let _timer = ctx.send_after_to(&self.target, "cross", Duration::from_millis(20));
-        while ctx.recv().await.is_some() {}
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        let lifetime = ctx.lifetime();
+        let _timer =
+            timers::send_after_to(&lifetime, &self.target, "cross", Duration::from_millis(20));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        (): Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn send_after_to_delivers_to_the_target_actor() {
+async fn send_after_to_delivers_through_the_public_target_ref() {
     let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
         move || CrossScheduler {
             target: target.clone(),
@@ -719,45 +618,49 @@ async fn send_after_to_delivers_to_the_target_actor() {
     });
     let handle = runtime.spawn();
 
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("cross-actor timer fired"),
-        Some("cross")
-    );
+    assert_eq!(observed_rx.recv().await, Some("cross"));
     assert!(
         timeout(Duration::from_millis(60), observed_rx.recv())
             .await
             .is_err(),
-        "one-shot cross-actor timer must not fire twice"
+        "one-shot cross-actor timer fired twice"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
 struct RestartingCrossScheduler {
     target: ActorRef<&'static str>,
     runs: Arc<AtomicUsize>,
 }
 
-impl RawActor for RestartingCrossScheduler {
+impl Actor for RestartingCrossScheduler {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        let lifetime = ctx.lifetime();
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            let _old = ctx.send_after_to(&self.target, "old", Duration::from_millis(150));
-            return Err::<_, BoxError>(Box::new(io::Error::other("restart")));
+            let _old =
+                timers::send_after_to(&lifetime, &self.target, "old", Duration::from_millis(150));
+            ctx.continue_with(());
+        } else {
+            let _new =
+                timers::send_after_to(&lifetime, &self.target, "new", Duration::from_millis(10));
         }
-
-        let _new = ctx.send_after_to(&self.target, "new", Duration::from_millis(10));
-        while ctx.recv().await.is_some() {}
         Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        (): Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        Err::<_, BoxError>(Box::new(io::Error::other("restart")))
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn restart_cancels_previous_incarnations_cross_actor_timer() {
+async fn restart_ends_cross_actor_timer_lifetime() {
     let runs = Arc::new(AtomicUsize::new(0));
     let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
         move || RestartingCrossScheduler {
@@ -767,35 +670,41 @@ async fn restart_cancels_previous_incarnations_cross_actor_timer() {
     });
     let handle = runtime.spawn();
 
-    assert_eq!(
-        timeout(Duration::from_secs(1), observed_rx.recv())
-            .await
-            .expect("new incarnation cross-actor timer fired"),
-        Some("new")
-    );
+    assert_eq!(observed_rx.recv().await, Some("new"));
     assert!(
         timeout(Duration::from_millis(200), observed_rx.recv())
             .await
             .is_err(),
-        "a previous scheduler incarnation delivered a stale cross-actor message"
+        "a previous scheduler incarnation delivered a stale message"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-#[derive(Clone)]
 struct CrossInterval {
     target: ActorRef<&'static str>,
+    timer: Option<CancellationHandle>,
 }
 
-impl RawActor for CrossInterval {
+impl Actor for CrossInterval {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let timer = ctx.interval_to(&self.target, "tick", Duration::from_millis(10));
-        while ctx.recv().await.is_some() {
-            timer.cancel();
-        }
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        self.timer = Some(timers::interval_to(
+            &ctx.lifetime(),
+            &self.target,
+            "tick",
+            Duration::from_millis(10),
+        ));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        (): Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.timer.as_ref().expect("timer armed").cancel();
         Ok(Continue)
     }
 }
@@ -805,17 +714,13 @@ async fn interval_to_repeats_until_cancelled() {
     let (runtime, scheduler_ref, mut observed_rx) = build_cross_runtime(|target| {
         move || CrossInterval {
             target: target.clone(),
+            timer: None,
         }
     });
     let handle = runtime.spawn();
 
     for _ in 1..=3 {
-        assert_eq!(
-            timeout(Duration::from_secs(1), observed_rx.recv())
-                .await
-                .expect("cross-actor interval ticked"),
-            Some("tick")
-        );
+        assert_eq!(observed_rx.recv().await, Some("tick"));
     }
     scheduler_ref.send(()).await.expect("scheduler alive");
     assert!(
@@ -826,4 +731,13 @@ async fn interval_to_repeats_until_cancelled() {
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn public_cancellation_handle_can_be_awaited() {
+    let cancellation = CancellationHandle::new();
+    let waiter = cancellation.clone();
+    let joined = tokio::spawn(async move { waiter.cancelled().await });
+    cancellation.cancel();
+    joined.await.expect("waiter completed");
 }

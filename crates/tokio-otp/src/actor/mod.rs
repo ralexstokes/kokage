@@ -18,10 +18,10 @@ mod raw;
 
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
-pub use cancellation::CancellationHandle;
+pub use cancellation::{CancellationHandle, Lifetime};
 pub use context::{
     ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, StartContext,
-    StartingScope, StateTimeoutSlot, StopContext, StoppingScope,
+    StartingScope, StopContext, StoppingScope, TimerKey,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError,

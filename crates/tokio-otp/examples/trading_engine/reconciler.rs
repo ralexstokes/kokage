@@ -1,5 +1,5 @@
 use std::{collections::HashMap, time::Duration};
-use tokio_otp::{LiveContext, StateTimeoutSlot};
+use tokio_otp::LiveContext;
 
 use tokio::time::Instant;
 use tokio_otp::prelude::*;
@@ -33,7 +33,6 @@ pub struct Reconciler {
     sessions: Vec<(VenueId, ExchangeSim)>,
     venues: HashMap<VenueId, VenueState>,
     down_reasons: HashMap<VenueId, Vec<DownReason>>,
-    stale_sweep: StateTimeoutSlot,
 }
 
 impl Reconciler {
@@ -51,7 +50,6 @@ impl Reconciler {
             sessions,
             venues,
             down_reasons: HashMap::new(),
-            stale_sweep: StateTimeoutSlot::new(),
         }
     }
 
@@ -68,7 +66,7 @@ impl Reconciler {
         }
     }
 
-    fn rearm(&mut self, ctx: &impl LiveContext<ReconcilerMsg>) {
+    fn rearm(&mut self, ctx: &mut impl LiveContext<ReconcilerMsg>) {
         let now = Instant::now();
         let earliest = self
             .venues
@@ -77,12 +75,12 @@ impl Reconciler {
             .filter_map(|state| state.last_seen.map(|seen| seen + STALE_AFTER))
             .min();
         if let Some(deadline) = earliest {
-            self.stale_sweep.set(ctx.send_after_retractable(
+            ctx.set_timeout(
                 ReconcilerMsg::StaleSweep,
                 deadline.saturating_duration_since(now),
-            ));
+            );
         } else {
-            self.stale_sweep.clear();
+            ctx.clear_timeout();
         }
     }
 }

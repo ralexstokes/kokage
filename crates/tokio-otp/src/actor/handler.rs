@@ -1,9 +1,14 @@
 use std::future::Future;
 
 use crate::actor::{
-    context::{ActorContext, MessageContext, StartContext, StopContext},
+    context::{ActorContext, MessageContext, StartContext, StopContext, TimerWake},
     raw::{ActorResult, BoxError, Flow, RawActor},
 };
+
+enum LoopEvent<M> {
+    Message(Option<M>),
+    Timer(TimerWake),
+}
 
 /// How the provided [`Actor`] receive loop treats messages still
 /// queued when shutdown is requested.
@@ -228,34 +233,81 @@ impl<H: Actor> RawActor for H {
         ctx.mark_ready();
 
         let mut stopping = start_flow == Flow::Stop;
-        while !stopping {
+        'receive: while !stopping {
             // External shutdown has priority over actor-local continuations.
             // In particular, a continuation queued by an in-flight handler
             // must not run after shutdown was requested.
             if ctx.shutdown.is_cancelled() {
                 break;
             }
-            let message = if let Some(message) = ctx.take_continuation() {
-                Some(message)
+            let event = if let Some(message) = ctx.take_continuation() {
+                LoopEvent::Message(Some(message))
+            } else if let Some(timer) = ctx.next_timer_wake() {
+                tokio::select! {
+                    biased;
+                    _ = ctx.shutdown.cancelled() => {
+                        break;
+                    }
+                    () = tokio::time::sleep_until(timer.deadline) => LoopEvent::Timer(timer),
+                    message = ctx.mailbox.recv() => LoopEvent::Message(message),
+                }
             } else {
                 tokio::select! {
                     biased;
                     _ = ctx.shutdown.cancelled() => {
                         break;
                     }
-                    message = ctx.mailbox.recv() => message,
+                    message = ctx.mailbox.recv() => LoopEvent::Message(message),
                 }
             };
 
-            let Some(message) = message else {
-                break;
-            };
-            ctx.myself.record_received();
-            ctx.observability.emit_message_received(&ctx.id);
-            stopping = self
-                .handle(message, &mut MessageContext::new(&mut ctx))
-                .await?
-                == Flow::Stop;
+            match event {
+                LoopEvent::Message(Some(message)) => {
+                    ctx.record_received();
+                    stopping = self
+                        .handle(message, &mut MessageContext::new(&mut ctx))
+                        .await?
+                        == Flow::Stop;
+                }
+                LoopEvent::Message(None) => break,
+                LoopEvent::Timer(timer) => {
+                    // Preserve mailbox arrival order at fire time: messages
+                    // already queued get one bounded turn to retract or
+                    // replace the elapsed timer. Continuations retain their
+                    // priority and do not consume the bounded mailbox prefix.
+                    let mut queued_before_fire = ctx.mailbox_depth();
+                    loop {
+                        if ctx.shutdown.is_cancelled() {
+                            break 'receive;
+                        }
+                        let message = if let Some(message) = ctx.take_continuation() {
+                            Some(message)
+                        } else if queued_before_fire > 0 {
+                            queued_before_fire -= 1;
+                            ctx.mailbox.try_recv().ok()
+                        } else {
+                            None
+                        };
+                        let Some(message) = message else { break };
+                        ctx.record_received();
+                        if self
+                            .handle(message, &mut MessageContext::new(&mut ctx))
+                            .await?
+                            == Flow::Stop
+                        {
+                            stopping = true;
+                            break;
+                        }
+                    }
+                    if !stopping && let Some(message) = ctx.take_fired_timer(timer) {
+                        ctx.record_received();
+                        stopping = self
+                            .handle(message, &mut MessageContext::new(&mut ctx))
+                            .await?
+                            == Flow::Stop;
+                    }
+                }
+            }
         }
 
         ctx.close_external_intake();
@@ -288,8 +340,7 @@ impl<H: Actor> RawActor for H {
                     }
                 };
                 let Some(message) = message else { break };
-                ctx.myself.record_received();
-                ctx.observability.emit_message_received(&ctx.id);
+                ctx.record_received();
                 // Once stopping begins, flow values do not change the drain
                 // decision. Continuations queued by drain handlers are left
                 // for the context to drop with the incarnation, and reported

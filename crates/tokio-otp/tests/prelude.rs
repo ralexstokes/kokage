@@ -9,8 +9,8 @@ mod coverage_probe {
         use tokio_otp::prelude::{
             Actor, ActorOptions, ActorRef, ActorResult, BoxError, CallError, CancellationHandle,
             CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuilder,
-            MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor, Reply, SendError,
-            Stop, Supervision,
+            Lifetime, MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor, Reply,
+            SendError, Stop, Supervision, TimerKey,
         };
     }
 

@@ -9,7 +9,6 @@ use std::{
 
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_supervisor::RestartPolicy;
-use tokio_util::sync::CancellationToken;
 
 use crate::actor::{
     error::SendError,
@@ -45,14 +44,14 @@ pub struct ActorStats {
     /// identical local identities in different subtrees. Standalone actor and
     /// graph stats have no supervisor membership and report `None`.
     pub lineage: Option<u64>,
-    /// Messages removed from the mailbox by the actor for handling.
+    /// Messages delivered to the actor for handling.
     ///
-    /// This can be lower than [`messages_accepted`](Self::messages_accepted):
-    /// accepted messages may be conflated before the actor receives them or
-    /// discarded when an incarnation stops, and a queued state timeout is
-    /// suppressed if its slot is replaced or cleared before receipt.
+    /// This includes actor-local continuations and timer events, which bypass
+    /// the mailbox. It can also be lower than
+    /// [`messages_accepted`](Self::messages_accepted): accepted messages may be
+    /// conflated before receipt or discarded when an incarnation stops.
     pub messages_received: u64,
-    /// Messages accepted into the mailbox by `send` or `try_send`.
+    /// External messages accepted into the mailbox by `send` or `try_send`.
     ///
     /// Acceptance does not mean the actor handled the message. In particular,
     /// a conflating mailbox counts every successful send here and separately
@@ -245,7 +244,7 @@ impl<M> fmt::Debug for MailboxMode<M> {
 
 pub(crate) enum MailboxReceiver<M> {
     Queue {
-        receiver: mpsc::Receiver<MailboxMessage<M>>,
+        receiver: mpsc::Receiver<M>,
         accepting_external: Arc<AtomicBool>,
     },
     Conflating(ConflatingReceiver<M>),
@@ -253,26 +252,23 @@ pub(crate) enum MailboxReceiver<M> {
 
 impl<M> MailboxReceiver<M> {
     pub(crate) async fn recv(&mut self) -> Option<M> {
-        loop {
-            let message = match self {
-                Self::Queue { receiver, .. } => receiver.recv().await,
-                Self::Conflating(receiver) => receiver.recv().await,
-            }?;
-            if let Some(message) = message.into_current() {
-                return Some(message);
-            }
+        match self {
+            Self::Queue { receiver, .. } => receiver.recv().await,
+            Self::Conflating(receiver) => receiver.recv().await,
         }
     }
 
     pub(crate) fn try_recv(&mut self) -> Result<M, mpsc::error::TryRecvError> {
-        loop {
-            let message = match self {
-                Self::Queue { receiver, .. } => receiver.try_recv(),
-                Self::Conflating(receiver) => receiver.try_recv(),
-            }?;
-            if let Some(message) = message.into_current() {
-                return Ok(message);
-            }
+        match self {
+            Self::Queue { receiver, .. } => receiver.try_recv(),
+            Self::Conflating(receiver) => receiver.try_recv(),
+        }
+    }
+
+    pub(crate) fn usage(&self) -> (usize, usize) {
+        match self {
+            Self::Queue { receiver, .. } => (receiver.len(), receiver.max_capacity()),
+            Self::Conflating(receiver) => receiver.usage(),
         }
     }
 
@@ -327,47 +323,6 @@ pub(crate) enum SendOutcome<M> {
     Closed(M),
 }
 
-impl<M> SendOutcome<M> {
-    fn map_closed<T>(self, map: impl FnOnce(M) -> T) -> SendOutcome<T> {
-        match self {
-            Self::Accepted { conflated } => SendOutcome::Accepted { conflated },
-            Self::Closed(message) => SendOutcome::Closed(map(message)),
-        }
-    }
-}
-
-pub(crate) enum MailboxMessage<M> {
-    Message(M),
-    StateTimeout {
-        message: M,
-        cancellation: CancellationToken,
-    },
-}
-
-impl<M> MailboxMessage<M> {
-    fn message(&self) -> &M {
-        match self {
-            Self::Message(message) | Self::StateTimeout { message, .. } => message,
-        }
-    }
-
-    fn into_message(self) -> M {
-        match self {
-            Self::Message(message) | Self::StateTimeout { message, .. } => message,
-        }
-    }
-
-    fn into_current(self) -> Option<M> {
-        match self {
-            Self::Message(message) => Some(message),
-            Self::StateTimeout {
-                message,
-                cancellation,
-            } => (!cancellation.is_cancelled()).then_some(message),
-        }
-    }
-}
-
 /// Sender for one bound mailbox instance of an actor.
 pub(crate) struct MailboxRef<M> {
     actor_id: Arc<str>,
@@ -401,32 +356,10 @@ impl<M> MailboxRef<M> {
     /// Sends, returning the message on failure so callers can retry after a
     /// rebind.
     pub(crate) async fn send_retaining(&self, message: M) -> SendOutcome<M> {
-        self.send_mailbox_message_retaining(MailboxMessage::Message(message), false)
-            .await
-            .map_closed(MailboxMessage::into_message)
+        self.send_message_retaining(message, false).await
     }
 
-    pub(crate) async fn send_state_timeout_retaining(
-        &self,
-        message: M,
-        cancellation: CancellationToken,
-    ) -> SendOutcome<M> {
-        self.send_mailbox_message_retaining(
-            MailboxMessage::StateTimeout {
-                message,
-                cancellation,
-            },
-            false,
-        )
-        .await
-        .map_closed(MailboxMessage::into_message)
-    }
-
-    async fn send_mailbox_message_retaining(
-        &self,
-        message: MailboxMessage<M>,
-        internal: bool,
-    ) -> SendOutcome<MailboxMessage<M>> {
+    async fn send_message_retaining(&self, message: M, internal: bool) -> SendOutcome<M> {
         match &self.sender {
             MailboxSender::Queue {
                 sender,
@@ -457,9 +390,7 @@ impl<M> MailboxRef<M> {
     }
 
     pub(crate) async fn send_internal_retaining(&self, message: M) -> SendOutcome<M> {
-        self.send_mailbox_message_retaining(MailboxMessage::Message(message), true)
-            .await
-            .map_closed(MailboxMessage::into_message)
+        self.send_message_retaining(message, true).await
     }
 
     pub(crate) fn try_send(&self, message: M) -> Result<u64, SendError> {
@@ -475,7 +406,7 @@ impl<M> MailboxRef<M> {
                 }
                 match sender.try_reserve() {
                     Ok(permit) if accepting_external.load(Ordering::Acquire) => {
-                        permit.send(MailboxMessage::Message(message));
+                        permit.send(message);
                         Ok(0)
                     }
                     Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -488,14 +419,12 @@ impl<M> MailboxRef<M> {
                     }),
                 }
             }
-            MailboxSender::Conflating(sender) => {
-                match sender.send(MailboxMessage::Message(message), false) {
-                    SendOutcome::Accepted { conflated } => Ok(conflated),
-                    SendOutcome::Closed(_) => Err(SendError::MailboxClosed {
-                        actor_id: self.actor_id.to_string(),
-                    }),
-                }
-            }
+            MailboxSender::Conflating(sender) => match sender.send(message, false) {
+                SendOutcome::Accepted { conflated } => Ok(conflated),
+                SendOutcome::Closed(_) => Err(SendError::MailboxClosed {
+                    actor_id: self.actor_id.to_string(),
+                }),
+            },
         }
     }
 
@@ -514,7 +443,7 @@ impl<M> MailboxRef<M> {
 
 pub(crate) enum MailboxSender<M> {
     Queue {
-        sender: mpsc::Sender<MailboxMessage<M>>,
+        sender: mpsc::Sender<M>,
         accepting_external: Arc<AtomicBool>,
     },
     Conflating(ConflatingSender<M>),
@@ -560,7 +489,7 @@ impl<M> MailboxSender<M> {
 type KeyMatcher<M> = Arc<dyn Fn(&M, &M) -> bool + Send + Sync>;
 
 struct ConflatingState<M> {
-    messages: VecDeque<MailboxMessage<M>>,
+    messages: VecDeque<M>,
     capacity: usize,
     key_matches: Option<KeyMatcher<M>>,
     sender_count: usize,
@@ -586,7 +515,7 @@ pub(crate) struct ConflatingSender<M> {
 }
 
 impl<M> ConflatingSender<M> {
-    fn send(&self, message: MailboxMessage<M>, internal: bool) -> SendOutcome<MailboxMessage<M>> {
+    fn send(&self, message: M, internal: bool) -> SendOutcome<M> {
         let mut state = self.shared.lock();
         if state.receiver_closed || (!internal && !state.accepting_external) {
             return SendOutcome::Closed(message);
@@ -596,7 +525,7 @@ impl<M> ConflatingSender<M> {
             if let Some(index) = state
                 .messages
                 .iter()
-                .position(|queued| key_matches(queued.message(), message.message()))
+                .position(|queued| key_matches(queued, &message))
             {
                 state.messages[index] = message;
                 1
@@ -658,7 +587,7 @@ pub(crate) struct ConflatingReceiver<M> {
 }
 
 impl<M> ConflatingReceiver<M> {
-    async fn recv(&mut self) -> Option<MailboxMessage<M>> {
+    async fn recv(&mut self) -> Option<M> {
         loop {
             let notified = self.shared.notify.notified();
             {
@@ -674,7 +603,7 @@ impl<M> ConflatingReceiver<M> {
         }
     }
 
-    fn try_recv(&mut self) -> Result<MailboxMessage<M>, mpsc::error::TryRecvError> {
+    fn try_recv(&mut self) -> Result<M, mpsc::error::TryRecvError> {
         let mut state = self.shared.lock();
         if let Some(message) = state.messages.pop_front() {
             Ok(message)
@@ -687,6 +616,11 @@ impl<M> ConflatingReceiver<M> {
 
     fn close_external(&mut self) {
         self.shared.lock().accepting_external = false;
+    }
+
+    fn usage(&self) -> (usize, usize) {
+        let state = self.shared.lock();
+        (state.messages.len(), state.capacity)
     }
 }
 

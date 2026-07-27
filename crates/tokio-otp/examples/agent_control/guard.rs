@@ -47,7 +47,11 @@ impl Guard {
         }
     }
 
-    async fn set_paused(&mut self, paused: bool, ctx: &impl LiveContext<GuardMsg>) -> ActorResult {
+    async fn set_paused(
+        &mut self,
+        paused: bool,
+        ctx: &mut impl LiveContext<GuardMsg>,
+    ) -> ActorResult {
         if self.report.paused == paused {
             return Ok(Continue);
         }
