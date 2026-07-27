@@ -11,7 +11,7 @@ use std::{
 
 use tokio::{
     sync::{Notify, oneshot, watch},
-    time::{Instant, MissedTickBehavior, timeout},
+    time::{Instant, timeout},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +22,7 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, MailboxReceiver, MailboxRef,
         MessageSizeObserver, SendOutcome,
     },
-    cancellation::CancellationHandle,
+    cancellation::{CancellationHandle, Lifetime},
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TryRecvError},
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
@@ -405,27 +405,6 @@ impl<M> ActorRef<M> {
             self.record_message_size(message_size);
         }
     }
-
-    async fn post_state_timeout_to_incarnation(
-        &self,
-        mailbox: MailboxRef<M>,
-        message: M,
-        cancellation: CancellationToken,
-    ) {
-        let message_size = self
-            .message_size
-            .as_ref()
-            .map(|observer| observer.size_hint(&message));
-        if let SendOutcome::Accepted { conflated } = mailbox
-            .send_state_timeout_retaining(message, cancellation)
-            .await
-        {
-            self.observe_send(MessageOperation::Send, None);
-            self.stats.record_send(true);
-            self.stats.record_conflated(conflated);
-            self.record_message_size(message_size);
-        }
-    }
 }
 
 /// One-shot reply channel carried inside a request message.
@@ -476,13 +455,192 @@ impl<T> fmt::Debug for Reply<T> {
     }
 }
 
+/// Stable name for one keyed actor-local timeout slot.
+///
+/// Keys are static protocol vocabulary: setting the same key replaces the
+/// existing timeout in that slot, while different keys remain independent.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct TimerKey(&'static str);
+
+impl TimerKey {
+    /// Creates a timer key.
+    pub const fn new(name: &'static str) -> Self {
+        Self(name)
+    }
+
+    /// Returns the key's static name.
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl From<&'static str> for TimerKey {
+    fn from(name: &'static str) -> Self {
+        Self::new(name)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TimerWake {
+    pub(crate) id: u64,
+    pub(crate) deadline: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimerSlot {
+    Default,
+    Keyed(TimerKey),
+    Anonymous,
+}
+
+struct TimerEntry<M> {
+    id: u64,
+    slot: TimerSlot,
+    deadline: Instant,
+    message: M,
+    cancellation: Option<CancellationToken>,
+    repeat: Option<TimerRepeat<M>>,
+}
+
+type TimerRepeat<M> = (Duration, fn(&M) -> M);
+
+/// Far-future cap for deadlines that would otherwise overflow, mirroring the
+/// horizon tokio's own timer wheel saturates to.
+const FAR_FUTURE: Duration = Duration::from_secs(86400 * 365 * 30);
+
+/// Deadline `delay` from now, saturating instead of panicking: `Instant + Duration`
+/// panics on overflow, and `Duration::MAX` is a plausible "never" sentinel.
+pub(crate) fn deadline_after(delay: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(delay).unwrap_or_else(|| now + FAR_FUTURE)
+}
+
+pub(crate) struct TimerTable<M> {
+    entries: Vec<TimerEntry<M>>,
+    next_id: u64,
+}
+
+impl<M> Default for TimerTable<M> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            next_id: 1,
+        }
+    }
+}
+
+impl<M> TimerTable<M> {
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        id
+    }
+
+    fn insert(
+        &mut self,
+        slot: TimerSlot,
+        message: M,
+        delay: Duration,
+        cancellation: Option<CancellationToken>,
+        repeat: Option<TimerRepeat<M>>,
+    ) {
+        if slot != TimerSlot::Anonymous
+            && let Some(index) = self.entries.iter().position(|entry| entry.slot == slot)
+        {
+            self.entries.swap_remove(index);
+        }
+        let id = self.next_id();
+        self.entries.push(TimerEntry {
+            id,
+            slot,
+            deadline: deadline_after(delay),
+            message,
+            cancellation,
+            repeat,
+        });
+    }
+
+    fn clear(&mut self, slot: TimerSlot) {
+        if let Some(index) = self.entries.iter().position(|entry| entry.slot == slot) {
+            self.entries.swap_remove(index);
+        }
+    }
+
+    fn is_armed(&self, slot: TimerSlot) -> bool {
+        self.entries.iter().any(|entry| entry.slot == slot)
+    }
+
+    fn next_wake(&mut self) -> Option<TimerWake> {
+        self.entries.retain(|entry| {
+            !entry
+                .cancellation
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+        });
+        self.entries
+            .iter()
+            .min_by_key(|entry| entry.deadline)
+            .map(|entry| TimerWake {
+                id: entry.id,
+                deadline: entry.deadline,
+            })
+    }
+
+    fn take_fired(&mut self, wake: TimerWake) -> Option<M> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.id == wake.id && entry.deadline == wake.deadline)?;
+        if self.entries[index].deadline > Instant::now() {
+            return None;
+        }
+        if self.entries[index]
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            self.entries.swap_remove(index);
+            return None;
+        }
+        if let Some((period, clone_message)) = self.entries[index].repeat {
+            let message = clone_message(&self.entries[index].message);
+            self.entries[index].deadline = deadline_after(period);
+            Some(message)
+        } else {
+            Some(self.entries.swap_remove(index).message)
+        }
+    }
+}
+
+fn clone_message<M: Clone>(message: &M) -> M {
+    message.clone()
+}
+
+pub(crate) struct ActorLifetime(CancellationToken);
+
+impl ActorLifetime {
+    pub(crate) fn new() -> Self {
+        Self(CancellationToken::new())
+    }
+
+    fn observe(&self) -> Lifetime {
+        Lifetime::from_token(self.0.clone())
+    }
+}
+
+impl Drop for ActorLifetime {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 /// Runtime context passed to a [`RawActor`](crate::RawActor) each time the
 /// graph is run.
 ///
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
 /// the incoming [`mailbox`](Self::recv) and explicit
 /// [`mark_ready`](Self::mark_ready) alongside the ambient capabilities —
-/// message [`timers`](Self::send_after), a bounded
+/// a bounded
 /// [`offload`](Self::offload) primitive for asynchronous postbacks, a
 /// [`shutdown_token`](Self::shutdown_token) for cooperative shutdown, and
 /// [`run_blocking`](Self::run_blocking) for blocking work.
@@ -500,7 +658,8 @@ pub struct ActorContext<M> {
     pub(crate) incarnation: MailboxRef<M>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) observability: GraphObservability,
-    pub(crate) timers: ActorTimers,
+    pub(crate) timers: TimerTable<M>,
+    pub(crate) lifetime: ActorLifetime,
     pub(crate) monitors: Arc<ActorMonitors>,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
@@ -528,6 +687,23 @@ impl<M: Send + 'static> ActorContext<M> {
 
     pub(crate) fn push_continuation(&mut self, message: M) {
         self.continuations.push_back(message);
+    }
+
+    pub(crate) fn next_timer_wake(&mut self) -> Option<TimerWake> {
+        self.timers.next_wake()
+    }
+
+    pub(crate) fn take_fired_timer(&mut self, wake: TimerWake) -> Option<M> {
+        self.timers.take_fired(wake)
+    }
+
+    pub(crate) fn mailbox_depth(&self) -> usize {
+        self.mailbox.usage().0
+    }
+
+    pub(crate) fn record_received(&self) {
+        self.myself.record_received();
+        self.observability.emit_message_received(&self.id);
     }
 
     /// Runs a bounded future and substitutes `fallback` when its deadline
@@ -683,6 +859,11 @@ impl<M: Send + 'static> ActorContext<M> {
         self.shutdown.is_cancelled()
     }
 
+    /// Returns an observe-only view of this actor incarnation's lifetime.
+    pub fn lifetime(&self) -> Lifetime {
+        self.lifetime.observe()
+    }
+
     /// Returns a sender targeting this actor's own mailbox.
     pub fn myself(&self) -> ActorRef<M> {
         self.myself.clone()
@@ -729,7 +910,7 @@ impl<M: Send + 'static> ActorContext<M> {
         F: FnMut(MonitorEvent) -> M + Send + 'static,
     {
         let (cancellation, install) = self.monitors.register(&target.monitors);
-        let monitor = CancellationHandle::new(cancellation.clone());
+        let monitor = CancellationHandle::from_token(cancellation.clone());
         if !install {
             return monitor;
         }
@@ -769,147 +950,6 @@ impl<M: Send + 'static> ActorContext<M> {
         });
 
         monitor
-    }
-
-    /// Sends `message` to this actor after `delay` has elapsed.
-    ///
-    /// Delivery uses the actor's ordinary mailbox policy: FIFO queues wait for
-    /// capacity, while conflating mailboxes replace stale unread state. The
-    /// timer is cancelled automatically if this actor incarnation stops or
-    /// restarts. To schedule delayed delivery to another actor, use
-    /// [`send_after_to`](Self::send_after_to).
-    pub fn send_after(&self, message: M, delay: Duration) -> CancellationHandle {
-        self.send_after_to(&self.myself, message, delay)
-    }
-
-    /// Sends `message` to `target` after `delay` has elapsed.
-    ///
-    /// The timer is bound to the lifecycle of the *scheduling* actor, exactly
-    /// like [`send_after`](Self::send_after): it is cancelled automatically
-    /// when this actor incarnation stops or restarts. It is not bound to the
-    /// target's lifecycle — if the target restarts before the timer fires,
-    /// the message is delivered to whichever target incarnation is running at
-    /// fire time, so messages should carry enough context (a key or
-    /// generation) for the handler to reject ones it no longer expects.
-    /// Delivery uses the target's ordinary mailbox policy: FIFO queues wait
-    /// for capacity, while conflating mailboxes replace stale unread state.
-    pub fn send_after_to<T: Send + 'static>(
-        &self,
-        target: &ActorRef<T>,
-        message: T,
-        delay: Duration,
-    ) -> CancellationHandle {
-        let cancellation = self.timers.child_token();
-        let timer = CancellationHandle::new(cancellation.clone());
-        spawn_delayed_send(target.clone(), message, delay, cancellation);
-
-        timer
-    }
-
-    /// Sends `message` to this actor after `delay`, retractably.
-    ///
-    /// This differs from [`send_after`](Self::send_after) only in when
-    /// cancellation stops working. An ordinary delayed send can be cancelled
-    /// until it reaches the mailbox; cancelling the handle returned here also
-    /// discards the message *after* the mailbox accepted it, as long as the
-    /// actor has not yet received it. The suppression is a mailbox-level
-    /// filter, so it works for both [`Actor`](crate::Actor) and
-    /// [`RawActor`](crate::RawActor) receive loops.
-    ///
-    /// Like other timers, the send is cancelled automatically if this actor
-    /// incarnation stops or restarts.
-    ///
-    /// This is the primitive under [`StateTimeoutSlot`], which adds the
-    /// one-at-a-time replace/clear bookkeeping of a `gen_statem`-style state
-    /// timeout. Reach for the slot unless you are building different
-    /// bookkeeping on top.
-    pub fn send_after_retractable(&self, message: M, delay: Duration) -> CancellationHandle {
-        let cancellation = self.timers.child_token();
-        let timer = CancellationHandle::new(cancellation.clone());
-        spawn_state_timeout_send(
-            self.myself(),
-            self.incarnation.clone(),
-            message,
-            delay,
-            cancellation,
-        );
-
-        timer
-    }
-
-    /// Sends a clone of `message` to this actor after every `period`.
-    ///
-    /// The first message is sent after one full period. FIFO delivery waits
-    /// for mailbox capacity; conflating delivery replaces stale unread state.
-    /// Missed ticks are skipped rather than accumulated. The timer stops on
-    /// cancellation, delivery failure, or when this actor incarnation stops or
-    /// restarts. To schedule periodic delivery to another actor, use
-    /// [`interval_to`](Self::interval_to).
-    ///
-    /// A zero period creates an already-cancelled timer and sends no messages.
-    pub fn interval(&self, message: M, period: Duration) -> CancellationHandle
-    where
-        M: Clone,
-    {
-        self.interval_to(&self.myself, message, period)
-    }
-
-    /// Sends a clone of `message` to `target` after every `period`.
-    ///
-    /// The first message is sent after one full period. Delivery uses the
-    /// target's ordinary mailbox policy — FIFO queues wait for capacity,
-    /// conflating mailboxes replace stale unread state — and missed ticks are
-    /// skipped rather than accumulated. Like
-    /// [`send_after_to`](Self::send_after_to), the timer is bound to the
-    /// lifecycle of the *scheduling* actor, not the target's: it stops on
-    /// cancellation, when this actor incarnation stops or restarts, or on
-    /// delivery failure (the target has permanently terminated). A target
-    /// that merely restarts does not stop the timer; later ticks are
-    /// delivered to its next incarnation.
-    ///
-    /// A zero period creates an already-cancelled timer and sends no messages.
-    pub fn interval_to<T>(
-        &self,
-        target: &ActorRef<T>,
-        message: T,
-        period: Duration,
-    ) -> CancellationHandle
-    where
-        T: Clone + Send + 'static,
-    {
-        let cancellation = self.timers.child_token();
-        let timer = CancellationHandle::new(cancellation.clone());
-        if period.is_zero() {
-            timer.cancel();
-            return timer;
-        }
-        let target = target.clone();
-
-        tokio::spawn(async move {
-            let start = Instant::now() + period;
-            let mut interval = tokio::time::interval_at(start, period);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-            loop {
-                tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => break,
-                    _ = interval.tick() => {
-                        let sent = tokio::select! {
-                            biased;
-                            () = cancellation.cancelled() => break,
-                            sent = target.send(message.clone()) => sent,
-                        };
-                        if sent.is_err() {
-                            cancellation.cancel();
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
-        timer
     }
 
     /// Waits for the next mailbox message, or `None` once shutdown has been
@@ -1025,12 +1065,12 @@ mod sealed {
 /// called from both `on_start` and `handle`:
 ///
 /// ```no_run
-/// use tokio_otp::{LiveContext, StateTimeoutSlot};
+/// use tokio_otp::LiveContext;
 /// use std::time::Duration;
 ///
 /// # enum Msg { Tick }
-/// fn arm(ctx: &impl LiveContext<Msg>, idle: &mut StateTimeoutSlot) {
-///     idle.set(ctx.send_after_retractable(Msg::Tick, Duration::from_secs(5)));
+/// fn arm(ctx: &mut impl LiveContext<Msg>) {
+///     ctx.set_timeout(Msg::Tick, Duration::from_secs(5));
 /// }
 /// ```
 ///
@@ -1058,6 +1098,11 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// Returns `true` if graph shutdown has been requested.
     fn is_shutting_down(&self) -> bool {
         self.cx().is_shutting_down()
+    }
+
+    /// Returns an observe-only view of this actor incarnation's lifetime.
+    fn lifetime(&self) -> Lifetime {
+        self.cx().lifetime()
     }
 
     /// Queues follow-up work as the actor's next message.
@@ -1101,55 +1146,78 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         self.cx().watch(target, map)
     }
 
-    /// Sends `message` to this actor after `delay` has elapsed.
+    /// Arms the default one-shot timeout, replacing the currently armed one.
     ///
-    /// See [`ActorContext::send_after`].
-    fn send_after(&self, message: M, delay: Duration) -> CancellationHandle {
-        self.cx().send_after(message, delay)
+    /// The timeout is owned by the actor loop rather than sent through its
+    /// mailbox. Replacement and [`clear_timeout`](Self::clear_timeout) are
+    /// therefore exact until delivery.
+    fn set_timeout(&mut self, message: M, delay: Duration) {
+        self.cx_mut()
+            .timers
+            .insert(TimerSlot::Default, message, delay, None, None);
     }
 
-    /// Sends `message` to `target` after `delay` has elapsed.
-    ///
-    /// See [`ActorContext::send_after_to`].
-    fn send_after_to<T: Send + 'static>(
-        &self,
-        target: &ActorRef<T>,
-        message: T,
-        delay: Duration,
-    ) -> CancellationHandle {
-        self.cx().send_after_to(target, message, delay)
+    /// Clears the default timeout, if one is armed.
+    fn clear_timeout(&mut self) {
+        self.cx_mut().timers.clear(TimerSlot::Default);
     }
 
-    /// Sends `message` to this actor after `delay`, retractably.
-    ///
-    /// See [`ActorContext::send_after_retractable`] and [`StateTimeoutSlot`].
-    fn send_after_retractable(&self, message: M, delay: Duration) -> CancellationHandle {
-        self.cx().send_after_retractable(message, delay)
+    /// Returns whether the default timeout is armed.
+    fn timeout_armed(&self) -> bool {
+        self.cx().timers.is_armed(TimerSlot::Default)
     }
 
-    /// Sends a clone of `message` to this actor after every `period`.
+    /// Arms a keyed one-shot timeout, replacing the timeout at the same key.
+    fn set_timeout_keyed(&mut self, key: TimerKey, message: M, delay: Duration) {
+        self.cx_mut()
+            .timers
+            .insert(TimerSlot::Keyed(key), message, delay, None, None);
+    }
+
+    /// Clears the timeout at `key`, if one is armed.
+    fn clear_timeout_keyed(&mut self, key: TimerKey) {
+        self.cx_mut().timers.clear(TimerSlot::Keyed(key));
+    }
+
+    /// Schedules an anonymous one-shot message and returns its exact
+    /// cancellation handle.
     ///
-    /// See [`ActorContext::interval`].
-    fn interval(&self, message: M, period: Duration) -> CancellationHandle
+    /// Self-timer delivery bypasses mailbox capacity and conflation, counts as
+    /// a received message, and is cancelled structurally on restart.
+    fn send_after(&mut self, message: M, delay: Duration) -> CancellationHandle {
+        let timer = CancellationHandle::new();
+        self.cx_mut().timers.insert(
+            TimerSlot::Anonymous,
+            message,
+            delay,
+            Some(timer.token()),
+            None,
+        );
+        timer
+    }
+
+    /// Schedules a periodic actor-local message.
+    ///
+    /// The first message is delivered after one full period. Each delivery
+    /// arms the next one, so missed ticks never pile up. A zero period returns
+    /// an already-cancelled handle and sends no messages.
+    fn interval(&mut self, message: M, period: Duration) -> CancellationHandle
     where
         M: Clone,
     {
-        self.cx().interval(message, period)
-    }
-
-    /// Sends a clone of `message` to `target` after every `period`.
-    ///
-    /// See [`ActorContext::interval_to`].
-    fn interval_to<T>(
-        &self,
-        target: &ActorRef<T>,
-        message: T,
-        period: Duration,
-    ) -> CancellationHandle
-    where
-        T: Clone + Send + 'static,
-    {
-        self.cx().interval_to(target, message, period)
+        let timer = CancellationHandle::new();
+        if period.is_zero() {
+            timer.cancel();
+            return timer;
+        }
+        self.cx_mut().timers.insert(
+            TimerSlot::Anonymous,
+            message,
+            period,
+            Some(timer.token()),
+            Some((period, clone_message::<M>)),
+        );
+        timer
     }
 
     /// Runs a bounded future and substitutes `fallback` when its deadline
@@ -1416,7 +1484,7 @@ pub struct MessageContext<'a, M> {
 /// A deliberately narrow surface. The hook runs after the receive loop has
 /// exited and the mailbox has been drained or discarded, so anything that
 /// queues future work for this incarnation — timers, intervals, watches,
-/// offloads, state timeouts, continuations — has no one left to deliver to and
+/// offloads, continuations — has no one left to deliver to and
 /// is withheld. What remains is identity, the shutdown token, the scope
 /// handles, and [`run_blocking`](Self::run_blocking) for synchronous teardown.
 ///
@@ -1569,89 +1637,6 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
     }
 }
 
-/// One-at-a-time state timeout, held in actor state.
-///
-/// This is the `gen_statem` state-timeout pattern: entering a timed state arms
-/// a timeout, entering a different state replaces or clears it, and a timeout
-/// belonging to a state the actor has already left must not be acted on.
-///
-/// The slot is bookkeeping over
-/// [`send_after_retractable`](LiveContext::send_after_retractable), which is
-/// what makes the last part work — [`set`](Self::set) and [`clear`](Self::clear)
-/// suppress a stale timeout that already reached the mailbox but has not been
-/// received yet. Without that primitive this pattern cannot be built outside
-/// the framework: recognizing a stale timeout in user code would require
-/// tagging it with a generation, and the actor's message type belongs to its
-/// senders, not to the wrapper.
-///
-/// Nothing here is per-actor state the runtime must carry, so an actor that
-/// does not model states pays nothing for it.
-///
-/// ```no_run
-/// use std::time::Duration;
-/// use tokio_otp::{LiveContext, StateTimeoutSlot};
-///
-/// # enum Msg { Idle, Work }
-/// const IDLE: Duration = Duration::from_secs(30);
-///
-/// struct Session {
-///     idle: StateTimeoutSlot,
-/// }
-///
-/// impl Session {
-///     fn go_idle(&mut self, ctx: &impl LiveContext<Msg>) {
-///         self.idle.set(ctx.send_after_retractable(Msg::Idle, IDLE));
-///     }
-///
-///     fn go_busy(&mut self) {
-///         self.idle.clear();
-///     }
-/// }
-/// ```
-#[derive(Debug, Default)]
-pub struct StateTimeoutSlot {
-    armed: Option<CancellationHandle>,
-}
-
-impl StateTimeoutSlot {
-    /// Returns an empty slot.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Arms `timer`, cancelling and discarding whatever the slot held.
-    ///
-    /// Pass the handle from
-    /// [`send_after_retractable`](LiveContext::send_after_retractable). The
-    /// previous timeout is cancelled even if it has already been accepted by
-    /// the mailbox, so a stale timeout is never received. The returned handle
-    /// is an alias of the newly armed one, for callers that want to cancel it
-    /// independently.
-    pub fn set(&mut self, timer: CancellationHandle) -> CancellationHandle {
-        if let Some(previous) = self.armed.replace(timer.clone()) {
-            previous.cancel();
-        }
-        timer
-    }
-
-    /// Cancels and clears the armed timeout, if any.
-    ///
-    /// Call this when entering a state that has no timeout. A timeout already
-    /// accepted by the mailbox is discarded if it has not yet been received.
-    pub fn clear(&mut self) {
-        if let Some(armed) = self.armed.take() {
-            armed.cancel();
-        }
-    }
-
-    /// Returns whether a timeout is currently armed and uncancelled.
-    pub fn is_armed(&self) -> bool {
-        self.armed
-            .as_ref()
-            .is_some_and(|armed| !armed.is_cancelled())
-    }
-}
-
 pub(crate) struct ActorOffloads {
     inner: Arc<ActorOffloadsInner>,
     cancellation: CancellationToken,
@@ -1718,71 +1703,6 @@ impl Drop for OffloadGuard {
         self.offloads.outstanding.fetch_sub(1, Ordering::Release);
         self.finished.store(true, Ordering::Release);
         self.offloads.changed.notify_one();
-    }
-}
-
-fn spawn_delayed_send<T: Send + 'static>(
-    target: ActorRef<T>,
-    message: T,
-    delay: Duration,
-    cancellation: CancellationToken,
-) {
-    tokio::spawn(async move {
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => {}
-            () = tokio::time::sleep(delay) => {
-                tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => {}
-                    _ = target.send(message) => {}
-                }
-            }
-        }
-    });
-}
-
-fn spawn_state_timeout_send<T: Send + 'static>(
-    target: ActorRef<T>,
-    incarnation: MailboxRef<T>,
-    message: T,
-    delay: Duration,
-    cancellation: CancellationToken,
-) {
-    tokio::spawn(async move {
-        tokio::select! {
-            biased;
-            () = cancellation.cancelled() => {}
-            () = tokio::time::sleep(delay) => {
-                tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => {}
-                    _ = target.post_state_timeout_to_incarnation(
-                        incarnation,
-                        message,
-                        cancellation.clone(),
-                    ) => {}
-                }
-            }
-        }
-    });
-}
-
-pub(crate) struct ActorTimers(CancellationToken);
-
-impl ActorTimers {
-    pub(crate) fn new(shutdown: &CancellationToken) -> Self {
-        Self(shutdown.child_token())
-    }
-
-    fn child_token(&self) -> CancellationToken {
-        self.0.child_token()
-    }
-}
-
-impl Drop for ActorTimers {
-    fn drop(&mut self) {
-        self.0.cancel();
     }
 }
 

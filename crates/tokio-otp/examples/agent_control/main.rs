@@ -465,8 +465,9 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
 async fn phase_3(app: &App) -> Result<(), AnyError> {
     let session_restarts = app.sessions.snapshot().total_restarts;
     let replies = app.chat.replies(CHAT_A).len();
-    app.chat.drop_session();
-    let envelope = app.chat.inject_user_message(CHAT_A, "OK bridge-redelivery");
+    let envelope = app
+        .chat
+        .drop_session_and_inject(CHAT_A, "OK bridge-redelivery");
     await_until(|| async { app.chat.sessions() >= 2 }).await?;
     await_until(|| async { app.chat.replies(CHAT_A).len() > replies }).await?;
     let report = journal_report(&app.journal).await?;
@@ -727,7 +728,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
             .is_some_and(|reply| !reply.contains("prior-context=0"))
     );
     println!(
-        "PHASE 7 OK — StateTimeoutSlot::clear + subtree removal/respawn + \
+        "PHASE 7 OK — clear_timeout + subtree removal/respawn + \
          readiness-before-rehydrate + raced eviction absorbed without membership protocol"
     );
     Ok(())

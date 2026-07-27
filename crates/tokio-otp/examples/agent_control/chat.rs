@@ -64,6 +64,10 @@ impl ChatSim {
 
     pub fn inject_user_message(&self, chat: ChatId, text: impl Into<String>) -> EnvelopeId {
         let mut state = self.0.lock().expect("chat simulation lock poisoned");
+        Self::queue(&mut state, chat, text)
+    }
+
+    fn queue(state: &mut ChatState, chat: ChatId, text: impl Into<String>) -> EnvelopeId {
         state.next_envelope += 1;
         let delivery = ChatDelivery {
             envelope: state.next_envelope,
@@ -89,16 +93,19 @@ impl ChatSim {
         }
     }
 
-    pub fn drop_session(&self) {
-        let sender = self
-            .0
-            .lock()
-            .expect("chat simulation lock poisoned")
-            .live
-            .take();
-        if let Some(sender) = sender {
+    /// Drops the live session and queues `text` under one lock hold.
+    ///
+    /// The bridge reconnects as soon as it observes the disconnect, so dropping
+    /// and queueing separately lets `connect` win the gap and take the delivery
+    /// live instead — leaving nothing outstanding to redeliver. Holding the lock
+    /// across both keeps the envelope pending at reconnect, which is what makes
+    /// the redelivery, and so the journal's duplicate append, deterministic.
+    pub fn drop_session_and_inject(&self, chat: ChatId, text: impl Into<String>) -> EnvelopeId {
+        let mut state = self.0.lock().expect("chat simulation lock poisoned");
+        if let Some(sender) = state.live.take() {
             let _ = sender.send(ChatEvent::Disconnected);
         }
+        Self::queue(&mut state, chat, text)
     }
 
     pub fn release_session(&self) {

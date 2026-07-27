@@ -51,7 +51,7 @@
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
-//! | [`ActorContext`] | The full context a [`RawActor`] run receives: mailbox, watches, timers, blocking work, shutdown token. |
+//! | [`ActorContext`] | The full context a [`RawActor`] run receives: mailbox, watches, lifetime, blocking work, shutdown token. |
 //! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
 //! | [`LiveContext`] | The capabilities shared by the running stages; the type shared helpers take. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
@@ -250,6 +250,7 @@ mod builder;
 mod runtime;
 mod supervision;
 mod supervision_derive;
+pub mod timers;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -266,11 +267,11 @@ pub mod prelude {
         BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken, Down,
         DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Flow,
         Flow::{Continue, Stop},
-        Graph, GraphBuilder, LifecycleWatchGuard, LiveContext, MailboxMode, MessageContext,
-        MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, Runtime,
-        RuntimeBuilder, RuntimeHandle, SendError, StartContext, StartingScope, StateTimeoutSlot,
+        Graph, GraphBuilder, LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode,
+        MessageContext, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply,
+        Runtime, RuntimeBuilder, RuntimeHandle, SendError, StartContext, StartingScope,
         StopContext, StoppingScope, Supervision, SupervisionBuildError, SupervisionFactories,
-        SupervisionTree,
+        SupervisionTree, TimerKey,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView, ChildSnapshot,
@@ -289,10 +290,10 @@ pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, BlockingCancelled, BoxError, CallError, CancellationHandle,
     DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuildError,
-    GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
+    GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
     OffloadDeadline, OffloadHandle, RawActor, Reply, RunnableActor, RunnableActorBuilder,
-    SendError, StartContext, StartingScope, StateTimeoutSlot, StopContext, StoppingScope,
-    SupervisorPathSegment, TryRecvError,
+    SendError, StartContext, StartingScope, StopContext, StoppingScope, SupervisorPathSegment,
+    TimerKey, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 pub use runtime::{
