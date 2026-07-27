@@ -86,6 +86,10 @@ pub(crate) struct AttachedChildrenView {
     /// Bound nested views carry the generation of the supervisor child
     /// incarnation that owns them.
     pub(crate) generation: Option<u64>,
+    /// Monotonic stable-channel binding that owns this view. Nested child
+    /// generations restart from zero with their parent, so generation alone
+    /// cannot reject a late publication from a displaced incarnation.
+    pub(crate) binding_epoch: u64,
     pub(crate) terminal: bool,
     pub(crate) children: Vec<AttachedChildState>,
 }
@@ -103,6 +107,7 @@ pub(crate) fn attached_children_state(
 ) -> AttachedChildrenState {
     Arc::new(Mutex::new(AttachedChildrenView {
         generation,
+        binding_epoch: 0,
         terminal: false,
         children,
     }))
@@ -318,6 +323,7 @@ impl StableSupervisorChannels {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = AttachedChildrenView {
             generation: Some(0),
+            binding_epoch: 0,
             terminal: false,
             children: attached_children,
         };
@@ -512,6 +518,7 @@ impl StableSupervisorChannels {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = AttachedChildrenView {
             generation: attachment_generation,
+            binding_epoch,
             terminal: false,
             children: initial_attached_children,
         };
@@ -528,6 +535,7 @@ impl StableSupervisorChannels {
                 channels: Arc::clone(self),
                 binding_epoch,
             },
+            binding_epoch,
             snapshots,
             lifecycle,
         })
@@ -1209,6 +1217,7 @@ pub(crate) struct StableBindingGuard {
 
 pub(crate) struct BoundIncarnation {
     pub(crate) guard: StableBindingGuard,
+    pub(crate) binding_epoch: u64,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) lifecycle: Arc<LifecycleHub>,
 }
