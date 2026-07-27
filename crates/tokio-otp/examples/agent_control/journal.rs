@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use tokio_otp::{Actor, ActorContext, ActorResult, DrainPolicy, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, DrainPolicy, MessageContext, prelude::Continue};
 
 use crate::messages::{AppendAck, JournalEntry, JournalMsg, JournalReport, StoredEntry};
 
@@ -25,7 +25,7 @@ impl Actor for Journal {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             JournalMsg::Append { chat, entry, reply } => {

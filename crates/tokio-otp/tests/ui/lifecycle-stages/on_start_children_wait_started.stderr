@@ -1,0 +1,5 @@
+error[E0599]: no method named `wait_started` found for struct `StartingScope` in the current scope
+  --> tests/ui/lifecycle-stages/on_start_children_wait_started.rs:12:22
+   |
+12 |             children.wait_started().await?;
+   |                      ^^^^^^^^^^^^ method not found in `StartingScope`

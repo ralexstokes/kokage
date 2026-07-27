@@ -21,7 +21,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 ///
 /// ```
 /// # use std::collections::VecDeque;
-/// # use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, prelude::Continue};
+/// # use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, prelude::Continue};
 /// # struct Job;
 /// # struct Client;
 /// # impl Clone for Client { fn clone(&self) -> Self { Self } }
@@ -33,7 +33,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// }
 /// # impl Actor for Worker {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
 /// #         let _ = (&self.client, &self.pending);
 /// #         Ok(Continue)
 /// #     }
@@ -210,7 +210,7 @@ fn parse_factory_attributes(
 /// is called once for the initial start and once per supervised restart:
 ///
 /// ```
-/// # use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor};
+/// # use tokio_otp::{MessageContext, ActorRef, ActorResult, Actor};
 /// # struct FrontendMsg;
 /// # struct ParserMsg;
 /// # struct SinkMsg;
@@ -223,7 +223,7 @@ fn parse_factory_attributes(
 /// #     async fn handle(
 /// #         &mut self,
 /// #         _: FrontendMsg,
-/// #         _: &mut ActorContext<FrontendMsg>,
+/// #         _: &mut MessageContext<'_, FrontendMsg>,
 /// #     ) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
@@ -235,7 +235,7 @@ fn parse_factory_attributes(
 /// # }
 /// # impl Actor for Parser {
 /// #     type Msg = ParserMsg;
-/// #     async fn handle(&mut self, _: ParserMsg, _: &mut ActorContext<ParserMsg>) -> ActorResult {
+/// #     async fn handle(&mut self, _: ParserMsg, _: &mut MessageContext<'_, ParserMsg>) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }
@@ -243,7 +243,7 @@ fn parse_factory_attributes(
 /// # struct Sink;
 /// # impl Actor for Sink {
 /// #     type Msg = SinkMsg;
-/// #     async fn handle(&mut self, _: SinkMsg, _: &mut ActorContext<SinkMsg>) -> ActorResult {
+/// #     async fn handle(&mut self, _: SinkMsg, _: &mut MessageContext<'_, SinkMsg>) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }

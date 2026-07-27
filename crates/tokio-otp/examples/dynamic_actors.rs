@@ -2,7 +2,7 @@ use std::error::Error;
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, Runtime, prelude::Continue,
+    Actor, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime, prelude::Continue,
 };
 use tokio_supervisor::Strategy;
 
@@ -22,7 +22,7 @@ impl Actor for Frontend {
     async fn handle(
         &mut self,
         message: FrontendMsg,
-        _ctx: &mut ActorContext<FrontendMsg>,
+        _ctx: &mut MessageContext<'_, FrontendMsg>,
     ) -> ActorResult {
         match message {
             FrontendMsg::SetRushPress(rush) => self.rush = Some(rush),
@@ -46,7 +46,11 @@ struct RushPress {
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        order: String,
+        _ctx: &mut MessageContext<'_, String>,
+    ) -> ActorResult {
         self.observed.send(order).expect("receiver alive");
         Ok(Continue)
     }

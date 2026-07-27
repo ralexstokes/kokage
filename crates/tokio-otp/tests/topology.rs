@@ -1,8 +1,8 @@
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageSize,
-    RawActor, RestartPolicy, SendError, Topology, prelude::Continue,
+    DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageContext,
+    MessageSize, RawActor, RestartPolicy, SendError, Topology, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -63,7 +63,7 @@ impl Actor for Frontend {
     async fn handle(
         &mut self,
         message: FrontendMsg,
-        _ctx: &mut ActorContext<FrontendMsg>,
+        _ctx: &mut MessageContext<'_, FrontendMsg>,
     ) -> ActorResult {
         match message {
             FrontendMsg::Feed(line) => self.parser.send(ParserMsg(line)).await?,
@@ -85,7 +85,7 @@ impl Actor for Parser {
     async fn handle(
         &mut self,
         message: ParserMsg,
-        _ctx: &mut ActorContext<ParserMsg>,
+        _ctx: &mut MessageContext<'_, ParserMsg>,
     ) -> ActorResult {
         self.sink.send(SinkMsg(message.0.to_uppercase())).await?;
         self.frontend.send(FrontendMsg::Ack).await?;
@@ -101,7 +101,11 @@ struct Sink {
 impl Actor for Sink {
     type Msg = SinkMsg;
 
-    async fn handle(&mut self, message: SinkMsg, _ctx: &mut ActorContext<SinkMsg>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: SinkMsg,
+        _ctx: &mut MessageContext<'_, SinkMsg>,
+    ) -> ActorResult {
         self.out.send(message.0).expect("test receiver alive");
         Ok(Continue)
     }

@@ -7,10 +7,10 @@ use tokio_otp::prelude::*;
 mod coverage_probe {
     mod actor {
         use tokio_otp::prelude::{
-            Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CallError,
-            CancellationHandle, CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow,
-            Graph, GraphBuilder, MailboxMode, MessageSize, MonitorEvent, RawActor, Reply,
-            SendError, Stop, Topology,
+            Actor, ActorOptions, ActorRef, ActorResult, BoxError, CallError, CancellationHandle,
+            CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuilder,
+            MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor, Reply, SendError,
+            Stop, Topology,
         };
     }
 
@@ -33,7 +33,7 @@ mod coverage_probe {
     mod advanced_root {
         use tokio_otp::{
             ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind,
-            LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent,
+            LifecyclePathSegment, LifecycleWatch, LiveContext, RecursiveLifecycleEvent,
             RecursiveLifecycleEventKind, RecursiveLifecycleWatch, Supervisor, SupervisorBuildError,
             SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec, SupervisorToken,
         };
@@ -50,7 +50,7 @@ struct BlockingWorker {
 impl Actor for BlockingWorker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         let observed = self.observed.clone();
         let actor_id = ctx.id().to_owned();
         ctx.run_blocking(move |token| {

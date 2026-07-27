@@ -2,7 +2,7 @@ use std::{error::Error, future::pending, marker::PhantomData};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
+    Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, MessageContext,
     RestartPolicy, prelude::Continue,
 };
 
@@ -40,7 +40,7 @@ impl<M: Send + 'static> Actor for Observe<M> {
     async fn handle(
         &mut self,
         message: Command<M>,
-        _ctx: &mut ActorContext<Command<M>>,
+        _ctx: &mut MessageContext<'_, Command<M>>,
     ) -> ActorResult {
         match message {
             Command::Observe(message) => {

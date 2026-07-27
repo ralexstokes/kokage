@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::actor::{
-    context::ActorContext,
+    context::{ActorContext, MessageContext, StartContext, StopContext},
     raw::{ActorResult, BoxError, Flow, RawActor},
 };
 
@@ -66,6 +66,11 @@ pub enum DrainPolicy {
     /// queued prefix drained here. Once intake is closed, `try_send` reports a
     /// closed mailbox and an awaited `send` waits for the binding's final
     /// lifecycle state. There is no separate sender-visible `Draining` state.
+    ///
+    /// The handler itself can see the phase:
+    /// [`MessageContext::is_draining`](crate::MessageContext::is_draining) is
+    /// `true` for exactly the calls made here. Use it to skip work whose only
+    /// effect would be to queue something the drain will drop.
     ///
     /// # Shutdown budget
     ///
@@ -137,7 +142,7 @@ pub trait Actor: Send + Sync + 'static {
     fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> impl Future<Output = ActorResult> + Send;
 
     /// Runs once before the first message of each actor run.
@@ -146,12 +151,13 @@ pub trait Actor: Send + Sync + 'static {
     /// [`Flow::Stop`] requests a clean stop before the ordinary receive loop.
     /// [`DrainPolicy::Discard`] drops messages queued during startup, while
     /// [`DrainPolicy::Drain`] handles the externally accepted mailbox queue;
-    /// actor-local continuations are dropped under either policy. An error
+    /// actor-local continuations are dropped under either policy, and their
+    /// loss is reported as a `WARN` before [`on_stop`](Self::on_stop). An error
     /// here fails the run like a [`handle`](Self::handle) error, so under
     /// supervision it is an ordinary restartable failure.
     fn on_start(
         &mut self,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut StartContext<'_, Self::Msg>,
     ) -> impl Future<Output = ActorResult> + Send {
         async { Ok(Flow::Continue) }
     }
@@ -163,13 +169,15 @@ pub trait Actor: Send + Sync + 'static {
     /// hook before detaching the child and completing
     /// [`RuntimeHandle::remove_child`](crate::RuntimeHandle::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
-    /// can abort this hook and detach the child without waiting for it.
+    /// can abort this hook and detach the child without waiting for it. The
+    /// hook's scope handles are [`StoppingScope`](crate::StoppingScope), which
+    /// withholds the operations that would wait on that detach.
     /// It is not called when
     /// [`handle`](Self::handle) or [`on_start`](Self::on_start) returns an
     /// error.
     fn on_stop(
         &mut self,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut StopContext<'_, Self::Msg>,
     ) -> impl Future<Output = Result<(), BoxError>> + Send {
         async { Ok(()) }
     }
@@ -216,7 +224,7 @@ impl<H: Actor> RawActor for H {
     }
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let start_flow = self.on_start(&mut ctx).await?;
+        let start_flow = self.on_start(&mut StartContext::new(&mut ctx)).await?;
         ctx.mark_ready();
 
         let mut stopping = start_flow == Flow::Stop;
@@ -244,7 +252,10 @@ impl<H: Actor> RawActor for H {
             };
             ctx.myself.record_received();
             ctx.observability.emit_message_received(&ctx.id);
-            stopping = self.handle(message, &mut ctx).await? == Flow::Stop;
+            stopping = self
+                .handle(message, &mut MessageContext::new(&mut ctx))
+                .await?
+                == Flow::Stop;
         }
 
         ctx.close_external_intake();
@@ -281,14 +292,28 @@ impl<H: Actor> RawActor for H {
                 ctx.observability.emit_message_received(&ctx.id);
                 // Once stopping begins, flow values do not change the drain
                 // decision. Continuations queued by drain handlers are left
-                // for the context to drop with the incarnation.
-                let _ = self.handle(message, &mut ctx).await?;
+                // for the context to drop with the incarnation, and reported
+                // below. A handler that cares can ask `is_draining`.
+                let _ = self
+                    .handle(message, &mut MessageContext::draining(&mut ctx))
+                    .await?;
             }
         } else {
             ctx.abort_offloads();
         }
 
-        self.on_stop(&mut ctx).await?;
+        // Only the receive loop above takes continuations, so anything still
+        // queued here is dropped with the incarnation: pushed by a drain
+        // handler, or by an `on_start` that then returned `Flow::Stop`. Both
+        // reach `continue_with` through a context type that is legitimately
+        // able to queue work at other times, so neither is expressible as a
+        // compile error the way `on_stop` and `RawActor` are. Report it.
+        if !ctx.continuations.is_empty() {
+            ctx.observability
+                .emit_continuations_dropped(&ctx.id, ctx.continuations.len());
+        }
+
+        self.on_stop(&mut StopContext::new(&mut ctx)).await?;
         Ok(Flow::Stop)
     }
 }

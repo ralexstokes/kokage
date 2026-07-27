@@ -61,7 +61,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -163,9 +163,11 @@ while a failure inside that scope leaves the leader running. Use
 `actor_with_scope_strategy(..., Strategy::OneForAll)` when either side failing
 must recycle both.
 
-Inside the leader, `ActorContext::children()` returns the child scope's
-pre-spawn `RuntimeHandle`. See [Scope handles inside actors] for the startup
-ordering and reconciliation rules of dynamic membership.
+Inside the leader, `MessageContext::children()` returns the child scope's
+pre-spawn `RuntimeHandle`; `StartContext::children()` returns the narrower
+`StartingScope` and `StopContext::children()` the narrower `StoppingScope`.
+See [Scope handles inside actors] for the startup ordering and
+reconciliation rules of dynamic membership.
 
 [`RuntimeBuilder::into_tree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.RuntimeBuilder.html#method.into_tree
 [`SupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/enum.SupervisionTree.html

@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use tokio_otp::{Actor, ActorContext, ActorResult, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, LiveContext, MessageContext, prelude::Continue};
 
 use crate::messages::{EffectStatus, ToolHostMsg, ToolOutcome, ToolReport};
 
@@ -19,7 +19,7 @@ impl Actor for ToolHost {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             ToolHostMsg::Execute { key, call, reply } => {

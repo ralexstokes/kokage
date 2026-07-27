@@ -123,7 +123,7 @@ impl SupervisionScope {
 /// impl Actor for Worker {
 ///     type Msg = ();
 ///
-///     async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
 ///         Ok(Continue)
 ///     }
 /// }

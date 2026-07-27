@@ -108,6 +108,24 @@ impl GraphObservability {
         );
     }
 
+    /// Reports continuations that were queued but never taken, because the
+    /// actor was already stopping when they were pushed.
+    ///
+    /// The stage split turns most no-op `continue_with` calls into compile
+    /// errors. This is the case it cannot reach: the drain loop hands a
+    /// draining handler the same `MessageContext` as the ordinary loop, so the
+    /// call type-checks and the message is dropped with the incarnation. The
+    /// phase is readable at runtime through `MessageContext::is_draining`, so a
+    /// handler that wants to avoid the warning can check before queueing.
+    pub(crate) fn emit_continuations_dropped(&self, actor_id: &Arc<str>, dropped: usize) {
+        warn!(
+            graph = %self.graph_name,
+            actor_id = %actor_id,
+            dropped_continuations = dropped,
+            "continuations queued while the actor was stopping were dropped"
+        );
+    }
+
     pub(crate) fn emit_message_received(&self, actor_id: &Arc<str>) {
         trace!(
             graph = %self.graph_name,

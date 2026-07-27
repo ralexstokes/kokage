@@ -121,7 +121,7 @@ The API child is not spawned until the database reports readiness. The same
 ordering is used when `OneForAll` or `RestForOne` restarts multiple children.
 Plain children without `wait_for_ready()` count as ready immediately. Actor
 children are gated automatically: their `on_start` hook is the readiness
-boundary. Use `ActorContext::continue_with(message)` inside `on_start` to queue
+boundary. Use `LiveContext::continue_with(message)` inside `on_start` to queue
 expensive follow-up work as the actor's next message without delaying later
 siblings. Call `handle.wait_started().await` when code outside the tree needs
 to wait until all current children are running. Ordered membership is immutable

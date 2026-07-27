@@ -1,6 +1,6 @@
 //! Token-spend metering with a global cap and guard notification.
 
-use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, prelude::Continue};
 
 use crate::messages::{BudgetMsg, BudgetReport, GuardMsg};
 
@@ -27,7 +27,7 @@ impl Actor for Budget {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             BudgetMsg::Charge { chat, tokens } => {

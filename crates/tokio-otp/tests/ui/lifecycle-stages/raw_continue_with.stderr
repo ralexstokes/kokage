@@ -1,0 +1,5 @@
+error[E0599]: no method named `continue_with` found for struct `ActorContext<M>` in the current scope
+  --> tests/ui/lifecycle-stages/raw_continue_with.rs:11:13
+   |
+11 |         ctx.continue_with(());
+   |             ^^^^^^^^^^^^^ method not found in `ActorContext<()>`

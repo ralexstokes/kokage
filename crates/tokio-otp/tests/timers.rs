@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorFactory, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Runtime,
-    prelude::Continue,
+    StateTimeoutSlot, prelude::Continue,
 };
 use tokio_supervisor::Strategy;
 
@@ -119,7 +119,8 @@ impl RawActor for StateTimeout {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let _timer = ctx.state_timeout("timeout", Duration::from_millis(20));
+        let mut slot = StateTimeoutSlot::new();
+        let _timer = slot.set(ctx.send_after_retractable("timeout", Duration::from_millis(20)));
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
         }
@@ -154,8 +155,9 @@ impl RawActor for ReplacedStateTimeout {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let old = ctx.state_timeout("old", Duration::from_millis(20));
-        let _new = ctx.state_timeout("new", Duration::from_millis(40));
+        let mut slot = StateTimeoutSlot::new();
+        let old = slot.set(ctx.send_after_retractable("old", Duration::from_millis(20)));
+        let _new = slot.set(ctx.send_after_retractable("new", Duration::from_millis(40)));
         assert!(old.is_cancelled());
 
         while let Some(message) = ctx.recv().await {
@@ -200,14 +202,15 @@ impl RawActor for QueuedStateTimeoutReplacement {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        ctx.state_timeout("old", Duration::from_millis(20));
+        let mut slot = StateTimeoutSlot::new();
+        slot.set(ctx.send_after_retractable("old", Duration::from_millis(20)));
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
 
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
             if message == "replace" {
-                ctx.state_timeout("new", Duration::from_millis(40));
+                slot.set(ctx.send_after_retractable("new", Duration::from_millis(40)));
             }
         }
         Ok(Continue)
@@ -262,9 +265,11 @@ impl RawActor for ClearedStateTimeout {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let timer = ctx.state_timeout("stale", Duration::from_millis(20));
-        ctx.clear_state_timeout();
+        let mut slot = StateTimeoutSlot::new();
+        let timer = slot.set(ctx.send_after_retractable("stale", Duration::from_millis(20)));
+        slot.clear();
         assert!(timer.is_cancelled());
+        assert!(!slot.is_armed());
 
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
@@ -300,11 +305,12 @@ impl RawActor for SequentialStateTimeouts {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        ctx.state_timeout("first", Duration::from_millis(20));
+        let mut slot = StateTimeoutSlot::new();
+        slot.set(ctx.send_after_retractable("first", Duration::from_millis(20)));
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
             if message == "first" {
-                ctx.state_timeout("second", Duration::from_millis(20));
+                slot.set(ctx.send_after_retractable("second", Duration::from_millis(20)));
             }
         }
         Ok(Continue)
@@ -344,8 +350,9 @@ impl RawActor for ClearsEmptyStateTimeout {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        ctx.clear_state_timeout();
-        ctx.state_timeout("timeout", Duration::from_millis(20));
+        let mut slot = StateTimeoutSlot::new();
+        slot.clear();
+        slot.set(ctx.send_after_retractable("timeout", Duration::from_millis(20)));
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
         }
@@ -510,11 +517,13 @@ impl RawActor for RestartingStateTimeout {
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            let _old = ctx.state_timeout("old", Duration::from_millis(150));
+            let mut slot = StateTimeoutSlot::new();
+            let _old = slot.set(ctx.send_after_retractable("old", Duration::from_millis(150)));
             return Err::<_, BoxError>(Box::new(io::Error::other("restart")));
         }
 
-        let _new = ctx.state_timeout("new", Duration::from_millis(10));
+        let mut slot = StateTimeoutSlot::new();
+        let _new = slot.set(ctx.send_after_retractable("new", Duration::from_millis(10)));
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
         }

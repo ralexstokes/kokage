@@ -8,9 +8,9 @@ use std::{
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
-    Actor, ActorContext, ActorResult, AddSubtreeError, BoxError, ControlError, DynamicActorOptions,
-    GraphBuilder, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle, ScopeKind, Strategy,
-    SupervisionTree,
+    Actor, ActorResult, AddSubtreeError, BoxError, ControlError, DynamicActorOptions, GraphBuilder,
+    LiveContext, MessageContext, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle,
+    ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
     prelude::{Continue, Stop},
 };
 use tokio_supervisor::ChildSpec;
@@ -22,7 +22,7 @@ struct Idle;
 impl Actor for Idle {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -44,7 +44,7 @@ struct ScopeProbe {
 impl Actor for ScopeProbe {
     type Msg = LeaderMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         let Some(children) = ctx.children() else {
             let supervisor = ctx.supervisor();
@@ -62,7 +62,12 @@ impl Actor for ScopeProbe {
             return Ok(Continue);
         };
         self.reports.send("some").expect("test receiver open");
+        // The raw supervisor handle is reachable only past `after_start`,
+        // since its own waits are the ones `StartingScope` withholds. Adding a
+        // child through it does not wait, so it is safe here.
         let before_ready = children
+            .clone()
+            .after_start()
             .supervisor_handle()
             .add_child(ChildSpec::new("too-early", |_| async { Ok(()) }))
             .await;
@@ -78,6 +83,9 @@ impl Actor for ScopeProbe {
         // The factory signature remains `|| ScopeProbe { .. }`: the runtime
         // injects `children`. Work launched from on_start waits for the inner
         // scope to bind, then mutates it without blocking leader readiness.
+        // `after_start` is where the lifecycle waits become reachable again —
+        // taking it here names the handoff that used to be a doc comment.
+        let children = children.after_start();
         let myself = ctx.myself();
         tokio::spawn(async move {
             let result = async {
@@ -97,7 +105,7 @@ impl Actor for ScopeProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             LeaderMsg::AddFromHandler => {
@@ -120,7 +128,7 @@ impl Actor for ScopeProbe {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self::Msg>) -> Result<(), BoxError> {
         if let Some(child_stopped) = &self.child_stopped {
             assert!(
                 child_stopped.load(Ordering::SeqCst),
@@ -136,11 +144,11 @@ struct StopProbe(Arc<AtomicBool>);
 impl Actor for StopProbe {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut ActorContext<()>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, ()>) -> Result<(), BoxError> {
         self.0.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -154,7 +162,7 @@ struct BuilderHandleOwner {
 impl Actor for BuilderHandleOwner {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         self.mount
             .add_actor("owned", || Idle, DynamicActorOptions::new())
             .await?;
@@ -162,7 +170,7 @@ impl Actor for BuilderHandleOwner {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -474,7 +482,7 @@ struct RestartProbe {
 impl Actor for RestartProbe {
     type Msg = LeaderMsg;
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
@@ -482,7 +490,7 @@ impl Actor for RestartProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         if matches!(message, LeaderMsg::Crash) {
             panic!("scripted crash");

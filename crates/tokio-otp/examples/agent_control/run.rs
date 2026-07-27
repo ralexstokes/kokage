@@ -1,9 +1,10 @@
 //! One transient role run, implemented as a mailbox-driven state machine.
 
 use std::sync::Arc;
+use tokio_otp::LiveContext;
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, CancellationToken,
+    Actor, ActorRef, ActorResult, CancellationToken, MessageContext, StartContext,
     prelude::{Continue, Stop},
 };
 
@@ -48,7 +49,7 @@ impl AgentRun {
         Ok(Continue)
     }
 
-    fn start_model(&self, ctx: &ActorContext<RunMsg>) {
+    fn start_model(&self, ctx: &impl LiveContext<RunMsg>) {
         let request = TurnRequest {
             chat: self.chat,
             task: self.task,
@@ -68,7 +69,7 @@ impl AgentRun {
         );
     }
 
-    async fn start_tool(&self, index: usize, ctx: &ActorContext<RunMsg>) -> ActorResult {
+    async fn start_tool(&self, index: usize, ctx: &impl LiveContext<RunMsg>) -> ActorResult {
         let call = self.tools[index].clone();
         let key = format!("{}:{}:{index}", self.chat, self.task);
         let _ = self
@@ -134,7 +135,7 @@ impl AgentRun {
 impl Actor for AgentRun {
     type Msg = RunMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         ctx.continue_with(RunMsg::Step);
         Ok(Continue)
     }
@@ -142,7 +143,7 @@ impl Actor for AgentRun {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             RunMsg::Step => self.start_model(ctx),

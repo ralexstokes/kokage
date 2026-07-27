@@ -408,7 +408,7 @@ impl Runtime {
     ///
     /// ```no_run
     /// use tokio_otp::{
-    ///     Actor, ActorContext, ActorResult, DynamicActorOptions, Runtime,
+    ///     Actor, MessageContext, ActorResult, DynamicActorOptions, Runtime,
     ///     prelude::Continue,
     /// };
     /// use tokio_supervisor::DynamicSupervisorBuilder;
@@ -418,7 +418,7 @@ impl Runtime {
     /// impl Actor for Worker {
     ///     type Msg = ();
     ///
-    ///     async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
     ///         Ok(Continue)
     ///     }
     /// }
@@ -467,7 +467,7 @@ impl Runtime {
     /// [`spawn`](Self::spawn) if you need actor-aware runtime behavior.
     ///
     /// ```no_run
-    /// use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, Runtime};
+    /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, Runtime};
     /// use tokio_otp::prelude::Continue;
     /// use tokio_supervisor::{SupervisorBuilder, SupervisorSpec};
     ///
@@ -476,7 +476,7 @@ impl Runtime {
     /// impl Actor for Worker {
     ///     type Msg = ();
     ///
-    ///     async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
     ///         Ok(Continue)
     ///     }
     /// }

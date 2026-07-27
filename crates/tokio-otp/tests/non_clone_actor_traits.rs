@@ -12,7 +12,8 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
-    LifecycleWatch, RawActor, Reply, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    LifecycleWatch, LiveContext, MessageContext, RawActor, Reply, RestartPolicy, Runtime,
+    RuntimeHandle, prelude::Continue,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -39,7 +40,7 @@ struct HandlerWithNonCloneState {
 impl Actor for HandlerWithNonCloneState {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -52,7 +53,7 @@ impl Actor for HandlerWithSendOnlyMessage {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         let value = ctx.run_blocking(move |_| message.get()).await?;
         ctx.continue_with(Cell::new(value));
@@ -104,7 +105,7 @@ impl Actor for NonCloneHandler {
     async fn handle(
         &mut self,
         message: ProbeMsg,
-        _ctx: &mut ActorContext<ProbeMsg>,
+        _ctx: &mut MessageContext<'_, ProbeMsg>,
     ) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {
@@ -280,7 +281,7 @@ struct DefaultActor;
 impl Actor for DefaultActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut ActorContext<()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }

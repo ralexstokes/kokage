@@ -28,7 +28,7 @@ impl Actor for FrontDesk {
     async fn handle(
         &mut self,
         message: FrontDeskMsg,
-        _ctx: &mut ActorContext<FrontDeskMsg>,
+        _ctx: &mut MessageContext<'_, FrontDeskMsg>,
     ) -> ActorResult {
         match message {
             FrontDeskMsg::SetRushPress(rush) => self.rush = Some(rush),
@@ -49,7 +49,7 @@ struct RushPress;
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, String>) -> ActorResult {
         println!("RUSH printed {order}");
         Ok(Continue)
     }
@@ -234,15 +234,47 @@ one identity.
 
 ## Scope handles inside actors
 
-`ActorContext::supervisor()` returns the actor-aware handle for the actor's
+`MessageContext::supervisor()` returns the actor-aware handle for the actor's
 enclosing scope. Observation always works. Membership changes work only for a
 dynamic scope; an ordered scope returns
 `ControlError::UnsupportedByScopeKind`. Awaiting ordinary scope operations is
 safe, with one residual cycle to avoid: do not await removal of a sibling whose
 drain needs this actor to keep consuming its own mailbox. Pipeline that removal
-with `ctx.offload`. Startup readiness has the same rule: awaiting the enclosing
-scope's `wait_started()` from `on_start` waits on the current actor's own
-readiness and therefore deadlocks. Pipeline the wait and let `on_start` return.
+with `ctx.offload`.
+
+Startup is different, and the type system says so. `StartContext::supervisor()`
+returns a `StartingScope` rather than a `RuntimeHandle`: an actor cannot report
+ready until `on_start` returns, so awaiting `wait_started()`, `wait()`,
+`wait_completed()`, or `shutdown_and_wait()` there waits on the current actor's
+own readiness and deadlocks. Those methods are simply absent from
+`StartingScope`, as is `supervisor_handle()`, which would hand the same waits
+back one call later. Insertion (`add_actor`, `add_subtree`) schedules startup
+rather than waiting for it, so it stays available, and `subtree()` returns
+another `StartingScope` so navigating to a nested scope does not widen the
+surface. When a wait must happen, call `StartingScope::after_start()` for the
+full handle and move it into the pipelined work:
+
+```rust,ignore
+let children = ctx.children().expect("leader has a child scope").after_start();
+let myself = ctx.myself();
+tokio::spawn(async move {
+    children.wait_started().await?;
+    children.add_actor("worker", || Worker, DynamicActorOptions::new()).await?;
+    myself.send(Msg::ScopeReady).await
+});
+```
+
+Shutdown has the mirror-image restriction, so `StopContext::supervisor()` and
+`StopContext::children()` return a `StoppingScope`. A stopping child is still
+attached: cooperative removal waits for `on_stop` to return before detaching
+it. Awaiting `wait()`, `wait_completed()`, `shutdown_and_wait()`, or
+`remove_child()` on its own id from `on_stop` therefore waits on a detach that
+is waiting on `on_stop`, and the cycle breaks only when the shutdown grace
+period expires and aborts the actor — a clean stop reported as a timed-out
+one. Fire-and-forget `shutdown()`, observation, and insertion remain. Teardown
+that really must observe another child belongs in work that outlives the
+incarnation: take `StoppingScope::after_stop()` and move it into a spawned
+future rather than awaiting it inline.
 
 For the common leader-and-workers shape, declare an actor-owned scope:
 
@@ -255,13 +287,14 @@ let sessions = SupervisionTree::new().actor_with_scope(
 ```
 
 This lowers to an ordered node containing `[session_actor, children]`.
-`ActorContext::children()` is `Some` only for that leader and returns the
-inner scope's pre-spawn handle without changing the actor factory signature.
-The inner scope starts after the leader reports ready and stops before the
-leader is cancelled. Consequently, work launched during `on_start` must be
-pipelined: let `on_start` return, wait for `children.wait_started()` in the
-offload, then add members. A normal handler can await `children.add_actor(...)`
-directly once the node is ready.
+`children()` is `Some` only for that leader and returns the inner scope's
+pre-spawn handle without changing the actor factory signature. The inner scope
+starts after the leader reports ready and stops before the leader is cancelled.
+Consequently, work launched during `on_start` must be pipelined: let `on_start`
+return, wait for `children.wait_started()` in the pipelined work, then add
+members — which is why `StartContext::children()` yields a `StartingScope`. A
+normal handler gets a full `RuntimeHandle` and can await
+`children.add_actor(...)` directly once the node is ready.
 
 `actor_with_scope` defaults to `RestForOne`: leader failure recycles the leader
 and owned scope, while a worker failure stays inside the owned scope. Use

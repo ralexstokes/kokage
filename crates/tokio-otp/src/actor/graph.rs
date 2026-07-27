@@ -93,7 +93,6 @@ where
                 shutdown: actor_shutdown,
                 observability,
                 timers,
-                state_timeout: None,
                 monitors,
                 ready: Some(start.ready),
                 continuations: Default::default(),

@@ -20,7 +20,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = Msg;
 
-    async fn handle(&mut self, message: Msg, _ctx: &mut ActorContext<Msg>) -> ActorResult {
+    async fn handle(&mut self, message: Msg, _ctx: &mut MessageContext<'_, Msg>) -> ActorResult {
         match message {
             Msg::Hold => {
                 self.started.send(()).expect("receiver alive");

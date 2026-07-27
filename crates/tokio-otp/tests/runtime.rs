@@ -14,8 +14,9 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch, RawActor,
-    Reply, Runtime, RuntimeHandle, SendError, prelude::Continue,
+    DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch,
+    MessageContext, RawActor, Reply, Runtime, RuntimeHandle, SendError, StartContext,
+    prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -1120,7 +1121,7 @@ struct ResettingCounter {
 impl Actor for ResettingCounter {
     type Msg = CounterMsg;
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<CounterMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, CounterMsg>) -> ActorResult {
         self.on_starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
@@ -1128,7 +1129,7 @@ impl Actor for ResettingCounter {
     async fn handle(
         &mut self,
         message: CounterMsg,
-        _ctx: &mut ActorContext<CounterMsg>,
+        _ctx: &mut MessageContext<'_, CounterMsg>,
     ) -> ActorResult {
         match message {
             CounterMsg::Add(n) => {
@@ -1245,7 +1246,7 @@ impl Actor for StuckDrainActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut ActorContext<Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             StuckDrainMsg::Gate => {

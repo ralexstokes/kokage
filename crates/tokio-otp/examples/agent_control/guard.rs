@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, LiveContext, MessageContext, prelude::Continue};
 
 use crate::{
     messages::{
@@ -47,7 +47,7 @@ impl Guard {
         }
     }
 
-    async fn set_paused(&mut self, paused: bool, ctx: &ActorContext<GuardMsg>) -> ActorResult {
+    async fn set_paused(&mut self, paused: bool, ctx: &impl LiveContext<GuardMsg>) -> ActorResult {
         if self.report.paused == paused {
             return Ok(Continue);
         }
@@ -68,7 +68,7 @@ impl Actor for Guard {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             GuardMsg::RunFailureObserved { chat, task } => {

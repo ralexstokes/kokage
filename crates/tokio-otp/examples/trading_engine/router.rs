@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use tokio_otp::prelude::*;
+use tokio_otp::{LiveContext, prelude::*};
 
 use crate::messages::{
     CALL_DEADLINE, CancelOutcome, GatewayMsg, LedgerMsg, OrderKey, PlaceOutcome, QueryOutcome,
@@ -80,7 +80,7 @@ impl Actor for OrderRouter {
     async fn handle(
         &mut self,
         message: RouterMsg,
-        ctx: &mut ActorContext<RouterMsg>,
+        ctx: &mut MessageContext<'_, RouterMsg>,
     ) -> ActorResult {
         match message {
             RouterMsg::Submit {

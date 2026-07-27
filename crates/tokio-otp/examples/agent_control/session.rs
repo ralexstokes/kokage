@@ -10,8 +10,9 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, RestartPolicy, prelude::Continue,
+    Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
+    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext,
+    StateTimeoutSlot, prelude::Continue,
 };
 
 use crate::{
@@ -60,6 +61,8 @@ pub struct Session {
     heartbeat: Option<CancellationHandle>,
     #[factory(default)]
     evict_requested: bool,
+    #[factory(default)]
+    idle: StateTimeoutSlot,
 }
 
 impl Session {
@@ -74,8 +77,9 @@ impl Session {
         Ok(Continue)
     }
 
-    fn arm_idle(&mut self, ctx: &mut ActorContext<SessionMsg>) {
-        ctx.state_timeout(SessionMsg::IdleSweep, IDLE_TIMEOUT);
+    fn arm_idle(&mut self, ctx: &impl LiveContext<SessionMsg>) {
+        self.idle
+            .set(ctx.send_after_retractable(SessionMsg::IdleSweep, IDLE_TIMEOUT));
     }
 
     async fn start_run(
@@ -84,9 +88,9 @@ impl Session {
         role: Role,
         attempt: u64,
         input: PendingInput,
-        ctx: &mut ActorContext<SessionMsg>,
+        ctx: &mut MessageContext<'_, SessionMsg>,
     ) -> ActorResult {
-        ctx.clear_state_timeout();
+        self.idle.clear();
         if self.heartbeat.is_none() {
             self.heartbeat = Some(ctx.interval_to(
                 &self.progress,
@@ -151,7 +155,7 @@ impl Session {
     async fn start_input(
         &mut self,
         input: PendingInput,
-        ctx: &mut ActorContext<SessionMsg>,
+        ctx: &mut MessageContext<'_, SessionMsg>,
     ) -> ActorResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
@@ -161,7 +165,7 @@ impl Session {
         &mut self,
         task: TaskId,
         approved: bool,
-        ctx: &mut ActorContext<SessionMsg>,
+        ctx: &mut impl LiveContext<SessionMsg>,
     ) -> ActorResult {
         let text = format!(
             "task {task} complete (approved={approved}, prior-context={})",
@@ -196,7 +200,7 @@ impl Session {
 impl Actor for Session {
     type Msg = SessionMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
         let mut proof = self.proof.lock().expect("proof lock poisoned");
         proof.session_ready_at.insert(self.chat, Instant::now());
         proof.session_generations.insert(self.chat, self.generation);
@@ -215,7 +219,7 @@ impl Actor for Session {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut ActorContext<Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             SessionMsg::Rehydrate => {
@@ -255,7 +259,7 @@ impl Actor for Session {
                     return Ok(Continue);
                 }
                 self.transcript_len += 1;
-                ctx.clear_state_timeout();
+                self.idle.clear();
                 let input = PendingInput { envelope, text };
                 if self.active.is_some() || !self.gate.load(Ordering::Acquire) {
                     self.pending.push_back(input);

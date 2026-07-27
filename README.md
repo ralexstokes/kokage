@@ -32,7 +32,7 @@ struct FrontDesk {
 impl Actor for FrontDesk {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut ActorContext<String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, String>) -> ActorResult {
         self.press.send(order).await?;
         Ok(Continue)
     }

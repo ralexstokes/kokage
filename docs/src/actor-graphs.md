@@ -13,7 +13,8 @@ supervisor child ids — addressing is always a typed ref.
 Handler methods return `Ok(Continue)` to receive another message or `Ok(Stop)`
 to finish cleanly. A clean stop follows the same drain policy and `on_stop`
 hook as an external stop: `Discard` drops the queued mailbox, `Drain` handles
-it, and queued `continue_with` continuations are dropped in either case. It is
+it, and queued `continue_with` continuations are dropped in either case — the
+loop logs a `WARN` naming the actor and the count when that happens. It is
 a normal exit to watches and supervision. `RestartPolicy::Always` restarts it;
 `OnFailure` and `Never` do not.
 
@@ -43,7 +44,7 @@ struct FrontDesk {
 impl Actor for FrontDesk {
     type Msg = Order;
 
-    async fn handle(&mut self, order: Order, _ctx: &mut ActorContext<Order>) -> ActorResult {
+    async fn handle(&mut self, order: Order, _ctx: &mut MessageContext<'_, Order>) -> ActorResult {
         self.press.send(order).await?;
         Ok(Continue)
     }
@@ -56,7 +57,7 @@ struct Press {
 impl Actor for Press {
     type Msg = Order;
 
-    async fn handle(&mut self, Order(order): Order, _ctx: &mut ActorContext<Order>) -> ActorResult {
+    async fn handle(&mut self, Order(order): Order, _ctx: &mut MessageContext<'_, Order>) -> ActorResult {
         self.shipping
             .send(ShippingMsg::Ship(Parcel(format!("printed[{order}]"))))
             .await?;
@@ -75,7 +76,7 @@ impl Actor for Shipping {
     async fn handle(
         &mut self,
         message: ShippingMsg,
-        _ctx: &mut ActorContext<ShippingMsg>,
+        _ctx: &mut MessageContext<'_, ShippingMsg>,
     ) -> ActorResult {
         match message {
             ShippingMsg::Ship(Parcel(parcel)) => {
@@ -335,6 +336,14 @@ If an actor should instead stop at once and drop what is queued, return
 `CallError::ReplyDropped`, and outstanding offloads are aborted rather than
 awaited. That is the right choice when queued work is replaceable — recomputed
 next run, conflated into a later snapshot, or retried by the sender.
+
+A drained message reaches the same `handle` as any other, so a handler that
+behaves differently on the way out has to ask: `ctx.is_draining()` is `true`
+for exactly the calls the drain makes. Reach for it when the handler would
+otherwise queue work that nothing will run — a `continue_with`, a fresh timer,
+a follow-up offload. It is not `ctx.is_shutting_down()`: a drain also follows
+the actor's own `Ok(Stop)`, where the graph is not shutting down and
+`is_shutting_down()` stays `false` the whole time.
 
 Hand-written `RawActor::run` loops are
 still available as the escape hatch for custom loop control; after

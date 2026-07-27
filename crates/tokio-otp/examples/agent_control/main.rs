@@ -695,7 +695,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
             .is_some_and(|reply| !reply.contains("prior-context=0"))
     );
     println!(
-        "PHASE 7 OK — clear_state_timeout + subtree removal/respawn + \
+        "PHASE 7 OK — StateTimeoutSlot::clear + subtree removal/respawn + \
          readiness-before-rehydrate + raced eviction absorbed without membership protocol"
     );
     Ok(())

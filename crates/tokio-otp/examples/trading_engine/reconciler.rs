@@ -1,4 +1,5 @@
 use std::{collections::HashMap, time::Duration};
+use tokio_otp::{LiveContext, StateTimeoutSlot};
 
 use tokio::time::Instant;
 use tokio_otp::prelude::*;
@@ -27,12 +28,12 @@ impl Default for VenueState {
     }
 }
 
-#[derive(Clone)]
 pub struct Reconciler {
     feeds: HashMap<VenueId, ActorRef<FeedMsg>>,
     sessions: Vec<(VenueId, ExchangeSim)>,
     venues: HashMap<VenueId, VenueState>,
     down_reasons: HashMap<VenueId, Vec<DownReason>>,
+    stale_sweep: StateTimeoutSlot,
 }
 
 impl Reconciler {
@@ -50,10 +51,11 @@ impl Reconciler {
             sessions,
             venues,
             down_reasons: HashMap::new(),
+            stale_sweep: StateTimeoutSlot::new(),
         }
     }
 
-    fn watch(&self, venue: VenueId, ctx: &ActorContext<ReconcilerMsg>) {
+    fn watch(&self, venue: VenueId, ctx: &impl LiveContext<ReconcilerMsg>) {
         let feed = self.feeds.get(venue).expect("known venue");
         ctx.watch(feed, move |event| ReconcilerMsg::Feed { venue, event });
     }
@@ -66,7 +68,7 @@ impl Reconciler {
         }
     }
 
-    fn rearm(&mut self, ctx: &mut ActorContext<ReconcilerMsg>) {
+    fn rearm(&mut self, ctx: &impl LiveContext<ReconcilerMsg>) {
         let now = Instant::now();
         let earliest = self
             .venues
@@ -75,12 +77,12 @@ impl Reconciler {
             .filter_map(|state| state.last_seen.map(|seen| seen + STALE_AFTER))
             .min();
         if let Some(deadline) = earliest {
-            ctx.state_timeout(
+            self.stale_sweep.set(ctx.send_after_retractable(
                 ReconcilerMsg::StaleSweep,
                 deadline.saturating_duration_since(now),
-            );
+            ));
         } else {
-            ctx.clear_state_timeout();
+            self.stale_sweep.clear();
         }
     }
 }
@@ -88,7 +90,7 @@ impl Reconciler {
 impl Actor for Reconciler {
     type Msg = ReconcilerMsg;
 
-    async fn on_start(&mut self, ctx: &mut ActorContext<ReconcilerMsg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, ReconcilerMsg>) -> ActorResult {
         for (venue, exchange) in &self.sessions {
             assert!(
                 exchange.feed_sessions(venue) >= 1,
@@ -108,7 +110,7 @@ impl Actor for Reconciler {
     async fn handle(
         &mut self,
         message: ReconcilerMsg,
-        ctx: &mut ActorContext<ReconcilerMsg>,
+        ctx: &mut MessageContext<'_, ReconcilerMsg>,
     ) -> ActorResult {
         match message {
             ReconcilerMsg::Market(snapshot) => {

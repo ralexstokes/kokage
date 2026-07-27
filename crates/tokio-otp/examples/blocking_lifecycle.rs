@@ -1,7 +1,7 @@
 use std::{error::Error, thread, time::Duration};
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, GraphBuilder, LiveContext, MessageContext, prelude::Continue};
 
 mod support;
 
@@ -18,7 +18,11 @@ struct Worker {
 impl Actor for Worker {
     type Msg = Command;
 
-    async fn handle(&mut self, command: Command, ctx: &mut ActorContext<Command>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        command: Command,
+        ctx: &mut MessageContext<'_, Command>,
+    ) -> ActorResult {
         match command {
             Command::Start(input) => {
                 let myself = ctx.myself();

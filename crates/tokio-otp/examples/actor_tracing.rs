@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorContext, ActorResult, GraphBuilder, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, GraphBuilder, LiveContext, MessageContext, prelude::Continue};
 
 mod support;
 
@@ -16,7 +16,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: &'static str,
-        ctx: &mut ActorContext<&'static str>,
+        ctx: &mut MessageContext<'_, &'static str>,
     ) -> ActorResult {
         tracing::info!(message, "worker received message");
         ctx.run_blocking(|_token| ()).await?;

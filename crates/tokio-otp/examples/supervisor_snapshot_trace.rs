@@ -10,7 +10,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, Runtime, prelude::Continue,
+    Actor, ActorRef, ActorResult, BoxError, GraphBuilder, MessageContext, Runtime, StartContext,
+    prelude::Continue,
 };
 use tokio_supervisor::{RestartIntensity, Strategy};
 
@@ -22,7 +23,11 @@ struct Frontend {
 impl Actor for Frontend {
     type Msg = String;
 
-    async fn handle(&mut self, message: String, _ctx: &mut ActorContext<String>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: String,
+        _ctx: &mut MessageContext<'_, String>,
+    ) -> ActorResult {
         let worker = self.worker.clone();
         worker.send(message).await?;
         Ok(Continue)
@@ -39,12 +44,16 @@ struct Worker {
 impl Actor for Worker {
     type Msg = String;
 
-    async fn on_start(&mut self, _ctx: &mut ActorContext<String>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, String>) -> ActorResult {
         self.run = self.runs.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: String, _ctx: &mut ActorContext<String>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        message: String,
+        _ctx: &mut MessageContext<'_, String>,
+    ) -> ActorResult {
         println!("worker generation {} received `{message}`", self.run);
         if message == "fail-worker" {
             return Err::<_, BoxError>(Box::new(io::Error::other("simulated failure")));
