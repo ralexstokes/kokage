@@ -30,13 +30,9 @@ doc-check:
 smoke:
     cargo run --locked -p tokio-otp --example trading_engine --features metrics
     cargo run --locked -p tokio-otp --example agent_control --features metrics
-    cargo run --locked -p tokio-otp --example supervised_actors
-    cargo run --locked -p tokio-otp --example ref_rebind
-    cargo run --locked -p tokio-otp --example drain_policy
-    cargo run --locked -p tokio-otp --example dynamic_actors
-    cargo run --locked -p tokio-otp --example directory
-    cargo run --locked -p tokio-supervisor --example dynamic_children
-    cargo run --locked -p tokio-supervisor --example nested_supervisor
+
+all-examples:
+    bash scripts/run-all-examples.sh
 
 nixfmt-check:
     nixfmt --check flake.nix nix/crane-checks.nix

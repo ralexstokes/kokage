@@ -70,6 +70,7 @@
             cargo-nextest
             git
             just
+            jq
             mdbook
             nixfmt
             ripgrep
