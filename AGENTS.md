@@ -21,8 +21,7 @@ recipes mirror them — keep the two in sync when changing either.
 
 ## Worktrees
 
-Create them wherever suits the task, with one hard rule: **not in `/tmp`** — it
-is cleared on reboot, which has already lost in-flight agent work here.
+Create them under `.worktrees`.
 
 `./scripts/dev` gives any worktree the correct toolchain no matter how it was created:
 
@@ -32,7 +31,3 @@ is cleared on reboot, which has already lost in-flight agent work here.
 - A shell spawned from another checkout inherits *that* checkout's devshell, so
   a worktree can appear to work while silently using the wrong toolchain.
   `./scripts/dev` detects this via `TOKIO_OTP_DEVSHELL` and re-enters the right one.
-
-Worktrees created by Claude Code are direnv-allowed automatically by the
-`WorktreeCreate` hook in `.claude/settings.json`; for a manually created one,
-run `direnv allow <dir>` once if you want the devshell in interactive shells.
