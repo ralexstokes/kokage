@@ -31,3 +31,5 @@ docs/book/
 # allowlist is committed so worktrees and other clones pick it up.
 .claude/*
 !.claude/settings.json
+
+.worktrees/*
