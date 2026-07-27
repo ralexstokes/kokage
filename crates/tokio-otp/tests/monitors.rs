@@ -1,7 +1,7 @@
 use std::{future::pending, sync::Arc, time::Duration};
 
 use tokio::{
-    sync::{Notify, mpsc},
+    sync::{Notify, mpsc, oneshot},
     time::timeout,
 };
 use tokio_otp::{
@@ -38,6 +38,7 @@ impl RawActor for Peer {
 enum ObserverMessage {
     Event(MonitorEvent),
     Crash,
+    Barrier(oneshot::Sender<()>),
 }
 
 #[derive(Clone)]
@@ -64,6 +65,9 @@ impl RawActor for Observer {
                     self.observed.send(event).expect("observer receiver alive");
                 }
                 ObserverMessage::Crash => panic!("deliberate observer panic"),
+                ObserverMessage::Barrier(reply) => {
+                    let _ = reply.send(());
+                }
             }
         }
         Ok(Continue)
@@ -122,13 +126,33 @@ async fn next_event(receiver: &mut mpsc::UnboundedReceiver<MonitorEvent>) -> Mon
         .expect("observer sender alive")
 }
 
-async fn assert_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEvent>) {
-    assert!(
-        timeout(Duration::from_millis(100), receiver.recv())
-            .await
-            .is_err(),
-        "no further events expected"
-    );
+async fn recv_test_event<T>(receiver: &mut mpsc::UnboundedReceiver<T>, phase: &str) -> T {
+    timeout(Duration::from_secs(1), receiver.recv())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|| panic!("channel closed while waiting for {phase}"))
+}
+
+async fn assert_silence(
+    observer: &ActorRef<ObserverMessage>,
+    receiver: &mut mpsc::UnboundedReceiver<MonitorEvent>,
+) {
+    let (barrier_tx, barrier_rx) = oneshot::channel();
+    observer
+        .send(ObserverMessage::Barrier(barrier_tx))
+        .await
+        .expect("observer accepts the silence barrier");
+    timeout(Duration::from_secs(1), barrier_rx)
+        .await
+        .expect("observer processes the silence barrier promptly")
+        .expect("observer keeps the silence barrier sender alive");
+    match receiver.try_recv() {
+        Err(mpsc::error::TryRecvError::Empty) => {}
+        Err(mpsc::error::TryRecvError::Disconnected) => {
+            panic!("observer channel closed before silence could be checked")
+        }
+        Ok(event) => panic!("unexpected event after observer barrier: {event:?}"),
+    }
 }
 
 async fn watch_cancelled(watch: &CancellationHandle) {
@@ -303,8 +327,8 @@ async fn cancelled_watch_suppresses_delivery() {
         .send(PeerMessage::Panic)
         .await
         .expect("panic command sent");
-    assert_silence(&mut fixture.observed).await;
     assert!(peer_task.await.expect_err("peer task panicked").is_panic());
+    assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
     observer_task.abort();
 }
 
@@ -377,7 +401,7 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
         expect_terminated(next_event(&mut fixture.observed).await, "peer"),
         Some(0)
     );
-    assert_silence(&mut fixture.observed).await;
+    assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
 
     second_task.abort();
 }
@@ -388,6 +412,7 @@ enum TaggedObserverMessage {
         event: MonitorEvent,
     },
     Crash,
+    Barrier(oneshot::Sender<()>),
 }
 
 #[derive(Clone)]
@@ -420,6 +445,9 @@ impl RawActor for TaggedObserver {
                     .send((registration, event))
                     .expect("event receiver alive"),
                 TaggedObserverMessage::Crash => panic!("deliberate observer panic"),
+                TaggedObserverMessage::Barrier(reply) => {
+                    let _ = reply.send(());
+                }
             }
         }
         Ok(Continue)
@@ -466,7 +494,7 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
     });
     started(&mut peer_started).await;
     started(&mut observer_started).await;
-    let (registration, event) = observed.recv().await.expect("initial up delivered");
+    let (registration, event) = recv_test_event(&mut observed, "initial tagged up event").await;
     assert_eq!(registration, 0);
     assert_eq!(event, up("peer", 0));
 
@@ -501,21 +529,28 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
         .send(PeerMessage::Stop)
         .await
         .expect("peer stop sent");
-    let (registration, event) = observed.recv().await.expect("down delivered");
+    let (registration, event) = recv_test_event(&mut observed, "tagged down event").await;
     assert_eq!(
         registration, 0,
         "replacement mapper did not replace the watch"
     );
     assert_eq!(expect_down(event).reason, DownReason::Normal);
-    let (registration, event) = observed.recv().await.expect("terminal delivered");
+    let (registration, event) = recv_test_event(&mut observed, "tagged terminal event").await;
     assert_eq!(registration, 0);
     assert_eq!(expect_terminated(event, "peer"), Some(0));
-    assert!(
-        timeout(Duration::from_millis(100), observed.recv())
-            .await
-            .is_err(),
-        "replacement registration must not create a duplicate watch"
-    );
+    let (barrier_tx, barrier_rx) = oneshot::channel();
+    observer_ref
+        .send(TaggedObserverMessage::Barrier(barrier_tx))
+        .await
+        .expect("replacement observer accepts the duplicate-check barrier");
+    timeout(Duration::from_secs(1), barrier_rx)
+        .await
+        .expect("replacement observer processes the duplicate-check barrier")
+        .expect("replacement observer keeps the barrier sender alive");
+    assert!(matches!(
+        observed.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
 
     peer_task
         .await
@@ -613,10 +648,10 @@ async fn repeated_watch_calls_alias_until_cancelled() {
             .await
     });
     started(&mut observer_started).await;
-    let first = watch_rx.recv().await.expect("first watch created");
-    let second = watch_rx.recv().await.expect("second watch created");
+    let first = recv_test_event(&mut watch_rx, "first aliased watch handle").await;
+    let second = recv_test_event(&mut watch_rx, "second aliased watch handle").await;
 
-    let (registration, event) = observed.recv().await.expect("initial up delivered");
+    let (registration, event) = recv_test_event(&mut observed, "initial aliased up event").await;
     assert_eq!(registration, 0, "the first mapper owns the watch");
     assert_eq!(event, up("peer", 0));
 
@@ -628,9 +663,9 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         .send(AliasedObserverMessage::Rewatch)
         .await
         .expect("rewatch command sent");
-    let fresh = watch_rx.recv().await.expect("replacement watch created");
+    let fresh = recv_test_event(&mut watch_rx, "replacement watch handle").await;
     assert!(!fresh.is_cancelled());
-    let (registration, event) = observed.recv().await.expect("fresh up delivered");
+    let (registration, event) = recv_test_event(&mut observed, "replacement up event").await;
     assert_eq!(registration, 2, "the fresh mapper owns the new watch");
     assert_eq!(event, up("peer", 0));
 
@@ -638,10 +673,10 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         .send(PeerMessage::Stop)
         .await
         .expect("peer stop sent");
-    let (registration, event) = observed.recv().await.expect("down delivered");
+    let (registration, event) = recv_test_event(&mut observed, "replacement down event").await;
     assert_eq!(registration, 2);
     assert_eq!(expect_down(event).reason, DownReason::Normal);
-    let (registration, event) = observed.recv().await.expect("terminal delivered");
+    let (registration, event) = recv_test_event(&mut observed, "replacement terminal event").await;
     assert_eq!(registration, 2);
     assert_eq!(expect_terminated(event, "peer"), Some(0));
     watch_cancelled(&fresh).await;
@@ -718,7 +753,7 @@ async fn observer_membership_removal_cancels_its_watches() {
             .await
     });
     started(&mut peer_started).await;
-    let watch = watch_rx.recv().await.expect("watch created");
+    let watch = recv_test_event(&mut watch_rx, "managed watch handle").await;
 
     observer_ref
         .send(ManagedObserverMessage::Stop)
@@ -771,7 +806,7 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
             .await
     });
     started(&mut peer_started).await;
-    let watch = watch_rx.recv().await.expect("watch created");
+    let watch = recv_test_event(&mut watch_rx, "subject-removal watch handle").await;
     assert_eq!(next_event(&mut observed).await, up("peer", 0));
 
     peer_ref
@@ -816,7 +851,7 @@ async fn watching_terminated_peer_delivers_immediate_terminated() {
         None,
         "a never-started terminated target has no last generation"
     );
-    assert_silence(&mut fixture.observed).await;
+    assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
     observer_task.abort();
 }
 
@@ -965,7 +1000,7 @@ async fn watch_registered_between_incarnations_waits_for_next_up() {
             .await
     });
     started(&mut fixture.observer_started).await;
-    assert_silence(&mut fixture.observed).await;
+    assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
 
     let second_peer = fixture.peer.clone();
     let second_task = tokio::spawn(async move {
@@ -1002,7 +1037,7 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
             .await
     });
     started(&mut fixture.observer_started).await;
-    assert_silence(&mut fixture.observed).await;
+    assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
 
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
@@ -1205,7 +1240,7 @@ async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
             .await
     });
     started(&mut peer_started).await;
-    let watch = watch_rx.recv().await.expect("watch created");
+    let watch = recv_test_event(&mut watch_rx, "gated observer watch handle").await;
     let clone = watch.clone();
     assert!(!watch.is_cancelled());
 

@@ -9,7 +9,7 @@ use std::{
 
 use tokio::{
     sync::{mpsc, oneshot},
-    time::{sleep, timeout},
+    time::{advance, timeout},
 };
 use tokio_otp::{
     ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Reply, Runtime,
@@ -166,7 +166,7 @@ impl RawActor for CleanThenReceive {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn send_waits_during_permanent_restart_window() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (first_exited_tx, first_exited_rx) = oneshot::channel();
@@ -203,11 +203,12 @@ async fn send_waits_during_permanent_restart_window() {
         let worker_ref = worker_ref.clone();
         async move { worker_ref.send("after-rebind".to_owned()).await }
     });
-    sleep(Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
     assert!(
         !send_task.is_finished(),
         "send should wait during the restart backoff"
     );
+    advance(Duration::from_millis(100)).await;
 
     let observed = timeout(Duration::from_secs(1), observed_rx.recv())
         .await
@@ -326,7 +327,7 @@ impl RawActor for RestartingRpc {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn call_succeeds_across_restart_window() {
     let (failed_tx, failed_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
@@ -365,11 +366,12 @@ async fn call_succeeds_across_restart_window() {
         let rpc_ref = rpc_ref.clone();
         async move { rpc_ref.call(Duration::from_secs(1), RpcMsg::Get).await }
     });
-    sleep(Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
     assert!(
         !call_task.is_finished(),
         "call should wait during the restart backoff"
     );
+    advance(Duration::from_millis(100)).await;
 
     assert_eq!(
         call_task

@@ -7,15 +7,19 @@ use std::{
     time::Duration,
 };
 
-use tokio::{sync::mpsc, time::timeout};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::timeout,
+};
 use tokio_otp::{
     Actor, ActorResult, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleEventKind,
-    MessageContext, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    MessageContext, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
 };
 
 enum SinkMsg {
     Lifecycle(LifecycleEvent),
     Crash,
+    Barrier(oneshot::Sender<()>),
 }
 
 struct Sink {
@@ -37,6 +41,9 @@ impl Actor for Sink {
                 .send((self.generation, event))
                 .expect("observer remains live"),
             SinkMsg::Crash => return Err(io::Error::other("sink crash requested").into()),
+            SinkMsg::Barrier(reply) => {
+                let _ = reply.send(());
+            }
         }
         Ok(Continue)
     }
@@ -83,11 +90,15 @@ async fn runtime_with_watched_subtree() -> (
             "watched",
             Runtime::builder()
                 .graph(graph.build().expect("nested graph builds"))
-                .restart(RestartPolicy::OnFailure),
+                .restart(RestartPolicy::OnFailure)
+                .restart_intensity(RestartIntensity::new(8, Duration::from_secs(1))),
         )
         .await
         .expect("watched subtree added");
-    handle.wait_started().await.expect("runtime starts");
+    timeout(Duration::from_secs(2), handle.wait_started())
+        .await
+        .expect("runtime startup timed out")
+        .expect("runtime starts");
     (handle, watched, sink, crasher, observed_rx)
 }
 
@@ -121,12 +132,49 @@ async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) 
     .expect("child reaches expected generation");
 }
 
+async fn shutdown_runtime(handle: &RuntimeHandle, phase: &str) {
+    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
+}
+
 async fn crash_and_receive_pair(
     crasher: &tokio_otp::ActorRef<()>,
     observed: &mut mpsc::UnboundedReceiver<(u64, LifecycleEvent)>,
 ) -> [(u64, LifecycleEvent); 2] {
     crasher.send(()).await.expect("crash request delivered");
     [recv_event(observed).await, recv_event(observed).await]
+}
+
+async fn assert_no_buffered_lifecycle(
+    sink: &tokio_otp::ActorRef<SinkMsg>,
+    observed: &mut mpsc::UnboundedReceiver<(u64, LifecycleEvent)>,
+    phase: &str,
+) {
+    let (barrier_tx, barrier_rx) = oneshot::channel();
+    timeout(
+        Duration::from_secs(2),
+        sink.send(SinkMsg::Barrier(barrier_tx)),
+    )
+    .await
+    .expect("timed out sending lifecycle barrier")
+    .expect("sink accepts lifecycle barrier");
+    timeout(Duration::from_secs(2), barrier_rx)
+        .await
+        .expect("sink lifecycle barrier timed out")
+        .expect("sink keeps lifecycle barrier sender alive");
+    match observed.try_recv() {
+        Err(mpsc::error::TryRecvError::Empty) => {}
+        Err(mpsc::error::TryRecvError::Disconnected) => {
+            panic!("lifecycle observer disconnected during {phase}")
+        }
+        Ok((generation, event)) => {
+            panic!(
+                "unexpected lifecycle event during {phase}: sink generation {generation}, {event:?}"
+            )
+        }
+    }
 }
 
 #[tokio::test]
@@ -151,12 +199,6 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
         .await
         .expect("sink crash request delivered");
     wait_for_generation(&handle, "sink", 1).await;
-    assert!(
-        timeout(Duration::from_millis(150), observed.recv())
-            .await
-            .is_err(),
-        "fresh target incarnation received replayed lifecycle history"
-    );
 
     let second = crash_and_receive_pair(&crasher, &mut observed).await;
     assert_eq!(second[0].0, 1);
@@ -164,8 +206,14 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     assert_eq!(second[0].1.seq, first[1].1.seq + 1);
     assert_eq!(second[1].1.seq, second[0].1.seq + 1);
     assert!(!guard.is_cancelled());
+    assert_no_buffered_lifecycle(
+        &sink,
+        &mut observed,
+        "fresh target replay check after a newer lifecycle pair",
+    )
+    .await;
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "lifecycle replay test shutdown").await;
 }
 
 #[tokio::test]
@@ -176,12 +224,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     assert!(guard.is_cancelled());
 
     crasher.send(()).await.expect("crash request delivered");
-    assert!(
-        timeout(Duration::from_millis(150), observed.recv())
-            .await
-            .is_err(),
-        "cancelled lifecycle guard delivered an event"
-    );
+    wait_for_generation(&watched, "crasher", 1).await;
 
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     drop(guard);
@@ -189,14 +232,27 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
         .send(())
         .await
         .expect("second crash request delivered");
-    assert!(
-        timeout(Duration::from_millis(150), observed.recv())
-            .await
-            .is_err(),
-        "dropped lifecycle guard delivered an event"
-    );
+    wait_for_generation(&watched, "crasher", 2).await;
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let later = crash_and_receive_pair(&crasher, &mut observed).await;
+    assert!(matches!(
+        later[0].1.kind,
+        LifecycleEventKind::Exited { generation: 2, .. }
+    ));
+    assert!(matches!(
+        later[1].1.kind,
+        LifecycleEventKind::Started { generation: 3 }
+    ));
+    assert_no_buffered_lifecycle(
+        &sink,
+        &mut observed,
+        "cancelled and dropped guard check after a later positive delivery",
+    )
+    .await;
+    guard.cancel();
+
+    shutdown_runtime(&handle, "lifecycle guard test shutdown").await;
 }
 
 #[tokio::test]
@@ -234,5 +290,5 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     .await
     .expect("pump stops with target identity");
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "lifecycle terminality test shutdown").await;
 }

@@ -44,7 +44,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(
         RestartIntensity::new(4, Duration::from_secs(2))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(500))),
+            .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(30))),
     );
     let fast = ChildSpec::new("fast", {
         let fast_failure = Arc::clone(&fast_failure);
@@ -81,28 +81,25 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         if matches!(
             common::recv_supervisor_event(&mut events).await,
             ObservedEvent::ChildRestartScheduled { ref id, delay, .. }
-                if id == "slow" && delay == Duration::from_millis(500)
+                if id == "slow" && delay == Duration::from_secs(30)
         ) {
             break;
         }
     }
 
     fast_failure.notify_one();
-    assert_eq!(
-        timeout(Duration::from_millis(200), fast_rx.recv())
-            .await
-            .expect("fast sibling should restart during slow backoff")
-            .expect("fast start sender remains open"),
-        1
-    );
-    assert!(
-        timeout(Duration::from_millis(20), slow_rx.recv())
-            .await
-            .is_err(),
-        "slow child should still be in backoff"
-    );
+    assert_eq!(common::recv_event(&mut fast_rx).await, 1);
+    match slow_rx.try_recv() {
+        Err(mpsc::error::TryRecvError::Empty) => {}
+        Err(mpsc::error::TryRecvError::Disconnected) => {
+            panic!("slow start channel closed during backoff")
+        }
+        Ok(generation) => panic!("slow child restarted early at generation {generation}"),
+    }
 
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+    common::shutdown_and_wait(&handle, "sibling restart test shutdown")
+        .await
+        .expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -171,7 +168,9 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
     .expect("sibling should keep running while flaky child restarts");
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "failed transient child test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -206,7 +205,9 @@ async fn permanent_child_restarts_after_completion() {
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "permanent child test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -256,7 +257,9 @@ async fn temporary_child_does_not_restart() {
 
     common::assert_no_event(&mut starts_rx).await;
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "temporary child test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -318,7 +321,9 @@ async fn child_restart_intensity_is_isolated_per_child() {
     assert_eq!(common::recv_n(&mut child_b_rx, 2).await, vec![0, 1]);
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "restart event ordering test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -392,5 +397,7 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
     );
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "restart intensity test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }

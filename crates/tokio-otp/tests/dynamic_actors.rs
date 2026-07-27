@@ -1,11 +1,12 @@
 use std::{
-    future::pending,
+    future::{Future, pending, poll_fn},
     io,
     marker::PhantomData,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    task::Poll,
     time::Duration,
 };
 
@@ -199,6 +200,27 @@ async fn next_monitor_event(events: &mut mpsc::UnboundedReceiver<MonitorEvent>) 
         .expect("monitor sender remains alive")
 }
 
+async fn recv_test_event<T>(rx: &mut mpsc::UnboundedReceiver<T>, phase: &str) -> T {
+    timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|| panic!("channel closed while waiting for {phase}"))
+}
+
+async fn wait_runtime_started(handle: &RuntimeHandle, phase: &str) {
+    timeout(Duration::from_secs(2), handle.wait_started())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
+}
+
+async fn shutdown_runtime(handle: &RuntimeHandle, phase: &str) {
+    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
+}
+
 struct SizedMessage(Vec<u8>);
 
 impl MessageSize for SizedMessage {
@@ -291,7 +313,10 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .await
         .expect("sink added");
     sink.send("first".to_owned()).await.expect("message sent");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("first"));
+    assert_eq!(
+        recv_test_event(&mut observed_rx, "first observed message").await,
+        "first"
+    );
     let initial_lineage = handle
         .snapshot()
         .child("sink")
@@ -337,7 +362,10 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .send("second".to_owned())
         .await
         .expect("replacement receives");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("second"));
+    assert_eq!(
+        recv_test_event(&mut observed_rx, "second observed message").await,
+        "second"
+    );
     let replacement_snapshot_lineage = handle
         .snapshot()
         .child("sink")
@@ -353,7 +381,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     assert_eq!(replacement_lineage, replacement_snapshot_lineage);
     assert!(replacement_lineage > initial_lineage);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "dynamic actor reference test shutdown").await;
 }
 
 #[tokio::test]
@@ -404,7 +432,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
     }
     assert_eq!(next, [MESSAGES_PER_SENDER; 2]);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "FIFO mailbox test shutdown").await;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -496,7 +524,10 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect("actor added");
 
     actor.send(RemovalMsg::Hold).await.expect("hold accepted");
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::Holding));
+    assert_eq!(
+        recv_test_event(&mut events_rx, "actor entering its held handler").await,
+        RemovalEvent::Holding
+    );
 
     let mut snapshots = handle.subscribe_snapshots();
     let remover = handle.clone();
@@ -525,8 +556,14 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect("racing work accepted before intake closes");
     release_handler.notify_one();
 
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::Drained(7)));
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::OnStopStarted));
+    assert_eq!(
+        recv_test_event(&mut events_rx, "queued work draining during removal").await,
+        RemovalEvent::Drained(7)
+    );
+    assert_eq!(
+        recv_test_event(&mut events_rx, "on_stop starting during removal").await,
+        RemovalEvent::OnStopStarted
+    );
     assert!(!removal.is_finished(), "removal waits for on_stop");
     assert!(snapshots.borrow().child("removable").is_some());
     assert!(matches!(
@@ -537,18 +574,20 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     // There is no public Draining state. An awaited send observes the closed
     // incarnation and waits for its terminal membership disposition.
     let stale = actor.clone();
-    let mut during_on_stop = tokio::spawn(async move { stale.send(RemovalMsg::Work(9)).await });
+    let mut during_on_stop = Box::pin(stale.send(RemovalMsg::Work(9)));
+    let first_poll = poll_fn(|cx| Poll::Ready(during_on_stop.as_mut().poll(cx))).await;
     assert!(
-        timeout(Duration::from_millis(20), &mut during_on_stop)
-            .await
-            .is_err(),
+        first_poll.is_pending(),
         "send waits while on_stop is still resolving lifecycle"
     );
 
     release_on_stop.notify_one();
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::OnStopFinished));
+    assert_eq!(
+        recv_test_event(&mut events_rx, "on_stop finishing during removal").await,
+        RemovalEvent::OnStopFinished
+    );
     assert!(matches!(
-        during_on_stop.await.expect("send task joined"),
+        during_on_stop.await,
         Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "removable"
     ));
     removal
@@ -574,7 +613,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .await
         .expect("fresh ref addresses replacement membership");
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "cooperative removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -605,7 +644,10 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         .expect("actor added");
 
     actor.send(RemovalMsg::Hold).await.expect("hold accepted");
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::Holding));
+    assert_eq!(
+        recv_test_event(&mut events_rx, "actor entering its held handler").await,
+        RemovalEvent::Holding
+    );
 
     let mut snapshots = handle.subscribe_snapshots();
     let remover = handle.clone();
@@ -630,7 +672,10 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         .await
         .expect("racing work accepted before handler observes shutdown");
     release_handler.notify_one();
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::OnStopStarted));
+    assert_eq!(
+        recv_test_event(&mut events_rx, "on_stop starting during shutdown").await,
+        RemovalEvent::OnStopStarted
+    );
 
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
@@ -638,7 +683,10 @@ async fn discard_closes_intake_and_drops_racing_messages() {
     ));
     assert!(!removal.is_finished(), "removal waits for on_stop");
     release_on_stop.notify_one();
-    assert_eq!(events_rx.recv().await, Some(RemovalEvent::OnStopFinished));
+    assert_eq!(
+        recv_test_event(&mut events_rx, "on_stop finishing during shutdown").await,
+        RemovalEvent::OnStopFinished
+    );
     removal
         .await
         .expect("removal task joined")
@@ -652,7 +700,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         "messages accepted around Discard removal were not handled"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "shutdown-during-removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -668,7 +716,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
-    handle.wait_started().await.expect("mixed runtime starts");
+    wait_runtime_started(&handle, "mixed runtime startup").await;
     let dynamic = handle
         .subtree("dynamic")
         .expect("dynamic subtree is available");
@@ -717,7 +765,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .add_actor("temporary", Drain::<()>::new, DynamicActorOptions::new())
         .await
         .expect("auto-removed actor id is reusable");
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "remove-on-exit monitor test shutdown").await;
 }
 
 #[tokio::test]
@@ -778,7 +826,7 @@ async fn clean_stop_applies_restart_policy_before_default_removal() {
             .is_some_and(|child| child.generation >= 1)
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "restart policy test shutdown").await;
 }
 
 #[tokio::test]
@@ -827,10 +875,10 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     })
     .await
     .expect("builder default restarts the cleanly stopped actor");
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    wait_for_child(&handle, "explicit", false).await;
     assert_eq!(explicit_starts.load(Ordering::SeqCst), 1);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "dynamic default options test shutdown").await;
 }
 
 #[tokio::test]
@@ -880,7 +928,7 @@ async fn runtime_new_inherits_the_supplied_dynamic_supervisors_defaults() {
     .expect("supplied abort default makes removal immediate")
     .expect("pending actor removed");
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "supplied supervisor defaults test shutdown").await;
 }
 
 #[tokio::test]
@@ -911,7 +959,7 @@ async fn never_actor_auto_removes_after_failure() {
         target.send(()).await,
         Err(SendError::ActorTerminated { actor_id, .. }) if actor_id == "temporary"
     ));
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "never-actor removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -999,7 +1047,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
     never_release.notify_one();
     wait_for_retained_terminal_child(&handle, "never-retained").await;
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "remove-on-exit ordering test shutdown").await;
 }
 
 #[tokio::test]
@@ -1043,7 +1091,7 @@ async fn default_remove_on_exit_does_not_remove_an_actor_that_restarts() {
     .expect("actor restarted");
     assert_eq!(starts.load(Ordering::SeqCst), 2);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "restarting remove-on-exit test shutdown").await;
 }
 
 #[tokio::test]
@@ -1074,7 +1122,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     assert_eq!(stats.message_bytes_accepted, Some(12));
     assert_eq!(stats.mailbox_capacity, 1);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "message-size observation test shutdown").await;
 }
 
 #[derive(Clone)]
@@ -1122,7 +1170,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
     assert_eq!(stats.mailbox_capacity, 1);
 
     release.notify_one();
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "conflating dynamic actor test shutdown").await;
 }
 
 #[tokio::test]
@@ -1136,7 +1184,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
-    handle.wait_started().await.expect("mixed runtime starts");
+    wait_runtime_started(&handle, "mixed runtime startup").await;
     let dynamic = handle
         .subtree("dynamic")
         .expect("dynamic subtree is available");
@@ -1160,8 +1208,11 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         .await
         .expect("message forwarded");
 
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("forwarded"));
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    assert_eq!(
+        recv_test_event(&mut observed_rx, "forwarded static-to-dynamic message").await,
+        "forwarded"
+    );
+    shutdown_runtime(&handle, "static-to-dynamic forwarding test shutdown").await;
 }
 
 #[derive(Clone)]
@@ -1193,7 +1244,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
-    handle.wait_started().await.expect("mixed runtime starts");
+    wait_runtime_started(&handle, "mixed runtime startup").await;
     let dynamic_scope = handle
         .subtree("dynamic")
         .expect("dynamic subtree is available");
@@ -1212,9 +1263,12 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
         .send("forwarded".to_owned())
         .await
         .expect("dynamic actor receives");
-    assert_eq!(observed_rx.recv().await.as_deref(), Some("forwarded"));
+    assert_eq!(
+        recv_test_event(&mut observed_rx, "forwarded dynamic-to-static message").await,
+        "forwarded"
+    );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "dynamic-to-static forwarding test shutdown").await;
 }
 
 #[derive(Clone)]
@@ -1263,7 +1317,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         .add_actor("dynamic", Drain::<()>::new, DynamicActorOptions::default())
         .await
         .expect("label reusable after timed-out removal");
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    shutdown_runtime(&handle, "timed-out removal test shutdown").await;
 }
 
 #[tokio::test]

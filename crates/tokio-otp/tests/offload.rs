@@ -9,8 +9,37 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_otp::{LiveContext, prelude::*};
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+async fn wait_runtime_started(runtime: &RuntimeHandle, phase: &str) {
+    tokio::time::timeout(TEST_TIMEOUT, runtime.wait_started())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
+}
+
+async fn shutdown_runtime(runtime: &RuntimeHandle, phase: &str) {
+    tokio::time::timeout(TEST_TIMEOUT, runtime.shutdown_and_wait())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
+}
+
+async fn wait_notification(notification: &Notify, phase: &str) {
+    tokio::time::timeout(TEST_TIMEOUT, notification.notified())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"));
+}
+
+async fn recv_test_event<T>(receiver: &mut mpsc::UnboundedReceiver<T>, phase: &str) -> T {
+    tokio::time::timeout(TEST_TIMEOUT, receiver.recv())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+        .unwrap_or_else(|| panic!("channel closed while waiting for {phase}"))
+}
 
 #[derive(Debug)]
 enum OutcomeMsg {
@@ -72,7 +101,7 @@ async fn offload_and_offload_or_post_total_and_fallback_outcomes() {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "offload outcome runtime startup").await;
 
     let mut observed = Vec::new();
     for _ in 0..4 {
@@ -103,24 +132,27 @@ async fn offload_and_offload_or_post_total_and_fallback_outcomes() {
             .iter()
             .any(|message| matches!(message, OutcomeMsg::OrFallback(7)))
     );
-    runtime.shutdown_and_wait().await.unwrap();
+    shutdown_runtime(&runtime, "offload outcome runtime shutdown").await;
 }
 
 #[derive(Debug)]
 enum StaleMsg {
     Start,
     Done,
+    Probe(oneshot::Sender<()>),
 }
 
 struct StaleActor {
     incarnation: usize,
     drop_started: Arc<AtomicBool>,
+    drop_finished: Arc<AtomicBool>,
     release_drop: Arc<AtomicBool>,
     done: Arc<AtomicUsize>,
 }
 
 struct SlowDropFuture {
     drop_started: Arc<AtomicBool>,
+    drop_finished: Arc<AtomicBool>,
     release_drop: Arc<AtomicBool>,
 }
 
@@ -140,6 +172,7 @@ impl Drop for SlowDropFuture {
                 std::thread::yield_now();
             }
         });
+        self.drop_finished.store(true, Ordering::Release);
     }
 }
 
@@ -166,6 +199,7 @@ impl Actor for StaleActor {
                     Duration::from_secs(1),
                     SlowDropFuture {
                         drop_started: self.drop_started.clone(),
+                        drop_finished: self.drop_finished.clone(),
                         release_drop: self.release_drop.clone(),
                     },
                     |_| StaleMsg::Done,
@@ -174,6 +208,9 @@ impl Actor for StaleActor {
             }
             StaleMsg::Done => {
                 self.done.fetch_add(1, Ordering::Relaxed);
+            }
+            StaleMsg::Probe(reply) => {
+                let _ = reply.send(());
             }
         }
         Ok(Continue)
@@ -184,6 +221,7 @@ impl Actor for StaleActor {
 async fn offload_is_aborted_and_never_posts_to_a_fresh_incarnation() {
     let constructed = Arc::new(AtomicUsize::new(0));
     let drop_started = Arc::new(AtomicBool::new(false));
+    let drop_finished = Arc::new(AtomicBool::new(false));
     let release_drop = Arc::new(AtomicBool::new(false));
     let _release_on_drop = ReleaseOnDrop(release_drop.clone());
     let done = Arc::new(AtomicUsize::new(0));
@@ -191,11 +229,13 @@ async fn offload_is_aborted_and_never_posts_to_a_fresh_incarnation() {
     let actor = graph.add({
         let constructed = constructed.clone();
         let drop_started = drop_started.clone();
+        let drop_finished = drop_finished.clone();
         let release_drop = release_drop.clone();
         let done = done.clone();
         move || StaleActor {
             incarnation: constructed.fetch_add(1, Ordering::Relaxed),
             drop_started: drop_started.clone(),
+            drop_finished: drop_finished.clone(),
             release_drop: release_drop.clone(),
             done: done.clone(),
         }
@@ -206,7 +246,7 @@ async fn offload_is_aborted_and_never_posts_to_a_fresh_incarnation() {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "stale-offload runtime startup").await;
     actor.send(StaleMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while constructed.load(Ordering::Relaxed) < 2 || !drop_started.load(Ordering::Acquire) {
@@ -217,9 +257,21 @@ async fn offload_is_aborted_and_never_posts_to_a_fresh_incarnation() {
     .unwrap();
     assert_eq!(actor.stats().outstanding_offloads, 0);
     release_drop.store(true, Ordering::Release);
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !drop_finished.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("aborted offload drop should finish after release");
+    let (probe_tx, probe_rx) = oneshot::channel();
+    actor.send(StaleMsg::Probe(probe_tx)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), probe_rx)
+        .await
+        .expect("fresh incarnation should process the post-abort probe")
+        .expect("fresh incarnation should keep the probe sender alive");
     assert_eq!(done.load(Ordering::Relaxed), 0);
-    runtime.shutdown_and_wait().await.unwrap();
+    shutdown_runtime(&runtime, "stale-offload runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -274,7 +326,7 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "abort-handle runtime startup").await;
     actor.send(AbortMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         while actor.stats().outstanding_offloads != 1 {
@@ -293,7 +345,7 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
     .await
     .unwrap();
     assert_eq!(done.load(Ordering::Relaxed), 0);
-    runtime.shutdown_and_wait().await.unwrap();
+    shutdown_runtime(&runtime, "abort-handle runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -369,16 +421,20 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "draining-offload runtime startup").await;
     actor.send(DrainMsg::Start).await.unwrap();
-    entered.notified().await;
+    wait_notification(&entered, "draining actor handler entry").await;
     actor.send(DrainMsg::Queued).await.unwrap();
     let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
     tokio::task::yield_now().await;
     if policy == DrainPolicy::Drain {
         release.notify_waiters();
     }
-    shutdown.await.unwrap().unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, shutdown)
+        .await
+        .expect("draining-offload shutdown task timed out")
+        .expect("draining-offload shutdown task should join")
+        .expect("draining-offload runtime should shut down cleanly");
 
     let mut values = Vec::new();
     while let Ok(value) = receiver.try_recv() {
@@ -465,9 +521,9 @@ async fn offload_postback_uses_mailbox_backpressure() {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "backpressure runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
-    offload_registered.notified().await;
+    wait_notification(&offload_registered, "backpressure offload registration").await;
     actor.send(BackpressureMsg::Fill).await.unwrap();
     offload_release.notify_one();
     tokio::task::yield_now().await;
@@ -475,9 +531,15 @@ async fn offload_postback_uses_mailbox_backpressure() {
     assert_eq!(stats.mailbox_depth, 1);
     assert_eq!(stats.outstanding_offloads, 1);
     handler_release.notify_one();
-    assert_eq!(receiver.recv().await, Some("fill"));
-    assert_eq!(receiver.recv().await, Some("done"));
-    runtime.shutdown_and_wait().await.unwrap();
+    assert_eq!(
+        recv_test_event(&mut receiver, "mailbox fill marker").await,
+        "fill"
+    );
+    assert_eq!(
+        recv_test_event(&mut receiver, "offload completion marker").await,
+        "done"
+    );
+    shutdown_runtime(&runtime, "backpressure runtime shutdown").await;
 }
 
 #[tokio::test]
@@ -507,9 +569,13 @@ async fn offload_postback_uses_conflating_mailbox_policy() {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "conflating postback runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
-    offload_registered.notified().await;
+    wait_notification(
+        &offload_registered,
+        "conflating postback offload registration",
+    )
+    .await;
     actor.send(BackpressureMsg::Fill).await.unwrap();
     offload_release.notify_one();
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -520,9 +586,12 @@ async fn offload_postback_uses_conflating_mailbox_policy() {
     .await
     .unwrap();
     handler_release.notify_one();
-    assert_eq!(receiver.recv().await, Some("done"));
+    assert_eq!(
+        recv_test_event(&mut receiver, "surviving handler completion marker").await,
+        "done"
+    );
     assert!(receiver.try_recv().is_err());
-    runtime.shutdown_and_wait().await.unwrap();
+    shutdown_runtime(&runtime, "conflating postback runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -581,14 +650,18 @@ async fn drain_waits_for_offload_deadline_and_handles_its_postback() {
         .build()
         .unwrap()
         .spawn();
-    runtime.wait_started().await.unwrap();
+    wait_runtime_started(&runtime, "deadline-drain runtime startup").await;
     actor.send(DeadlineDrainMsg::Start).await.unwrap();
-    registered.notified().await;
+    wait_notification(&registered, "deadline-drain offload registration").await;
     let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
     let outcome = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
         .unwrap()
         .unwrap();
     assert!(matches!(outcome, Err(OffloadDeadline)));
-    shutdown.await.unwrap().unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, shutdown)
+        .await
+        .expect("deadline-drain shutdown task timed out")
+        .expect("deadline-drain shutdown task should join")
+        .expect("deadline-drain runtime should shut down cleanly");
 }

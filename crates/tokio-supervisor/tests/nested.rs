@@ -52,8 +52,7 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         Some(ExitStatusView::Completed)
     ));
 
-    handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::shutdown(handle).await;
 }
 
 #[tokio::test]
@@ -747,16 +746,19 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
 
     let mid = SupervisorBuilder::new()
         .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
-        .child(ChildSpec::new("fuse", {
-            let fail = fail.clone();
-            move |_ctx| {
+        .child(
+            ChildSpec::new("fuse", {
                 let fail = fail.clone();
-                async move {
-                    fail.notified().await;
-                    Err(common::test_error("escalate middle supervisor"))
+                move |_ctx| {
+                    let fail = fail.clone();
+                    async move {
+                        fail.notified().await;
+                        Err(common::test_error("escalate middle supervisor"))
+                    }
                 }
-            }
-        }))
+            })
+            .shutdown(ShutdownPolicy::abort()),
+        )
         .supervisor(SupervisorSpec::new("leafsup", leafsup))
         .build()
         .expect("valid middle supervisor");
@@ -799,16 +801,14 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
     }
     common::recv_event(&mut starts_rx).await;
 
-    grand_snapshots
-        .wait_for(|snapshot| {
-            snapshot.state == SupervisorStateView::Running
-                && snapshot.lifecycle_seq > baseline_seq
-                && snapshot
-                    .child("worker")
-                    .is_some_and(|worker| worker.started)
-        })
-        .await
-        .expect("stable snapshot channel should publish the replacement incarnation");
+    common::wait_for_snapshot(&mut grand_snapshots, |snapshot| {
+        snapshot.state == SupervisorStateView::Running
+            && snapshot.lifecycle_seq > baseline_seq
+            && snapshot
+                .child("worker")
+                .is_some_and(|worker| worker.started)
+    })
+    .await;
     assert_eq!(
         grand_handle
             .add_child(ChildSpec::new("rebound", |_| async { Ok(()) }))
@@ -820,8 +820,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         "the grandchild control channel should bind to the replacement incarnation"
     );
 
-    handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::shutdown(handle).await;
 }
 
 #[tokio::test]
