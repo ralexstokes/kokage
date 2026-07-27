@@ -14,7 +14,7 @@ enum Msg {
 }
 
 # async fn load() -> String { String::new() }
-# fn start(ctx: &ActorContext<Msg>) {
+# fn start(ctx: &mut ActorContext<Msg>) {
 ctx.offload_or(
     Duration::from_millis(250),
     load(),
@@ -26,22 +26,23 @@ ctx.offload_or(
 
 The deadline and fallback are required: timeout cannot be forgotten, but the
 common path does not need to expose a separate deadline type in the message
-protocol. The completion uses the actor's ordinary mailbox policy. A full
-FIFO mailbox backpressures it; conflating mailboxes may replace it like any
-other message.
+protocol. The actor loop owns the completion directly. It does not consume
+mailbox capacity or participate in conflation, and its ordering relative to
+external mailbox messages is unspecified. The loop selects fairly between
+the two sources so neither one has priority.
 
 Use the lower-level `ActorContext::offload` when the actor must distinguish a
 deadline from a value returned by the future. Its continuation receives the
 total `Result<T, OffloadDeadline>` outcome.
 
-## Incarnations and correlation
+## Ownership and correlation
 
-Every postback is stamped to the incarnation that started it. If that
-incarnation fails or restarts, the future is aborted and a racing completion
-is silently dropped instead of following the restart-stable `ActorRef` into
-fresh in-memory state.
+Every offload belongs to the actor context that started it. If that incarnation
+fails or restarts, dropping the context aborts its offload set and discards any
+unreaped completion. Nothing is sent through the restart-stable `ActorRef`, so
+an old completion cannot reach fresh in-memory state.
 
-The library owns only this cross-incarnation staleness rule. Correlation among
+The library owns that structural cross-incarnation boundary. Correlation among
 concurrent offloads in one incarnation remains part of the message protocol:
 
 ```rust,no_run
@@ -51,16 +52,17 @@ enum Msg {
     Fetched { request: u64, value: Result<String, OffloadDeadline> },
 }
 # async fn fetch() -> String { String::new() }
-# fn start(ctx: &ActorContext<Msg>, request: u64) {
+# fn start(ctx: &mut ActorContext<Msg>, request: u64) {
 ctx.offload(Duration::from_secs(1), fetch(), move |value| {
     Msg::Fetched { request, value }
 });
 # }
 ```
 
-The request id is still necessary when multiple fetches can overlap. A hand
-rolled incarnation or turn tag used only to reject results after restart is
-not.
+The request id is still necessary when multiple fetches can overlap. A
+hand-rolled incarnation or turn tag used only to reject results after restart
+is not. A panic in the future or continuation resumes on the actor task and is
+therefore handled by its normal supervision policy.
 
 ## Pipelining calls from a handler
 
@@ -149,10 +151,10 @@ impl Actor for Router {
 
 Reply ownership is what keeps this observationally equivalent to the inline
 version: `Reply` moves into the continuation message, so the actor applies its
-state update before answering, and a caller follow-up is ordered after that
-update in the FIFO mailbox. Incarnation ownership and the order id play the
-roles described above — a racing postback is dropped after a restart, while
-the domain request id still says which of several concurrent offloads completed.
+state update before answering. Context ownership and the order id play the
+roles described above — an unreaped completion is dropped with a failed
+incarnation, while the domain request id still says which of several concurrent
+offloads completed.
 
 When per-callee state outgrows what a resolution message can carry, promote
 the callee to a dedicated child actor and let supervision manage its lifecycle
@@ -183,13 +185,14 @@ Offloads follow handler actors' `DrainPolicy`:
   offload, which joins the same bounded drain.
 
 Draining must interleave messages and completions. Waiting for all offloads
-first would deadlock when a full FIFO mailbox backpressures a completion that
-needs the actor to receive one queued message before capacity becomes
-available. Each offload future is still bounded by its own required deadline;
-the standalone host bound or supervised child grace remains the outer backstop
-for slow handlers.
+first would postpone already accepted external work unnecessarily. Completions
+cannot deadlock on mailbox capacity because they remain in the loop-owned task
+set until reaped. Each offload future is still bounded by its own required
+deadline; the standalone host bound or supervised child grace remains the
+outer backstop for slow handlers.
 
 `ActorStats::outstanding_offloads` exposes the current number of owned offloads.
-The method lives on the shared `ActorContext` type, but automatic shutdown and
-drain integration belongs to the framework-owned `Actor` loop. A `RawActor`
-that uses `offload` must define its own receive and shutdown protocol.
+It falls when the actor loop reaps a completion or observes an abort. The method
+lives on the shared `ActorContext` type: `recv` and `try_recv` merge offload
+completions with mailbox messages for a `RawActor`, but a hand-written raw loop
+must still define its own shutdown and drain protocol.

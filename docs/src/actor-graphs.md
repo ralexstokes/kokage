@@ -393,6 +393,8 @@ blocking work after it starts.
 For intentionally detached or concurrent work, clone `ctx.myself()`, call
 `tokio::task::spawn_blocking` directly, and send the result back as a message.
 The `blocking_lifecycle` example demonstrates this mailbox-as-completion
-pattern.
+pattern. Bounded async work started with `ctx.offload` is different: its
+completion is owned and reaped by the actor loop without consuming mailbox
+capacity.
 
 [`ActorRef`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorRef.html

@@ -243,21 +243,23 @@ impl<H: Actor> RawActor for H {
             let event = if let Some(message) = ctx.take_continuation() {
                 LoopEvent::Message(Some(message))
             } else if let Some(timer) = ctx.next_timer_wake() {
+                let shutdown = ctx.shutdown.clone();
                 tokio::select! {
                     biased;
-                    _ = ctx.shutdown.cancelled() => {
+                    _ = shutdown.cancelled() => {
                         break;
                     }
                     () = tokio::time::sleep_until(timer.deadline) => LoopEvent::Timer(timer),
-                    message = ctx.mailbox.recv() => LoopEvent::Message(message),
+                    message = ctx.next_delivery() => LoopEvent::Message(message),
                 }
             } else {
+                let shutdown = ctx.shutdown.clone();
                 tokio::select! {
                     biased;
-                    _ = ctx.shutdown.cancelled() => {
+                    _ = shutdown.cancelled() => {
                         break;
                     }
-                    message = ctx.mailbox.recv() => LoopEvent::Message(message),
+                    message = ctx.next_delivery() => LoopEvent::Message(message),
                 }
             };
 
@@ -312,34 +314,10 @@ impl<H: Actor> RawActor for H {
 
         ctx.close_external_intake();
         if self.drain_policy() == DrainPolicy::Drain {
-            // Waiting for every offload before receiving would deadlock when a
-            // full FIFO mailbox backpressures a completion. Drain externally
-            // accepted messages and incarnation-local offload completions
-            // together until both sources are quiescent. Continuations are
-            // deliberately ignored once stopping begins.
-            loop {
-                let message = match ctx.mailbox.try_recv() {
-                    Ok(message) => Some(message),
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-                        if ctx.outstanding_offloads() == 0 =>
-                    {
-                        // A final offload can enqueue its postback after the
-                        // first poll and then decrement the gauge before this
-                        // check. The offload's Release decrement synchronizes
-                        // with the Acquire load that observed zero, so re-poll
-                        // before declaring the mailbox quiescent.
-                        ctx.mailbox.try_recv().ok()
-                    }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        let changed = ctx.offload_change_notify();
-                        tokio::select! {
-                            message = ctx.mailbox.recv() => message,
-                            () = changed.notified() => continue,
-                        }
-                    }
-                };
-                let Some(message) = message else { break };
+            // Completions and the mailbox are independent loop-owned sources.
+            // Drain whichever is ready until the JoinSet is empty and the
+            // closed external mailbox has no accepted message left.
+            while let Some(message) = ctx.next_drain_delivery().await {
                 ctx.record_received();
                 // Once stopping begins, flow values do not change the drain
                 // decision. Continuations queued by drain handlers are left

@@ -23,7 +23,7 @@ use crate::{
             mailbox,
         },
         builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
-        context::{ActorContext, ActorLifetime, ActorOffloads, ActorRef},
+        context::{ActorContext, ActorLifetime, ActorRef},
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
         observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
@@ -74,8 +74,7 @@ where
             let observability = start.observability;
             let (sender, mailbox) = mailbox(&mailbox_mode, start.mailbox_capacity);
             let actor_id = binding.actor_id().clone();
-            let offloads = ActorOffloads::new();
-            let incarnation = MailboxRef::new(actor_id.clone(), sender, offloads.gauge());
+            let incarnation = MailboxRef::new(actor_id.clone(), sender);
             let bound_mailbox = BindingGuard::bind(
                 binding.clone(),
                 incarnation.clone(),
@@ -88,7 +87,6 @@ where
                 id: actor_id,
                 mailbox,
                 myself,
-                incarnation,
                 shutdown: actor_shutdown,
                 observability,
                 timers: Default::default(),
@@ -96,7 +94,7 @@ where
                 monitors,
                 ready: Some(start.ready),
                 continuations: Default::default(),
-                offloads,
+                offloads: Default::default(),
                 supervisor: start.supervisor,
                 children: start.children,
             };
