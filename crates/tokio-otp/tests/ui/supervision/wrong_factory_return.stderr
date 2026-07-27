@@ -1,0 +1,15 @@
+error[E0271]: expected `{closure@wrong_factory_return.rs:29:59}` to return `Worker`, but it returns `Other`
+  --> tests/ui/supervision/wrong_factory_return.rs:29:62
+   |
+29 |     Application::graph(|_| ApplicationFactories { worker: || Other }).unwrap();
+   |                                                           -- ^^^^^ expected `Worker`, found `Other`
+   |                                                           |
+   |                                                           this closure
+   |
+   = note: required for `{closure@$DIR/tests/ui/supervision/wrong_factory_return.rs:29:59: 29:61}` to implement `ActorFactory`
+note: required by a bound in `Application::graph`
+  --> tests/ui/supervision/wrong_factory_return.rs:23:10
+   |
+23 | #[derive(Supervision)]
+   |          ^^^^^^^^^^^ required by this bound in `Application::graph`
+   = note: this error originates in the derive macro `Supervision` (in Nightly builds, run with -Z macro-backtrace for more info)

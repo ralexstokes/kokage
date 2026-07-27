@@ -1,9 +1,9 @@
 # Compile-fail UI tests
 
-`actor-factory/`, `topology/`, and `lifecycle-stages/` hold
+`actor-factory/`, `supervision/`, and `lifecycle-stages/` hold
 [trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
-`tests/topology_ui.rs`. The former covers the `#[derive(ActorFactory)]` shape
-and attribute contract. The latter covers the `#[derive(Topology)]` contract,
+`tests/derive_ui.rs`. The former covers the `#[derive(ActorFactory)]` shape
+and attribute contract. The latter covers the `#[derive(Supervision)]` contract,
 typed factory return/completeness checks, plus the two token-API guarantees
 (wrong-type `define` is E0271, reusing a consumed `ActorSlot` is E0382). Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
@@ -32,7 +32,7 @@ toolchain in `rust-toolchain.toml` may break them even though nothing is
 wrong. Regenerate locally and review the diff:
 
 ```sh
-TRYBUILD=overwrite cargo test -p tokio-otp --test topology_ui
+TRYBUILD=overwrite cargo test -p tokio-otp --test derive_ui
 git diff crates/tokio-otp/tests/ui
 ```
 

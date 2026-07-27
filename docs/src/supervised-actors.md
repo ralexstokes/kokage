@@ -154,3 +154,93 @@ and travels by clone or by message.
 
 Use `Strategy::OneForAll` when a group of actor children should share fate,
 or configure them as a runtime subtree for a scoped restart boundary.
+
+## Declaring a Tree with the Derive
+
+`Runtime::builder` reconciles a flat graph with a hierarchical tree by hand.
+When the shape is static, `#[derive(Supervision)]` can declare both at once:
+struct nesting is scope nesting.
+
+```rust,ignore
+use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Supervision};
+
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForAll)]
+struct Workers {
+    parse: Parser,
+    render: Renderer,
+}
+
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForOne)]
+struct App {
+    #[supervision(restart = RestartPolicy::Never)]
+    ingest: Ingest,
+    #[supervision(scope)]
+    workers: Workers,
+    #[supervision(dynamic)]
+    sessions: DynamicScope,
+}
+
+// Reserved before wiring, so an actor factory can capture the mount.
+let sessions = Runtime::dynamic();
+let mount = sessions.handle();
+
+let (runtime, refs) = App::runtime(|_refs| AppFactories {
+    ingest: move || Ingest::new(mount.clone()),
+    workers: WorkersFactories {
+        parse: || Parser::new(),
+        render: || Renderer::new(),
+    },
+    sessions,
+})?;
+let handle = runtime.spawn();
+```
+
+All three actors join **one** graph, so refs cross scope boundaries freely and
+cyclic wiring keeps working exactly as it does for a graph alone. Only
+supervision placement is hierarchical. Actor labels are qualified by the scope
+path, so the graph above contains `ingest`, `workers.parse`, and
+`workers.render`.
+
+Supervisor child ids stay local to their scope: `parse` is named `parse` inside
+the `workers` supervisor, giving the path `root.workers.parse` — the label with
+`root.` in front, not a repeated scope name. Snapshot and lifecycle lookups take
+the local id (`workers_handle.snapshot().child("parse")`) while `actor_stats`
+reports the qualified label (`workers.parse`).
+
+Because one graph means one `mailbox_capacity`, set a per-actor override with
+`ActorOptions::mailbox_capacity` where a scope previously had its own graph.
+
+Field order is semantic here in a way it is not for a graph alone: an ordered
+scope starts children in declaration order, and `Strategy::RestForOne` restarts
+the ones that follow. Reordering fields changes restart behaviour.
+
+Two field attributes select what a field is:
+
+- `#[supervision(scope)]` — a nested derived struct, becoming a named child
+  scope.
+- `#[supervision(dynamic)]` — an empty scope whose membership is written at
+  runtime. The field type is the `DynamicScope` marker, which is never
+  constructed; its wiring entry is a `DynamicRuntimeBuilder`. Supplying the
+  builder is what makes the scope's mount handle available *before* wiring, so
+  an actor can hold it as a durable factory field instead of looking the scope
+  up after spawn. Policy comes from the builder
+  (`Runtime::dynamic().restart(..)`), not from attributes.
+
+Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
+field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
+the `SupervisionTree` declaration — paired, like every generated constructor,
+with the refs bundle — without building it, which is useful for asserting shape
+in tests through `outline()`.
+
+Each of `graph`, `tree`, and `runtime` has a `_with` form taking a
+`GraphBuilder`. That builder is for graph-wide configuration — name and mailbox
+capacity — and must not have actors registered on it already: `tree_with` and
+`runtime_with` place only the derived struct's own fields in the supervision
+tree, so
+a pre-registered actor joins the graph but is never started. Use `graph_with`
+when composing a graph by hand and hosting it yourself.
+
+Reach for `Runtime::builder` instead when the shape is not static — actors
+created in a loop, ids chosen at runtime, or subtrees assembled conditionally.

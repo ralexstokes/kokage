@@ -205,6 +205,18 @@ impl Graph {
         &self.inner.actors
     }
 
+    /// Finds a runnable actor by its label.
+    ///
+    /// Labels are unique within a graph, so at most one actor matches. This is
+    /// how a supervision declaration places a named actor without depending on
+    /// declaration order.
+    pub fn actor(&self, label: &str) -> Option<&RunnableActor> {
+        self.inner
+            .actors
+            .iter()
+            .find(|actor| actor.label() == label)
+    }
+
     /// Returns point-in-time stats for every actor in graph declaration order.
     pub fn stats(&self) -> Vec<ActorStats> {
         self.inner.actors.iter().map(RunnableActor::stats).collect()

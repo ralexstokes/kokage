@@ -1,10 +1,14 @@
 //! A multi-venue trading engine exercising the library's supervision,
 //! messaging, and timer features together.
 //!
-//! The topology is two supervision trees: a `trading-core` graph with a
-//! nested `venues` subtree (both one-for-one, sequential start). The core
-//! graph is built with slots so the mutual references resolve: venue actors
-//! need core refs (ledger, reconciler) before the core actors are defined.
+//! The whole shape is one `#[derive(Supervision)]` declaration (`TradingEngine`):
+//! a root scope of core actors with a nested `venues` scope, both one-for-one
+//! with sequential start. Struct nesting is scope nesting, and every actor
+//! joins a single graph, so the mutual references resolve without opening
+//! slots by hand — venue actors capture core refs (ledger, reconciler) and the
+//! reconciler captures every feed's ref in the same wiring closure. Actor
+//! labels are qualified by scope path, so the venue ids are
+//! `venues.venue-a-feed` and friends.
 //!
 //! # Modules
 //!
@@ -137,7 +141,7 @@ use messages::*;
 use reconciler::Reconciler;
 use router::OrderRouter;
 use telemetry::LatencyRecorder;
-use venue::{ExchangeSim, VenueFeedFactory, VenueGatewayFactory};
+use venue::{ExchangeSim, VenueFeed, VenueFeedFactory, VenueGateway, VenueGatewayFactory};
 
 const VENUE_A: VenueId = "venue-a";
 const VENUE_B: VenueId = "venue-b";
@@ -154,6 +158,54 @@ fn feed_message_key(message: &FeedMsg) -> &'static str {
         // snapshot cannot conflate away a pending crash command.
         FeedMsg::Crash => "__control__",
     }
+}
+
+/// Venue actors keep the shallower mailbox the separate `trading-venues` graph
+/// gave them before the scopes merged into one graph.
+const VENUE_MAILBOX: usize = 16;
+
+fn venue_options<M: Send + 'static>() -> ActorOptions<M> {
+    ActorOptions::new().mailbox_capacity(VENUE_MAILBOX)
+}
+
+fn feed_options() -> ActorOptions<FeedMsg> {
+    venue_options()
+        .mailbox(MailboxMode::conflate_by_key(feed_message_key))
+        .message_size()
+}
+
+/// One scope per venue-facing pair, restart-budgeted as a group. Labels are
+/// pinned so the qualified ids stay `venues.venue-a-feed` and friends.
+#[derive(Supervision)]
+#[supervision(
+    strategy = Strategy::OneForOne,
+    restart_intensity = RestartIntensity::new(5, Duration::from_secs(10)),
+)]
+struct Venues {
+    #[supervision(label = "venue-a-feed", options = feed_options())]
+    venue_a_feed: VenueFeed,
+    #[supervision(label = "venue-a-gateway", options = venue_options())]
+    venue_a_gateway: VenueGateway,
+    #[supervision(label = "venue-b-feed", options = feed_options())]
+    venue_b_feed: VenueFeed,
+    #[supervision(label = "venue-b-gateway", options = venue_options())]
+    venue_b_gateway: VenueGateway,
+}
+
+/// The whole engine. `venues` comes first so the venue scope starts ahead of
+/// the core actors, matching the subtree-before-actors order the runtime
+/// builder used before.
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForOne)]
+struct TradingEngine {
+    #[supervision(scope)]
+    venues: Venues,
+    reconciler: Reconciler,
+    ledger: Ledger,
+    #[supervision(label = "order-router")]
+    router: OrderRouter,
+    control: Control,
+    health: Health,
 }
 
 struct App {
@@ -201,116 +253,103 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let venue_b = ExchangeSim::default();
     let intake_gate = Arc::new(AtomicBool::new(true));
 
-    let mut core = GraphBuilder::new();
-    core.name("trading-core");
-    core.mailbox_capacity(32);
-    let (reconciler_slot, reconciler) = core.slot::<ReconcilerMsg>("reconciler");
-    let (ledger_slot, ledger) = core.slot::<LedgerMsg>("ledger");
-    let (router_slot, router) = core.slot::<RouterMsg>("order-router");
-    let (control_slot, control) = core.slot::<ControlMsg>("control");
-    let (health_slot, health) = core.slot::<HealthMsg>("health");
-
-    let mut venues = GraphBuilder::new();
-    venues.name("trading-venues");
-    venues.mailbox_capacity(16);
-    let venue_a_feed = venues.actor_with_options(
-        "venue-a-feed",
-        VenueFeedFactory {
-            venue: VENUE_A,
-            exchange: venue_a.clone(),
-            reconciler: reconciler.clone(),
-            latency: latency.clone(),
-        },
-        ActorOptions::new()
-            .mailbox(MailboxMode::conflate_by_key(feed_message_key))
-            .message_size(),
-    );
-    let venue_a_gateway = venues.actor(
-        "venue-a-gateway",
-        VenueGatewayFactory {
-            venue: VENUE_A,
-            exchange: venue_a.clone(),
-            ledger: ledger.clone(),
-            latency: latency.clone(),
-        },
-    );
-    let venue_b_feed = venues.actor_with_options(
-        "venue-b-feed",
-        VenueFeedFactory {
-            venue: VENUE_B,
-            exchange: venue_b.clone(),
-            reconciler: reconciler.clone(),
-            latency: latency.clone(),
-        },
-        ActorOptions::new()
-            .mailbox(MailboxMode::conflate_by_key(feed_message_key))
-            .message_size(),
-    );
-    let venue_b_gateway = venues.actor(
-        "venue-b-gateway",
-        VenueGatewayFactory {
-            venue: VENUE_B,
-            exchange: venue_b.clone(),
-            ledger: ledger.clone(),
-            latency: latency.clone(),
-        },
-    );
-
-    let feed_refs = HashMap::from([
-        (VENUE_A, venue_a_feed.clone()),
-        (VENUE_B, venue_b_feed.clone()),
-    ]);
-    let gateways = HashMap::from([
-        (VENUE_A, venue_a_gateway.clone()),
-        (VENUE_B, venue_b_gateway.clone()),
-    ]);
-    core.define(reconciler_slot, {
-        let exchanges = vec![(VENUE_A, venue_a.clone()), (VENUE_B, venue_b.clone())];
-        move || Reconciler::new(feed_refs.clone(), exchanges.clone())
-    });
-    core.define(ledger_slot, {
-        let latency = latency.clone();
-        move || Ledger::new(latency.clone())
-    });
-    core.define(router_slot, {
-        let ledger = ledger.clone();
-        let intake_gate = intake_gate.clone();
-        // Order keys correlate the router's pipelined gateway calls, so the
-        // sequence lives outside the per-incarnation state: keys must stay
-        // unique across router restarts (see router.rs).
-        let sequence = Arc::new(AtomicU64::new(0));
-        move || {
-            OrderRouter::new(
-                gateways.clone(),
-                ledger.clone(),
-                intake_gate.clone(),
-                sequence.clone(),
-            )
+    // Core and venue actors share one graph, so the cycle between them — feeds
+    // hold the reconciler's ref, the reconciler holds every feed's — is wired in
+    // a single closure with no slots to open and fill by hand.
+    let mut builder = GraphBuilder::new();
+    builder.name("trading-engine");
+    builder.mailbox_capacity(32);
+    let (tree, refs) = TradingEngine::tree_with(builder, |refs| {
+        let venues = &refs.venues;
+        let feed_refs = HashMap::from([
+            (VENUE_A, venues.venue_a_feed.clone()),
+            (VENUE_B, venues.venue_b_feed.clone()),
+        ]);
+        let gateways = HashMap::from([
+            (VENUE_A, venues.venue_a_gateway.clone()),
+            (VENUE_B, venues.venue_b_gateway.clone()),
+        ]);
+        TradingEngineFactories {
+            venues: VenuesFactories {
+                venue_a_feed: VenueFeedFactory {
+                    venue: VENUE_A,
+                    exchange: venue_a.clone(),
+                    reconciler: refs.reconciler.clone(),
+                    latency: latency.clone(),
+                },
+                venue_a_gateway: VenueGatewayFactory {
+                    venue: VENUE_A,
+                    exchange: venue_a.clone(),
+                    ledger: refs.ledger.clone(),
+                    latency: latency.clone(),
+                },
+                venue_b_feed: VenueFeedFactory {
+                    venue: VENUE_B,
+                    exchange: venue_b.clone(),
+                    reconciler: refs.reconciler.clone(),
+                    latency: latency.clone(),
+                },
+                venue_b_gateway: VenueGatewayFactory {
+                    venue: VENUE_B,
+                    exchange: venue_b.clone(),
+                    ledger: refs.ledger.clone(),
+                    latency: latency.clone(),
+                },
+            },
+            reconciler: {
+                let exchanges = vec![(VENUE_A, venue_a.clone()), (VENUE_B, venue_b.clone())];
+                move || Reconciler::new(feed_refs.clone(), exchanges.clone())
+            },
+            ledger: {
+                let latency = latency.clone();
+                move || Ledger::new(latency.clone())
+            },
+            router: {
+                let ledger = refs.ledger.clone();
+                let intake_gate = intake_gate.clone();
+                // Order keys correlate the router's pipelined gateway calls, so
+                // the sequence lives outside the per-incarnation state: keys
+                // must stay unique across router restarts (see router.rs).
+                let sequence = Arc::new(AtomicU64::new(0));
+                move || {
+                    OrderRouter::new(
+                        gateways.clone(),
+                        ledger.clone(),
+                        intake_gate.clone(),
+                        sequence.clone(),
+                    )
+                }
+            },
+            control: {
+                let intake_gate = intake_gate.clone();
+                let venue_a_gateway = venues.venue_a_gateway.clone();
+                let venue_b_gateway = venues.venue_b_gateway.clone();
+                move || Control {
+                    gateways: vec![venue_a_gateway.clone(), venue_b_gateway.clone()],
+                    intake_gate: intake_gate.clone(),
+                }
+            },
+            health: {
+                let control = refs.control.clone();
+                move || Health::new(control.clone())
+            },
         }
-    });
-    core.define(control_slot, {
-        let intake_gate = intake_gate.clone();
-        move || Control {
-            gateways: vec![venue_a_gateway.clone(), venue_b_gateway.clone()],
-            intake_gate: intake_gate.clone(),
-        }
-    });
-    core.define(health_slot, {
-        let control = control.clone();
-        move || Health::new(control.clone())
-    });
+    })?;
+    let TradingEngineRefs {
+        venues,
+        reconciler,
+        ledger,
+        router,
+        control,
+        health,
+    } = refs;
+    let VenuesRefs {
+        venue_a_feed,
+        venue_b_feed,
+        ..
+    } = venues;
 
-    let venue_graph = venues.build()?;
-    let core_graph = core.build()?;
-    let venue_runtime = Runtime::builder()
-        .graph(venue_graph)
-        .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartIntensity::new(5, Duration::from_secs(10)));
-    let runtime = Runtime::builder()
-        .graph(core_graph)
-        .strategy(Strategy::OneForOne)
-        .subtree("venues", venue_runtime)
-        .build()?;
+    let runtime = tree.build()?;
     let handle = runtime.spawn();
 
     let background_stop = CancellationToken::new();
@@ -602,12 +641,14 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
             .subtree("venues")
             .expect("venue runtime subtree")
             .actor_stats();
-        ["venue-a-feed", "venue-b-feed"].iter().all(|id| {
-            stats
-                .iter()
-                .find(|sample| sample.actor_id == *id)
-                .is_some_and(|sample| sample.messages_conflated > 0)
-        })
+        ["venues.venue-a-feed", "venues.venue-b-feed"]
+            .iter()
+            .all(|id| {
+                stats
+                    .iter()
+                    .find(|sample| sample.actor_id == *id)
+                    .is_some_and(|sample| sample.messages_conflated > 0)
+            })
     })
     .await?;
     let cancelled = app
@@ -625,7 +666,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         .subtree("venues")
         .expect("venue runtime subtree")
         .actor_stats();
-    for id in ["venue-a-feed", "venue-b-feed"] {
+    for id in ["venues.venue-a-feed", "venues.venue-b-feed"] {
         assert!(
             feed_stats
                 .iter()

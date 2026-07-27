@@ -1,5 +1,0 @@
-error: Topology can only be derived for structs with named fields
-  --> tests/ui/topology/tuple_struct.rs:15:21
-   |
-15 | struct TupleTopology(Worker);
-   |                     ^^^^^^^^

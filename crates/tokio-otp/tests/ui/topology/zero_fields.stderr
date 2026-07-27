@@ -1,5 +1,0 @@
-error: Topology requires at least one actor field
- --> tests/ui/topology/zero_fields.rs:4:8
-  |
-4 | struct EmptyTopology {}
-  |        ^^^^^^^^^^^^^

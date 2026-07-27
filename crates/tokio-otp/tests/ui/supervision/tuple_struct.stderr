@@ -1,0 +1,5 @@
+error: Supervision can only be derived for structs with named fields
+  --> tests/ui/supervision/tuple_struct.rs:15:18
+   |
+15 | struct TupleScope(Worker);
+   |                  ^^^^^^^^

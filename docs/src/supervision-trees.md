@@ -97,9 +97,10 @@ different scope because child ids are sibling-scoped.
 
 An [`ActorSpec`] is a complete actor child declaration: its runnable payload
 provides the id, and optional `restart`, `shutdown`, and `restart_intensity`
-values override the enclosing scope's defaults. Bare runnable actors convert
-to `ActorSpec`, so `.actor(runnable)` remains the concise spelling when no
-override is needed.
+values override the enclosing scope's defaults. `child_id` overrides the id
+itself, for a nested scope whose actor labels are already qualified by the
+scope path. Bare runnable actors convert to `ActorSpec`, so `.actor(runnable)`
+remains the concise spelling when no override is needed.
 
 When a hand-built dynamic scope will receive actors at runtime, call
 `dynamic_defaults(&graph)` on that scope to adopt the graph's actor execution

@@ -465,7 +465,7 @@ application — an LLM agent control plane (`agent-control-sketch.md`) — cover
 dynamic actor lifecycles under a subtree, transient (`RestartPolicy::Never`)
 children, long-running handlers as state machines, factory-fresh rehydration,
 continuations, cooperative blocking work, custom `RawActor` loops, and the
-`Topology` derive.
+`Supervision` derive.
 
 Big shapes that neither application covers, roughly in priority order:
 
@@ -525,7 +525,7 @@ application or materially strengthen the runtime:
   timers), state timeouts, and continuations;
 - FIFO, latest-wins, and keyed-conflating mailboxes;
 - restart-stable typed actor references;
-- topology derivation and metadata;
+- supervision derivation and metadata;
 - snapshot state, ordered supervisor lifecycle streams, and cumulative restart counters;
 - snapshots, events, tracing, actor stats, and message-size metrics; and
 - raw/advanced composition escape hatches.

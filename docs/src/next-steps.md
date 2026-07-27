@@ -38,7 +38,7 @@ cargo run -p <crate> --example <name>
 | Example | Shows |
 |---------|-------|
 | `supervised_actors` | Per-actor supervision with default policies. |
-| `topology` | A cyclic graph wired with `#[derive(Topology)]`. |
+| `supervision` | A cyclic graph wired with `#[derive(Supervision)]`. |
 | `individual_actor_policies` | Per-actor restart/shutdown overrides. |
 | `dynamic_actors` | Adding and removing actors at runtime, refs distributed by message. |
 | `directory` | A typed, userland name-directory actor (registry replacement pattern). |

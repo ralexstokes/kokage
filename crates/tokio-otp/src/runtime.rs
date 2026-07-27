@@ -137,6 +137,7 @@ pub struct DynamicActorOptions<M = ()> {
     pub restart_intensity: Option<RestartIntensity>,
     mailbox_mode: MailboxMode<M>,
     size_hint: Option<fn(&M) -> usize>,
+    mailbox_capacity: Option<usize>,
     // `None` selects the dynamic-actor default. Keeping the override unresolved
     // makes `restart(...).remove_on_exit(...)` order-independent.
     remove_on_exit: Option<bool>,
@@ -152,6 +153,7 @@ impl<M> Clone for DynamicActorOptions<M> {
             restart_intensity: self.restart_intensity,
             mailbox_mode: self.mailbox_mode.clone(),
             size_hint: self.size_hint,
+            mailbox_capacity: self.mailbox_capacity,
             remove_on_exit: self.remove_on_exit,
         }
     }
@@ -167,6 +169,7 @@ impl<M> Default for DynamicActorOptions<M> {
             restart_intensity: None,
             mailbox_mode: MailboxMode::Queue,
             size_hint: None,
+            mailbox_capacity: None,
             remove_on_exit: None,
         }
     }
@@ -211,6 +214,13 @@ impl<M> DynamicActorOptions<M> {
     #[must_use]
     pub fn mailbox(mut self, mailbox_mode: MailboxMode<M>) -> Self {
         self.mailbox_mode = mailbox_mode;
+        self
+    }
+
+    /// Overrides the hosting scope's mailbox capacity for this actor alone.
+    #[must_use]
+    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.mailbox_capacity = Some(capacity);
         self
     }
 
@@ -273,6 +283,7 @@ impl<M> DynamicActorOptions<M> {
             ActorOptions {
                 mailbox_mode: self.mailbox_mode,
                 size_hint: self.size_hint,
+                mailbox_capacity: self.mailbox_capacity,
             },
             child_options,
         )
@@ -897,6 +908,8 @@ pub(crate) struct ActorOverrides {
 
 /// How one actor is supervised as a child of its enclosing scope.
 pub(crate) struct ActorChildOptions {
+    /// Id within the enclosing scope. Defaults to the actor label.
+    pub(crate) child_id: Option<String>,
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: ShutdownPolicy,
     pub(crate) restart_intensity: Option<RestartIntensity>,
@@ -911,12 +924,18 @@ pub(crate) struct ActorChildOptions {
 impl ActorChildOptions {
     pub(crate) fn new(restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
         Self {
+            child_id: None,
             restart,
             shutdown,
             restart_intensity: None,
             remove_on_exit: false,
             children: None,
         }
+    }
+
+    pub(crate) fn child_id(mut self, child_id: Option<String>) -> Self {
+        self.child_id = child_id;
+        self
     }
 
     pub(crate) fn restart_intensity(mut self, intensity: Option<RestartIntensity>) -> Self {
@@ -941,13 +960,14 @@ pub(crate) fn actor_child_spec(
     options: ActorChildOptions,
 ) -> ChildSpec {
     let ActorChildOptions {
+        child_id,
         restart,
         shutdown,
         restart_intensity,
         remove_on_exit,
         children,
     } = options;
-    let actor_id = actor.label().to_owned();
+    let actor_id = child_id.unwrap_or_else(|| actor.label().to_owned());
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);

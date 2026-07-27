@@ -1,0 +1,5 @@
+error: expected `=`
+  --> tests/ui/supervision/options_malformed.rs:16:26
+   |
+16 |     #[supervision(options)]
+   |                          ^

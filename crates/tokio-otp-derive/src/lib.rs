@@ -3,7 +3,7 @@
 //! Derive macros for `tokio-otp`.
 //!
 //! Do not depend on this crate directly: `tokio-otp` re-exports
-//! `#[derive(ActorFactory)]` and `#[derive(Topology)]` under its default
+//! `#[derive(ActorFactory)]` and `#[derive(Supervision)]` under its default
 //! `derive` feature, and the generated code refers to `tokio_otp` paths.
 
 use proc_macro::TokenStream;
@@ -186,23 +186,35 @@ fn parse_factory_attributes(
     Ok(defaults)
 }
 
-/// Derives a static actor topology from a named-field struct.
+/// Derives a static actor graph and the supervision scope running it.
 ///
 /// Each field declares one actor type in the graph. Every field type must
 /// implement `tokio_otp::RawActor`; any `Actor` qualifies through the blanket
 /// impl. For a struct named `Pipeline`, the derive generates:
 ///
-/// * a `PipelineRefs` struct with one field per topology field, typed
+/// * a `PipelineRefs` struct with one field per struct field, typed
 ///   `ActorRef<<FieldType as RawActor>::Msg>`;
-/// * a generic `PipelineFactories` struct with one factory field per topology
-///   field;
-/// * `Pipeline::graph(wire)`, which builds the graph with a default
-///   `GraphBuilder`;
-/// * `Pipeline::graph_with_refs(wire)`, which also returns the generated
-///   `PipelineRefs` bundle for use as application entry points;
-/// * `Pipeline::graph_with(builder, wire)`, which accepts a preconfigured
-///   `GraphBuilder` — graph name, mailbox capacity, and any extra actors
-///   registered by hand.
+/// * a generic `PipelineFactories` struct with one factory field per struct
+///   field, implementing `tokio_otp::SupervisionFactories<Pipeline>`;
+/// * a `PipelineSlots` struct holding the unfilled graph slots;
+/// * a `PipelineScopes` struct holding the reserved dynamic scopes;
+/// * an implementation of the `tokio_otp::Supervision` trait; and
+/// * three families of constructors, each in a plain and a `_with`
+///   (preconfigured `GraphBuilder`) form:
+///   * `Pipeline::graph(wire)` — the actor graph alone;
+///   * `Pipeline::tree(wire)` — a `SupervisionTree` declaration over that
+///     graph; and
+///   * `Pipeline::runtime(wire)` — a built `Runtime`, ready to `spawn`.
+///
+/// Every constructor returns its value paired with the `PipelineRefs` bundle,
+/// for use as application entry points; write `let (graph, _) = ...` when the
+/// refs are not needed.
+///
+/// The `GraphBuilder` a `_with` form takes is for graph-wide configuration —
+/// name and mailbox capacity — and must not have actors registered on it
+/// already: `tree_with` and `runtime_with` place only this struct's own
+/// actors in the supervision tree, so a pre-registered actor joins the graph
+/// but is never started. Use `graph_with` when composing a graph by hand.
 ///
 /// The `wire` closure receives `&PipelineRefs` before any actor incarnation is
 /// constructed, so factories can capture each other's refs even when the graph
@@ -248,7 +260,7 @@ fn parse_factory_attributes(
 /// #     }
 /// # }
 /// #
-/// #[derive(tokio_otp::Topology)]
+/// #[derive(tokio_otp::Supervision)]
 /// struct Pipeline {
 ///     frontend: Frontend,
 ///     parser: Parser,
@@ -256,7 +268,7 @@ fn parse_factory_attributes(
 /// }
 ///
 /// # fn main() -> Result<(), tokio_otp::GraphBuildError> {
-/// let (graph, refs) = Pipeline::graph_with_refs(|refs| {
+/// let (graph, refs) = Pipeline::graph(|refs| {
 ///     PipelineFactories {
 ///         frontend: {
 ///             let refs = refs.clone();
@@ -285,21 +297,34 @@ fn parse_factory_attributes(
 /// cycles inherit the deadlock hazard: two actors that `send` to each other
 /// while both mailboxes are full wait forever, and a `call` cycle deadlocks
 /// at depth one. Use `try_send` on feedback edges, and `call` only
-/// "downhill" along a DAG ordering of the topology.
+/// "downhill" along a DAG ordering of the declared actors.
 ///
 /// # Actor labels
 ///
-/// Field names become actor labels verbatim. Labels are display names, not
-/// addresses: they appear in tracing fields, actor stats, and supervisor
-/// child ids — renaming a field renames all of those, but never affects
-/// type checking or message routing.
+/// Field names become actor labels, qualified by the path of enclosing
+/// scopes: a `parse` field inside a `workers` scope is labelled
+/// `workers.parse`. Root-level fields are unqualified. Override the name of
+/// any node — actor or scope — with `#[supervision(label = "...")]`; the
+/// override replaces that one path component, so it must not contain `.`.
+///
+/// Labels are display names, not addresses: they appear in tracing fields and
+/// actor stats, and renaming a field renames both, but never affects type
+/// checking or message routing.
+///
+/// A supervisor child id is local to its scope, so a nested actor is named
+/// `parse` within the `workers` supervisor while its graph label stays
+/// `workers.parse`. Scope names and label components come from the same field
+/// names, so the supervisor path spells the label rather than repeating the
+/// scope: `root.workers.parse`, whose tail past `root.` is exactly the label.
+/// Snapshot and lifecycle lookups therefore take the local id, while
+/// `actor_stats` reports the qualified label.
 ///
 /// # Visibility
 ///
-/// The refs struct and the generated `graph` / `graph_with_refs` /
-/// `graph_with` methods inherit the topology struct's visibility; each refs field inherits the
-/// corresponding topology field's visibility. A `pub` topology with `pub`
-/// fields can therefore be wired from another module or crate.
+/// The refs struct and the generated constructors inherit the derived
+/// struct's visibility; each refs field inherits the corresponding field's
+/// visibility. A `pub` struct with `pub` fields can therefore be wired from
+/// another module or crate.
 ///
 /// # Compile-time guarantees
 ///
@@ -317,21 +342,30 @@ fn parse_factory_attributes(
 ///   literal checking;
 /// * returning the wrong actor type from a field factory fails to compile;
 /// * filling the same slot twice is unrepresentable — the generated code owns
-///   exactly one slot token per field.
+///   exactly one slot token per field;
+/// * a `#[supervision(dynamic)]` field whose type is not `DynamicScope` fails to
+///   compile;
+/// * `scope` and `dynamic` on one field is rejected;
+/// * a `label` that is empty or contains `.` is rejected; and
+/// * two nodes sharing a name — whether from field names or `label`
+///   overrides — are rejected.
+///
+/// `SupervisionBuildError`, returned by `runtime` and `runtime_with`, is this
+/// derive's own error union; the `SupervisorBuildError` it wraps is the
+/// lower-level validation error from `tokio-supervisor`.
 ///
 /// # Errors
 ///
-/// `graph`, `graph_with_refs`, and `graph_with` return `GraphBuildError` for
-/// the runtime configuration checks that remain, such as passing `graph_with`
-/// a builder that already has an actor registered under the same id as a
-/// topology field.
+/// `graph` and `graph_with` return `GraphBuildError` for the runtime
+/// configuration checks that remain, such as passing `graph_with` a builder
+/// that already has an actor registered under the same id as a declared field.
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
 ///
 /// # Per-actor options
 ///
-/// Add `#[topology(options = expression)]` to a field to pass an
+/// Add `#[supervision(options = expression)]` to a field to pass an
 /// `ActorOptions` expression to `GraphBuilder::slot_with_options`. Fields
 /// without this attribute continue to use the default options:
 ///
@@ -352,31 +386,289 @@ fn parse_factory_attributes(
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }
-/// #[derive(tokio_otp::Topology)]
+/// #[derive(tokio_otp::Supervision)]
 /// struct MarketData {
-///     #[topology(options = ActorOptions::new()
+///     #[supervision(options = ActorOptions::new()
 ///         .mailbox(MailboxMode::Conflate)
 ///         .message_size())]
 ///     snapshots: SnapshotActor,
 /// }
 /// ```
 ///
-#[proc_macro_derive(Topology, attributes(topology))]
-pub fn derive_topology(input: TokenStream) -> TokenStream {
+/// # Supervision shape
+///
+/// Struct nesting is scope nesting. A `#[supervision(scope)]` field whose type
+/// is another derived struct becomes a named child scope; the actors still join
+/// one shared graph, so refs cross scope boundaries freely and cyclic wiring
+/// keeps working. Only supervision placement is hierarchical.
+///
+/// ```
+/// # use tokio_otp::{
+/// #     Actor, ActorResult, DynamicScope, MessageContext, RestartPolicy, Runtime, Strategy,
+/// #     SupervisionBuildError, prelude::Continue,
+/// # };
+/// # struct Worker;
+/// # impl Actor for Worker {
+/// #     type Msg = ();
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+/// #         Ok(Continue)
+/// #     }
+/// # }
+/// #[derive(tokio_otp::Supervision)]
+/// #[supervision(strategy = Strategy::OneForAll)]
+/// struct Workers {
+///     parse: Worker,
+///     render: Worker,
+/// }
+///
+/// #[derive(tokio_otp::Supervision)]
+/// #[supervision(strategy = Strategy::OneForOne)]
+/// struct App {
+///     #[supervision(restart = RestartPolicy::Never)]
+///     ingest: Worker,
+///     #[supervision(scope)]
+///     workers: Workers,
+///     #[supervision(dynamic)]
+///     sessions: DynamicScope,
+/// }
+///
+/// # fn main() -> Result<(), SupervisionBuildError> {
+/// let (runtime, refs) = App::runtime(|_refs| AppFactories {
+///     ingest: || Worker,
+///     workers: WorkersFactories {
+///         parse: || Worker,
+///         render: || Worker,
+///     },
+///     sessions: Runtime::dynamic().restart(RestartPolicy::Never),
+/// })?;
+/// # let _ = (runtime, refs.ingest, refs.workers.parse);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Field order is semantic for supervision, unlike for a graph alone: an
+/// ordered scope starts children in declaration order and `Strategy::RestForOne`
+/// restarts the ones that follow. Reordering fields changes restart behaviour.
+///
+/// ## Scope attributes
+///
+/// On the struct, each taking `= <expression>`:
+///
+/// | Key | Effect |
+/// |-----|--------|
+/// | `strategy` | This scope's restart strategy. |
+/// | `restart` | Default restart policy inherited by actor fields. |
+/// | `shutdown` | Default shutdown policy inherited by actor fields. |
+/// | `restart_intensity` | This scope's restart-intensity window. |
+///
+/// ## Field attributes
+///
+/// `label = "..."` renames a node. `options = <expression>` configures an
+/// actor's mailbox. `restart`, `shutdown`, and `restart_intensity` override
+/// the enclosing scope's defaults for one actor. A nested scope declares those
+/// three on its own struct instead. The remaining keys select what a field is:
+///
+/// * `scope` — a nested derived struct, contributing a named child scope.
+/// * `dynamic` — an empty scope whose membership is written at runtime. The
+///   field type must be `DynamicScope`, a marker that is never constructed.
+///   Its wiring entry is a `DynamicRuntimeBuilder` rather than an actor
+///   factory, which both configures the scope
+///   (`Runtime::dynamic().restart(..)`) and makes its mount handle available
+///   before any actor is built, so a factory can capture it.
+///
+#[proc_macro_derive(Supervision, attributes(supervision))]
+pub fn derive_supervision(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    expand_topology(input)
+    expand_supervision(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
-    let topology = input.ident;
+/// Scope-level `#[supervision(...)]` configuration.
+#[derive(Default)]
+struct ScopeAttrs {
+    strategy: Option<Expr>,
+    restart: Option<Expr>,
+    shutdown: Option<Expr>,
+    restart_intensity: Option<Expr>,
+}
+
+/// What a declared field is.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum FieldKind {
+    /// An actor, the default.
+    Actor,
+    /// A nested derived struct, contributing a named child scope.
+    Scope,
+    /// An empty runtime-written scope, declared by a `DynamicScope` marker.
+    Dynamic,
+}
+
+/// Field-level `#[supervision(...)]` configuration.
+struct FieldAttrs {
+    kind: FieldKind,
+    label: Option<String>,
+    options: Option<Expr>,
+    restart: Option<Expr>,
+    shutdown: Option<Expr>,
+    restart_intensity: Option<Expr>,
+}
+
+impl Default for FieldAttrs {
+    fn default() -> Self {
+        Self {
+            kind: FieldKind::Actor,
+            label: None,
+            options: None,
+            restart: None,
+            shutdown: None,
+            restart_intensity: None,
+        }
+    }
+}
+
+fn take_expr(
+    slot: &mut Option<Expr>,
+    meta: &syn::meta::ParseNestedMeta,
+    key: &str,
+) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(meta.error(format!("duplicate `{key}` option")));
+    }
+    *slot = Some(meta.value()?.parse()?);
+    Ok(())
+}
+
+fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
+    let mut parsed = ScopeAttrs::default();
+
+    for attr in attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("supervision"))
+    {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("strategy") {
+                return take_expr(&mut parsed.strategy, &meta, "strategy");
+            }
+            if meta.path.is_ident("restart") {
+                return take_expr(&mut parsed.restart, &meta, "restart");
+            }
+            if meta.path.is_ident("shutdown") {
+                return take_expr(&mut parsed.shutdown, &meta, "shutdown");
+            }
+            if meta.path.is_ident("restart_intensity") {
+                return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
+            }
+            Err(meta.error(
+                "expected `strategy`, `restart`, `shutdown`, or `restart_intensity`, \
+                 each `= <expression>`",
+            ))
+        })?;
+    }
+
+    Ok(parsed)
+}
+
+fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
+    let mut parsed = FieldAttrs::default();
+    let mut kind_span = None;
+
+    for attr in field
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("supervision"))
+    {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("scope") || meta.path.is_ident("dynamic") {
+                let kind = if meta.path.is_ident("scope") {
+                    FieldKind::Scope
+                } else {
+                    FieldKind::Dynamic
+                };
+                if kind_span.is_some() {
+                    return Err(meta.error("`scope` and `dynamic` are mutually exclusive"));
+                }
+                kind_span = Some(attr.span());
+                parsed.kind = kind;
+                return Ok(());
+            }
+            if meta.path.is_ident("label") {
+                if parsed.label.is_some() {
+                    return Err(meta.error("duplicate `label` option"));
+                }
+                let literal: syn::LitStr = meta.value()?.parse()?;
+                let label = literal.value();
+                if label.is_empty() {
+                    return Err(syn::Error::new_spanned(&literal, "label must not be empty"));
+                }
+                if label.contains('.') {
+                    return Err(syn::Error::new_spanned(
+                        &literal,
+                        "label must not contain `.`, which separates path components",
+                    ));
+                }
+                parsed.label = Some(label);
+                return Ok(());
+            }
+            if meta.path.is_ident("options") {
+                return take_expr(&mut parsed.options, &meta, "options");
+            }
+            if meta.path.is_ident("restart") {
+                return take_expr(&mut parsed.restart, &meta, "restart");
+            }
+            if meta.path.is_ident("shutdown") {
+                return take_expr(&mut parsed.shutdown, &meta, "shutdown");
+            }
+            if meta.path.is_ident("restart_intensity") {
+                return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
+            }
+            Err(meta.error(
+                "expected `scope`, `dynamic`, `label = \"...\"`, \
+                 or `options`/`restart`/`shutdown`/`restart_intensity` = <expression>",
+            ))
+        })?;
+    }
+
+    if parsed.kind != FieldKind::Actor && parsed.options.is_some() {
+        return Err(syn::Error::new_spanned(
+            field,
+            "`options` applies only to actor fields; a nested scope configures its own",
+        ));
+    }
+    if parsed.kind == FieldKind::Scope
+        && (parsed.restart.is_some()
+            || parsed.shutdown.is_some()
+            || parsed.restart_intensity.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            field,
+            "a nested scope declares its own `restart`, `shutdown`, and `restart_intensity` \
+             on its own struct",
+        ));
+    }
+    if parsed.kind == FieldKind::Dynamic
+        && (parsed.restart.is_some()
+            || parsed.shutdown.is_some()
+            || parsed.restart_intensity.is_some())
+    {
+        return Err(syn::Error::new_spanned(
+            field,
+            "a dynamic scope takes its policy from the `DynamicRuntimeBuilder` wired for \
+             this field, as in `Runtime::dynamic().restart(..)`",
+        ));
+    }
+
+    Ok(parsed)
+}
+
+fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let declared = input.ident;
     let vis = input.vis;
 
     if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
         return Err(syn::Error::new_spanned(
             input.generics,
-            "Topology cannot be derived for generic structs",
+            "Supervision cannot be derived for generic structs",
         ));
     }
 
@@ -386,212 +678,491 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             Fields::Unnamed(fields) => {
                 return Err(syn::Error::new_spanned(
                     fields,
-                    "Topology can only be derived for structs with named fields",
+                    "Supervision can only be derived for structs with named fields",
                 ));
             }
             Fields::Unit => {
                 return Err(syn::Error::new_spanned(
-                    &topology,
-                    "Topology can only be derived for structs with named fields",
+                    &declared,
+                    "Supervision can only be derived for structs with named fields",
                 ));
             }
         },
         _ => {
             return Err(syn::Error::new_spanned(
-                &topology,
-                "Topology can only be derived for structs with named fields",
+                &declared,
+                "Supervision can only be derived for structs with named fields",
             ));
         }
     };
 
     if fields.is_empty() {
         return Err(syn::Error::new_spanned(
-            &topology,
-            "Topology requires at least one actor field",
+            &declared,
+            "Supervision requires at least one actor field",
         ));
     }
 
-    let refs = format_ident!("{topology}Refs");
-    let factories = format_ident!("{topology}Factories");
+    let scope_attrs = parse_scope_attributes(&input.attrs)?;
+    let field_attrs = fields
+        .iter()
+        .map(parse_supervision_field)
+        .collect::<syn::Result<Vec<_>>>()?;
+
+    let refs = format_ident!("{declared}Refs");
+    let factories = format_ident!("{declared}Factories");
+    let slots = format_ident!("{declared}Slots");
+    let scopes = format_ident!("{declared}Scopes");
 
     let field_idents: Vec<_> = fields
         .iter()
         .map(|field| field.ident.as_ref().expect("named fields"))
         .collect();
-    let field_vis: Vec<_> = fields.iter().map(|field| &field.vis).collect();
-    let field_types: Vec<_> = fields.iter().map(|field| &field.ty).collect();
-    let field_names: Vec<_> = field_idents.iter().map(|ident| ident.to_string()).collect();
-    let factory_params: Vec<_> = (0..field_idents.len())
-        .map(|index| format_ident!("F{index}"))
+    let node_names: Vec<String> = field_idents
+        .iter()
+        .zip(&field_attrs)
+        .map(|(ident, attrs)| attrs.label.clone().unwrap_or_else(|| ident.to_string()))
         .collect();
-    let actor_options = parse_field_attributes(&fields)?;
-    let slot_idents: Vec<_> = field_idents
+
+    // Names address nodes in both the graph label path and the supervisor
+    // scope, so a collision would silently shadow a node rather than fail at
+    // build time.
+    let mut seen_names = std::collections::HashSet::with_capacity(node_names.len());
+    for (index, name) in node_names.iter().enumerate() {
+        if !seen_names.insert(name) {
+            return Err(syn::Error::new_spanned(
+                &fields[index],
+                format!(
+                    "duplicate node name `{name}`; node names must be unique within one struct"
+                ),
+            ));
+        }
+    }
+
+    // Type parameters are minted only for fields that carry a factory, so a
+    // `dynamic` marker field neither takes a parameter nor appears in the
+    // wiring struct literal: it has nothing to construct.
+    let mut factory_params: Vec<Option<syn::Ident>> = Vec::with_capacity(fields.len());
+    let mut next_param = 0usize;
+    for attrs in &field_attrs {
+        if attrs.kind == FieldKind::Dynamic {
+            factory_params.push(None);
+        } else {
+            factory_params.push(Some(format_ident!("F{next_param}")));
+            next_param += 1;
+        }
+    }
+    let all_params: Vec<&syn::Ident> = factory_params.iter().flatten().collect();
+
+    let mut scope_fields = Vec::new();
+    let mut scope_ctor = Vec::new();
+    let mut slot_fields = Vec::new();
+    let mut refs_fields = Vec::new();
+    let mut factory_fields = Vec::new();
+    let mut factory_bounds = Vec::new();
+    let mut open_stmts = Vec::new();
+    let mut define_stmts = Vec::new();
+    let mut bound_idents = Vec::new();
+    let mut marker_assertions = Vec::new();
+
+    for (index, field) in fields.iter().enumerate() {
+        let ident = field_idents[index];
+        let field_vis = &field.vis;
+        let ty = &field.ty;
+        let attrs = &field_attrs[index];
+        let name = &node_names[index];
+        let slot_ident = format_ident!("{ident}_slot");
+
+        match attrs.kind {
+            FieldKind::Actor => {
+                let param = factory_params[index]
+                    .as_ref()
+                    .expect("actor field parameter");
+                // Uses of a field type behind the `RawActor` bound are spanned
+                // at that field type, so a non-actor field reports E0277 there
+                // rather than at the derive attribute. User-code spans opt the
+                // refs fields into dead-code lints, hence the explicit allow:
+                // an unread ref is normal for leaf actors and not actionable,
+                // since the macro mints one per field.
+                let ref_ty = quote_spanned! {ty.span()=>
+                    ::tokio_otp::ActorRef<<#ty as ::tokio_otp::RawActor>::Msg>
+                };
+                let slot_ty = quote_spanned! {ty.span()=>
+                    ::tokio_otp::ActorSlot<<#ty as ::tokio_otp::RawActor>::Msg>
+                };
+                let options = attrs.options.clone().map_or_else(
+                    || quote! { ::tokio_otp::ActorOptions::new() },
+                    |options| quote! { #options },
+                );
+                slot_fields.push(quote! { #field_vis #ident: #slot_ty });
+                refs_fields.push(quote! {
+                    #[allow(dead_code)]
+                    #field_vis #ident: #ref_ty
+                });
+                factory_fields.push(quote! {
+                    #[allow(dead_code)]
+                    #field_vis #ident: #param
+                });
+                factory_bounds.push(quote! { #param: ::tokio_otp::ActorFactory<Actor = #ty> });
+                bound_idents.push(ident);
+                open_stmts.push(quote_spanned! {ty.span()=>
+                    let (#slot_ident, #ident) = builder.slot_with_options::
+                        <<#ty as ::tokio_otp::RawActor>::Msg>(
+                            &::tokio_otp::qualified_label(prefix, #name),
+                            #options,
+                        );
+                });
+                define_stmts.push(quote! {
+                    builder.define(slots.#ident, self.#ident);
+                });
+            }
+            FieldKind::Scope => {
+                let param = factory_params[index]
+                    .as_ref()
+                    .expect("scope field parameter");
+                let ref_ty = quote_spanned! {ty.span()=>
+                    <#ty as ::tokio_otp::Supervision>::Refs
+                };
+                let slot_ty = quote_spanned! {ty.span()=>
+                    <#ty as ::tokio_otp::Supervision>::Slots
+                };
+                slot_fields.push(quote! { #field_vis #ident: #slot_ty });
+                refs_fields.push(quote! {
+                    #[allow(dead_code)]
+                    #field_vis #ident: #ref_ty
+                });
+                factory_fields.push(quote! {
+                    #[allow(dead_code)]
+                    #field_vis #ident: #param
+                });
+                factory_bounds.push(quote! { #param: ::tokio_otp::SupervisionFactories<#ty> });
+                bound_idents.push(ident);
+                open_stmts.push(quote_spanned! {ty.span()=>
+                    let (#slot_ident, #ident) = <#ty as ::tokio_otp::Supervision>::open(
+                        builder,
+                        &::tokio_otp::qualified_label(prefix, #name),
+                    );
+                });
+                scope_fields.push(quote! {
+                    #field_vis #ident: <#ty as ::tokio_otp::Supervision>::Scopes
+                });
+                scope_ctor.push(ident);
+                define_stmts.push(quote! {
+                    let #ident = <#param as ::tokio_otp::SupervisionFactories<#ty>>::define(
+                        self.#ident,
+                        builder,
+                        slots.#ident,
+                    );
+                });
+            }
+            FieldKind::Dynamic => {
+                let assertion = format_ident!("_assert_{ident}_is_a_dynamic_scope");
+                marker_assertions.push(quote_spanned! {ty.span()=>
+                    #[allow(non_snake_case, dead_code)]
+                    fn #assertion(marker: #ty) -> ::tokio_otp::DynamicScope {
+                        marker
+                    }
+                });
+                factory_fields.push(quote! {
+                    #[allow(dead_code)]
+                    #field_vis #ident: ::tokio_otp::DynamicRuntimeBuilder
+                });
+                scope_fields.push(quote! {
+                    #field_vis #ident: ::tokio_otp::DynamicRuntimeBuilder
+                });
+                scope_ctor.push(ident);
+                define_stmts.push(quote! {
+                    let #ident = self.#ident;
+                });
+            }
+        }
+    }
+
+    let slot_ctor_idents: Vec<_> = fields
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| field_attrs[*index].kind != FieldKind::Dynamic)
+        .map(|(index, _)| field_idents[index])
+        .collect();
+    let slot_ctor_values: Vec<_> = slot_ctor_idents
         .iter()
         .map(|ident| format_ident!("{ident}_slot"))
         .collect();
-    // Uses of a field type behind the `RawActor` bound are spanned at that field
-    // type, so a non-actor field reports E0277 there rather than at the
-    // derive attribute. User-code spans opt the refs fields into dead-code
-    // lints, hence the explicit allow: an unread ref is normal for leaf
-    // actors and not actionable, since the macro mints one per field.
-    let ref_tys: Vec<_> = field_types
-        .iter()
-        .map(|ty| {
-            quote_spanned! {ty.span()=>
-                ::tokio_otp::ActorRef<<#ty as ::tokio_otp::RawActor>::Msg>
-            }
-        })
-        .collect();
-    let slot_calls: Vec<_> = field_types
-        .iter()
-        .zip(&slot_idents)
-        .zip(&field_idents)
-        .zip(&field_names)
-        .zip(&actor_options)
-        .map(|((((ty, slot), ident), name), options)| {
-            if let Some(options) = options {
-                quote_spanned! {ty.span()=>
-                    let (#slot, #ident) = builder.slot_with_options::
-                        <<#ty as ::tokio_otp::RawActor>::Msg>(#name, #options);
-                }
-            } else {
-                quote_spanned! {ty.span()=>
-                    let (#slot, #ident) =
-                        builder.slot::<<#ty as ::tokio_otp::RawActor>::Msg>(#name);
-                }
-            }
-        })
-        .collect();
-    Ok(quote! {
-        #vis struct #refs {
-            #(
-                #[allow(dead_code)]
-                #field_vis #field_idents: #ref_tys,
-            )*
-        }
 
-        impl ::core::clone::Clone for #refs {
-            fn clone(&self) -> Self {
-                Self {
-                    #(
-                        #field_idents: self.#field_idents.clone(),
-                    )*
-                }
+    // Scope construction, in declaration order.
+    let mut scope_stmts = Vec::new();
+    for (index, field) in fields.iter().enumerate() {
+        let ident = field_idents[index];
+        let ty = &field.ty;
+        let attrs = &field_attrs[index];
+        let name = &node_names[index];
+
+        match attrs.kind {
+            FieldKind::Actor => {
+                let spec = actor_spec_expr(name, attrs);
+                // A graph other than the one `open` populated cannot supply
+                // this actor. Record the mismatch on the scope instead of
+                // panicking: `build` and `outline` report it.
+                scope_stmts.push(quote! {
+                    let tree = match graph.actor(&::tokio_otp::qualified_label(prefix, #name)) {
+                        ::core::option::Option::Some(actor) => tree.actor(#spec),
+                        ::core::option::Option::None => tree.missing_actor(),
+                    };
+                });
+            }
+            FieldKind::Scope => {
+                scope_stmts.push(quote! {
+                    let tree = tree.child(<#ty as ::tokio_otp::Supervision>::node(
+                        graph,
+                        scopes.#ident,
+                        #name,
+                        &::tokio_otp::qualified_label(prefix, #name),
+                    ));
+                });
+            }
+            FieldKind::Dynamic => {
+                // The reserved builder carries this scope's policy and the
+                // identity behind any handle already handed out; the graph only
+                // supplies execution defaults for actors added later.
+                scope_stmts.push(quote! {
+                    let tree = tree.child(
+                        ::tokio_otp::SupervisionTree::from(scopes.#ident)
+                            .dynamic_defaults(graph)
+                            .id(#name),
+                    );
+                });
             }
         }
+    }
 
-        #vis struct #factories<#(#factory_params),*> {
-            #(
-                #[allow(dead_code)]
-                #field_vis #field_idents: #factory_params,
-            )*
-        }
+    let mut scope_root = quote! {
+        ::tokio_otp::SupervisionTree::new().dynamic_defaults(graph)
+    };
+    if let Some(strategy) = &scope_attrs.strategy {
+        scope_root = quote! { #scope_root.strategy(#strategy) };
+    }
+    if let Some(restart) = &scope_attrs.restart {
+        scope_root = quote! { #scope_root.default_restart(#restart) };
+    }
+    if let Some(shutdown) = &scope_attrs.shutdown {
+        scope_root = quote! { #scope_root.default_shutdown(#shutdown) };
+    }
+    if let Some(intensity) = &scope_attrs.restart_intensity {
+        scope_root = quote! { #scope_root.restart_intensity(#intensity) };
+    }
 
-        impl #topology {
-            #vis fn graph<#(#factory_params),*>(
-                wire: impl FnOnce(&#refs) -> #factories<#(#factory_params),*>,
-            ) -> ::core::result::Result<::tokio_otp::Graph, ::tokio_otp::GraphBuildError>
-            where
-                #(
-                    #factory_params: ::tokio_otp::ActorFactory<Actor = #field_types>,
-                )*
-            {
-                Self::graph_with_refs(wire).map(|(graph, _refs)| graph)
-            }
+    let node_body = quote! { Self::__supervision_scope(graph, scopes, prefix).id(id) };
 
-            #vis fn graph_with_refs<#(#factory_params),*>(
-                wire: impl FnOnce(&#refs) -> #factories<#(#factory_params),*>,
+    let root_constructors = quote! {
+        impl #declared {
+            #vis fn graph<#(#all_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
                 (::tokio_otp::Graph, #refs),
                 ::tokio_otp::GraphBuildError,
             >
             where
-                #(
-                    #factory_params: ::tokio_otp::ActorFactory<Actor = #field_types>,
-                )*
+                #(#factory_bounds,)*
             {
-                let mut builder = ::tokio_otp::GraphBuilder::new();
-                // The topology struct is never constructed; its fields only name actor types.
-                // Destructuring it here marks the user's fields as read so they do not trigger
-                // `dead_code` warnings on every derive.
-                let _mark_topology_fields_used = |value: Self| {
-                    let Self { #(#field_idents),* } = value;
-                    let _ = (#(#field_idents),*);
-                };
-                #(#slot_calls)*
-
-                let refs = #refs {
-                    #(#field_idents,)*
-                };
-                let factories = wire(&refs);
-
-                #(
-                    builder.define(#slot_idents, factories.#field_idents);
-                )*
-
-                let graph = builder.build()?;
-                Ok((graph, refs))
+                Self::graph_with(::tokio_otp::GraphBuilder::new(), wire)
             }
 
-            #vis fn graph_with<#(#factory_params),*>(
-                mut builder: ::tokio_otp::GraphBuilder,
-                wire: impl FnOnce(&#refs) -> #factories<#(#factory_params),*>,
-            ) -> ::core::result::Result<::tokio_otp::Graph, ::tokio_otp::GraphBuildError>
+            #vis fn graph_with<#(#all_params),*>(
+                builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Graph, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
             where
-                #(
-                    #factory_params: ::tokio_otp::ActorFactory<Actor = #field_types>,
-                )*
+                #(#factory_bounds,)*
             {
-                // The topology struct is never constructed; its fields only name actor types.
-                // Destructuring it here marks the user's fields as read so they do not trigger
-                // `dead_code` warnings on every derive.
-                let _mark_topology_fields_used = |value: Self| {
-                    let Self { #(#field_idents),* } = value;
-                    let _ = (#(#field_idents),*);
-                };
-                #(#slot_calls)*
+                Self::__supervision_graph(builder, wire).map(|(graph, refs, _scopes)| (graph, refs))
+            }
 
-                let refs = #refs {
-                    #(#field_idents,)*
-                };
-                let factories = wire(&refs);
+            #vis fn tree<#(#all_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::SupervisionTree, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                Self::tree_with(::tokio_otp::GraphBuilder::new(), wire)
+            }
 
-                #(
-                    builder.define(#slot_idents, factories.#field_idents);
-                )*
+            #vis fn tree_with<#(#all_params),*>(
+                builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::SupervisionTree, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
+                let tree = Self::__supervision_scope(&graph, scopes, "");
+                ::core::result::Result::Ok((tree, refs))
+            }
 
-                builder.build()
+            #vis fn runtime<#(#all_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Runtime, #refs),
+                ::tokio_otp::SupervisionBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                Self::runtime_with(::tokio_otp::GraphBuilder::new(), wire)
+            }
+
+            #vis fn runtime_with<#(#all_params),*>(
+                builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Runtime, #refs),
+                ::tokio_otp::SupervisionBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                let (tree, refs) = Self::tree_with(builder, wire)?;
+                ::core::result::Result::Ok((tree.build()?, refs))
             }
         }
+    };
+
+    Ok(quote! {
+        #vis struct #refs {
+            #(#refs_fields,)*
+        }
+
+        impl ::core::clone::Clone for #refs {
+            fn clone(&self) -> Self {
+                Self {
+                    #(#bound_idents: self.#bound_idents.clone(),)*
+                }
+            }
+        }
+
+        #vis struct #slots {
+            #(#slot_fields,)*
+        }
+
+        #vis struct #scopes {
+            #(#scope_fields,)*
+        }
+
+        #vis struct #factories<#(#all_params),*> {
+            #(#factory_fields,)*
+        }
+
+        impl<#(#all_params),*> ::tokio_otp::SupervisionFactories<#declared>
+            for #factories<#(#all_params),*>
+        where
+            #(#factory_bounds,)*
+        {
+            fn define(
+                self,
+                builder: &mut ::tokio_otp::GraphBuilder,
+                slots: <#declared as ::tokio_otp::Supervision>::Slots,
+            ) -> <#declared as ::tokio_otp::Supervision>::Scopes {
+                #(#define_stmts)*
+                #scopes { #(#scope_ctor,)* }
+            }
+        }
+
+        impl ::tokio_otp::Supervision for #declared {
+            type Refs = #refs;
+            type Slots = #slots;
+            type Scopes = #scopes;
+
+            fn open(
+                builder: &mut ::tokio_otp::GraphBuilder,
+                prefix: &str,
+            ) -> (Self::Slots, Self::Refs) {
+                // The derived struct is never constructed; its fields only name actor types.
+                // Destructuring it here marks the user's fields as read so they do not trigger
+                // `dead_code` warnings on every derive.
+                let _mark_declared_fields_used = |value: Self| {
+                    let Self { #(#field_idents),* } = value;
+                    let _ = (#(#field_idents),*);
+                };
+                #(#marker_assertions)*
+                #(#open_stmts)*
+
+                (
+                    #slots { #(#slot_ctor_idents: #slot_ctor_values,)* },
+                    #refs { #(#bound_idents,)* },
+                )
+            }
+
+            fn node(
+                graph: &::tokio_otp::Graph,
+                scopes: Self::Scopes,
+                id: &str,
+                prefix: &str,
+            ) -> ::tokio_otp::SupervisionTree {
+                #node_body
+            }
+        }
+
+        impl #declared {
+            #[doc(hidden)]
+            fn __supervision_scope(
+                graph: &::tokio_otp::Graph,
+                scopes: #scopes,
+                prefix: &str,
+            ) -> ::tokio_otp::SupervisionTree {
+                let tree = #scope_root;
+                #(#scope_stmts)*
+                tree
+            }
+
+            #[doc(hidden)]
+            fn __supervision_graph<#(#all_params),*>(
+                mut builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Graph, #refs, #scopes),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                let (slots, refs) =
+                    <Self as ::tokio_otp::Supervision>::open(&mut builder, "");
+                let factories = wire(&refs);
+                let scopes =
+                    ::tokio_otp::SupervisionFactories::<Self>::define(factories, &mut builder, slots);
+                let graph = builder.build()?;
+                ::core::result::Result::Ok((graph, refs, scopes))
+            }
+        }
+
+        #root_constructors
     })
 }
 
-fn parse_field_attributes(
-    fields: &syn::punctuated::Punctuated<Field, syn::token::Comma>,
-) -> syn::Result<Vec<Option<Expr>>> {
-    let mut actor_options = Vec::with_capacity(fields.len());
-
-    for field in fields {
-        let mut options = None;
-        for attr in field
-            .attrs
-            .iter()
-            .filter(|attr| attr.path().is_ident("topology"))
-        {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("options") {
-                    if options.is_some() {
-                        return Err(meta.error("duplicate `options` option"));
-                    }
-                    let value = meta.value()?;
-                    options = Some(value.parse()?);
-                    return Ok(());
-                }
-                Err(meta.error("expected `options = <expression>`"))
-            })?;
-        }
-        actor_options.push(options);
+/// Builds the `ActorSpec` expression placing one actor field in its scope.
+///
+/// The expression reads an `actor` binding holding the resolved
+/// `&RunnableActor`, which the caller matches out of the graph.
+fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
+    let mut spec = quote! {
+        ::tokio_otp::ActorSpec::new(::core::clone::Clone::clone(actor)).child_id(#name)
+    };
+    if let Some(restart) = &attrs.restart {
+        spec = quote! { #spec.restart(#restart) };
     }
-
-    Ok(actor_options)
+    if let Some(shutdown) = &attrs.shutdown {
+        spec = quote! { #spec.shutdown(#shutdown) };
+    }
+    if let Some(intensity) = &attrs.restart_intensity {
+        spec = quote! { #spec.restart_intensity(#intensity) };
+    }
+    spec
 }

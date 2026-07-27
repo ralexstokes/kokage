@@ -1,5 +1,0 @@
-error: Topology cannot be derived for generic structs
-  --> tests/ui/topology/generic_struct.rs:17:23
-   |
-17 | struct GenericTopology<T> {
-   |                       ^^^
