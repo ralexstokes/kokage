@@ -28,16 +28,24 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+        toolchainConfig = builtins.fromTOML (builtins.readFile ./rust-toolchain.toml);
+        stableChannel = toolchainConfig.toolchain.channel;
+        rustHost = pkgs.stdenv.hostPlatform.rust.rustcTarget;
         rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-        nightlyToolchain = pkgs.rust-bin.nightly.latest.default.override {
-          extensions = [
-            "clippy"
-            "rustfmt"
-          ];
-        };
-        nightlyCargo = pkgs.writeShellScriptBin "cargo-nightly" ''
-          export PATH=${nightlyToolchain}/bin:$PATH
-          exec ${nightlyToolchain}/bin/cargo "$@"
+        nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (
+          toolchain:
+          toolchain.default.override {
+            extensions = [
+              "clippy"
+              "rustfmt"
+            ];
+          }
+        );
+        rustupHome = pkgs.runCommandLocal "tokio-otp-rustup-home" { } ''
+          mkdir -p $out/toolchains $out/update-hashes
+          ln -s ${rustToolchain} $out/toolchains/${stableChannel}-${rustHost}
+          ln -s ${nightlyToolchain} $out/toolchains/nightly-${rustHost}
+          printf 'version = "12"\n\n[overrides]\n' > $out/settings.toml
         '';
         cargoChecks = import ./nix/crane-checks.nix {
           inherit
@@ -65,8 +73,10 @@
         // cargoChecks;
 
         devShells.default = pkgs.mkShell {
-          NIGHTLY_CARGO = "${nightlyCargo}/bin/cargo-nightly";
+          RUSTUP_HOME = rustupHome;
+          RUSTUP_TOOLCHAIN = stableChannel;
           packages = with pkgs; [
+            rustup
             cargo-nextest
             git
             just
@@ -74,9 +84,6 @@
             mdbook
             nixfmt
             ripgrep
-            rustToolchain
-            nightlyToolchain
-            rustup
           ];
         };
       }
