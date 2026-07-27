@@ -95,11 +95,10 @@ the membership disappears. The child id becomes reusable when removal
 completes, not merely when `Terminated` is observed; wait for the snapshot to
 drop the membership before re-adding the same id.
 
-With a group strategy, removal timing is observable. If a non-restarted exit is
-handled before a later group restart, removal is permanent and that restart
-cannot revive the actor. If the actor exits while an already-active group
-restart is draining it, the exit belongs to that restart cycle and the actor is
-respawned.
+Dynamic scopes always use `Strategy::OneForOne`, so one actor's exit, restart,
+or removal never starts a sibling restart cycle. Once terminal removal
+completes, only a new `add_actor` call can create another membership with that
+child id.
 
 These defaults apply only to actors added with `add_actor`. Actors declared in
 the static graph remain registered after terminal exit, even when
