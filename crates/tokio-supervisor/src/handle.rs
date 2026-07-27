@@ -549,6 +549,32 @@ impl StableSupervisorChannels {
         binding.current.clone()
     }
 
+    /// Publishes one incarnation's snapshot only while that incarnation still
+    /// owns the stable binding.
+    ///
+    /// Keeping the epoch check and watch update under the binding lock makes
+    /// publication atomic with [`bind`](Self::bind): either the old view lands
+    /// before a replacement resets it, or the replacement wins and rejects
+    /// the displaced writer.
+    fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
+        if binding.terminal
+            || !binding
+                .current
+                .as_ref()
+                .is_some_and(|binding| binding.binding_epoch == binding_epoch)
+        {
+            return;
+        }
+        self.snapshots().send_if_modified(|current| {
+            if current == snapshot {
+                return false;
+            }
+            current.clone_from(snapshot);
+            true
+        });
+    }
+
     /// Classifies what a non-root [`SupervisorHandle::wait`] should do, at one
     /// binding-serialized point.
     fn wait_target(&self) -> WaitTarget {
@@ -1354,6 +1380,10 @@ impl std::fmt::Debug for SupervisorHandle {
 }
 
 impl SupervisorHandle {
+    pub(crate) fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
+        self.channels.publish_snapshot(binding_epoch, snapshot);
+    }
+
     /// Requests a graceful shutdown of the supervisor.
     ///
     /// This is non-blocking: it signals the supervisor to begin its shutdown

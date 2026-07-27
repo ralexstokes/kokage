@@ -347,7 +347,6 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) live_tasks: usize,
     pub(crate) lifecycle: Arc<LifecycleHub>,
     pub(crate) lifecycle_tree: LifecycleTreeSink,
-    pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) attached_children: AttachedChildrenState,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
@@ -467,7 +466,6 @@ impl SupervisorRuntime {
             live_tasks: 0,
             lifecycle,
             lifecycle_tree,
-            snapshots,
             attached_children,
             shutdown_rx,
             command_rx,
@@ -1914,13 +1912,8 @@ impl SupervisorRuntime {
         // cell per incarnation always accepts that first view, and thereafter
         // an unchanged snapshot neither replaces the stored one nor queues a
         // notification.
-        self.snapshots.send_if_modified(|current| {
-            if *current == snapshot {
-                return false;
-            }
-            current.clone_from(&snapshot);
-            true
-        });
+        self.own_handle
+            .publish_snapshot(self.meta.binding_epoch, &snapshot);
         if let Some(parent_link) = self.meta.parent_link.as_ref() {
             parent_link.publish_snapshot(snapshot);
         }
@@ -2453,7 +2446,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn displaced_incarnation_cannot_republish_attachments_after_rebind() {
+    async fn displaced_incarnation_cannot_republish_stable_views_after_rebind() {
         let supervisor = crate::DynamicSupervisorBuilder::new()
             .build()
             .expect("dynamic supervisor builds");
@@ -2529,12 +2522,17 @@ mod tests {
             )
             .expect("replacement incarnation binds");
         assert!(handle.attached_children::<String>().is_empty());
+        assert!(handle.snapshot().children.is_empty());
 
         old_runtime.publish_snapshot();
 
         assert!(
             handle.attached_children::<String>().is_empty(),
             "the displaced incarnation must not restore its attachment view after a same-generation rebind"
+        );
+        assert!(
+            handle.snapshot().children.is_empty(),
+            "the displaced incarnation must not restore its snapshot after a same-generation rebind"
         );
         drop(replacement);
         drop(bound.guard);
