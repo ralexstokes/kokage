@@ -2,11 +2,13 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use tokio_otp::{ActorRef, Reply};
+use tokio_otp::{ActorRef, MonitorEvent, Reply};
 
 use crate::model::{Action, Digest, TargetId};
 
 pub const CALL_DEADLINE: Duration = Duration::from_secs(3);
+/// Bound on one worker dispatch. Missing it retires the worker as wedged.
+pub const DISPATCH_DEADLINE: Duration = Duration::from_millis(400);
 pub const CONTROL_DEADLINE: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +73,10 @@ pub enum PoolMsg {
         actor: Option<ActorRef<WorkerMsg>>,
     },
     WorkerRemoved,
+    WorkerLifecycle {
+        label: String,
+        event: MonitorEvent,
+    },
     DispatchFinished {
         label: String,
         action: Action,
@@ -87,6 +93,7 @@ pub enum PoolMsg {
 pub enum DispatchOutcome {
     Finished(ExecOutcome),
     Lost,
+    Stalled,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -97,6 +104,9 @@ pub struct PoolReport {
     pub removed_workers: u64,
     pub dispatches: u64,
     pub lost_dispatches: u64,
+    pub stalled_dispatches: u64,
+    pub retired_workers: u64,
+    pub worker_restarts: u64,
 }
 
 #[derive(Debug)]

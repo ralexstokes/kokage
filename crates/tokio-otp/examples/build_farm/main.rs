@@ -102,7 +102,7 @@ struct Farm {
 
 #[tokio::main]
 async fn main() -> Result<(), AnyError> {
-    // One worker panic is intentional and supervised.
+    // One worker panic and one retired wedge are intentional and supervised.
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::WARN)
         .try_init()?;
@@ -317,12 +317,16 @@ fn verify_cold_build(durable: &Durable, farm: &Farm) -> Result<(), AnyError> {
         .ok_or("pool writes its final report during shutdown")?;
     assert!(pool.peak_workers >= 2, "{pool:?}");
     assert_eq!(pool.lost_dispatches, 1, "{pool:?}");
+    assert_eq!(pool.stalled_dispatches, 1, "{pool:?}");
+    assert_eq!(pool.retired_workers, 1, "{pool:?}");
+    assert!(pool.worker_restarts >= 1, "{pool:?}");
     assert!(pool.removed_workers > 0, "{pool:?}");
     assert_eq!(farm.lease.acquisitions(), 2);
     assert!(farm.lease.renewals() >= 1);
 
     let attempts = durable.attempts.snapshot();
     assert_eq!(attempts.get("network"), Some(&2));
+    assert_eq!(attempts.get("docs"), Some(&2));
     assert_eq!(durable.store.report().entries, durable.plan.actions().len());
     assert!(
         farm.journal
@@ -333,12 +337,12 @@ fn verify_cold_build(durable: &Durable, farm: &Farm) -> Result<(), AnyError> {
             >= durable.plan.actions().len()
     );
     println!(
-        "PHASE 2 OK — cold build completed after one worker crash and {} lease stalls",
+        "PHASE 2 OK — cold build completed after one worker crash, one retired wedge, and {} lease stalls",
         status.lease_stalls
     );
     println!(
-        "PHASE 3 OK — dynamic pool peaked at {} workers and retired {}",
-        pool.peak_workers, pool.removed_workers
+        "PHASE 3 OK — dynamic pool peaked at {} workers, retired {} wedge, and performed {} total removals",
+        pool.peak_workers, pool.retired_workers, pool.removed_workers
     );
     Ok(())
 }
@@ -353,6 +357,7 @@ fn verify_warm_build(durable: &Durable, farm: &Farm) -> Result<(), AnyError> {
 
     let attempts = durable.attempts.snapshot();
     assert_eq!(attempts.get("network"), Some(&2));
+    assert_eq!(attempts.get("docs"), Some(&2));
     assert!(attempts.values().all(|attempts| *attempts <= 2));
     let store = durable.store.report();
     assert_eq!(store.entries, durable.plan.actions().len());

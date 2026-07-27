@@ -1,7 +1,7 @@
 //! A leader actor that owns and resizes a dynamic worker scope.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -10,14 +10,15 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, BoxError, DynamicActorOptions, LiveContext, MessageContext,
-    RestartIntensity, RestartPolicy, StartContext, StopContext, prelude::Continue,
+    Actor, ActorRef, ActorResult, BoxError, CancellationHandle, DynamicActorOptions, LiveContext,
+    MessageContext, MonitorEvent, RestartIntensity, RestartPolicy, StartContext, StopContext,
+    prelude::Continue,
 };
 
 use crate::{
     messages::{
-        CALL_DEADLINE, CONTROL_DEADLINE, DispatchOutcome, ExecOutcome, Phase, PoolMsg, PoolReport,
-        ProgressMsg, SchedulerMsg, WorkerMsg,
+        CONTROL_DEADLINE, DISPATCH_DEADLINE, DispatchOutcome, ExecOutcome, Phase, PoolMsg,
+        PoolReport, ProgressMsg, SchedulerMsg, WorkerMsg,
     },
     model::{Action, Digest},
     shared::BuildJournal,
@@ -39,6 +40,8 @@ pub struct Pool {
     journal: Arc<BuildJournal>,
     labels: Arc<AtomicU64>,
     workers: BTreeMap<String, WorkerSlot>,
+    watches: BTreeMap<String, CancellationHandle>,
+    started: BTreeSet<String>,
     queue: VecDeque<(Action, Digest)>,
     pending_adds: usize,
     report: PoolReport,
@@ -59,6 +62,8 @@ impl Pool {
             journal,
             labels,
             workers: BTreeMap::new(),
+            watches: BTreeMap::new(),
+            started: BTreeSet::new(),
             queue: VecDeque::new(),
             pending_adds: 0,
             report: PoolReport::default(),
@@ -96,12 +101,22 @@ impl Actor for Pool {
             PoolMsg::WorkerAdded { label, actor } => {
                 self.pending_adds = self.pending_adds.saturating_sub(1);
                 if let Some(actor) = actor {
+                    self.watch_worker(&label, &actor, ctx);
                     self.workers
                         .insert(label, WorkerSlot { actor, busy: false });
                     self.report.added_workers += 1;
                     self.report.peak_workers = self.report.peak_workers.max(self.workers.len());
                 }
             }
+            PoolMsg::WorkerLifecycle { label, event } => match event {
+                MonitorEvent::Up { .. } => {
+                    if !self.started.insert(label) {
+                        self.report.worker_restarts += 1;
+                    }
+                }
+                MonitorEvent::Terminated { .. } => self.forget(&label),
+                _ => {}
+            },
             PoolMsg::DispatchFinished {
                 label,
                 action,
@@ -135,7 +150,7 @@ impl Pool {
     fn reconcile(&mut self, ctx: &MessageContext<'_, PoolMsg>) {
         // A draining actor keeps handling offload completions. Starting a new
         // control offload for every completion would make the drain perpetual.
-        if ctx.is_shutting_down() {
+        if ctx.is_draining() {
             return;
         }
 
@@ -219,10 +234,13 @@ impl Pool {
         let completed_by = label.clone();
         self.report.dispatches += 1;
         ctx.offload(
-            CALL_DEADLINE,
+            DISPATCH_DEADLINE,
             async move {
+                // The inner call is deliberately looser than the outer
+                // offload. If the outer deadline wins, the result is known to
+                // be a stall; an inner call error means the worker died.
                 worker
-                    .call(CALL_DEADLINE, |reply| WorkerMsg::Execute {
+                    .call(DISPATCH_DEADLINE * 4, |reply| WorkerMsg::Execute {
                         action: request,
                         digest,
                         reply,
@@ -235,7 +253,8 @@ impl Pool {
                 digest,
                 outcome: match result {
                     Ok(Ok(outcome)) => DispatchOutcome::Finished(outcome),
-                    Ok(Err(_)) | Err(_) => DispatchOutcome::Lost,
+                    Ok(Err(_)) => DispatchOutcome::Lost,
+                    Err(_) => DispatchOutcome::Stalled,
                 },
             },
         );
@@ -257,6 +276,15 @@ impl Pool {
             DispatchOutcome::Lost => {
                 self.report.lost_dispatches += 1;
                 self.queue.push_front((action, digest));
+            }
+            DispatchOutcome::Stalled => {
+                self.report.stalled_dispatches += 1;
+                self.report.retired_workers += 1;
+                self.queue.push_front((action, digest));
+                // The worker is still inside the call that missed its
+                // deadline. Retiring it cancels that work before retrying on a
+                // healthy member of the owned scope.
+                self.remove_worker(label, ctx);
             }
         }
     }
@@ -280,7 +308,7 @@ impl Pool {
     }
 
     fn remove_worker(&mut self, label: String, ctx: &MessageContext<'_, PoolMsg>) {
-        self.workers.remove(&label);
+        self.forget(&label);
         self.report.removed_workers += 1;
         let Some(children) = ctx.children() else {
             return;
@@ -292,5 +320,26 @@ impl Pool {
             },
             |_| PoolMsg::WorkerRemoved,
         );
+    }
+
+    fn forget(&mut self, label: &str) {
+        self.workers.remove(label);
+        if let Some(watch) = self.watches.remove(label) {
+            watch.cancel();
+        }
+    }
+
+    fn watch_worker(
+        &mut self,
+        label: &str,
+        actor: &ActorRef<WorkerMsg>,
+        ctx: &impl LiveContext<PoolMsg>,
+    ) {
+        let watched = label.to_owned();
+        let handle = ctx.watch(actor, move |event| PoolMsg::WorkerLifecycle {
+            label: watched.clone(),
+            event,
+        });
+        self.watches.insert(label.to_owned(), handle);
     }
 }

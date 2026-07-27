@@ -11,6 +11,7 @@ pub type Digest = u64;
 pub enum Behavior {
     Sound,
     CrashOnce,
+    StallOnce,
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +56,12 @@ impl BuildPlan {
                     behavior: Behavior::CrashOnce,
                 },
                 Action {
+                    target: "docs",
+                    dependencies: &["fetch", "codegen"],
+                    source: "docs/**",
+                    behavior: Behavior::StallOnce,
+                },
+                Action {
                     target: "cli",
                     dependencies: &["core", "network"],
                     source: "src/bin/cli.rs",
@@ -87,6 +94,18 @@ pub fn digest(action: &Action, mut dependencies: Vec<(TargetId, Digest)>) -> Dig
 }
 
 pub fn compile(action: &Action, attempt: u32, cancellation: &CancellationToken) -> Option<usize> {
+    if action.behavior == Behavior::StallOnce && attempt == 1 {
+        // Simulate a wedged toolchain well past the dispatch deadline. The
+        // slices let dynamic worker removal cancel the blocking work promptly.
+        for _ in 0..40 {
+            if cancellation.is_cancelled() {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        return None;
+    }
+
     let mut hash = fnv(FNV_OFFSET, action.source.as_bytes());
     for chunk in 0_u64..4 {
         if cancellation.is_cancelled() {
