@@ -459,7 +459,7 @@ mod tests {
                 root.emit_event(
                     &RuntimeEvent::ChildRestartScheduled {
                         id: "worker".to_owned(),
-                        membership_epoch: 0,
+                        lineage: 0,
                         generation: 0,
                         delay: Duration::from_millis(10),
                         total_restarts: 1,

@@ -18,26 +18,26 @@ Snapshots carry cumulative counters — per-child
 `SupervisorSnapshot::total_restarts` — so counter deltas account for every
 restart even when updates are conflated.
 
-Every `ChildSnapshot` also carries a `membership_epoch`. A restart increments
-`generation` but retains the membership epoch; removing a child and adding a
-new child under the same id assigns a later epoch even though the replacement
-starts at generation zero. Treat `(id, membership_epoch)` as the identity of a
-direct child membership. Epochs start at zero, include statically configured
-children in declaration order, and are monotonic across every incarnation of
-one restart-stable supervisor identity. Each nested supervisor identity
-allocates its own local sequence; epochs are not global. In a recursive view,
-identify a child by the full supervisor path together with its local
-`(id, membership_epoch)`. Each path segment includes the containing
-supervisor's id, parent-assigned membership epoch, and generation.
+Every `ChildSnapshot` also carries a `lineage`. A restart increments
+`generation` but retains the lineage; removing a child and adding a new child
+under the same id assigns a later lineage even though the replacement starts at
+generation zero. Treat `(id, lineage)` as the identity of a direct child
+membership. Lineages start at zero, include statically configured children in
+declaration order, and are monotonic across every incarnation of one
+restart-stable supervisor identity. Each nested supervisor identity allocates
+its own local sequence; lineages are not global. In a recursive view, identify
+a child by the full supervisor path together with its local `(id, lineage)`.
+Each path segment includes the containing supervisor's id, parent-assigned
+lineage, and generation.
 
 Removing a subtree and inserting another under the same id creates a new
 membership in the parent and a new stable supervisor identity. The new
-subtree's local membership sequence may therefore begin at zero even if its
-predecessor used the same local epochs; the parent path distinguishes the two.
-The `u64` counter saturates at its maximum rather than changing supervisor
-control semantics in the practically unreachable overflow case.
-For dynamically added task children, `SupervisorHandle::add_child` returns the
-same epoch that the supervisor assigned while inserting the child. Consumers
+subtree's local lineage sequence may therefore begin at zero even if its
+predecessor used the same local lineages; the parent path distinguishes the
+two. The `u64` counter saturates at its maximum rather than changing supervisor
+control semantics in the practically unreachable overflow case. For
+dynamically added task children, `SupervisorHandle::add_child` returns the same
+lineage that the supervisor assigned while inserting the child. Consumers
 that need to associate their own state with that exact membership should retain
 the returned value rather than performing a later id-based snapshot lookup.
 
@@ -49,7 +49,7 @@ children emit `Started` only after `on_start` succeeds. A restart is the
 ordered pair `Exited` then `Started` for the same membership; count restarts
 from the event envelope's cumulative counters, not by inferring event pairs.
 
-Each event carries a monotonic `seq`, child id and membership epoch,
+Each event carries a monotonic `seq`, child id and lineage,
 `total_restarts`, and the child's `child_restart_count`. A nested supervisor's
 sequence and total counter continue across its own incarnations, including
 recreation by an ancestor. `next()` returns `None` only after staged events
@@ -82,7 +82,7 @@ initial snapshot already projects statically configured children as `Starting`,
 while the first later `Added` event records installation of that membership
 into the running supervisor incarnation and `Started` records readiness. An
 edge reducer seeded from the snapshot must therefore treat `Added` as an
-idempotent upsert/activation keyed by `(id, membership_epoch)`, rather than an
+idempotent upsert/activation keyed by `(id, lineage)`, rather than an
 unchecked row insertion. This preserves the watch-before-spawn guarantee
 without pretending configured state and runtime installation are different
 child identities.
@@ -95,7 +95,7 @@ cumulative counters, so filtering it against a snapshot is sound and restart
 counts resynchronize at the marker. Stream closure is terminality, not an
 event, and is never dropped.
 
-Note that a marker's `child_id` and `membership_epoch` describe the newest
+Note that a marker's `child_id` and `lineage` describe the newest
 discarded transition, so a marker can be stamped with one child while standing
 for another child's loss. Filter on `seq`, not on the marker's identity fields.
 
@@ -150,7 +150,7 @@ mailbox remains full, cancellation or target termination is the escape hatch.
 `watch_lifecycle_recursive()` yields one ordered stream for the watched scope
 and every nested supervisor. Each event carries a `supervisor_path` relative
 to the watched handle. Every path segment includes the nested supervisor's id,
-membership epoch, and generation, so consumers can distinguish both a restarted
+lineage, and generation, so consumers can distinguish both a restarted
 incarnation and a removed-then-reinserted subtree.
 
 The recursive event kind includes supervisor `Started`, `Stopping`, and
@@ -235,12 +235,12 @@ and passed to `RuntimeHandle::add_actor`.
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that
 subtree, including actors added dynamically through the scoped handle.
-These runtime-scoped samples set `ActorStats::membership_epoch` from the
+These runtime-scoped samples set `ActorStats::lineage` from the
 membership identity retained when the actor was registered. They also carry
 `ActorStats::supervisor_path`: each containing nested supervisor is identified
-by id, membership epoch, and generation. Use the full supervisor path together
-with `(actor_id, membership_epoch)` to join a flattened recursive sample to the
-exact current tree node; local epochs can repeat in sibling subtrees. A direct
+by id, lineage, and generation. Use the full supervisor path together
+with `(actor_id, lineage)` to join a flattened recursive sample to the
+exact current tree node; local lineages can repeat in sibling subtrees. A direct
 child has an empty path. Stats sampled directly from an `ActorRef`,
 `RunnableActor`, or standalone `Graph` report `None` for both runtime-scoped
 identity fields because those surfaces have no supervisor context.

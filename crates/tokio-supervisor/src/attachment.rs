@@ -12,7 +12,7 @@ pub struct AttachedChildIdentity {
     /// Child id within its direct supervisor.
     pub id: String,
     /// Monotonic identity of this membership within its direct supervisor.
-    pub membership_epoch: u64,
+    pub lineage: u64,
     /// Current restart generation of this child membership.
     pub generation: u64,
 }

@@ -300,7 +300,7 @@ mod tests {
         LifecycleEvent {
             seq,
             child_id: child_id.to_owned(),
-            membership_epoch: 0,
+            lineage: 0,
             total_restarts: 0,
             child_restart_count: 0,
             kind,

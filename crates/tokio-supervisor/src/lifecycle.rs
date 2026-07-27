@@ -30,7 +30,7 @@ pub struct LifecycleEvent {
     /// Direct child membership that transitioned.
     pub child_id: String,
     /// Identity of this child membership within its stable supervisor scope.
-    pub membership_epoch: u64,
+    pub lineage: u64,
     /// Stable-scope cumulative restart count at emission.
     pub total_restarts: u64,
     /// Subject child's cumulative restart count at emission.
@@ -49,7 +49,7 @@ pub enum LifecycleEventKind {
     /// A pre-spawn snapshot can already project a statically configured child
     /// as `Starting` before this transition is emitted. Consumers combining a
     /// snapshot and stream should therefore apply `Added` as an idempotent
-    /// upsert keyed by `(child_id, membership_epoch)`, not as an unchecked row
+    /// upsert keyed by `(child_id, lineage)`, not as an unchecked row
     /// insertion.
     Added,
     /// The child became running. For readiness-gated children this is emitted
@@ -93,9 +93,9 @@ pub enum LifecycleEventKind {
 
 /// One nested-supervisor edge in a recursive lifecycle event's path.
 ///
-/// The tuple `(id, membership_epoch, generation)` identifies the exact
+/// The tuple `(id, lineage, generation)` identifies the exact
 /// supervisor incarnation that forwarded the event. In particular,
-/// `membership_epoch` distinguishes a removed subtree from a later subtree
+/// `lineage` distinguishes a removed subtree from a later subtree
 /// inserted under the same id.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -104,17 +104,17 @@ pub struct LifecyclePathSegment {
     /// Child id of the nested supervisor.
     pub id: String,
     /// Identity of that child membership in its parent scope.
-    pub membership_epoch: u64,
+    pub lineage: u64,
     /// Generation of the nested supervisor child.
     pub generation: u64,
 }
 
 impl LifecyclePathSegment {
     /// Creates one exact nested-supervisor path segment.
-    pub fn new(id: impl Into<String>, membership_epoch: u64, generation: u64) -> Self {
+    pub fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
         Self {
             id: id.into(),
-            membership_epoch,
+            lineage,
             generation,
         }
     }
@@ -170,7 +170,7 @@ pub enum RecursiveLifecycleEventKind {
         /// Child identifier.
         child_id: String,
         /// Identity of the child membership in the emitting scope.
-        membership_epoch: u64,
+        lineage: u64,
         /// Generation that exited and will be replaced.
         generation: u64,
         /// Time before the replacement is spawned.
@@ -401,7 +401,7 @@ impl fmt::Debug for LifecycleWatch {
 
 pub(crate) struct LifecycleEventDraft {
     pub(crate) child_id: String,
-    pub(crate) membership_epoch: u64,
+    pub(crate) lineage: u64,
     pub(crate) total_restarts: u64,
     pub(crate) child_restart_count: u64,
     pub(crate) kind: LifecycleEventKind,
@@ -521,7 +521,7 @@ impl<T: Laggable> LifecycleQueue<T> {
 /// supervisor identity.
 pub(crate) struct LifecycleHub {
     seq: AtomicU64,
-    next_membership_epoch: AtomicU64,
+    next_lineage: AtomicU64,
     recursive_watcher_count: Arc<AtomicUsize>,
     state: Mutex<LifecycleHubState>,
 }
@@ -536,7 +536,7 @@ impl LifecycleHub {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             seq: AtomicU64::new(0),
-            next_membership_epoch: AtomicU64::new(0),
+            next_lineage: AtomicU64::new(0),
             recursive_watcher_count: Arc::new(AtomicUsize::new(0)),
             state: Mutex::new(LifecycleHubState {
                 terminal: false,
@@ -550,31 +550,31 @@ impl LifecycleHub {
         self.seq.load(Ordering::Acquire)
     }
 
-    /// Mints a membership epoch scoped to this restart-stable supervisor
+    /// Mints a lineage scoped to this restart-stable supervisor
     /// identity. The counter intentionally continues across incarnations.
-    pub(crate) fn next_membership_epoch(&self) -> u64 {
-        self.next_membership_epoch
+    pub(crate) fn next_lineage(&self) -> u64 {
+        self.next_lineage
             .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 Some(current.saturating_add(1))
             })
             .unwrap_or_else(|current| current)
     }
 
-    /// Returns the epoch [`next_membership_epoch`](Self::next_membership_epoch)
+    /// Returns the lineage [`next_lineage`](Self::next_lineage)
     /// would mint next, without consuming it.
-    pub(crate) fn peek_membership_epoch(&self) -> u64 {
-        self.next_membership_epoch.load(Ordering::Acquire)
+    pub(crate) fn peek_lineage(&self) -> u64 {
+        self.next_lineage.load(Ordering::Acquire)
     }
 
-    /// Advances the epoch allocator past a membership projected before this
-    /// hub began minting epochs (the root supervisor's initial snapshot).
-    pub(crate) fn observe_membership_epoch(&self, membership_epoch: u64) {
-        let next = membership_epoch.saturating_add(1);
-        let _ =
-            self.next_membership_epoch
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                    (current < next).then_some(next)
-                });
+    /// Advances the lineage allocator past a membership projected before this
+    /// hub began minting lineages (the root supervisor's initial snapshot).
+    pub(crate) fn observe_lineage(&self, lineage: u64) {
+        let next = lineage.saturating_add(1);
+        let _ = self
+            .next_lineage
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < next).then_some(next)
+            });
     }
 
     pub(crate) fn watch(&self) -> LifecycleWatch {
@@ -624,7 +624,7 @@ impl LifecycleHub {
         let event = LifecycleEvent {
             seq,
             child_id: draft.child_id,
-            membership_epoch: draft.membership_epoch,
+            lineage: draft.lineage,
             total_restarts: draft.total_restarts,
             child_restart_count: draft.child_restart_count,
             kind: draft.kind,
@@ -794,7 +794,7 @@ mod tests {
         let event = child_hub.emit(
             LifecycleEventDraft {
                 child_id: "worker".to_owned(),
-                membership_epoch: 8,
+                lineage: 8,
                 total_restarts: 13,
                 child_restart_count: 2,
                 kind: LifecycleEventKind::Started { generation: 1 },
@@ -812,7 +812,7 @@ mod tests {
             forwarded.kind,
             RecursiveLifecycleEventKind::Child(event)
                 if event.child_id == "worker"
-                    && event.membership_epoch == 8
+                    && event.lineage == 8
                     && event.total_restarts == 13
                     && event.child_restart_count == 2
                     && event.kind == LifecycleEventKind::Started { generation: 1 }

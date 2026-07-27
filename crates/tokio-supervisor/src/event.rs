@@ -42,7 +42,7 @@ pub(crate) enum RuntimeEvent {
     },
     ChildRestartScheduled {
         id: String,
-        membership_epoch: u64,
+        lineage: u64,
         generation: u64,
         delay: Duration,
         total_restarts: u64,

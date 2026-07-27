@@ -347,25 +347,25 @@ impl StableSupervisorChannels {
     }
 
     pub(crate) fn project_declared_children(&self, ids: Vec<String>) {
-        // Projected epochs are positional, and `bind` later overwrites them
-        // with epochs minted from this hub. The two agree — which is what
-        // makes the documented `(child_id, membership_epoch)` upsert on
+        // Projected lineages are positional, and `bind` later overwrites them
+        // with lineages minted from this hub. The two agree — which is what
+        // makes the documented `(child_id, lineage)` upsert on
         // `watch_lifecycle` idempotent across the pre-spawn baseline — only
-        // because a reserved identity has not minted any epoch yet, so the
+        // because a reserved identity has not minted any lineage yet, so the
         // hub allocates 0, 1, 2, ... in the same declaration order.
         debug_assert_eq!(
-            self.lifecycle.peek_membership_epoch(),
+            self.lifecycle.peek_lineage(),
             0,
-            "declared projection assumes an identity that has not minted membership epochs yet"
+            "declared projection assumes an identity that has not minted lineages yet"
         );
         let snapshots = self.snapshots();
         snapshots.send_if_modified(|snapshot| {
             let children = ids
                 .into_iter()
                 .enumerate()
-                .map(|(membership_epoch, id)| ChildSnapshot {
+                .map(|(lineage, id)| ChildSnapshot {
                     id,
-                    membership_epoch: membership_epoch as u64,
+                    lineage: lineage as u64,
                     generation: 0,
                     started: false,
                     startup_aborted: false,
@@ -463,18 +463,18 @@ impl StableSupervisorChannels {
         // binding.
         let snapshots = self.snapshots();
         let lifecycle = self.lifecycle();
-        // Membership epochs belong to the stable supervisor identity, not an
+        // Lineages belong to the stable supervisor identity, not an
         // individual incarnation. Assign the new static memberships before
         // publishing the incarnation baseline so snapshot reducers and later
         // `Added` events agree on their keys.
         for child in &mut initial_snapshot.children {
-            let membership_epoch = lifecycle.next_membership_epoch();
-            child.membership_epoch = membership_epoch;
+            let lineage = lifecycle.next_lineage();
+            child.lineage = lineage;
             if let Some(attached) = initial_attached_children
                 .iter_mut()
                 .find(|attached| attached.identity.id == child.id)
             {
-                attached.identity.membership_epoch = membership_epoch;
+                attached.identity.lineage = lineage;
             }
         }
         // A retained static descendant can still be finishing under the old
@@ -945,7 +945,7 @@ mod tests {
             vec![AttachedChildState {
                 identity: AttachedChildIdentity {
                     id: "dynamic-worker".to_owned(),
-                    membership_epoch: 0,
+                    lineage: 0,
                     generation: 0,
                 },
                 attachment: Some(Arc::new("stale".to_owned()) as OpaqueAttachment),
@@ -977,7 +977,7 @@ mod tests {
                 vec![AttachedChildState {
                     identity: AttachedChildIdentity {
                         id: "dynamic".to_owned(),
-                        membership_epoch: 0,
+                        lineage: 0,
                         generation: 0,
                     },
                     attachment: None,
@@ -1379,11 +1379,11 @@ impl SupervisorHandle {
 
     /// Adds a new child to the supervisor at runtime.
     ///
-    /// Waits if the control channel is full. On success, returns the membership
-    /// epoch assigned to the child by the supervisor. The epoch is allocated
-    /// atomically with insertion, so it identifies the membership created by
-    /// this specific call even if the same child id is later removed and
-    /// reused. Success means the membership was inserted and its start was
+    /// Waits if the control channel is full. On success, returns the lineage
+    /// assigned to the child by the supervisor. It is allocated atomically with
+    /// insertion, so it identifies the membership created by this specific call
+    /// even if the same child id is later removed and reused. Success means the
+    /// membership was inserted and its start was
     /// scheduled. This operation is supported only by dynamic supervisors,
     /// which spawn it immediately. Use [`wait_started`](Self::wait_started)
     /// when readiness is required.
@@ -1394,7 +1394,7 @@ impl SupervisorHandle {
     /// Adds a nested supervisor at runtime with restart-stable observation and
     /// control channels.
     ///
-    /// On success, returns the membership epoch assigned atomically with the
+    /// On success, returns the lineage assigned atomically with the
     /// insertion. The nested handle and attachment are registered at insertion,
     /// before the child is spawned. This operation is supported only by
     /// dynamic supervisors; use [`wait_started`](Self::wait_started) to await
@@ -1648,8 +1648,8 @@ impl SupervisorHandle {
     /// whose sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
     /// Pre-spawn snapshots already project configured children as `Starting`,
     /// so apply a later `Added` for that membership as an idempotent upsert
-    /// keyed by `(child_id, membership_epoch)`. Membership epochs remain
-    /// unique across incarnations of this stable supervisor identity.
+    /// keyed by `(child_id, lineage)`. Lineage allocation continues across
+    /// incarnations of this stable supervisor identity.
     ///
     /// Each watch owns a bounded buffer. Sustained overflow is represented by
     /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged), never

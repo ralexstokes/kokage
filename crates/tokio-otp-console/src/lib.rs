@@ -50,7 +50,7 @@ pub struct ActorStatsView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supervisor_path: Option<Vec<SupervisorPathSegmentView>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub membership_epoch: Option<u64>,
+    pub lineage: Option<u64>,
     pub messages_received: u64,
     pub messages_accepted: u64,
     pub messages_conflated: u64,
@@ -66,7 +66,7 @@ pub struct ActorStatsView {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct SupervisorPathSegmentView {
     pub id: String,
-    pub membership_epoch: u64,
+    pub lineage: u64,
     pub generation: u64,
 }
 
@@ -78,12 +78,12 @@ impl From<ActorStats> for ActorStatsView {
                 path.into_iter()
                     .map(|segment| SupervisorPathSegmentView {
                         id: segment.id,
-                        membership_epoch: segment.membership_epoch,
+                        lineage: segment.lineage,
                         generation: segment.generation,
                     })
                     .collect()
             }),
-            membership_epoch: stats.membership_epoch,
+            lineage: stats.lineage,
             messages_received: stats.messages_received,
             messages_accepted: stats.messages_accepted,
             messages_conflated: stats.messages_conflated,

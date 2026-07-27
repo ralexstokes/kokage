@@ -294,7 +294,7 @@ compare, or assemble that shape directly.
 removed while it is running:
 
 ```rust,ignore
-let membership_epoch = handle
+let lineage = handle
     .add_child(ChildSpec::new("night-shift-press", factory))
     .await?;
 handle.remove_child("night-shift-press").await?;
@@ -304,7 +304,7 @@ let pressroom = handle.supervisor("pressroom").expect("added dynamically");
 pressroom.add_child(child).await?;
 ```
 
-`add_child` returns the membership epoch allocated atomically for that
+`add_child` returns the lineage allocated atomically for that
 insertion. It is the same value published in the child's snapshot and remains
 the identity of that membership if the id is removed and reused before the
 caller next samples the tree. The reply schedules immediate startup;

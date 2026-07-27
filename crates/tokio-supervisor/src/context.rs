@@ -8,7 +8,7 @@ use crate::SupervisorHandle;
 #[derive(Debug)]
 pub(crate) struct ChildReady {
     pub(crate) key: usize,
-    pub(crate) instance: u64,
+    pub(crate) lineage: u64,
     pub(crate) generation: u64,
 }
 

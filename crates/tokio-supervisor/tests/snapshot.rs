@@ -52,8 +52,8 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
     assert_eq!(snapshot.kind, ScopeKind::Ordered);
     assert_eq!(snapshot.state, SupervisorStateView::Running);
     assert_eq!(child_ids(&snapshot), vec!["alpha", "beta"]);
-    assert_eq!(snapshot.children[0].membership_epoch, 0);
-    assert_eq!(snapshot.children[1].membership_epoch, 1);
+    assert_eq!(snapshot.children[0].lineage, 0);
+    assert_eq!(snapshot.children[1].lineage, 1);
     for entry in &snapshot.children {
         assert_eq!(entry.membership, ChildMembershipView::Active);
         assert_eq!(entry.last_exit, None);
@@ -66,7 +66,7 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
 }
 
 #[tokio::test]
-async fn nested_supervisors_allocate_membership_epochs_independently() {
+async fn nested_supervisors_allocate_lineages_independently() {
     let nested = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid nested supervisor");
@@ -109,7 +109,7 @@ async fn nested_supervisors_allocate_membership_epochs_independently() {
         outer_snapshot
             .child("nested")
             .expect("nested supervisor visible")
-            .membership_epoch,
+            .lineage,
         1
     );
     let nested_snapshot = nested_handle.snapshot();
@@ -117,14 +117,14 @@ async fn nested_supervisors_allocate_membership_epochs_independently() {
         nested_snapshot
             .child("seed")
             .expect("nested seed visible")
-            .membership_epoch,
+            .lineage,
         0
     );
     assert_eq!(
         nested_snapshot
             .child("late")
             .expect("nested dynamic child visible")
-            .membership_epoch,
+            .lineage,
         1
     );
 
@@ -181,7 +181,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     })
     .await;
     let flaky = child(&restarting, "flaky").expect("flaky child should exist");
-    let membership_epoch = flaky.membership_epoch;
+    let lineage = flaky.lineage;
     assert!(
         flaky
             .next_restart_in
@@ -209,9 +209,9 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     assert_eq!(
         child(&running_again, "flaky")
             .expect("flaky child should exist")
-            .membership_epoch,
-        membership_epoch,
-        "restarting the same membership must retain its epoch"
+            .lineage,
+        lineage,
+        "restarting the same membership must retain its lineage"
     );
 
     handle.shutdown();
