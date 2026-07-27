@@ -97,7 +97,7 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
         LifecycleEventKind::Started { generation: 0 }
     ));
     assert_eq!(added.seq, baseline.lifecycle_seq + 1);
-    assert_eq!(added.membership_epoch, declared.membership_epoch);
+    assert_eq!(added.lineage, declared.lineage);
     assert_eq!(started.seq, added.seq + 1);
 
     spawned

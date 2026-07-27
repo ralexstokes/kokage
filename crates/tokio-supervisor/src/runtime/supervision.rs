@@ -58,7 +58,7 @@ pub(crate) struct ChildEnvelope {
 #[derive(Clone, Copy)]
 pub(crate) struct TaskMeta {
     pub(crate) key: ChildKey,
-    pub(crate) instance: u64,
+    pub(crate) lineage: u64,
     pub(crate) generation: u64,
 }
 
@@ -148,19 +148,19 @@ enum Wake {
 
 /// Per-child bookkeeping entry stored in the supervisor's slab.
 ///
-/// `instance` is a monotonically increasing identifier that distinguishes
+/// `lineage` is a monotonically increasing identifier that distinguishes
 /// different memberships in one restart-stable supervisor identity (e.g.
 /// after a child is removed and a new one is inserted at the recycled key, or
 /// after the supervisor itself is reincarnated). Combined with `generation`
 /// (which counts restarts of the *same* child spec), this pair identifies every
 /// task the supervisor has spawned unless the counter reaches its saturating
-/// `u64::MAX` limit. The instance is exposed to observers as
-/// [`ChildSnapshot::membership_epoch`].
+/// `u64::MAX` limit. The lineage is exposed to observers as
+/// [`ChildSnapshot::lineage`].
 pub(crate) struct ChildEntry {
     pub(crate) id: String,
     pub(crate) formatted_path: String,
-    /// Monotonic membership instance. See struct-level docs.
-    pub(crate) instance: u64,
+    /// Monotonic lineage identifier. See struct-level docs.
+    pub(crate) lineage: u64,
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) runtime: ChildRuntime,
     last_exit: Option<ExitStatusView>,
@@ -184,13 +184,13 @@ struct PendingRemoval {
 #[derive(Clone, Copy)]
 struct StartItem {
     key: ChildKey,
-    instance: u64,
+    lineage: u64,
     emit_restart_event: bool,
 }
 
 struct StartGate {
     key: ChildKey,
-    instance: u64,
+    lineage: u64,
     generation: u64,
 }
 
@@ -212,12 +212,12 @@ impl ChildEntry {
         definition: Arc<ChildDefinition>,
         nested_channels: Option<Arc<StableSupervisorChannels>>,
         default_restart_intensity: RestartIntensity,
-        instance: u64,
+        lineage: u64,
     ) -> Self {
         Self {
             id,
             formatted_path,
-            instance,
+            lineage,
             attachment: definition.attachment.clone(),
             runtime: ChildRuntime::new(definition, default_restart_intensity),
             last_exit: None,
@@ -389,22 +389,18 @@ impl SupervisorRuntime {
                 LifecycleTreeSink::nested(
                     Arc::clone(&lifecycle),
                     link.lifecycle_tree.clone(),
-                    LifecyclePathSegment::new(
-                        link.id.clone(),
-                        link.membership_epoch,
-                        link.generation,
-                    ),
+                    LifecyclePathSegment::new(link.id.clone(), link.lineage, link.generation),
                 )
             },
         );
         let mut children = Slab::with_capacity(config.children.len());
         let mut children_by_id = HashMap::with_capacity(config.children.len());
         let mut child_order = Vec::with_capacity(config.children.len());
-        let declared_membership_epochs: HashMap<_, _> = snapshots
+        let declared_lineages: HashMap<_, _> = snapshots
             .borrow()
             .children
             .iter()
-            .map(|child| (child.id.clone(), child.membership_epoch))
+            .map(|child| (child.id.clone(), child.lineage))
             .collect();
         let mut stable_identities = reconcile_stable_identities(&config.children, &nested_channels);
 
@@ -419,17 +415,17 @@ impl SupervisorRuntime {
                 ),
                 ChildKind::Task(_) => None,
             };
-            let membership_epoch = *declared_membership_epochs
+            let lineage = *declared_lineages
                 .get(&id)
                 .expect("initial snapshot contains every static child");
-            lifecycle.observe_membership_epoch(membership_epoch);
+            lifecycle.observe_lineage(lineage);
             let key = children.insert(ChildEntry::new(
                 id.clone(),
                 formatted_path,
                 spec,
                 child_nested_channels,
                 default_restart_intensity,
-                membership_epoch,
+                lineage,
             ));
             children_by_id.insert(id.clone(), key);
             child_order.push(key);
@@ -543,14 +539,14 @@ impl SupervisorRuntime {
         for &key in &initial_children {
             self.send_lifecycle(key, LifecycleEventKind::Added);
         }
-        let initial_instances: Vec<_> = initial_children
+        let initial_lineages: Vec<_> = initial_children
             .iter()
-            .filter_map(|&key| self.children.get(key).map(|entry| (key, entry.instance)))
+            .filter_map(|&key| self.children.get(key).map(|entry| (key, entry.lineage)))
             .collect();
         if let Some(startup_ready) = startup_ready {
             self.startup_gate = Some(StartupGate {
                 ready: startup_ready,
-                pending: initial_instances,
+                pending: initial_lineages,
             });
         }
         self.schedule_start_sequence(initial_children, false)?;
@@ -688,7 +684,7 @@ impl SupervisorRuntime {
 
             let item = StartItem {
                 key,
-                instance: entry.instance,
+                lineage: entry.lineage,
                 emit_restart_event: emit_restart_events,
             };
             if self.meta.kind == ScopeKind::Dynamic {
@@ -716,7 +712,7 @@ impl SupervisorRuntime {
         let Some(entry) = self.children.get(item.key) else {
             return Ok(());
         };
-        if entry.instance != item.instance
+        if entry.lineage != item.lineage
             || entry.membership != MembershipState::Active
             || !matches!(
                 entry.runtime.state,
@@ -732,11 +728,11 @@ impl SupervisorRuntime {
                 .get_or_insert_with(StartSequence::default)
                 .gate = Some(StartGate {
                 key: item.key,
-                instance: item.instance,
+                lineage: item.lineage,
                 generation: new_generation,
             });
         } else if !readiness_gated {
-            self.startup_member_ready(item.key, item.instance);
+            self.startup_member_ready(item.key, item.lineage);
         }
         if item.emit_restart_event
             && let Some(old_generation) = old_generation
@@ -754,15 +750,15 @@ impl SupervisorRuntime {
             let gate_action = self.start_sequence.as_ref().and_then(|sequence| {
                 sequence.gate.as_ref().map(|gate| {
                     let state = self.children.get(gate.key).and_then(|entry| {
-                        (entry.instance == gate.instance
+                        (entry.lineage == gate.lineage
                             && entry.membership == MembershipState::Active)
                             .then_some((entry.runtime.state, entry.runtime.next_restart_deadline))
                     });
-                    (gate.key, gate.instance, state)
+                    (gate.key, gate.lineage, state)
                 })
             });
 
-            if let Some((key, instance, state)) = gate_action {
+            if let Some((key, lineage, state)) = gate_action {
                 match state {
                     Some((RuntimeChildState::Starting | RuntimeChildState::Stopping, _))
                     | Some((RuntimeChildState::Stopped, Some(_))) => return Ok(()),
@@ -771,14 +767,14 @@ impl SupervisorRuntime {
                             .as_mut()
                             .and_then(|sequence| sequence.gate.take())
                             .expect("start gate was present");
-                        self.startup_member_ready(key, instance);
+                        self.startup_member_ready(key, lineage);
                     }
                     Some((RuntimeChildState::Stopped, None)) => {
                         self.start_sequence
                             .as_mut()
                             .expect("start sequence was present")
                             .gate = None;
-                        self.startup_member_aborted(key, instance)?;
+                        self.startup_member_aborted(key, lineage)?;
                     }
                     Some((RuntimeChildState::StartQueued, _)) | None => {
                         self.start_sequence
@@ -809,21 +805,21 @@ impl SupervisorRuntime {
         }
     }
 
-    fn startup_member_ready(&mut self, key: ChildKey, instance: u64) {
+    fn startup_member_ready(&mut self, key: ChildKey, lineage: u64) {
         let Some(gate) = self.startup_gate.as_mut() else {
             return;
         };
-        gate.pending.retain(|&(pending_key, pending_instance)| {
-            pending_key != key || pending_instance != instance
+        gate.pending.retain(|&(pending_key, pending_lineage)| {
+            pending_key != key || pending_lineage != lineage
         });
         self.complete_empty_startup_gate();
     }
 
-    fn startup_member_aborted(&mut self, key: ChildKey, instance: u64) -> RuntimeResult<()> {
+    fn startup_member_aborted(&mut self, key: ChildKey, lineage: u64) -> RuntimeResult<()> {
         let pending = self
             .startup_gate
             .as_ref()
-            .is_some_and(|gate| gate.pending.contains(&(key, instance)));
+            .is_some_and(|gate| gate.pending.contains(&(key, lineage)));
         if !pending {
             return Ok(());
         }
@@ -837,8 +833,8 @@ impl SupervisorRuntime {
         .into())
     }
 
-    fn startup_member_removed(&mut self, key: ChildKey, instance: u64) {
-        self.startup_member_ready(key, instance);
+    fn startup_member_removed(&mut self, key: ChildKey, lineage: u64) {
+        self.startup_member_ready(key, lineage);
     }
 
     fn complete_empty_startup_gate(&mut self) {
@@ -856,7 +852,7 @@ impl SupervisorRuntime {
         let Some(entry) = self.children.get_mut(ready.key) else {
             return Ok(());
         };
-        if entry.instance != ready.instance
+        if entry.lineage != ready.lineage
             || entry.runtime.generation != ready.generation
             || entry.membership != MembershipState::Active
             || entry.runtime.state != RuntimeChildState::Starting
@@ -876,12 +872,12 @@ impl SupervisorRuntime {
             id,
             generation: ready.generation,
         });
-        self.startup_member_ready(ready.key, ready.instance);
+        self.startup_member_ready(ready.key, ready.lineage);
 
         let matches_gate = self.start_sequence.as_ref().is_some_and(|sequence| {
             sequence.gate.as_ref().is_some_and(|gate| {
                 gate.key == ready.key
-                    && gate.instance == ready.instance
+                    && gate.lineage == ready.lineage
                     && gate.generation == ready.generation
             })
         });
@@ -917,11 +913,11 @@ impl SupervisorRuntime {
         key: ChildKey,
         startup_aborted: bool,
     ) -> RuntimeResult<()> {
-        let instance = self.children[key].instance;
+        let lineage = self.children[key].lineage;
         if startup_aborted {
             self.children[key].runtime.startup_aborted = true;
             self.publish_snapshot();
-            self.startup_member_aborted(key, instance)?;
+            self.startup_member_aborted(key, lineage)?;
         }
         // Skipped by the group respawn and never restarted afterwards; if
         // this supervisor is the root, that judgment is final.
@@ -980,14 +976,14 @@ impl SupervisorRuntime {
 
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
         let definition = child.inner;
-        let membership_epoch = self.lifecycle.next_membership_epoch();
+        let lineage = self.lifecycle.next_lineage();
         let key = self.children.insert(ChildEntry::new(
             id.clone(),
             formatted_path,
             definition,
             None,
             self.meta.default_restart_intensity,
-            membership_epoch,
+            lineage,
         ));
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
@@ -995,7 +991,7 @@ impl SupervisorRuntime {
 
         self.schedule_start_sequence(vec![key], false)?;
 
-        Ok(membership_epoch)
+        Ok(lineage)
     }
 
     fn add_supervisor(&mut self, mut pending: PendingSupervisorSpec) -> CommandResult<u64> {
@@ -1032,14 +1028,14 @@ impl SupervisorRuntime {
         let supervisor = pending.accept();
         let definition = Arc::new(ChildDefinition::supervisor(supervisor));
         let formatted_path = format_child_path(&self.meta.path_prefix, &id);
-        let membership_epoch = self.lifecycle.next_membership_epoch();
+        let lineage = self.lifecycle.next_lineage();
         let key = self.children.insert(ChildEntry::new(
             id.clone(),
             formatted_path,
             definition,
             Some(Arc::clone(&stable)),
             self.meta.default_restart_intensity,
-            membership_epoch,
+            lineage,
         ));
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
@@ -1051,7 +1047,7 @@ impl SupervisorRuntime {
 
         self.schedule_start_sequence(vec![key], false)?;
 
-        Ok(membership_epoch)
+        Ok(lineage)
     }
 
     pub(crate) fn finish(&mut self) {
@@ -1077,7 +1073,7 @@ impl SupervisorRuntime {
         let Some(entry) = self.children.get_mut(notification.parent_key) else {
             return;
         };
-        if entry.instance != notification.parent_instance
+        if entry.lineage != notification.parent_lineage
             || entry.runtime.generation != notification.generation
         {
             return;
@@ -1114,7 +1110,7 @@ impl SupervisorRuntime {
             return Ok(());
         }
 
-        let (instance, mode, active) = {
+        let (lineage, mode, active) = {
             let entry = &mut self.children[key];
             entry.membership = MembershipState::Removing;
             let active = entry.runtime.state.is_active();
@@ -1131,7 +1127,7 @@ impl SupervisorRuntime {
                 grace_expired: false,
                 hard_abort_deadline: None,
             });
-            (entry.instance, mode, active)
+            (entry.lineage, mode, active)
         };
 
         self.publish_snapshot();
@@ -1143,7 +1139,7 @@ impl SupervisorRuntime {
                 }
             }
         }
-        self.detach_start_member(key, instance)?;
+        self.detach_start_member(key, lineage)?;
 
         if !active {
             self.finalize_removed_child(key, false);
@@ -1151,34 +1147,34 @@ impl SupervisorRuntime {
         Ok(())
     }
 
-    fn detach_start_member(&mut self, key: ChildKey, instance: u64) -> RuntimeResult<()> {
-        let cleared_gate = self.remove_start_sequence_member(key, instance);
-        self.startup_member_removed(key, instance);
+    fn detach_start_member(&mut self, key: ChildKey, lineage: u64) -> RuntimeResult<()> {
+        let cleared_gate = self.remove_start_sequence_member(key, lineage);
+        self.startup_member_removed(key, lineage);
         if cleared_gate {
             self.advance_start_sequence()?;
         }
         Ok(())
     }
 
-    fn terminal_start_member(&mut self, key: ChildKey, instance: u64) -> RuntimeResult<()> {
-        let cleared_gate = self.remove_start_sequence_member(key, instance);
-        self.startup_member_aborted(key, instance)?;
+    fn terminal_start_member(&mut self, key: ChildKey, lineage: u64) -> RuntimeResult<()> {
+        let cleared_gate = self.remove_start_sequence_member(key, lineage);
+        self.startup_member_aborted(key, lineage)?;
         if cleared_gate {
             self.advance_start_sequence()?;
         }
         Ok(())
     }
 
-    fn remove_start_sequence_member(&mut self, key: ChildKey, instance: u64) -> bool {
+    fn remove_start_sequence_member(&mut self, key: ChildKey, lineage: u64) -> bool {
         let mut cleared_gate = false;
         if let Some(sequence) = self.start_sequence.as_mut() {
             sequence
                 .queue
-                .retain(|item| item.key != key || item.instance != instance);
+                .retain(|item| item.key != key || item.lineage != lineage);
             if sequence
                 .gate
                 .as_ref()
-                .is_some_and(|gate| gate.key == key && gate.instance == instance)
+                .is_some_and(|gate| gate.key == key && gate.lineage == lineage)
             {
                 sequence.gate = None;
                 cleared_gate = true;
@@ -1375,14 +1371,14 @@ impl SupervisorRuntime {
             let entry = &self.children[classified.key];
             self.send_event(RuntimeEvent::ChildRestartScheduled {
                 id: entry.id.clone(),
-                membership_epoch: entry.instance,
+                lineage: entry.lineage,
                 generation: previous_generation,
                 delay,
                 total_restarts: self.total_restarts,
                 child_restart_count: entry.runtime.restart_tracker.total_restarts(),
             });
         } else if allow_restart {
-            let instance = self.children[classified.key].instance;
+            let lineage = self.children[classified.key].lineage;
             let startup_aborted = !self.children[classified.key].runtime.has_reported_ready;
             if startup_aborted {
                 self.children[classified.key].runtime.startup_aborted = true;
@@ -1394,7 +1390,7 @@ impl SupervisorRuntime {
                 .remove_on_exit
             {
                 let startup_result = if startup_aborted {
-                    self.terminal_start_member(classified.key, instance)
+                    self.terminal_start_member(classified.key, lineage)
                 } else {
                     Ok(())
                 };
@@ -1424,7 +1420,7 @@ impl SupervisorRuntime {
                 self.mark_child_terminal(classified.key);
             }
             if startup_aborted {
-                self.terminal_start_member(classified.key, instance)?;
+                self.terminal_start_member(classified.key, lineage)?;
             }
         }
 
@@ -1465,7 +1461,7 @@ impl SupervisorRuntime {
                 };
                 Ok(ClassifiedExit {
                     key: meta.key,
-                    instance: meta.instance,
+                    lineage: meta.lineage,
                     generation: meta.generation,
                     status: self
                         .classify_child_exit(&meta, ExitStatus::from_child_result(envelope.result)),
@@ -1481,7 +1477,7 @@ impl SupervisorRuntime {
                 let status = self.classify_child_exit(&meta, classify_join_error(err));
                 Ok(ClassifiedExit {
                     key: meta.key,
-                    instance: meta.instance,
+                    lineage: meta.lineage,
                     generation: meta.generation,
                     status,
                 })
@@ -1496,7 +1492,7 @@ impl SupervisorRuntime {
     /// join is dequeued after the deadline has passed.
     fn classify_child_exit(&self, meta: &TaskMeta, status: ExitStatus) -> ExitStatus {
         if self.children.get(meta.key).is_some_and(|entry| {
-            entry.instance == meta.instance
+            entry.lineage == meta.lineage
                 && entry.runtime.generation == meta.generation
                 && (entry.runtime.shutdown_timed_out
                     || entry.pending_removal.as_ref().is_some_and(|pending| {
@@ -1661,7 +1657,7 @@ impl SupervisorRuntime {
                     for classified in deferred {
                         if self.current_child_matches(
                             classified.key,
-                            classified.instance,
+                            classified.lineage,
                             classified.generation,
                         ) {
                             self.apply_exit_policy(classified)?;
@@ -1683,14 +1679,14 @@ impl SupervisorRuntime {
         {
             return Ok(());
         }
-        let instance = entry.instance;
+        let lineage = entry.lineage;
         self.children[key].runtime.next_restart_deadline = None;
         let (old_generation, new_generation) = self.spawn_child(key)?;
         if let Some(gate) = self
             .start_sequence
             .as_mut()
             .and_then(|sequence| sequence.gate.as_mut())
-            .filter(|gate| gate.key == key && gate.instance == instance)
+            .filter(|gate| gate.key == key && gate.lineage == lineage)
         {
             gate.generation = new_generation;
         }
@@ -1745,7 +1741,7 @@ impl SupervisorRuntime {
         for classified in completed_in_scope {
             if !self.current_child_matches(
                 classified.key,
-                classified.instance,
+                classified.lineage,
                 classified.generation,
             ) {
                 continue;
@@ -1829,7 +1825,7 @@ impl SupervisorRuntime {
         let entry = self.children.get(key)?;
         Some(LifecycleEventDraft {
             child_id: entry.id.clone(),
-            membership_epoch: entry.instance,
+            lineage: entry.lineage,
             total_restarts: self.total_restarts,
             child_restart_count: entry.runtime.restart_tracker.total_restarts(),
             kind,
@@ -1861,14 +1857,14 @@ impl SupervisorRuntime {
             RuntimeEvent::SupervisorStopped => Some(RecursiveLifecycleEventKind::SupervisorStopped),
             RuntimeEvent::ChildRestartScheduled {
                 id,
-                membership_epoch,
+                lineage,
                 generation,
                 delay,
                 total_restarts,
                 child_restart_count,
             } => Some(RecursiveLifecycleEventKind::RestartScheduled {
                 child_id: id.clone(),
-                membership_epoch: *membership_epoch,
+                lineage: *lineage,
                 generation: *generation,
                 delay: *delay,
                 total_restarts: *total_restarts,
@@ -1930,7 +1926,7 @@ impl SupervisorRuntime {
             .map(|entry| AttachedChildState {
                 identity: crate::AttachedChildIdentity {
                     id: entry.id.clone(),
-                    membership_epoch: entry.instance,
+                    lineage: entry.lineage,
                     generation: entry.runtime.generation,
                 },
                 attachment: entry.attachment.clone(),
@@ -1952,7 +1948,7 @@ impl SupervisorRuntime {
 
             children.push(ChildSnapshot {
                 id: entry.id.clone(),
-                membership_epoch: entry.instance,
+                lineage: entry.lineage,
                 generation: entry.runtime.generation,
                 started: entry.runtime.has_reported_ready,
                 startup_aborted: entry.runtime.startup_aborted,
@@ -1999,7 +1995,7 @@ impl SupervisorRuntime {
         joined: Result<(Id, ChildEnvelope), JoinError>,
     ) -> Result<Option<ClassifiedExit>, SupervisorError> {
         let classified = self.classify_join(joined)?;
-        if !self.current_child_matches(classified.key, classified.instance, classified.generation) {
+        if !self.current_child_matches(classified.key, classified.lineage, classified.generation) {
             return Ok(None);
         }
 
@@ -2007,10 +2003,10 @@ impl SupervisorRuntime {
         Ok(Some(classified))
     }
 
-    fn current_child_matches(&self, key: ChildKey, instance: u64, generation: u64) -> bool {
-        self.children.get(key).is_some_and(|entry| {
-            entry.instance == instance && entry.runtime.generation == generation
-        })
+    fn current_child_matches(&self, key: ChildKey, lineage: u64, generation: u64) -> bool {
+        self.children
+            .get(key)
+            .is_some_and(|entry| entry.lineage == lineage && entry.runtime.generation == generation)
     }
 }
 
@@ -2066,7 +2062,7 @@ fn map_supervisor_error_to_control(err: SupervisorError) -> ControlError {
 
 pub(crate) struct ClassifiedExit {
     pub(crate) key: ChildKey,
-    instance: u64,
+    lineage: u64,
     pub(crate) generation: u64,
     pub(crate) status: ExitStatus,
 }
@@ -2186,7 +2182,7 @@ mod tests {
             .nested_snapshot_tx
             .send(NestedSnapshotNotification {
                 parent_key: 0,
-                parent_instance: 0,
+                parent_lineage: 0,
                 generation: 0,
             })
             .expect("nested snapshot channel should remain open");
@@ -2194,7 +2190,7 @@ mod tests {
             .ready_tx
             .send(ChildReady {
                 key: 1,
-                instance: 0,
+                lineage: 0,
                 generation: 0,
             })
             .expect("readiness receiver should remain open");
@@ -2388,7 +2384,7 @@ mod tests {
             own_handle,
         );
         let key = runtime.child_order[0];
-        let instance = runtime.children[key].instance;
+        let lineage = runtime.children[key].lineage;
         runtime.children[key].runtime.has_started = true;
         runtime.start_sequence = Some(StartSequence::default());
 
@@ -2396,7 +2392,7 @@ mod tests {
             runtime
                 .spawn_start_item(StartItem {
                     key,
-                    instance,
+                    lineage,
                     emit_restart_event: true,
                 })
                 .is_ok()
@@ -2430,7 +2426,7 @@ mod tests {
             runtime
                 .handle_child_ready(ChildReady {
                     key,
-                    instance,
+                    lineage,
                     generation: 2,
                 })
                 .is_ok()

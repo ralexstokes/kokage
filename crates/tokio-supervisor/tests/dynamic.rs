@@ -422,11 +422,11 @@ async fn remove_last_child_and_readd_same_id() {
     )
     .await;
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
-    let initial_epoch = handle
+    let initial_lineage = handle
         .snapshot()
         .child("dynamic")
         .expect("initial child visible")
-        .membership_epoch;
+        .lineage;
 
     handle
         .remove_child("dynamic")
@@ -435,7 +435,7 @@ async fn remove_last_child_and_readd_same_id() {
     assert!(handle.snapshot().children.is_empty());
 
     let mut events = common::event_watch(&handle);
-    let replacement_epoch = handle
+    let replacement_lineage = handle
         .add_child(ChildSpec::new("dynamic", move |_ctx| {
             let starts_tx = starts_tx.clone();
             async move {
@@ -446,8 +446,8 @@ async fn remove_last_child_and_readd_same_id() {
         .await
         .expect("removed child id should be reusable");
     assert!(
-        replacement_epoch > initial_epoch,
-        "re-adding an id must return a distinct membership epoch"
+        replacement_lineage > initial_lineage,
+        "re-adding an id must return a distinct lineage"
     );
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
     let replacement = handle.snapshot();
@@ -455,7 +455,7 @@ async fn remove_last_child_and_readd_same_id() {
         .child("dynamic")
         .expect("replacement child visible");
     assert_eq!(replacement.generation, 0);
-    assert_eq!(replacement.membership_epoch, replacement_epoch);
+    assert_eq!(replacement.lineage, replacement_lineage);
     loop {
         match common::recv_supervisor_event(&mut events).await {
             ObservedEvent::ChildExited { id, status, .. } if id == "dynamic" => {

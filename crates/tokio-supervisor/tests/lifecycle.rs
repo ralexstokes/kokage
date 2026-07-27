@@ -111,7 +111,7 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
         scheduled.kind,
         RecursiveLifecycleEventKind::RestartScheduled {
             ref child_id,
-            membership_epoch: 0,
+            lineage: 0,
             generation: 0,
             delay,
             total_restarts: 1,
@@ -177,7 +177,7 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
     .await;
     assert_eq!(initial.supervisor_path.len(), 2);
     assert_eq!(initial.supervisor_path[0].id, "middle");
-    assert_eq!(initial.supervisor_path[0].membership_epoch, 0);
+    assert_eq!(initial.supervisor_path[0].lineage, 0);
     assert_eq!(initial.supervisor_path[0].generation, 0);
     assert_eq!(initial.supervisor_path[1].id, "leaf");
     assert_eq!(initial.supervisor_path[1].generation, 0);
@@ -199,12 +199,10 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
     })
     .await;
     assert_eq!(recreated.supervisor_path.len(), 2);
-    assert_eq!(recreated.supervisor_path[0].membership_epoch, 0);
+    assert_eq!(recreated.supervisor_path[0].lineage, 0);
     assert_eq!(recreated.supervisor_path[0].generation, 1);
     assert_eq!(recreated.supervisor_path[1].id, "leaf");
-    assert!(
-        recreated.supervisor_path[1].membership_epoch > initial.supervisor_path[1].membership_epoch
-    );
+    assert!(recreated.supervisor_path[1].lineage > initial.supervisor_path[1].lineage);
 
     shutdown(handle).await;
 }
@@ -218,7 +216,7 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
     handle.wait_started().await.expect("startup succeeds");
     let mut tree = handle.watch_lifecycle_recursive();
 
-    let first_epoch = handle
+    let first_lineage = handle
         .add_supervisor(SupervisorSpec::new("nested", idle_supervisor()))
         .await
         .expect("first nested supervisor added");
@@ -231,25 +229,26 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
     })
     .await;
     assert_eq!(first.supervisor_path.len(), 1);
-    assert_eq!(first.supervisor_path[0].membership_epoch, first_epoch);
+    assert_eq!(first.supervisor_path[0].lineage, first_lineage);
     assert_eq!(first.supervisor_path[0].generation, 0);
 
     handle
         .remove_child("nested")
         .await
         .expect("first nested supervisor removed");
-    let second_epoch = handle
+    let second_lineage = handle
         .add_supervisor(SupervisorSpec::new("nested", idle_supervisor()))
         .await
         .expect("replacement nested supervisor added");
     let second = next_recursive_for(&mut tree, |event| {
         matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
-            && event.supervisor_path.first().is_some_and(|segment| {
-                segment.id == "nested" && segment.membership_epoch == second_epoch
-            })
+            && event
+                .supervisor_path
+                .first()
+                .is_some_and(|segment| segment.id == "nested" && segment.lineage == second_lineage)
     })
     .await;
-    assert!(second_epoch > first_epoch);
+    assert!(second_lineage > first_lineage);
     assert_eq!(second.supervisor_path.len(), 1);
     assert_eq!(second.supervisor_path[0].generation, 0);
 
@@ -548,7 +547,7 @@ async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
     assert_eq!(started.seq, added.seq + 1);
     assert_eq!(exited.seq, started.seq + 1);
     assert_eq!(removed.seq, exited.seq + 1);
-    assert_eq!(removed.membership_epoch, added.membership_epoch);
+    assert_eq!(removed.lineage, added.lineage);
 
     shutdown(handle).await;
 }
@@ -693,11 +692,11 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .spawn();
     handle.wait_started().await.expect("startup succeeds");
     let middle = handle.supervisor("middle").expect("middle handle");
-    let initial_worker_epoch = middle
+    let initial_worker_lineage = middle
         .snapshot()
         .child("worker")
         .expect("worker is supervised")
-        .membership_epoch;
+        .lineage;
     let mut lifecycle = middle.watch_lifecycle();
 
     crash_worker.notify_one();
@@ -721,8 +720,8 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
     .await;
     assert_eq!(added.seq, fatal_exit.seq + 1);
     assert!(started.seq > added.seq);
-    assert!(added.membership_epoch > initial_worker_epoch);
-    assert_eq!(started.membership_epoch, added.membership_epoch);
+    assert!(added.lineage > initial_worker_lineage);
+    assert_eq!(started.lineage, added.lineage);
     assert_eq!(added.total_restarts, 2);
     assert_eq!(started.total_restarts, 2);
 
@@ -778,9 +777,9 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
     })
     .await;
     assert_eq!(added.seq, baseline.lifecycle_seq + 1);
-    assert_eq!(added.membership_epoch, declared.membership_epoch);
+    assert_eq!(added.lineage, declared.lineage);
     assert_eq!(started.seq, added.seq + 1);
-    assert_eq!(started.membership_epoch, declared.membership_epoch);
+    assert_eq!(started.lineage, declared.lineage);
 
     shutdown(handle).await;
 }

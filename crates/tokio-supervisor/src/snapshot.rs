@@ -73,16 +73,8 @@ pub struct SupervisorSnapshot {
 pub struct ChildSnapshot {
     /// The child's unique identifier.
     pub id: String,
-    /// Monotonic identity of this membership within the stable supervisor
-    /// identity.
-    ///
-    /// Unlike [`generation`](Self::generation), this changes when a child is
-    /// removed and another child is added under the same id. Restarts of the
-    /// same membership retain the epoch. The sequence continues across
-    /// incarnations of a restart-stable nested supervisor; distinct nested
-    /// supervisor identities maintain independent sequences. The counter
-    /// saturates at [`u64::MAX`].
-    pub membership_epoch: u64,
+    /// Supervisor-wide identity of this child's restart-linked occupancy chain.
+    pub lineage: u64,
     /// Current generation counter. Incremented on each restart.
     pub generation: u64,
     /// Whether this child has reported readiness in its current generation.
@@ -190,7 +182,7 @@ impl ChildSnapshot {
     pub fn new(id: impl Into<String>, generation: u64, state: ChildStateView) -> Self {
         Self {
             id: id.into(),
-            membership_epoch: 0,
+            lineage: 0,
             generation,
             started: false,
             startup_aborted: false,
@@ -204,10 +196,10 @@ impl ChildSnapshot {
         }
     }
 
-    /// Sets the identity of this child membership.
+    /// Sets this child's lineage.
     #[must_use]
-    pub fn membership_epoch(mut self, membership_epoch: u64) -> Self {
-        self.membership_epoch = membership_epoch;
+    pub fn lineage(mut self, lineage: u64) -> Self {
+        self.lineage = lineage;
         self
     }
 
@@ -332,7 +324,7 @@ pub enum ChildMembershipView {
 #[derive(Clone, Debug)]
 pub(crate) struct NestedSnapshotNotification {
     pub(crate) parent_key: usize,
-    pub(crate) parent_instance: u64,
+    pub(crate) parent_lineage: u64,
     pub(crate) generation: u64,
 }
 
@@ -388,7 +380,7 @@ pub(crate) struct SnapshotCell {
     notifications: mpsc::UnboundedSender<NestedSnapshotNotification>,
     state: NestedSnapshotState,
     parent_key: usize,
-    parent_instance: u64,
+    parent_lineage: u64,
 }
 
 impl SnapshotCell {
@@ -396,13 +388,13 @@ impl SnapshotCell {
         notifications: mpsc::UnboundedSender<NestedSnapshotNotification>,
         state: NestedSnapshotState,
         parent_key: usize,
-        parent_instance: u64,
+        parent_lineage: u64,
     ) -> Self {
         Self {
             notifications,
             state,
             parent_key,
-            parent_instance,
+            parent_lineage,
         }
     }
 
@@ -416,7 +408,7 @@ impl SnapshotCell {
 
         let notification = NestedSnapshotNotification {
             parent_key: self.parent_key,
-            parent_instance: self.parent_instance,
+            parent_lineage: self.parent_lineage,
             generation,
         };
 
@@ -446,7 +438,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn membership_epoch_is_required_when_deserializing() {
+    fn lineage_is_required_when_deserializing() {
         use super::{ChildSnapshot, ChildStateView};
 
         let mut value =
@@ -455,10 +447,10 @@ mod tests {
         value
             .as_object_mut()
             .expect("child snapshot serializes as an object")
-            .remove("membership_epoch");
+            .remove("lineage");
 
-        let error = serde_json::from_value::<ChildSnapshot>(value)
-            .expect_err("membership_epoch must be present");
-        assert!(error.to_string().contains("membership_epoch"));
+        let error =
+            serde_json::from_value::<ChildSnapshot>(value).expect_err("lineage must be present");
+        assert!(error.to_string().contains("lineage"));
     }
 }

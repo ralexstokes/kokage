@@ -80,7 +80,7 @@ pub(crate) struct ParentLink {
     pub(crate) lifecycle_tree: LifecycleTreeSink,
     pub(crate) snapshot_cell: SnapshotCell,
     pub(crate) id: String,
-    pub(crate) membership_epoch: u64,
+    pub(crate) lineage: u64,
     pub(crate) generation: u64,
 }
 
@@ -495,9 +495,9 @@ pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot 
             .children
             .iter()
             .enumerate()
-            .map(|(membership_epoch, child)| ChildSnapshot {
+            .map(|(lineage, child)| ChildSnapshot {
                 id: child.id.clone(),
-                membership_epoch: membership_epoch as u64,
+                lineage: lineage as u64,
                 generation: 0,
                 started: false,
                 startup_aborted: false,
@@ -524,10 +524,10 @@ fn initial_attached_children(
         .children
         .iter()
         .enumerate()
-        .map(|(membership_epoch, child)| AttachedChildState {
+        .map(|(lineage, child)| AttachedChildState {
             identity: crate::AttachedChildIdentity {
                 id: child.id.clone(),
-                membership_epoch: membership_epoch as u64,
+                lineage: lineage as u64,
                 generation: 0,
             },
             attachment: child.attachment.clone(),

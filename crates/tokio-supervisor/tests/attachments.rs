@@ -52,7 +52,7 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
         .build()
         .expect("supervisor builds")
         .spawn();
-    let old_epoch = handle
+    let old_lineage = handle
         .add_child(waiting_child("worker").attachment("old".to_owned()))
         .await
         .expect("old child added");
@@ -60,13 +60,13 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
     let old = handle.attached_children::<String>();
     assert_eq!(old.len(), 1);
     assert_eq!(old[0].attachment().as_str(), "old");
-    assert_eq!(old[0].path()[0].membership_epoch, old_epoch);
+    assert_eq!(old[0].path()[0].lineage, old_lineage);
 
     handle
         .remove_child("worker")
         .await
         .expect("old child removed");
-    let new_epoch = handle
+    let new_lineage = handle
         .add_child(waiting_child("worker").attachment("new".to_owned()))
         .await
         .expect("replacement child added");
@@ -74,8 +74,8 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
     let current = handle.attached_children::<String>();
     assert_eq!(current.len(), 1);
     assert_eq!(current[0].attachment().as_str(), "new");
-    assert_eq!(current[0].path()[0].membership_epoch, new_epoch);
-    assert_ne!(new_epoch, old_epoch);
+    assert_eq!(current[0].path()[0].lineage, new_lineage);
+    assert_ne!(new_lineage, old_lineage);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

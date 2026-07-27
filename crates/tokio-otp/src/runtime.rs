@@ -607,7 +607,7 @@ impl RuntimeHandle {
     ) -> Result<RuntimeHandle, AddSubtreeError> {
         let id = id.into();
         let (nested_supervisor, nested_actors) = builder.into().build()?.into_parts();
-        let membership_epoch = self
+        let lineage = self
             .supervisor
             .add_supervisor(
                 SupervisorSpec::new(id.clone(), nested_supervisor).attachment(
@@ -615,7 +615,7 @@ impl RuntimeHandle {
                 ),
             )
             .await?;
-        self.subtree_membership(&id, Some(membership_epoch))
+        self.subtree_membership(&id, Some(lineage))
             .ok_or(ControlError::Unavailable.into())
     }
 
@@ -628,7 +628,7 @@ impl RuntimeHandle {
         self.subtree_membership(id, None)
     }
 
-    fn subtree_membership(&self, id: &str, membership_epoch: Option<u64>) -> Option<RuntimeHandle> {
+    fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<RuntimeHandle> {
         self.supervisor
             .attached_children::<RuntimeAttachment>()
             .into_iter()
@@ -637,9 +637,7 @@ impl RuntimeHandle {
                     return None;
                 };
                 if identity.id != id
-                    || membership_epoch.is_some_and(|membership_epoch| {
-                        identity.membership_epoch != membership_epoch
-                    })
+                    || lineage.is_some_and(|lineage| identity.lineage != lineage)
                     || !attached.attachment().belongs_to(&self.actors)
                 {
                     return None;
@@ -847,7 +845,7 @@ impl RuntimeHandle {
                             .map(supervisor_path_segment)
                             .collect(),
                     );
-                    actor_stats.membership_epoch = Some(child.membership_epoch);
+                    actor_stats.lineage = Some(child.lineage);
                     stats.push(actor_stats);
                 }
                 RuntimeAttachmentKind::Subtree(subtree) => {
@@ -990,7 +988,7 @@ pub(crate) fn actor_child_spec(
 fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSegment {
     SupervisorPathSegment {
         id: identity.id.clone(),
-        membership_epoch: identity.membership_epoch,
+        lineage: identity.lineage,
         generation: identity.generation,
     }
 }
@@ -1014,11 +1012,11 @@ mod tests {
         root.add_subtree("workers", crate::Runtime::builder())
             .await
             .expect("first subtree added");
-        let first_epoch = root
+        let first_lineage = root
             .snapshot()
             .child("workers")
             .expect("first membership is visible")
-            .membership_epoch;
+            .lineage;
 
         root.remove_child("workers")
             .await
@@ -1026,20 +1024,20 @@ mod tests {
         root.add_subtree("workers", crate::Runtime::builder())
             .await
             .expect("replacement subtree added");
-        let replacement_epoch = root
+        let replacement_lineage = root
             .snapshot()
             .child("workers")
             .expect("replacement membership is visible")
-            .membership_epoch;
+            .lineage;
 
-        assert_ne!(first_epoch, replacement_epoch);
+        assert_ne!(first_lineage, replacement_lineage);
         assert!(
-            root.subtree_membership("workers", Some(first_epoch))
+            root.subtree_membership("workers", Some(first_lineage))
                 .is_none(),
             "a lookup bound to the completed add must not return a same-id replacement"
         );
         assert!(
-            root.subtree_membership("workers", Some(replacement_epoch))
+            root.subtree_membership("workers", Some(replacement_lineage))
                 .is_some()
         );
 

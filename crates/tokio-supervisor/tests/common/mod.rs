@@ -87,7 +87,7 @@ impl Drop for LiveGuard {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedPathSegment {
     pub id: String,
-    pub membership_epoch: u64,
+    pub lineage: u64,
     pub generation: u64,
 }
 
@@ -95,7 +95,7 @@ impl ObservedPathSegment {
     pub fn new(id: impl Into<String>, generation: u64) -> Self {
         Self {
             id: id.into(),
-            membership_epoch: 0,
+            lineage: 0,
             generation,
         }
     }
@@ -108,7 +108,7 @@ pub enum ObservedEvent {
     SupervisorStopped,
     Nested {
         id: String,
-        membership_epoch: u64,
+        lineage: u64,
         generation: u64,
         event: Box<Self>,
     },
@@ -143,14 +143,14 @@ impl ObservedEvent {
         let mut event = self;
         while let Self::Nested {
             id,
-            membership_epoch,
+            lineage,
             generation,
             event: inner,
         } = event
         {
             path.push(ObservedPathSegment {
                 id: id.clone(),
-                membership_epoch: *membership_epoch,
+                lineage: *lineage,
                 generation: *generation,
             });
             event = inner;
@@ -287,7 +287,7 @@ fn wrap_event(
         .rev()
         .fold(event, |event, segment| ObservedEvent::Nested {
             id: segment.id.clone(),
-            membership_epoch: segment.membership_epoch,
+            lineage: segment.lineage,
             generation: segment.generation,
             event: Box::new(event),
         })

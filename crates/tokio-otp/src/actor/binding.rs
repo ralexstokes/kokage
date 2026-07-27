@@ -31,8 +31,8 @@ pub struct ActorStats {
     /// through [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
     ///
     /// A direct child of the sampled runtime has an empty path. Each nested
-    /// segment includes the supervisor child's membership epoch and generation
-    /// so identical actor ids and local epochs in sibling or restarted
+    /// segment includes the supervisor child's lineage and generation
+    /// so identical actor ids and local lineages in sibling or restarted
     /// subtrees remain distinguishable. Standalone actor and graph stats have
     /// no supervisor context and report `None`.
     pub supervisor_path: Option<Vec<SupervisorPathSegment>>,
@@ -44,7 +44,7 @@ pub struct ActorStats {
     /// actor from a later actor added under the same id, including actors with
     /// identical local identities in different subtrees. Standalone actor and
     /// graph stats have no supervisor membership and report `None`.
-    pub membership_epoch: Option<u64>,
+    pub lineage: Option<u64>,
     /// Messages removed from the mailbox by the actor for handling.
     ///
     /// This can be lower than [`messages_accepted`](Self::messages_accepted):
@@ -87,7 +87,7 @@ pub struct SupervisorPathSegment {
     /// Child id under which the nested supervisor is mounted.
     pub id: String,
     /// Membership identity of that child in its parent supervisor.
-    pub membership_epoch: u64,
+    pub lineage: u64,
     /// Current generation of the nested supervisor child.
     pub generation: u64,
 }
@@ -147,7 +147,7 @@ impl ActorStatsCounters {
         ActorStats {
             actor_id: actor_id.to_owned(),
             supervisor_path: None,
-            membership_epoch: None,
+            lineage: None,
             messages_received: self.messages_received.load(Ordering::Relaxed),
             messages_accepted: self.messages_accepted.load(Ordering::Relaxed),
             messages_conflated: self.messages_conflated.load(Ordering::Relaxed),

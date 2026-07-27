@@ -40,8 +40,8 @@ fn print_event(event: &RecursiveLifecycleEvent) {
         .iter()
         .map(|segment| {
             format!(
-                "{}[epoch={}, generation={}]",
-                segment.id, segment.membership_epoch, segment.generation
+                "{}[lineage={}, generation={}]",
+                segment.id, segment.lineage, segment.generation
             )
         })
         .collect::<Vec<_>>()

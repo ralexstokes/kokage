@@ -163,13 +163,13 @@ async fn runtime_handle_enumerates_actor_stats() {
     assert_eq!(stats[0].actor_id, worker_ref.id());
     assert_eq!(stats[0].supervisor_path, Some(Vec::new()));
     assert_eq!(
-        stats[0].membership_epoch,
+        stats[0].lineage,
         Some(
             handle
                 .snapshot()
                 .child(worker_ref.id())
                 .expect("worker snapshot available")
-                .membership_epoch
+                .lineage
         )
     );
     assert_eq!(stats[0].messages_accepted, 1);
@@ -220,19 +220,19 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
     assert_eq!(actor_ids, ["root-worker", "nested-worker", "leaf-worker"]);
 
     let subtree = handle.subtree("workers").expect("actor-aware subtree");
-    let nested_epoch = subtree
+    let nested_lineage = subtree
         .snapshot()
         .child("nested-worker")
         .expect("nested actor snapshot available")
-        .membership_epoch;
+        .lineage;
     assert_eq!(
         handle
             .actor_stats()
             .into_iter()
             .find(|stats| stats.actor_id == "nested-worker")
             .expect("nested actor stats available")
-            .membership_epoch,
-        Some(nested_epoch)
+            .lineage,
+        Some(nested_lineage)
     );
     assert_eq!(
         subtree
@@ -280,14 +280,14 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         .await
         .expect("nested actor added");
     dynamic.send(()).await.expect("dynamic message sent");
-    let dynamic_epoch = dynamic_scope
+    let dynamic_lineage = dynamic_scope
         .snapshot()
         .child("dynamic-worker")
         .expect("dynamic actor snapshot available")
-        .membership_epoch;
+        .lineage;
     assert!(
         handle.actor_stats().iter().any(|stats| {
-            stats.actor_id == "dynamic-worker" && stats.membership_epoch == Some(dynamic_epoch)
+            stats.actor_id == "dynamic-worker" && stats.lineage == Some(dynamic_lineage)
         }),
         "parent stats recursively include actors added through a subtree handle"
     );
@@ -356,8 +356,8 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     assert!(
         root.actor_stats()
             .iter()
-            .all(|stats| stats.membership_epoch.is_some()),
-        "builder-created and dynamically added actors both have bound epochs"
+            .all(|stats| stats.lineage.is_some()),
+        "builder-created and dynamically added actors both have bound lineages"
     );
 
     root.shutdown_and_wait().await.expect("clean shutdown");
@@ -449,7 +449,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
     let stats = handle.actor_stats();
     assert_eq!(stats.len(), 2);
     assert!(stats.iter().all(|stats| stats.actor_id == "worker"));
-    assert!(stats.iter().all(|stats| stats.membership_epoch == Some(0)));
+    assert!(stats.iter().all(|stats| stats.lineage == Some(0)));
 
     let paths = stats
         .iter()
@@ -459,11 +459,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
                 .as_ref()
                 .expect("runtime stats carry a supervisor path");
             assert_eq!(path.len(), 1);
-            (
-                path[0].id.as_str(),
-                path[0].membership_epoch,
-                path[0].generation,
-            )
+            (path[0].id.as_str(), path[0].lineage, path[0].generation)
         })
         .collect::<Vec<_>>();
     assert_eq!(paths, [("left", 0, 0), ("right", 1, 0)]);
@@ -479,12 +475,12 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .await
         .expect("tracked actor added");
     tracked.send(()).await.expect("tracked actor receives");
-    let tracked_epoch = handle
+    let tracked_lineage = handle
         .actor_stats()
         .into_iter()
         .find(|stats| stats.actor_id == "worker")
-        .and_then(|stats| stats.membership_epoch)
-        .expect("tracked membership epoch available");
+        .and_then(|stats| stats.lineage)
+        .expect("tracked lineage available");
 
     let sampler_handle = handle.clone();
     let sampler = tokio::spawn(async move {
@@ -492,8 +488,8 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
             for stats in sampler_handle.actor_stats() {
                 if stats.actor_id == "worker" {
                     assert_eq!(
-                        stats.membership_epoch,
-                        Some(tracked_epoch),
+                        stats.lineage,
+                        Some(tracked_lineage),
                         "a replacement membership must never receive the old actor's counters"
                     );
                 }

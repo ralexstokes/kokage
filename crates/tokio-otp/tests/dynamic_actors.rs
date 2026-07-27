@@ -249,22 +249,22 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .expect("sink added");
     sink.send("first".to_owned()).await.expect("message sent");
     assert_eq!(observed_rx.recv().await.as_deref(), Some("first"));
-    let initial_epoch = handle
+    let initial_lineage = handle
         .snapshot()
         .child("sink")
         .expect("sink snapshot available")
-        .membership_epoch;
+        .lineage;
     assert_eq!(
         handle
             .actor_stats()
             .into_iter()
             .find(|stats| stats.actor_id == "sink")
             .expect("sink stats available")
-            .membership_epoch,
-        Some(initial_epoch)
+            .lineage,
+        Some(initial_lineage)
     );
     assert_eq!(
-        sink.stats().membership_epoch,
+        sink.stats().lineage,
         None,
         "standalone ref stats have no supervisor context"
     );
@@ -295,20 +295,20 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .await
         .expect("replacement receives");
     assert_eq!(observed_rx.recv().await.as_deref(), Some("second"));
-    let replacement_snapshot_epoch = handle
+    let replacement_snapshot_lineage = handle
         .snapshot()
         .child("sink")
         .expect("replacement snapshot available")
-        .membership_epoch;
-    let replacement_epoch = handle
+        .lineage;
+    let replacement_lineage = handle
         .actor_stats()
         .into_iter()
         .find(|stats| stats.actor_id == "sink")
         .expect("replacement stats available")
-        .membership_epoch
+        .lineage
         .expect("runtime stats include supervisor membership");
-    assert_eq!(replacement_epoch, replacement_snapshot_epoch);
-    assert!(replacement_epoch > initial_epoch);
+    assert_eq!(replacement_lineage, replacement_snapshot_lineage);
+    assert!(replacement_lineage > initial_lineage);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

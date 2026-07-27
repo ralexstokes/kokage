@@ -22,7 +22,7 @@ struct SpawnPlan {
     old_generation: Option<u64>,
     kind: ChildKind,
     ctx: ChildContext,
-    instance: u64,
+    lineage: u64,
     snapshot_state: Option<NestedSnapshotState>,
     nested_channels: Option<Arc<StableSupervisorChannels>>,
     completion: CompletionFlag,
@@ -40,7 +40,7 @@ impl SupervisorRuntime {
             old_generation,
             kind,
             ctx,
-            instance,
+            lineage,
             snapshot_state,
             nested_channels,
             completion,
@@ -50,7 +50,7 @@ impl SupervisorRuntime {
                 SupervisorError::Internal(format!("missing child slot for key {key}"))
             })?;
             let child = &mut entry.runtime;
-            let instance = entry.instance;
+            let lineage = entry.lineage;
 
             let old_generation = if child.has_started {
                 Some(child.generation)
@@ -101,7 +101,7 @@ impl SupervisorRuntime {
                         self.ready_tx.clone(),
                         ChildReady {
                             key,
-                            instance,
+                            lineage,
                             generation,
                         },
                     )
@@ -116,7 +116,7 @@ impl SupervisorRuntime {
                 old_generation,
                 kind,
                 ctx,
-                instance,
+                lineage,
                 snapshot_state,
                 nested_channels,
                 completion,
@@ -157,10 +157,10 @@ impl SupervisorRuntime {
                         self.nested_snapshot_tx.clone(),
                         snapshot_state,
                         key,
-                        instance,
+                        lineage,
                     ),
                     id: child_id.clone(),
-                    membership_epoch: instance,
+                    lineage,
                     generation,
                 },
                 channels,
@@ -228,7 +228,7 @@ impl SupervisorRuntime {
             task_id,
             TaskMeta {
                 key,
-                instance,
+                lineage,
                 generation,
             },
         );

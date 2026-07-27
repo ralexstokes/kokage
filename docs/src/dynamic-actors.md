@@ -337,11 +337,11 @@ concurrent teardown across sibling subtrees needed no cross-sibling drain
 sequencing.
 
 If an id is removed and later reused, compare the snapshot's
-`membership_epoch` (also present in runtime-scoped `ActorStats`) as well as its
-`generation`: restarts keep an epoch and increment the generation, while a new
-membership receives a later epoch and starts again at generation zero. For
+`lineage` (also present in runtime-scoped `ActorStats`) as well as its
+`generation`: restarts keep a lineage and increment the generation, while a new
+membership receives a later lineage and starts again at generation zero. For
 recursive stats, also compare `ActorStats::supervisor_path`; it distinguishes
-otherwise identical local ids and epochs in sibling or restarted subtrees.
+otherwise identical local ids and lineages in sibling or restarted subtrees.
 
 For a raw nested `Supervisor` that does not need actor-aware behavior, start
 from `RuntimeHandle::supervisor_handle` and use

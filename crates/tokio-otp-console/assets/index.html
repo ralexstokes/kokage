@@ -559,7 +559,7 @@
     return actual.every(function (segment, index) {
       const wanted = expected[index];
       return segment.id === wanted.id &&
-        segment.membership_epoch === wanted.membership_epoch &&
+        segment.lineage === wanted.lineage &&
         segment.generation === wanted.generation;
     });
   }
@@ -568,7 +568,7 @@
     const row = el("span", "node-main");
     row.appendChild(el("span", "node-id", child.id));
     row.appendChild(stateBadge(child.state));
-    row.appendChild(el("span", "chip chip-quiet", "member " + child.membership_epoch));
+    row.appendChild(el("span", "chip chip-quiet", "lineage " + child.lineage));
     row.appendChild(el("span", "chip chip-quiet", "gen " + child.generation));
     if (child.restart_count > 0) {
       row.appendChild(el("span", "chip chip-warn", "restarts " + child.restart_count));
@@ -580,7 +580,7 @@
     const actor = actorStats.find(function (stats) {
       return stats.actor_id === child.id &&
         (stats.supervisor_path == null || sameSupervisorPath(stats.supervisor_path, supervisorPath)) &&
-        (stats.membership_epoch == null || stats.membership_epoch === child.membership_epoch);
+        (stats.lineage == null || stats.lineage === child.lineage);
     });
     if (actor) {
       row.appendChild(el("span", "chip", "mailbox " + actor.mailbox_depth + "/" + actor.mailbox_capacity));
@@ -625,7 +625,7 @@
     const nested = el("div", "node-nested");
     const nestedSupervisorPath = supervisorPath.concat([{
       id: child.id,
-      membership_epoch: child.membership_epoch,
+      lineage: child.lineage,
       generation: child.generation
     }]);
     nested.appendChild(renderSupervisor(child.supervisor, path, nestedSupervisorPath));
@@ -708,8 +708,8 @@
 
     const head = el("div", "actor-head");
     head.appendChild(el("span", "actor-id", actor.actor_id));
-    if (actor.membership_epoch != null) {
-      head.appendChild(el("span", "chip chip-quiet", "member " + actor.membership_epoch));
+    if (actor.lineage != null) {
+      head.appendChild(el("span", "chip chip-quiet", "lineage " + actor.lineage));
     }
     head.appendChild(el("span", "actor-mail",
       "mailbox " + actor.mailbox_depth + " / " + actor.mailbox_capacity));
@@ -830,7 +830,7 @@
     const supervisorPath = ev && Array.isArray(ev.supervisor_path) ? ev.supervisor_path : [];
     if (supervisorPath.length > 0) {
       const prefix = supervisorPath.map(function (segment) {
-        return "[" + segment.id + " epoch:" + segment.membership_epoch + " gen:" + segment.generation + "]";
+        return "[" + segment.id + " lineage:" + segment.lineage + " gen:" + segment.generation + "]";
       }).join(" ");
       info.msg = prefix + " " + info.msg;
     }
