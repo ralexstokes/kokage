@@ -11,8 +11,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, ActorScope, DEFAULT_SHUTDOWN_BOUND,
-    GraphBuilder, HandleContext, LifecycleWatch, RawActor, Reply, RestartPolicy, Runtime,
+    Actor, ActorContext, ActorFactory, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
+    HandleContext, LifecycleWatch, LiveContext, RawActor, Reply, RestartPolicy, Runtime,
     RuntimeHandle, prelude::Continue,
 };
 

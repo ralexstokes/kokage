@@ -1,5 +1,5 @@
 use std::{collections::HashMap, time::Duration};
-use tokio_otp::{ActorScope, StateTimeoutSlot};
+use tokio_otp::{LiveContext, StateTimeoutSlot};
 
 use tokio::time::Instant;
 use tokio_otp::prelude::*;
@@ -55,7 +55,7 @@ impl Reconciler {
         }
     }
 
-    fn watch(&self, venue: VenueId, ctx: &impl ActorScope<ReconcilerMsg>) {
+    fn watch(&self, venue: VenueId, ctx: &impl LiveContext<ReconcilerMsg>) {
         let feed = self.feeds.get(venue).expect("known venue");
         ctx.watch(feed, move |event| ReconcilerMsg::Feed { venue, event });
     }
@@ -68,7 +68,7 @@ impl Reconciler {
         }
     }
 
-    fn rearm(&mut self, ctx: &impl ActorScope<ReconcilerMsg>) {
+    fn rearm(&mut self, ctx: &impl LiveContext<ReconcilerMsg>) {
         let now = Instant::now();
         let earliest = self
             .venues

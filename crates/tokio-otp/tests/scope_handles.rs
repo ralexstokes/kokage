@@ -8,8 +8,8 @@ use std::{
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
-    Actor, ActorResult, ActorScope, AddSubtreeError, BoxError, ControlError, DynamicActorOptions,
-    GraphBuilder, HandleContext, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle,
+    Actor, ActorResult, AddSubtreeError, BoxError, ControlError, DynamicActorOptions, GraphBuilder,
+    HandleContext, LiveContext, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle,
     ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
     prelude::{Continue, Stop},
 };

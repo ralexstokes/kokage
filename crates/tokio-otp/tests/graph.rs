@@ -15,10 +15,10 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, ActorScope, BoxError, CallError,
+    Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
     DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, HandleContext,
-    RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext, StopContext,
-    TryRecvError, prelude::Continue,
+    LiveContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
+    StopContext, TryRecvError, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
 

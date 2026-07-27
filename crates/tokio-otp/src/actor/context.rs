@@ -289,7 +289,7 @@ impl<M> ActorRef<M> {
     /// fan-out or routing actors it turns one slow callee into head-of-line
     /// blocking for all traffic through the intermediary. Pipeline the
     /// bounded call back into an ordinary message with
-    /// [`ActorScope::offload`], or move the slow dependency behind a dedicated
+    /// [`LiveContext::offload`], or move the slow dependency behind a dedicated
     /// child actor. The book's request/reply chapter covers the pattern.
     pub async fn call<T>(
         &self,
@@ -1015,19 +1015,21 @@ mod sealed {
     }
 }
 
-/// The capabilities an actor has while it is running, independent of which
-/// lifecycle stage it is in.
+/// The capabilities an actor has while its incarnation is still live,
+/// independent of which lifecycle stage it is in.
 ///
-/// Implemented by [`StartContext`] and [`HandleContext`] — the two stages that
-/// can still queue work for this incarnation. It is the type a shared helper
-/// should take when it is called from both `on_start` and `handle`:
+/// Live is the whole condition: every capability here ends in a delivery to
+/// this incarnation, so the trait covers exactly the stages that still have
+/// someone to deliver to. Implemented by [`StartContext`] and
+/// [`HandleContext`]. It is the type a shared helper should take when it is
+/// called from both `on_start` and `handle`:
 ///
 /// ```no_run
-/// use tokio_otp::{ActorScope, StateTimeoutSlot};
+/// use tokio_otp::{LiveContext, StateTimeoutSlot};
 /// use std::time::Duration;
 ///
 /// # enum Msg { Tick }
-/// fn arm(ctx: &impl ActorScope<Msg>, idle: &mut StateTimeoutSlot) {
+/// fn arm(ctx: &impl LiveContext<Msg>, idle: &mut StateTimeoutSlot) {
 ///     idle.set(ctx.send_after_retractable(Msg::Tick, Duration::from_secs(5)));
 /// }
 /// ```
@@ -1037,7 +1039,7 @@ mod sealed {
 ///
 /// This trait is sealed. It exists to name the shared surface, not to let
 /// callers substitute their own context.
-pub trait ActorScope<M: Send + 'static>: sealed::Sealed<M> {
+pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// Returns the actor's unique identifier within the graph.
     fn id(&self) -> &str {
         self.cx().id()
@@ -1193,7 +1195,7 @@ pub trait ActorScope<M: Send + 'static>: sealed::Sealed<M> {
     }
 }
 
-macro_rules! actor_scope {
+macro_rules! live_context {
     ($view:ident) => {
         impl<M> sealed::Sealed<M> for $view<'_, M> {
             fn cx(&self) -> &ActorContext<M> {
@@ -1205,7 +1207,7 @@ macro_rules! actor_scope {
             }
         }
 
-        impl<M: Send + 'static> ActorScope<M> for $view<'_, M> {}
+        impl<M: Send + 'static> LiveContext<M> for $view<'_, M> {}
     };
 }
 
@@ -1356,7 +1358,7 @@ impl StartingScope {
     /// Releases the full [`RuntimeHandle`] for use after `on_start` returns.
     ///
     /// Move the returned handle into a [`tokio::spawn`] or an
-    /// [`offload`](ActorScope::offload) continuation. Awaiting its lifecycle
+    /// [`offload`](LiveContext::offload) continuation. Awaiting its lifecycle
     /// operations inline, before `on_start` returns, is the deadlock this type
     /// exists to make explicit.
     pub fn after_start(self) -> RuntimeHandle {
@@ -1414,8 +1416,8 @@ pub struct StopContext<'a, M> {
     cx: &'a mut ActorContext<M>,
 }
 
-actor_scope!(StartContext);
-actor_scope!(HandleContext);
+live_context!(StartContext);
+live_context!(HandleContext);
 
 impl<'a, M: Send + 'static> StartContext<'a, M> {
     pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
@@ -1531,7 +1533,7 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
 /// belonging to a state the actor has already left must not be acted on.
 ///
 /// The slot is bookkeeping over
-/// [`send_after_retractable`](ActorScope::send_after_retractable), which is
+/// [`send_after_retractable`](LiveContext::send_after_retractable), which is
 /// what makes the last part work — [`set`](Self::set) and [`clear`](Self::clear)
 /// suppress a stale timeout that already reached the mailbox but has not been
 /// received yet. Without that primitive this pattern cannot be built outside
@@ -1544,7 +1546,7 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
 ///
 /// ```no_run
 /// use std::time::Duration;
-/// use tokio_otp::{ActorScope, StateTimeoutSlot};
+/// use tokio_otp::{LiveContext, StateTimeoutSlot};
 ///
 /// # enum Msg { Idle, Work }
 /// const IDLE: Duration = Duration::from_secs(30);
@@ -1554,7 +1556,7 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
 /// }
 ///
 /// impl Session {
-///     fn go_idle(&mut self, ctx: &impl ActorScope<Msg>) {
+///     fn go_idle(&mut self, ctx: &impl LiveContext<Msg>) {
 ///         self.idle.set(ctx.send_after_retractable(Msg::Idle, IDLE));
 ///     }
 ///
@@ -1577,7 +1579,7 @@ impl StateTimeoutSlot {
     /// Arms `timer`, cancelling and discarding whatever the slot held.
     ///
     /// Pass the handle from
-    /// [`send_after_retractable`](ActorScope::send_after_retractable). The
+    /// [`send_after_retractable`](LiveContext::send_after_retractable). The
     /// previous timeout is cancelled even if it has already been accepted by
     /// the mailbox, so a stale timeout is never received. The returned handle
     /// is an alias of the newly armed one, for callers that want to cancel it

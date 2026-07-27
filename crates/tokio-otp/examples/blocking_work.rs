@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorResult, ActorScope, GraphBuilder, HandleContext, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, GraphBuilder, HandleContext, LiveContext, prelude::Continue};
 
 mod support;
 

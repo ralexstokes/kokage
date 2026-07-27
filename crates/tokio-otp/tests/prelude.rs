@@ -32,8 +32,8 @@ mod coverage_probe {
 
     mod advanced_root {
         use tokio_otp::{
-            ActorScope, ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent,
-            LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent,
+            ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind,
+            LifecyclePathSegment, LifecycleWatch, LiveContext, RecursiveLifecycleEvent,
             RecursiveLifecycleEventKind, RecursiveLifecycleWatch, Supervisor, SupervisorBuildError,
             SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec, SupervisorToken,
         };

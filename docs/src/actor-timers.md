@@ -84,7 +84,7 @@ you is the one piece a `gen_statem`-style timeout needs: a timeout belonging to
 a state the actor has already left must not be acted on, even when it already
 reached the mailbox.
 
-`ActorScope::send_after_retractable` is the primitive. It behaves like
+`LiveContext::send_after_retractable` is the primitive. It behaves like
 `send_after`, except that cancelling its handle also discards the message
 *after* the mailbox accepted it, as long as the actor has not yet received it.
 `StateTimeoutSlot` is the one-at-a-time bookkeeping on top: a slot lives in

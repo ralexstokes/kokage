@@ -5,7 +5,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{ActorScope, prelude::*};
+use tokio_otp::{LiveContext, prelude::*};
 
 use crate::{
     messages::{

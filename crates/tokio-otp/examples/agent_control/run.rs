@@ -1,7 +1,7 @@
 //! One transient role run, implemented as a mailbox-driven state machine.
 
 use std::sync::Arc;
-use tokio_otp::ActorScope;
+use tokio_otp::LiveContext;
 
 use tokio_otp::{
     Actor, ActorRef, ActorResult, CancellationToken, HandleContext, StartContext,
@@ -49,7 +49,7 @@ impl AgentRun {
         Ok(Continue)
     }
 
-    fn start_model(&self, ctx: &impl ActorScope<RunMsg>) {
+    fn start_model(&self, ctx: &impl LiveContext<RunMsg>) {
         let request = TurnRequest {
             chat: self.chat,
             task: self.task,
@@ -69,7 +69,7 @@ impl AgentRun {
         );
     }
 
-    async fn start_tool(&self, index: usize, ctx: &impl ActorScope<RunMsg>) -> ActorResult {
+    async fn start_tool(&self, index: usize, ctx: &impl LiveContext<RunMsg>) -> ActorResult {
         let call = self.tools[index].clone();
         let key = format!("{}:{}:{index}", self.chat, self.task);
         let _ = self

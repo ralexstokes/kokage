@@ -10,7 +10,7 @@ use std::{
 };
 
 use tokio::sync::{Notify, mpsc};
-use tokio_otp::{ActorScope, prelude::*};
+use tokio_otp::{LiveContext, prelude::*};
 
 #[derive(Debug)]
 enum OutcomeMsg {

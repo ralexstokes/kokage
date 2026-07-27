@@ -10,8 +10,8 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorScope, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, HandleContext, RestartPolicy, StartContext, StateTimeoutSlot,
+    Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
+    DynamicActorOptions, HandleContext, LiveContext, RestartPolicy, StartContext, StateTimeoutSlot,
     prelude::Continue,
 };
 
@@ -77,7 +77,7 @@ impl Session {
         Ok(Continue)
     }
 
-    fn arm_idle(&mut self, ctx: &impl ActorScope<SessionMsg>) {
+    fn arm_idle(&mut self, ctx: &impl LiveContext<SessionMsg>) {
         self.idle
             .set(ctx.send_after_retractable(SessionMsg::IdleSweep, IDLE_TIMEOUT));
     }
@@ -165,7 +165,7 @@ impl Session {
         &mut self,
         task: TaskId,
         approved: bool,
-        ctx: &mut impl ActorScope<SessionMsg>,
+        ctx: &mut impl LiveContext<SessionMsg>,
     ) -> ActorResult {
         let text = format!(
             "task {task} complete (approved={approved}, prior-context={})",
