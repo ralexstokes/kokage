@@ -137,8 +137,8 @@ pub struct DynamicActorOptions<M = ()> {
     pub restart_intensity: Option<RestartIntensity>,
     mailbox_mode: MailboxMode<M>,
     size_hint: Option<fn(&M) -> usize>,
-    // `None` selects the policy-dependent default. Keeping the override
-    // unresolved makes `restart(...).remove_on_exit(...)` order-independent.
+    // `None` selects the dynamic-actor default. Keeping the override unresolved
+    // makes `restart(...).remove_on_exit(...)` order-independent.
     remove_on_exit: Option<bool>,
 }
 
@@ -227,12 +227,12 @@ impl<M> DynamicActorOptions<M> {
     /// Sets whether the actor child is removed after a terminal exit.
     ///
     /// Removal happens only when the restart policy declines a restart, never
-    /// during a restart cycle. By default, actors using
-    /// [`RestartPolicy::Never`] are removed and actors using other policies
-    /// remain visible in supervisor snapshots. Watchers observe
+    /// during a restart cycle. Dynamic actors are removed on terminal exit by
+    /// default, independent of their restart policy. Pass `false` to retain a
+    /// terminal actor in supervisor snapshots. Watchers observe
     /// [`Terminated`](crate::MonitorEvent::Terminated) before removal completes,
-    /// so that event alone does not mean the child id is reusable; wait for
-    /// removal to complete or use a fresh id.
+    /// but the child id becomes reusable only when removal completes; wait for
+    /// the snapshot to drop the membership before re-adding the same id.
     #[must_use]
     pub fn remove_on_exit(mut self, remove_on_exit: bool) -> Self {
         self.remove_on_exit = Some(remove_on_exit);
@@ -254,9 +254,7 @@ impl<M> DynamicActorOptions<M> {
         } else {
             self.shutdown
         };
-        let remove_on_exit = self
-            .remove_on_exit
-            .unwrap_or(matches!(restart, RestartPolicy::Never));
+        let remove_on_exit = self.remove_on_exit.unwrap_or(true);
         DynamicChildOptions {
             restart,
             shutdown,

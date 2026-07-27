@@ -86,20 +86,20 @@ the `restart(...)` or `shutdown(...)` builder methods to override them. Those
 methods are how the runtime distinguishes an explicit override from an
 inherited default.
 
-A `RestartPolicy::Never` actor is removed automatically after either a clean or
-failed exit, matching OTP temporary-child semantics; other restart policies
-retain a terminal child in the supervisor snapshot by default. Override either
-default with `remove_on_exit(bool)`. Removal only follows an exit the policy
-will not restart, so it never interrupts a restart cycle. Watches still receive
-`Down` followed by `Terminated` before the membership disappears. Consequently,
-`Terminated` alone does not mean the child id is reusable: wait for removal to
-complete or use a fresh id rather than immediately re-adding the same one.
+Dynamic actors are removed automatically after a terminal exit by default,
+independent of their restart policy. An exit is terminal only when the policy
+declines to restart it, so default removal never interrupts a restart cycle.
+Use `remove_on_exit(false)` to retain a terminal child in the supervisor
+snapshot instead. Watches still receive `Down` followed by `Terminated` before
+the membership disappears. The child id becomes reusable when removal
+completes, not merely when `Terminated` is observed; wait for the snapshot to
+drop the membership before re-adding the same id.
 
-With a group strategy, opting a non-`Never` actor into removal makes timing
-observable. If its non-restarted exit is handled before a later group restart,
-removal is permanent and that restart cannot revive it. If the actor exits while
-an already-active group restart is draining it, the exit belongs to that restart
-cycle and the actor is respawned.
+With a group strategy, removal timing is observable. If a non-restarted exit is
+handled before a later group restart, removal is permanent and that restart
+cannot revive the actor. If the actor exits while an already-active group
+restart is draining it, the exit belongs to that restart cycle and the actor is
+respawned.
 
 These defaults apply only to actors added with `add_actor`. Actors declared in
 the static graph remain registered after terminal exit, even when

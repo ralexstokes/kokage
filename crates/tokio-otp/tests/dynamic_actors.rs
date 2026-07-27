@@ -148,6 +148,27 @@ async fn wait_for_child(handle: &RuntimeHandle, id: &str, present: bool) {
     .expect("child membership reached expected state");
 }
 
+async fn wait_for_terminal_child(handle: &RuntimeHandle, id: &str) {
+    timeout(Duration::from_secs(1), async {
+        let mut snapshots = handle.subscribe_snapshots();
+        loop {
+            if snapshots
+                .borrow()
+                .child(id)
+                .is_some_and(|child| child.last_exit.is_some())
+            {
+                return;
+            }
+            snapshots
+                .changed()
+                .await
+                .expect("runtime remains available");
+        }
+    })
+    .await
+    .expect("terminal child remains in membership");
+}
+
 async fn next_monitor_event(events: &mut mpsc::UnboundedReceiver<MonitorEvent>) -> MonitorEvent {
     timeout(Duration::from_secs(1), events.recv())
         .await
@@ -612,7 +633,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 }
 
 #[tokio::test]
-async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
+async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     let watcher = graph.actor("watcher", move || Watcher {
@@ -638,7 +659,7 @@ async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
                     starts: starts.clone(),
                 }
             },
-            DynamicActorOptions::new().restart(RestartPolicy::Never),
+            DynamicActorOptions::new().restart(RestartPolicy::OnFailure),
         )
         .await
         .expect("temporary actor added");
@@ -677,7 +698,7 @@ async fn never_actor_auto_removal_preserves_monitor_order_and_reuses_id() {
 }
 
 #[tokio::test]
-async fn clean_stop_follows_each_restart_policy() {
+async fn clean_stop_applies_restart_policy_before_default_removal() {
     let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
@@ -698,35 +719,12 @@ async fn clean_stop_follows_each_restart_policy() {
         .await
         .expect("transient actor added");
     transient.send(()).await.expect("clean stop requested");
-    timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
-        loop {
-            if snapshots
-                .borrow()
-                .child("transient")
-                .is_some_and(|child| child.last_exit.is_some())
-            {
-                break;
-            }
-            snapshots
-                .changed()
-                .await
-                .expect("runtime remains available");
-        }
-    })
-    .await
-    .expect("transient clean stop recorded");
-    let transient_snapshot = handle
-        .snapshot()
-        .child("transient")
-        .cloned()
-        .expect("OnFailure actor remains in membership");
-    assert_eq!(transient_snapshot.generation, 0);
-    assert!(matches!(
-        transient_snapshot.last_exit,
-        Some(tokio_otp::ExitStatusView::Completed)
-    ));
+    wait_for_child(&handle, "transient", false).await;
     assert_eq!(transient_starts.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        transient.send(()).await,
+        Err(SendError::ActorTerminated { actor_id, .. }) if actor_id == "transient"
+    ));
 
     let permanent_starts = Arc::new(AtomicUsize::new(0));
     let permanent = handle
@@ -894,18 +892,18 @@ async fn never_actor_auto_removes_after_failure() {
 }
 
 #[tokio::test]
-async fn remove_on_exit_defaults_and_overrides_follow_the_final_restart_policy() {
+async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent() {
     let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
 
-    let retained_release = Arc::new(Notify::new());
+    let default_release = Arc::new(Notify::new());
     handle
         .add_actor(
             "transient-default",
             {
-                let release = retained_release.clone();
+                let release = default_release.clone();
                 move || GatedExit {
                     release: release.clone(),
                     fail: false,
@@ -915,53 +913,15 @@ async fn remove_on_exit_defaults_and_overrides_follow_the_final_restart_policy()
         )
         .await
         .expect("transient actor added");
-    retained_release.notify_one();
-    wait_for_child(&handle, "transient-default", true).await;
-    timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
-        loop {
-            if snapshots
-                .borrow()
-                .child("transient-default")
-                .is_some_and(|child| child.last_exit.is_some())
-            {
-                break;
-            }
-            snapshots
-                .changed()
-                .await
-                .expect("runtime remains available");
-        }
-    })
-    .await
-    .expect("transient exit recorded");
+    default_release.notify_one();
+    wait_for_child(&handle, "transient-default", false).await;
 
-    let removed_release = Arc::new(Notify::new());
+    let transient_release = Arc::new(Notify::new());
     handle
         .add_actor(
-            "transient-override",
+            "transient-retained",
             {
-                let release = removed_release.clone();
-                move || GatedExit {
-                    release: release.clone(),
-                    fail: false,
-                }
-            },
-            DynamicActorOptions::new()
-                .remove_on_exit(true)
-                .restart(RestartPolicy::OnFailure),
-        )
-        .await
-        .expect("transient override actor added");
-    removed_release.notify_one();
-    wait_for_child(&handle, "transient-override", false).await;
-
-    let never_release = Arc::new(Notify::new());
-    handle
-        .add_actor(
-            "never-override",
-            {
-                let release = never_release.clone();
+                let release = transient_release.clone();
                 move || GatedExit {
                     release: release.clone(),
                     fail: false,
@@ -969,35 +929,38 @@ async fn remove_on_exit_defaults_and_overrides_follow_the_final_restart_policy()
             },
             DynamicActorOptions::new()
                 .remove_on_exit(false)
-                .restart(RestartPolicy::Never),
+                .restart(RestartPolicy::OnFailure),
         )
         .await
-        .expect("never override actor added");
-    never_release.notify_one();
-    timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
-        loop {
-            if snapshots
-                .borrow()
-                .child("never-override")
-                .is_some_and(|child| child.last_exit.is_some())
+        .expect("retained transient actor added");
+    transient_release.notify_one();
+    wait_for_terminal_child(&handle, "transient-retained").await;
+
+    let reversed_release = Arc::new(Notify::new());
+    handle
+        .add_actor(
+            "transient-retained-reversed",
             {
-                break;
-            }
-            snapshots
-                .changed()
-                .await
-                .expect("runtime remains available");
-        }
-    })
-    .await
-    .expect("never exit retained by override");
+                let release = reversed_release.clone();
+                move || GatedExit {
+                    release: release.clone(),
+                    fail: false,
+                }
+            },
+            DynamicActorOptions::new()
+                .restart(RestartPolicy::OnFailure)
+                .remove_on_exit(false),
+        )
+        .await
+        .expect("reversed retained transient actor added");
+    reversed_release.notify_one();
+    wait_for_terminal_child(&handle, "transient-retained-reversed").await;
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[tokio::test]
-async fn remove_on_exit_does_not_remove_an_actor_that_restarts() {
+async fn default_remove_on_exit_does_not_remove_an_actor_that_restarts() {
     let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
@@ -1012,9 +975,7 @@ async fn remove_on_exit_does_not_remove_an_actor_that_restarts() {
                     starts: starts.clone(),
                 }
             },
-            DynamicActorOptions::new()
-                .restart(RestartPolicy::OnFailure)
-                .remove_on_exit(true),
+            DynamicActorOptions::new().restart(RestartPolicy::OnFailure),
         )
         .await
         .expect("restartable actor added");
