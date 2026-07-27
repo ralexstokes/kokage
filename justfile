@@ -33,6 +33,8 @@ smoke:
     cargo run --locked -p tokio-otp --example supervised_actors
     cargo run --locked -p tokio-otp --example ref_rebind
     cargo run --locked -p tokio-otp --example drain_policy
+    cargo run --locked -p tokio-otp --example dynamic_actors
+    cargo run --locked -p tokio-otp --example directory
 
 nixfmt-check:
     nixfmt --check flake.nix nix/crane-checks.nix
