@@ -26,10 +26,11 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Enable Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Enable shared Nix cache
+        uses: cachix/cachix-action@v17
         with:
-          use-flakehub: false
+          name: ralexstokes
+          skipPush: true
 
       - name: Build docs
         run: |
