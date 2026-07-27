@@ -174,6 +174,7 @@ impl Supervisor {
         let initial_attached_children = initial_attached_children(&self.config, &nested_channels);
         let BoundIncarnation {
             guard: binding,
+            binding_epoch,
             snapshots: snapshots_tx,
             lifecycle,
         } = channels
@@ -202,6 +203,7 @@ impl Supervisor {
                     lifecycle,
                     snapshots_tx,
                     task_attached_children,
+                    binding_epoch,
                     command_rx,
                     nested_channels,
                     Vec::new(),
@@ -273,6 +275,7 @@ impl Supervisor {
         // the previous incarnation's final snapshot through the new binding.
         let Some(BoundIncarnation {
             guard: binding,
+            binding_epoch,
             snapshots: snapshots_tx,
             lifecycle,
         }) = channels.bind(
@@ -298,6 +301,7 @@ impl Supervisor {
                     lifecycle,
                     snapshots_tx,
                     attached_children,
+                    binding_epoch,
                     command_rx,
                     nested_channels,
                     path,
@@ -360,6 +364,7 @@ impl Supervisor {
         lifecycle: Arc<LifecycleHub>,
         snapshots_tx: watch::Sender<SupervisorSnapshot>,
         attached_children: AttachedChildrenState,
+        binding_epoch: u64,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         nested_channels: NestedChannels,
         path: Vec<String>,
@@ -377,6 +382,7 @@ impl Supervisor {
             lifecycle,
             snapshots_tx,
             attached_children,
+            binding_epoch,
             command_rx,
             nested_channels,
             path,

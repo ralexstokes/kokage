@@ -304,6 +304,8 @@ pub(crate) struct RuntimeMeta {
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
     pub(crate) parent_link: Option<ParentLink>,
+    /// Stable-channel binding that owns this incarnation's attachment view.
+    pub(crate) binding_epoch: u64,
     /// Whether this supervisor incarnation could ever be replaced by another
     /// one: it is restartable by its parent, or some ancestor is revivable
     /// *along a statically configured chain* (reincarnation respawns static
@@ -345,7 +347,6 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) live_tasks: usize,
     pub(crate) lifecycle: Arc<LifecycleHub>,
     pub(crate) lifecycle_tree: LifecycleTreeSink,
-    pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) attached_children: AttachedChildrenState,
     pub(crate) shutdown_rx: watch::Receiver<bool>,
     pub(crate) command_rx: mpsc::Receiver<SupervisorCommand>,
@@ -373,6 +374,7 @@ impl SupervisorRuntime {
         lifecycle: Arc<LifecycleHub>,
         snapshots: watch::Sender<SupervisorSnapshot>,
         attached_children: AttachedChildrenState,
+        binding_epoch: u64,
         command_rx: mpsc::Receiver<SupervisorCommand>,
         nested_channels: NestedChannels,
         path_prefix: Vec<String>,
@@ -451,6 +453,7 @@ impl SupervisorRuntime {
                 path_prefix,
                 observability,
                 parent_link,
+                binding_epoch,
                 revivable,
             },
             state: SupervisorState::Running,
@@ -463,7 +466,6 @@ impl SupervisorRuntime {
             live_tasks: 0,
             lifecycle,
             lifecycle_tree,
-            snapshots,
             attached_children,
             shutdown_rx,
             command_rx,
@@ -1891,7 +1893,10 @@ impl SupervisorRuntime {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let generation = self.meta.parent_link.as_ref().map(|link| link.generation);
-        if !attached_children.terminal && attached_children.generation == generation {
+        if !attached_children.terminal
+            && attached_children.generation == generation
+            && attached_children.binding_epoch == self.meta.binding_epoch
+        {
             attached_children.children = self.attached_children_view();
         }
         drop(attached_children);
@@ -1907,13 +1912,8 @@ impl SupervisorRuntime {
         // cell per incarnation always accepts that first view, and thereafter
         // an unchanged snapshot neither replaces the stored one nor queues a
         // notification.
-        self.snapshots.send_if_modified(|current| {
-            if *current == snapshot {
-                return false;
-            }
-            current.clone_from(&snapshot);
-            true
-        });
+        self.own_handle
+            .publish_snapshot(self.meta.binding_epoch, &snapshot);
         if let Some(parent_link) = self.meta.parent_link.as_ref() {
             parent_link.publish_snapshot(snapshot);
         }
@@ -2145,6 +2145,7 @@ mod tests {
             LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
+            0,
             command_rx,
             empty_nested_channels(),
             Vec::new(),
@@ -2170,6 +2171,7 @@ mod tests {
             LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
+            0,
             command_rx,
             empty_nested_channels(),
             Vec::new(),
@@ -2217,6 +2219,7 @@ mod tests {
             LifecycleHub::new(),
             snapshots_tx,
             attached_children_state(None, Vec::new()),
+            0,
             command_rx,
             empty_nested_channels(),
             Vec::new(),
@@ -2376,6 +2379,7 @@ mod tests {
             lifecycle_hub,
             snapshots_tx,
             attached_children_state(None, Vec::new()),
+            0,
             command_rx,
             empty_nested_channels(),
             Vec::new(),
@@ -2439,6 +2443,99 @@ mod tests {
             started.kind,
             LifecycleEventKind::Started { generation: 2 }
         ));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn displaced_incarnation_cannot_republish_stable_views_after_rebind() {
+        let supervisor = crate::DynamicSupervisorBuilder::new()
+            .build()
+            .expect("dynamic supervisor builds");
+        let channels = supervisor.stable_channels(false);
+        let handle = channels.internal_handle();
+        let config = supervisor.config.clone();
+        let control_capacity = config.control_channel_capacity;
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (command_tx, command_rx) = mpsc::channel(control_capacity);
+        let (_done_tx, done_rx) = watch::channel(None);
+        let bound = channels
+            .bind(
+                0,
+                shutdown_tx,
+                command_tx,
+                done_rx,
+                initial_snapshot(&config),
+                Vec::new(),
+            )
+            .expect("first incarnation binds");
+        let snapshots = bound.snapshots.clone();
+        let lifecycle = Arc::clone(&bound.lifecycle);
+        let mut old_runtime = SupervisorRuntime::new(
+            config.clone(),
+            shutdown_rx,
+            lifecycle,
+            snapshots,
+            channels.attached_children(),
+            bound.binding_epoch,
+            command_rx,
+            channels.nested_channels(),
+            Vec::new(),
+            Some(ParentLink {
+                lifecycle_tree: LifecycleTreeSink::root(LifecycleHub::new()),
+                snapshot_cell: crate::snapshot::SnapshotCell::new(
+                    mpsc::unbounded_channel().0,
+                    NestedSnapshotState::default(),
+                    0,
+                    0,
+                ),
+                id: "scope".to_owned(),
+                lineage: 0,
+                generation: 0,
+            }),
+            false,
+            handle.clone(),
+        );
+        assert!(
+            old_runtime
+                .add_child(
+                    ChildSpec::new("dynamic-worker", |ctx| async move {
+                        ctx.shutdown_token().cancelled().await;
+                        Ok(())
+                    })
+                    .attachment("old attachment".to_owned()),
+                )
+                .is_ok(),
+            "dynamic child is accepted"
+        );
+        assert_eq!(handle.attached_children::<String>().len(), 1);
+
+        let (replacement_shutdown_tx, _replacement_shutdown_rx) = watch::channel(false);
+        let (replacement_command_tx, _replacement_command_rx) = mpsc::channel(control_capacity);
+        let (_replacement_done_tx, replacement_done_rx) = watch::channel(None);
+        let replacement = channels
+            .bind(
+                0,
+                replacement_shutdown_tx,
+                replacement_command_tx,
+                replacement_done_rx,
+                initial_snapshot(&config),
+                Vec::new(),
+            )
+            .expect("replacement incarnation binds");
+        assert!(handle.attached_children::<String>().is_empty());
+        assert!(handle.snapshot().children.is_empty());
+
+        old_runtime.publish_snapshot();
+
+        assert!(
+            handle.attached_children::<String>().is_empty(),
+            "the displaced incarnation must not restore its attachment view after a same-generation rebind"
+        );
+        assert!(
+            handle.snapshot().children.is_empty(),
+            "the displaced incarnation must not restore its snapshot after a same-generation rebind"
+        );
+        drop(replacement);
+        drop(bound.guard);
     }
 
     #[test]

@@ -86,6 +86,10 @@ pub(crate) struct AttachedChildrenView {
     /// Bound nested views carry the generation of the supervisor child
     /// incarnation that owns them.
     pub(crate) generation: Option<u64>,
+    /// Monotonic stable-channel binding that owns this view. Nested child
+    /// generations restart from zero with their parent, so generation alone
+    /// cannot reject a late publication from a displaced incarnation.
+    pub(crate) binding_epoch: u64,
     pub(crate) terminal: bool,
     pub(crate) children: Vec<AttachedChildState>,
 }
@@ -103,6 +107,7 @@ pub(crate) fn attached_children_state(
 ) -> AttachedChildrenState {
     Arc::new(Mutex::new(AttachedChildrenView {
         generation,
+        binding_epoch: 0,
         terminal: false,
         children,
     }))
@@ -318,6 +323,7 @@ impl StableSupervisorChannels {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = AttachedChildrenView {
             generation: Some(0),
+            binding_epoch: 0,
             terminal: false,
             children: attached_children,
         };
@@ -512,6 +518,7 @@ impl StableSupervisorChannels {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = AttachedChildrenView {
             generation: attachment_generation,
+            binding_epoch,
             terminal: false,
             children: initial_attached_children,
         };
@@ -528,6 +535,7 @@ impl StableSupervisorChannels {
                 channels: Arc::clone(self),
                 binding_epoch,
             },
+            binding_epoch,
             snapshots,
             lifecycle,
         })
@@ -539,6 +547,32 @@ impl StableSupervisorChannels {
             return None;
         }
         binding.current.clone()
+    }
+
+    /// Publishes one incarnation's snapshot only while that incarnation still
+    /// owns the stable binding.
+    ///
+    /// Keeping the epoch check and watch update under the binding lock makes
+    /// publication atomic with [`bind`](Self::bind): either the old view lands
+    /// before a replacement resets it, or the replacement wins and rejects
+    /// the displaced writer.
+    fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
+        if binding.terminal
+            || !binding
+                .current
+                .as_ref()
+                .is_some_and(|binding| binding.binding_epoch == binding_epoch)
+        {
+            return;
+        }
+        self.snapshots().send_if_modified(|current| {
+            if current == snapshot {
+                return false;
+            }
+            current.clone_from(snapshot);
+            true
+        });
     }
 
     /// Classifies what a non-root [`SupervisorHandle::wait`] should do, at one
@@ -1209,6 +1243,7 @@ pub(crate) struct StableBindingGuard {
 
 pub(crate) struct BoundIncarnation {
     pub(crate) guard: StableBindingGuard,
+    pub(crate) binding_epoch: u64,
     pub(crate) snapshots: watch::Sender<SupervisorSnapshot>,
     pub(crate) lifecycle: Arc<LifecycleHub>,
 }
@@ -1345,6 +1380,10 @@ impl std::fmt::Debug for SupervisorHandle {
 }
 
 impl SupervisorHandle {
+    pub(crate) fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
+        self.channels.publish_snapshot(binding_epoch, snapshot);
+    }
+
     /// Requests a graceful shutdown of the supervisor.
     ///
     /// This is non-blocking: it signals the supervisor to begin its shutdown
