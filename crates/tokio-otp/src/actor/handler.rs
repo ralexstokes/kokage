@@ -163,7 +163,9 @@ pub trait Actor: Send + Sync + 'static {
     /// hook before detaching the child and completing
     /// [`RuntimeHandle::remove_child`](crate::RuntimeHandle::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
-    /// can abort this hook and detach the child without waiting for it.
+    /// can abort this hook and detach the child without waiting for it. The
+    /// hook's scope handles are [`StoppingScope`](crate::StoppingScope), which
+    /// withholds the operations that would wait on that detach.
     /// It is not called when
     /// [`handle`](Self::handle) or [`on_start`](Self::on_start) returns an
     /// error.

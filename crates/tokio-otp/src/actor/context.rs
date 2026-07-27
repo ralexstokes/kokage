@@ -1210,19 +1210,141 @@ macro_rules! actor_scope {
 /// child completing, the scope shutting down — deadlocks the actor against
 /// itself. Those methods are absent here rather than documented as forbidden.
 ///
+/// The restriction is closed under navigation: [`subtree`](Self::subtree)
+/// hands back another `StartingScope`, because a sibling scope declared after
+/// this actor starts after it reports ready, and the raw
+/// `SupervisorHandle` — one method call away from the same waits — is not
+/// reachable from here at all.
+///
 /// The pattern for a wait that must happen is to launch it as pipelined work
 /// and consume the result after startup. Take the full handle with
-/// [`after_start`](Self::after_start) and move it into the spawned future.
+/// [`after_start`](Self::after_start) and move it into the spawned future;
+/// that is also the way to reach
+/// [`RuntimeHandle::supervisor_handle`] and the rest of the full surface.
 #[derive(Clone, Debug)]
 pub struct StartingScope {
     handle: RuntimeHandle,
 }
 
-impl StartingScope {
-    fn new(handle: RuntimeHandle) -> Self {
-        Self { handle }
-    }
+/// The enclosing scope handle as seen from
+/// [`Actor::on_stop`](crate::Actor::on_stop).
+///
+/// The same [`RuntimeHandle`] narrowing as [`StartingScope`], for the opposite
+/// end of the lifecycle and a different reason. A stopping child is still
+/// attached to its supervisor: cooperative removal waits for `on_stop` to
+/// return before the child is detached and its exit recorded. Anything awaited
+/// here that blocks on the scope's membership settling — the scope finishing
+/// its shutdown, a child completing, this actor's own removal — therefore
+/// waits on a detach that waits on this hook. The cycle resolves only when the
+/// shutdown grace period runs out and aborts the actor, turning a clean stop
+/// into a timed-out one.
+///
+/// Fire-and-forget control is kept: [`shutdown`](Self::shutdown) requests and
+/// returns, and insertion schedules rather than waits.
+/// [`subtree`](Self::subtree) hands back another `StoppingScope`, since a
+/// nested scope's shutdown is sequenced with this one's.
+///
+/// Teardown that genuinely has to observe another child belongs in work that
+/// outlives this incarnation: take the full handle with
+/// [`after_stop`](Self::after_stop) and move it into a
+/// [`tokio::spawn`]ed future rather than awaiting it inline.
+#[derive(Clone, Debug)]
+pub struct StoppingScope {
+    handle: RuntimeHandle,
+}
 
+/// Generates the delegation shared by the stage-restricted scope handles.
+///
+/// Both types are the same restriction of [`RuntimeHandle`] — everything that
+/// cannot block on another child's lifecycle — differing only in the stage
+/// they belong to and in the name of their escape hatch. The rationale for
+/// each restriction lives on the type, not here.
+macro_rules! restricted_scope {
+    ($scope:ident) => {
+        impl $scope {
+            fn new(handle: RuntimeHandle) -> Self {
+                Self { handle }
+            }
+
+            /// Returns a point-in-time snapshot of the scope.
+            pub fn snapshot(&self) -> tokio_supervisor::SupervisorSnapshot {
+                self.handle.snapshot()
+            }
+
+            /// Returns per-actor message counters for this scope.
+            pub fn actor_stats(&self) -> Vec<ActorStats> {
+                self.handle.actor_stats()
+            }
+
+            /// Subscribes to scope snapshots.
+            pub fn subscribe_snapshots(
+                &self,
+            ) -> watch::Receiver<tokio_supervisor::SupervisorSnapshot> {
+                self.handle.subscribe_snapshots()
+            }
+
+            /// Returns a handle to a nested subtree by id, restricted the same
+            /// way as this one.
+            pub fn subtree(&self, id: &str) -> Option<Self> {
+                self.handle.subtree(id).map(Self::new)
+            }
+
+            /// Inserts an actor into this scope.
+            ///
+            /// Safe to await here: insertion schedules startup rather than
+            /// waiting for it, so it does not block on another child's
+            /// lifecycle. See [`RuntimeHandle::add_actor`].
+            pub async fn add_actor<F>(
+                &self,
+                label: impl Into<String>,
+                factory: F,
+                options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
+            ) -> Result<
+                ActorRef<<F::Actor as crate::RawActor>::Msg>,
+                tokio_supervisor::ControlError,
+            >
+            where
+                F: crate::ActorFactory,
+            {
+                self.handle.add_actor(label, factory, options).await
+            }
+
+            /// Inserts a subtree into this scope.
+            ///
+            /// Safe to await here for the same reason as
+            /// [`add_actor`](Self::add_actor). See
+            /// [`RuntimeHandle::add_subtree`].
+            pub async fn add_subtree(
+                &self,
+                id: impl Into<String>,
+                builder: impl Into<crate::SupervisionTree>,
+            ) -> Result<RuntimeHandle, crate::AddSubtreeError> {
+                self.handle.add_subtree(id, builder).await
+            }
+
+            /// Observes lifecycle transitions of this scope's direct children.
+            pub fn watch_lifecycle(&self) -> tokio_supervisor::LifecycleWatch {
+                self.handle.watch_lifecycle()
+            }
+
+            /// Observes lifecycle transitions of this scope and everything
+            /// beneath it.
+            pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::RecursiveLifecycleWatch {
+                self.handle.watch_lifecycle_recursive()
+            }
+
+            /// Requests shutdown of this scope without waiting for it.
+            pub fn shutdown(&self) {
+                self.handle.shutdown()
+            }
+        }
+    };
+}
+
+restricted_scope!(StartingScope);
+restricted_scope!(StoppingScope);
+
+impl StartingScope {
     /// Releases the full [`RuntimeHandle`] for use after `on_start` returns.
     ///
     /// Move the returned handle into a [`tokio::spawn`] or an
@@ -1232,74 +1354,18 @@ impl StartingScope {
     pub fn after_start(self) -> RuntimeHandle {
         self.handle
     }
+}
 
-    /// Returns the underlying supervisor handle.
-    pub fn supervisor_handle(&self) -> tokio_supervisor::SupervisorHandle {
-        self.handle.supervisor_handle()
-    }
-
-    /// Returns a point-in-time snapshot of the scope.
-    pub fn snapshot(&self) -> tokio_supervisor::SupervisorSnapshot {
-        self.handle.snapshot()
-    }
-
-    /// Returns per-actor message counters for this scope.
-    pub fn actor_stats(&self) -> Vec<ActorStats> {
-        self.handle.actor_stats()
-    }
-
-    /// Subscribes to scope snapshots.
-    pub fn subscribe_snapshots(&self) -> watch::Receiver<tokio_supervisor::SupervisorSnapshot> {
-        self.handle.subscribe_snapshots()
-    }
-
-    /// Returns a handle to a nested subtree by id.
-    pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
-        self.handle.subtree(id)
-    }
-
-    /// Inserts an actor into this scope.
+impl StoppingScope {
+    /// Releases the full [`RuntimeHandle`] for teardown that outlives this
+    /// incarnation.
     ///
-    /// Safe to await here: insertion schedules startup rather than waiting for
-    /// it, so it cannot block on a child whose start depends on this one.
-    /// See [`RuntimeHandle::add_actor`].
-    pub async fn add_actor<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-        options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
-    ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
-    where
-        F: crate::ActorFactory,
-    {
-        self.handle.add_actor(label, factory, options).await
-    }
-
-    /// Inserts a subtree into this scope.
-    ///
-    /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
-    /// See [`RuntimeHandle::add_subtree`].
-    pub async fn add_subtree(
-        &self,
-        id: impl Into<String>,
-        builder: impl Into<crate::SupervisionTree>,
-    ) -> Result<RuntimeHandle, crate::AddSubtreeError> {
-        self.handle.add_subtree(id, builder).await
-    }
-
-    /// Observes lifecycle transitions of this scope's direct children.
-    pub fn watch_lifecycle(&self) -> tokio_supervisor::LifecycleWatch {
-        self.handle.watch_lifecycle()
-    }
-
-    /// Observes lifecycle transitions of this scope and everything beneath it.
-    pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::RecursiveLifecycleWatch {
-        self.handle.watch_lifecycle_recursive()
-    }
-
-    /// Requests shutdown of this scope without waiting for it.
-    pub fn shutdown(&self) {
-        self.handle.shutdown()
+    /// Move the returned handle into a [`tokio::spawn`]ed future — something
+    /// the supervisor is not waiting on — and let it observe the scope after
+    /// this child has detached. Awaiting its lifecycle operations inline, from
+    /// `on_stop`, waits on a detach that is waiting on `on_stop`.
+    pub fn after_stop(self) -> RuntimeHandle {
+        self.handle
     }
 }
 
@@ -1333,6 +1399,9 @@ pub struct HandleContext<'a, M> {
 /// offloads, state timeouts, continuations — has no one left to deliver to and
 /// is withheld. What remains is identity, the shutdown token, the scope
 /// handles, and [`run_blocking`](Self::run_blocking) for synchronous teardown.
+///
+/// The scope handles are narrowed to [`StoppingScope`], which withholds the
+/// lifecycle waits that would block on a detach this hook is itself holding up.
 pub struct StopContext<'a, M> {
     cx: &'a mut ActorContext<M>,
 }
@@ -1415,14 +1484,21 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
         self.cx.is_shutting_down()
     }
 
-    /// Returns the actor-aware handle for this actor's enclosing scope.
-    pub fn supervisor(&self) -> RuntimeHandle {
-        self.cx.supervisor()
+    /// Returns this actor's enclosing scope, restricted for the shutdown stage.
+    ///
+    /// See [`StoppingScope`] for why the lifecycle waits are withheld here and
+    /// where teardown that needs one belongs instead.
+    pub fn supervisor(&self) -> StoppingScope {
+        StoppingScope::new(self.cx.supervisor())
     }
 
-    /// Returns the actor-aware handle for this leader's declared child scope.
-    pub fn children(&self) -> Option<RuntimeHandle> {
-        self.cx.children()
+    /// Returns this leader's declared child scope, restricted for the shutdown
+    /// stage.
+    ///
+    /// The child scope is torn down around this hook, so awaiting its
+    /// completion inline deadlocks the same way. See [`StoppingScope`].
+    pub fn children(&self) -> Option<StoppingScope> {
+        self.cx.children().map(StoppingScope::new)
     }
 
     /// Runs blocking teardown work on Tokio's blocking pool.

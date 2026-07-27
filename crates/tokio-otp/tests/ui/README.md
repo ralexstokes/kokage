@@ -13,10 +13,17 @@ factories.
 
 `lifecycle-stages/` covers the guarantees bought by splitting `ActorContext`
 into per-stage views: `on_start` cannot await its own readiness through
-`StartingScope`, `on_stop` cannot queue a continuation that would be dropped,
-a handler cannot read the mailbox the provided loop owns, and a `RawActor`
-cannot queue a continuation nothing drains. Each was legal code — deadlocking
-or silently doing nothing — when all four hooks shared one context type.
+`StartingScope`, `on_stop` cannot await a scope lifecycle through
+`StoppingScope` or queue a continuation that would be dropped, a handler
+cannot read the mailbox the provided loop owns, and a `RawActor` cannot queue
+a continuation nothing drains. Each was legal code — deadlocking or silently
+doing nothing — when all four hooks shared one context type.
+
+The restricted scope handles must also stay restricted under navigation, so
+two cases pin the escapes that would otherwise hand the withheld waits back:
+`subtree()` returns another restricted handle rather than a `RuntimeHandle`,
+and the raw `SupervisorHandle` — which carries the same waits — is reachable
+only past `after_start()` / `after_stop()`.
 
 ## Updating snapshots on a toolchain bump
 

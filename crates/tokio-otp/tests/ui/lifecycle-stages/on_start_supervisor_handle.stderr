@@ -1,0 +1,5 @@
+error[E0599]: no method named `supervisor_handle` found for struct `StartingScope` in the current scope
+  --> tests/ui/lifecycle-stages/on_start_supervisor_handle.rs:11:26
+   |
+11 |         ctx.supervisor().supervisor_handle().wait_started().await?;
+   |                          ^^^^^^^^^^^^^^^^^ method not found in `StartingScope`

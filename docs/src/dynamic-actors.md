@@ -247,10 +247,12 @@ returns a `StartingScope` rather than a `RuntimeHandle`: an actor cannot report
 ready until `on_start` returns, so awaiting `wait_started()`, `wait()`,
 `wait_completed()`, or `shutdown_and_wait()` there waits on the current actor's
 own readiness and deadlocks. Those methods are simply absent from
-`StartingScope`. Insertion (`add_actor`, `add_subtree`) schedules startup
-rather than waiting for it, so it stays available. When a wait must happen,
-call `StartingScope::after_start()` for the full handle and move it into the
-pipelined work:
+`StartingScope`, as is `supervisor_handle()`, which would hand the same waits
+back one call later. Insertion (`add_actor`, `add_subtree`) schedules startup
+rather than waiting for it, so it stays available, and `subtree()` returns
+another `StartingScope` so navigating to a nested scope does not widen the
+surface. When a wait must happen, call `StartingScope::after_start()` for the
+full handle and move it into the pipelined work:
 
 ```rust,ignore
 let children = ctx.children().expect("leader has a child scope").after_start();
@@ -261,6 +263,18 @@ tokio::spawn(async move {
     myself.send(Msg::ScopeReady).await
 });
 ```
+
+Shutdown has the mirror-image restriction, so `StopContext::supervisor()` and
+`StopContext::children()` return a `StoppingScope`. A stopping child is still
+attached: cooperative removal waits for `on_stop` to return before detaching
+it. Awaiting `wait()`, `wait_completed()`, `shutdown_and_wait()`, or
+`remove_child()` on its own id from `on_stop` therefore waits on a detach that
+is waiting on `on_stop`, and the cycle breaks only when the shutdown grace
+period expires and aborts the actor — a clean stop reported as a timed-out
+one. Fire-and-forget `shutdown()`, observation, and insertion remain. Teardown
+that really must observe another child belongs in work that outlives the
+incarnation: take `StoppingScope::after_stop()` and move it into a spawned
+future rather than awaiting it inline.
 
 For the common leader-and-workers shape, declare an actor-owned scope:
 

@@ -21,7 +21,7 @@ pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::CancellationHandle;
 pub use context::{
     ActorContext, ActorRef, ActorScope, HandleContext, OffloadHandle, Reply, StartContext,
-    StartingScope, StateTimeoutSlot, StopContext,
+    StartingScope, StateTimeoutSlot, StopContext, StoppingScope,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError,

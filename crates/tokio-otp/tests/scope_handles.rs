@@ -62,7 +62,12 @@ impl Actor for ScopeProbe {
             return Ok(Continue);
         };
         self.reports.send("some").expect("test receiver open");
+        // The raw supervisor handle is reachable only past `after_start`,
+        // since its own waits are the ones `StartingScope` withholds. Adding a
+        // child through it does not wait, so it is safe here.
         let before_ready = children
+            .clone()
+            .after_start()
             .supervisor_handle()
             .add_child(ChildSpec::new("too-early", |_| async { Ok(()) }))
             .await;

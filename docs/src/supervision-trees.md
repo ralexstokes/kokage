@@ -165,7 +165,8 @@ must recycle both.
 
 Inside the leader, `HandleContext::children()` returns the child scope's
 pre-spawn `RuntimeHandle`; `StartContext::children()` returns the narrower
-`StartingScope`. See [Scope handles inside actors] for the startup ordering and
+`StartingScope` and `StopContext::children()` the narrower `StoppingScope`.
+See [Scope handles inside actors] for the startup ordering and
 reconciliation rules of dynamic membership.
 
 [`RuntimeBuilder::into_tree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.RuntimeBuilder.html#method.into_tree
