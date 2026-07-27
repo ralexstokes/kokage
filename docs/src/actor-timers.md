@@ -79,11 +79,17 @@ terminates permanently.
 
 ## State timeouts
 
-Rust enums already make actor state machines explicit. `state_timeout` adds
-the one piece that otherwise requires bookkeeping: a single timeout slot that
-cancels and replaces the previous timeout whenever the actor enters another
-timed state. `clear_state_timeout` cancels the slot when entering an untimed
-state.
+Rust enums already make actor state machines explicit. What they do not give
+you is the one piece a `gen_statem`-style timeout needs: a timeout belonging to
+a state the actor has already left must not be acted on, even when it already
+reached the mailbox.
+
+`ActorScope::send_after_retractable` is the primitive. It behaves like
+`send_after`, except that cancelling its handle also discards the message
+*after* the mailbox accepted it, as long as the actor has not yet received it.
+`StateTimeoutSlot` is the one-at-a-time bookkeeping on top: a slot lives in
+actor state, `set` cancels and replaces whatever it held, and `clear` empties
+it.
 
 ```rust,ignore
 use std::time::Duration;
@@ -97,35 +103,43 @@ enum Message {
     Cancelled,
 }
 
-#[derive(Clone, Default)]
-enum Order {
+#[derive(Default)]
+enum Phase {
     #[default]
     PendingFill,
     Cancelling,
     Complete,
 }
 
+#[derive(Default)]
+struct Order {
+    phase: Phase,
+    deadline: StateTimeoutSlot,
+}
+
 impl Actor for Order {
     type Msg = Message;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Message>) -> ActorResult {
-        ctx.state_timeout(Message::FillTimedOut, Duration::from_millis(500));
+        self.deadline
+            .set(ctx.send_after_retractable(Message::FillTimedOut, Duration::from_millis(500)));
         Ok(Continue)
     }
 
     async fn handle(&mut self, message: Message, ctx: &mut HandleContext<'_, Message>) -> ActorResult {
-        match (&*self, message) {
-            (Order::PendingFill, Message::Filled) => {
-                ctx.clear_state_timeout();
-                *self = Order::Complete;
+        match (&self.phase, message) {
+            (Phase::PendingFill, Message::Filled) => {
+                self.deadline.clear();
+                self.phase = Phase::Complete;
             }
-            (Order::PendingFill, Message::FillTimedOut) => {
-                *self = Order::Cancelling;
-                ctx.state_timeout(Message::Cancelled, Duration::from_secs(2));
+            (Phase::PendingFill, Message::FillTimedOut) => {
+                self.phase = Phase::Cancelling;
+                self.deadline
+                    .set(ctx.send_after_retractable(Message::Cancelled, Duration::from_secs(2)));
             }
-            (Order::Cancelling, Message::Cancelled) => {
-                ctx.clear_state_timeout();
-                *self = Order::Complete;
+            (Phase::Cancelling, Message::Cancelled) => {
+                self.deadline.clear();
+                self.phase = Phase::Complete;
             }
             _ => {}
         }
@@ -134,15 +148,18 @@ impl Actor for Order {
 }
 ```
 
-Calling `state_timeout` takes ownership of the message and returns a
-`CancellationHandle`, like `send_after`, but the actor does not need to retain
-it. Entering another timed state and calling `state_timeout` automatically
-cancels the previous timeout. Call `clear_state_timeout` when entering a state
-without a timeout.
+`set` returns the handle it armed, so a caller that wants to cancel one
+timeout independently can keep it; most do not. A retained handle reports
+`is_cancelled() == true` once the slot has been replaced or cleared.
 
-Replacing or clearing a state timeout suppresses its message even if the timer
-already fired and the message is waiting in the mailbox. The framework stamps
-the delivery with the slot's cancellation token and discards it before the
-actor receives it when that slot is no longer current. A retained handle will
-report `is_cancelled() == true` after replacement or clearing. State timeouts
-are also cleared with all other timers when the actor stops or restarts.
+The suppression is a mailbox-level filter: the framework stamps the delivery
+with the timer's cancellation token and discards it at receive time if that
+token has been cancelled. That is why this cannot be built outside the
+framework — recognizing a stale timeout in user code would mean tagging it with
+a generation, and an actor's message type belongs to its senders, not to a
+wrapper around the actor. It is also why the filter works for `RawActor` loops
+reading `ctx.recv()`, not just for the provided `Actor` loop.
+
+Slots are ordinary actor state, so an actor that does not model states carries
+nothing for this. Retractable sends are cleared with all other timers when the
+actor stops or restarts.

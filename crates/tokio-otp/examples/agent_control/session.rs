@@ -11,7 +11,8 @@ use std::{
 use tokio::time::Instant;
 use tokio_otp::{
     Actor, ActorRef, ActorResult, ActorScope, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, HandleContext, RestartPolicy, StartContext, prelude::Continue,
+    DynamicActorOptions, HandleContext, RestartPolicy, StartContext, StateTimeoutSlot,
+    prelude::Continue,
 };
 
 use crate::{
@@ -60,6 +61,8 @@ pub struct Session {
     heartbeat: Option<CancellationHandle>,
     #[factory(default)]
     evict_requested: bool,
+    #[factory(default)]
+    idle: StateTimeoutSlot,
 }
 
 impl Session {
@@ -74,8 +77,9 @@ impl Session {
         Ok(Continue)
     }
 
-    fn arm_idle(&mut self, ctx: &mut impl ActorScope<SessionMsg>) {
-        ctx.state_timeout(SessionMsg::IdleSweep, IDLE_TIMEOUT);
+    fn arm_idle(&mut self, ctx: &impl ActorScope<SessionMsg>) {
+        self.idle
+            .set(ctx.send_after_retractable(SessionMsg::IdleSweep, IDLE_TIMEOUT));
     }
 
     async fn start_run(
@@ -86,7 +90,7 @@ impl Session {
         input: PendingInput,
         ctx: &mut HandleContext<'_, SessionMsg>,
     ) -> ActorResult {
-        ctx.clear_state_timeout();
+        self.idle.clear();
         if self.heartbeat.is_none() {
             self.heartbeat = Some(ctx.interval_to(
                 &self.progress,
@@ -255,7 +259,7 @@ impl Actor for Session {
                     return Ok(Continue);
                 }
                 self.transcript_len += 1;
-                ctx.clear_state_timeout();
+                self.idle.clear();
                 let input = PendingInput { envelope, text };
                 if self.active.is_some() || !self.gate.load(Ordering::Acquire) {
                     self.pending.push_back(input);

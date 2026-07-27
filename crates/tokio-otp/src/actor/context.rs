@@ -501,7 +501,6 @@ pub struct ActorContext<M> {
     pub(crate) shutdown: CancellationToken,
     pub(crate) observability: GraphObservability,
     pub(crate) timers: ActorTimers,
-    pub(crate) state_timeout: Option<CancellationHandle>,
     pub(crate) monitors: Arc<ActorMonitors>,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
@@ -807,24 +806,26 @@ impl<M: Send + 'static> ActorContext<M> {
         timer
     }
 
-    /// Sends `message` after `delay`, replacing the current state timeout.
+    /// Sends `message` to this actor after `delay`, retractably.
     ///
-    /// Scheduling a new state timeout cancels the previous one. Call this when
-    /// entering a timed state, and call [`clear_state_timeout`](Self::clear_state_timeout)
-    /// when entering an untimed state. Like other timers, the timeout is
-    /// cancelled automatically if this actor incarnation stops or restarts.
+    /// This differs from [`send_after`](Self::send_after) only in when
+    /// cancellation stops working. An ordinary delayed send can be cancelled
+    /// until it reaches the mailbox; cancelling the handle returned here also
+    /// discards the message *after* the mailbox accepted it, as long as the
+    /// actor has not yet received it. The suppression is a mailbox-level
+    /// filter, so it works for both [`Actor`](crate::Actor) and
+    /// [`RawActor`](crate::RawActor) receive loops.
     ///
-    /// Replacing or clearing the slot also suppresses a stale timeout that has
-    /// already reached the mailbox but has not yet been received. A retained
-    /// handle will report [`CancellationHandle::is_cancelled`] as `true` once
-    /// its slot has been replaced or cleared.
-    pub fn state_timeout(&mut self, message: M, delay: Duration) -> CancellationHandle {
+    /// Like other timers, the send is cancelled automatically if this actor
+    /// incarnation stops or restarts.
+    ///
+    /// This is the primitive under [`StateTimeoutSlot`], which adds the
+    /// one-at-a-time replace/clear bookkeeping of a `gen_statem`-style state
+    /// timeout. Reach for the slot unless you are building different
+    /// bookkeeping on top.
+    pub fn send_after_retractable(&self, message: M, delay: Duration) -> CancellationHandle {
         let cancellation = self.timers.child_token();
         let timer = CancellationHandle::new(cancellation.clone());
-        let previous = self.state_timeout.replace(timer.clone());
-        if let Some(previous) = previous {
-            previous.cancel();
-        }
         spawn_state_timeout_send(
             self.myself(),
             self.incarnation.clone(),
@@ -834,17 +835,6 @@ impl<M: Send + 'static> ActorContext<M> {
         );
 
         timer
-    }
-
-    /// Cancels and clears the current state timeout, if any.
-    ///
-    /// Call this when entering a state that has no timeout. A timeout already
-    /// accepted by the mailbox is discarded if it has not yet been received.
-    pub fn clear_state_timeout(&mut self) {
-        let timeout = self.state_timeout.take();
-        if let Some(timeout) = timeout {
-            timeout.cancel();
-        }
     }
 
     /// Sends a clone of `message` to this actor after every `period`.
@@ -1033,12 +1023,12 @@ mod sealed {
 /// should take when it is called from both `on_start` and `handle`:
 ///
 /// ```no_run
-/// use tokio_otp::{ActorScope, CancellationHandle};
+/// use tokio_otp::{ActorScope, StateTimeoutSlot};
 /// use std::time::Duration;
 ///
 /// # enum Msg { Tick }
-/// fn arm(ctx: &mut impl ActorScope<Msg>) -> CancellationHandle {
-///     ctx.state_timeout(Msg::Tick, Duration::from_secs(5))
+/// fn arm(ctx: &impl ActorScope<Msg>, idle: &mut StateTimeoutSlot) {
+///     idle.set(ctx.send_after_retractable(Msg::Tick, Duration::from_secs(5)));
 /// }
 /// ```
 ///
@@ -1116,18 +1106,11 @@ pub trait ActorScope<M: Send + 'static>: sealed::Sealed<M> {
         self.cx().send_after_to(target, message, delay)
     }
 
-    /// Sends `message` after `delay`, replacing the current state timeout.
+    /// Sends `message` to this actor after `delay`, retractably.
     ///
-    /// See [`ActorContext::state_timeout`].
-    fn state_timeout(&mut self, message: M, delay: Duration) -> CancellationHandle {
-        self.cx_mut().state_timeout(message, delay)
-    }
-
-    /// Cancels and clears the current state timeout, if any.
-    ///
-    /// See [`ActorContext::clear_state_timeout`].
-    fn clear_state_timeout(&mut self) {
-        self.cx_mut().clear_state_timeout()
+    /// See [`ActorContext::send_after_retractable`] and [`StateTimeoutSlot`].
+    fn send_after_retractable(&self, message: M, delay: Duration) -> CancellationHandle {
+        self.cx().send_after_retractable(message, delay)
     }
 
     /// Sends a clone of `message` to this actor after every `period`.
@@ -1454,6 +1437,89 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
         R: Send + 'static,
     {
         self.cx.run_blocking(f)
+    }
+}
+
+/// One-at-a-time state timeout, held in actor state.
+///
+/// This is the `gen_statem` state-timeout pattern: entering a timed state arms
+/// a timeout, entering a different state replaces or clears it, and a timeout
+/// belonging to a state the actor has already left must not be acted on.
+///
+/// The slot is bookkeeping over
+/// [`send_after_retractable`](ActorScope::send_after_retractable), which is
+/// what makes the last part work — [`set`](Self::set) and [`clear`](Self::clear)
+/// suppress a stale timeout that already reached the mailbox but has not been
+/// received yet. Without that primitive this pattern cannot be built outside
+/// the framework: recognizing a stale timeout in user code would require
+/// tagging it with a generation, and the actor's message type belongs to its
+/// senders, not to the wrapper.
+///
+/// Nothing here is per-actor state the runtime must carry, so an actor that
+/// does not model states pays nothing for it.
+///
+/// ```no_run
+/// use std::time::Duration;
+/// use tokio_otp::{ActorScope, StateTimeoutSlot};
+///
+/// # enum Msg { Idle, Work }
+/// const IDLE: Duration = Duration::from_secs(30);
+///
+/// struct Session {
+///     idle: StateTimeoutSlot,
+/// }
+///
+/// impl Session {
+///     fn go_idle(&mut self, ctx: &impl ActorScope<Msg>) {
+///         self.idle.set(ctx.send_after_retractable(Msg::Idle, IDLE));
+///     }
+///
+///     fn go_busy(&mut self) {
+///         self.idle.clear();
+///     }
+/// }
+/// ```
+#[derive(Debug, Default)]
+pub struct StateTimeoutSlot {
+    armed: Option<CancellationHandle>,
+}
+
+impl StateTimeoutSlot {
+    /// Returns an empty slot.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Arms `timer`, cancelling and discarding whatever the slot held.
+    ///
+    /// Pass the handle from
+    /// [`send_after_retractable`](ActorScope::send_after_retractable). The
+    /// previous timeout is cancelled even if it has already been accepted by
+    /// the mailbox, so a stale timeout is never received. The returned handle
+    /// is an alias of the newly armed one, for callers that want to cancel it
+    /// independently.
+    pub fn set(&mut self, timer: CancellationHandle) -> CancellationHandle {
+        if let Some(previous) = self.armed.replace(timer.clone()) {
+            previous.cancel();
+        }
+        timer
+    }
+
+    /// Cancels and clears the armed timeout, if any.
+    ///
+    /// Call this when entering a state that has no timeout. A timeout already
+    /// accepted by the mailbox is discarded if it has not yet been received.
+    pub fn clear(&mut self) {
+        if let Some(armed) = self.armed.take() {
+            armed.cancel();
+        }
+    }
+
+    /// Returns whether a timeout is currently armed and uncancelled.
+    pub fn is_armed(&self) -> bool {
+        self.armed
+            .as_ref()
+            .is_some_and(|armed| !armed.is_cancelled())
     }
 }
 
