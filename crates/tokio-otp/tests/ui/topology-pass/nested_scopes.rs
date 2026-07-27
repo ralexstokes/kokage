@@ -1,5 +1,5 @@
-//! A nested topology: an ordered root, a nested scope, a leader-owned scope,
-//! and a dynamic marker scope all wire from one factories literal.
+//! A nested topology: an ordered root, two nested scopes, and a dynamic marker
+//! scope all wire from one factories literal.
 
 use tokio_otp::{
     ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime, Strategy, Topology,
@@ -24,9 +24,8 @@ struct Workers {
 }
 
 #[derive(Topology)]
-#[topology(leader_strategy = Strategy::OneForAll)]
+#[topology(strategy = Strategy::RestForOne)]
 struct Pool {
-    #[topology(leader)]
     manager: Worker,
     #[topology(dynamic)]
     sessions: DynamicScope,
@@ -44,7 +43,7 @@ struct App {
 }
 
 fn main() -> Result<(), TopologyBuildError> {
-    let (runtime, refs) = App::runtime_with_refs(|_refs| AppFactories {
+    let (runtime, refs) = App::runtime(|_refs| AppFactories {
         ingest: || Worker,
         workers: WorkersFactories {
             parse: || Worker,

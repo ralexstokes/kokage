@@ -12,9 +12,9 @@ impl RawActor for Worker {
 
 #[derive(Topology)]
 struct Pool {
-    front: Worker,
-    #[topology(leader)]
-    manager: Worker,
+    parse: Worker,
+    #[topology(label = "parse")]
+    render: Worker,
 }
 
 fn main() {}

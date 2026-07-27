@@ -123,7 +123,7 @@ async fn derived_topology_runs_cyclic_pipeline() {
     let (acks_tx, mut acks_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let (graph, refs) = Pipeline::graph_with_refs(|refs| PipelineFactories {
+    let (graph, refs) = Pipeline::graph(|refs| PipelineFactories {
         frontend: {
             let refs = refs.clone();
             move || Frontend {
@@ -285,7 +285,7 @@ struct OptionsGraph {
 
 #[tokio::test]
 async fn derived_topology_applies_per_actor_options() {
-    let (graph, refs) = OptionsGraph::graph_with_refs(|_| OptionsGraphFactories {
+    let (graph, refs) = OptionsGraph::graph(|_| OptionsGraphFactories {
         mailbox_only: || OptionsActor,
         message_size_only: || OptionsActor,
         combined: || OptionsActor,
@@ -333,7 +333,7 @@ async fn graph_with_applies_builder_config() {
     builder.mailbox_capacity(1);
 
     let mut park = None;
-    let graph = ParkGraph::graph_with(builder, |refs| {
+    let (graph, _refs) = ParkGraph::graph_with(builder, |refs| {
         park = Some(refs.park.clone());
         ParkGraphFactories { park: || Park }
     })

@@ -1,5 +1,0 @@
-error: a `leader` field requires at least one more field to form the scope it owns
-  --> tests/ui/topology/leader_without_scope.rs:14:8
-   |
-14 | struct Pool {
-   |        ^^^^

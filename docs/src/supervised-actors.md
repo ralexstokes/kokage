@@ -186,7 +186,7 @@ struct App {
 let sessions = Runtime::dynamic();
 let mount = sessions.handle();
 
-let (runtime, refs) = App::runtime_with_refs(|_refs| AppFactories {
+let (runtime, refs) = App::runtime(|_refs| AppFactories {
     ingest: move || Ingest::new(mount.clone()),
     workers: WorkersFactories {
         parse: || Parser::new(),
@@ -216,7 +216,7 @@ Field order is semantic here in a way it is not for a graph alone: an ordered
 scope starts children in declaration order, and `Strategy::RestForOne` restarts
 the ones that follow. Reordering fields changes restart behaviour.
 
-Three field attributes select what a field is:
+Two field attributes select what a field is:
 
 - `#[topology(scope)]` — a nested derived topology, becoming a named child
   scope.
@@ -227,16 +227,19 @@ Three field attributes select what a field is:
   an actor can hold it as a durable factory field instead of looking the scope
   up after spawn. Policy comes from the builder
   (`Runtime::dynamic().restart(..)`), not from attributes.
-- `#[topology(leader)]` — an actor started before, and owning, the scope formed
-  by the struct's remaining fields. It must be the first field, and relates to
-  its scope by `leader_strategy` (`Strategy::RestForOne` by default). A
-  topology with a leader is a fragment rather than an application root, so it
-  generates no constructors of its own; use it as a `scope` field.
 
 Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
 field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
-the `SupervisionTree` declaration without building it, which is useful for
-asserting shape in tests through `outline()`.
+the `SupervisionTree` declaration — paired, like every generated constructor,
+with the refs bundle — without building it, which is useful for asserting shape
+in tests through `outline()`.
+
+Each of `graph`, `tree`, and `runtime` has a `_with` form taking a
+`GraphBuilder`. That builder is for graph-wide configuration — name and mailbox
+capacity — and must not have actors registered on it already: `tree_with` and
+`runtime_with` place only the topology's own fields in the supervision tree, so
+a pre-registered actor joins the graph but is never started. Use `graph_with`
+when composing a graph by hand and hosting it yourself.
 
 Reach for `Runtime::builder` instead when the shape is not static — actors
 created in a loop, ids chosen at runtime, or subtrees assembled conditionally.

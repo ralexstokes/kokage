@@ -411,7 +411,9 @@ impl SupervisionTree {
     ///
     /// # Panics
     ///
-    /// Panics when called on a leaf child node.
+    /// Panics unless this node is an ordered or dynamic scope: actor, child
+    /// spec, and actor-with-scope nodes carry their id in the declaration
+    /// itself.
     #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.scope_mut()
@@ -474,27 +476,12 @@ impl SupervisionTree {
         children: impl Into<SupervisionTree>,
         strategy: Strategy,
     ) -> Self {
-        self.child(Self::leader(id, actor, children, strategy))
-    }
-
-    /// Creates a standalone actor-with-scope node.
-    ///
-    /// This is [`actor_with_scope_strategy`](Self::actor_with_scope_strategy)
-    /// without the parent: the node carries its own `id` and is appended with
-    /// [`child`](Self::child). See that method for how `strategy` relates the
-    /// leader to the scope it owns.
-    pub fn leader(
-        id: impl Into<String>,
-        actor: impl Into<ActorSpec>,
-        children: impl Into<SupervisionTree>,
-        strategy: Strategy,
-    ) -> Self {
-        Self::ActorWithScope {
+        self.child(Self::ActorWithScope {
             id: id.into(),
             actor: actor.into(),
             children: Box::new(children.into()),
             strategy,
-        }
+        })
     }
 
     /// Appends an already constructed recursive child node.
@@ -547,7 +534,7 @@ impl SupervisionTree {
     ) -> Result<ChildOutline, SupervisorBuildError> {
         Ok(match self {
             Self::Actor(actor) => ChildOutline::Actor {
-                label: actor.id().to_owned(),
+                id: actor.id().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
                 restart_intensity: actor.restart_intensity,
@@ -569,7 +556,7 @@ impl SupervisionTree {
             } => ChildOutline::ActorWithScope {
                 id: id.clone(),
                 leader: Box::new(ChildOutline::Actor {
-                    label: actor.id().to_owned(),
+                    id: actor.id().to_owned(),
                     restart: actor.restart.unwrap_or(default_restart),
                     shutdown: actor.shutdown.unwrap_or(default_shutdown),
                     restart_intensity: actor.restart_intensity,
@@ -648,15 +635,21 @@ impl SupervisionTree {
         }
         for child in scope.children {
             builder = match child {
-                Self::Actor(actor) => builder.child(actor_child_spec(
-                    actor.actor.clone(),
+                Self::Actor(ActorSpec {
+                    actor,
+                    child_id,
+                    restart,
+                    shutdown,
+                    restart_intensity,
+                }) => builder.child(actor_child_spec(
+                    actor,
                     &actors,
                     ActorChildOptions::new(
-                        actor.restart.unwrap_or(scope.default_restart),
-                        actor.shutdown.unwrap_or(scope.default_shutdown),
+                        restart.unwrap_or(scope.default_restart),
+                        shutdown.unwrap_or(scope.default_shutdown),
                     )
-                    .restart_intensity(actor.restart_intensity)
-                    .child_id(actor.child_id),
+                    .restart_intensity(restart_intensity)
+                    .child_id(child_id),
                 )),
                 Self::Child(spec) => builder.child(spec),
                 tree @ (Self::Ordered { .. } | Self::Dynamic { .. }) => {
@@ -671,7 +664,14 @@ impl SupervisionTree {
                 }
                 Self::ActorWithScope {
                     id,
-                    actor,
+                    actor:
+                        ActorSpec {
+                            actor,
+                            child_id,
+                            restart,
+                            shutdown,
+                            restart_intensity,
+                        },
                     children,
                     strategy,
                 } => {
@@ -686,14 +686,14 @@ impl SupervisionTree {
                         Arc::clone(&children_actors),
                     );
                     let leader = actor_child_spec(
-                        actor.actor.clone(),
+                        actor,
                         &owned_actors,
                         ActorChildOptions::new(
-                            actor.restart.unwrap_or(scope.default_restart),
-                            actor.shutdown.unwrap_or(scope.default_shutdown),
+                            restart.unwrap_or(scope.default_restart),
+                            shutdown.unwrap_or(scope.default_shutdown),
                         )
-                        .restart_intensity(actor.restart_intensity)
-                        .child_id(actor.child_id)
+                        .restart_intensity(restart_intensity)
+                        .child_id(child_id)
                         .children(children_handle),
                     );
                     let owned = SupervisorBuilder::new()
@@ -765,8 +765,9 @@ pub struct SupervisionOutline {
 pub enum ChildOutline {
     /// An actor with resolved policies.
     Actor {
-        /// Actor label and child id.
-        label: String,
+        /// Child id within the enclosing scope; equals the actor label unless
+        /// [`ActorSpec::child_id`] overrode it.
+        id: String,
         /// Resolved restart policy.
         restart: RestartPolicy,
         /// Resolved shutdown policy.
@@ -819,8 +820,10 @@ impl ChildOutline {
     /// Returns this node's id within its parent.
     pub fn id(&self) -> &str {
         match self {
-            Self::Actor { label, .. } => label,
-            Self::Child { id, .. } | Self::Scope { id, .. } | Self::ActorWithScope { id, .. } => id,
+            Self::Actor { id, .. }
+            | Self::Child { id, .. }
+            | Self::Scope { id, .. }
+            | Self::ActorWithScope { id, .. } => id,
         }
     }
 }

@@ -199,15 +199,22 @@ fn parse_factory_attributes(
 /// * a `PipelineSlots` struct holding the unfilled graph slots;
 /// * a `PipelineScopes` struct holding the reserved dynamic scopes;
 /// * an implementation of the `tokio_otp::Topology` trait; and
-/// * three families of constructors, each in a plain, `_with_refs`, and
-///   `_with` (preconfigured `GraphBuilder`) form:
+/// * three families of constructors, each in a plain and a `_with`
+///   (preconfigured `GraphBuilder`) form:
 ///   * `Pipeline::graph(wire)` — the actor graph alone;
 ///   * `Pipeline::tree(wire)` — a `SupervisionTree` declaration over that
 ///     graph; and
 ///   * `Pipeline::runtime(wire)` — a built `Runtime`, ready to `spawn`.
 ///
-/// The `_with_refs` forms additionally return the `PipelineRefs` bundle for
-/// use as application entry points.
+/// Every constructor returns its value paired with the `PipelineRefs` bundle,
+/// for use as application entry points; write `let (graph, _) = ...` when the
+/// refs are not needed.
+///
+/// The `GraphBuilder` a `_with` form takes is for graph-wide configuration —
+/// name and mailbox capacity — and must not have actors registered on it
+/// already: `tree_with` and `runtime_with` place only the topology's own
+/// actors in the supervision tree, so a pre-registered actor joins the graph
+/// but is never started. Use `graph_with` when composing a graph by hand.
 ///
 /// The `wire` closure receives `&PipelineRefs` before any actor incarnation is
 /// constructed, so factories can capture each other's refs even when the graph
@@ -261,7 +268,7 @@ fn parse_factory_attributes(
 /// }
 ///
 /// # fn main() -> Result<(), tokio_otp::GraphBuildError> {
-/// let (graph, refs) = Pipeline::graph_with_refs(|refs| {
+/// let (graph, refs) = Pipeline::graph(|refs| {
 ///     PipelineFactories {
 ///         frontend: {
 ///             let refs = refs.clone();
@@ -314,10 +321,10 @@ fn parse_factory_attributes(
 ///
 /// # Visibility
 ///
-/// The refs struct and the generated `graph` / `graph_with_refs` /
-/// `graph_with` methods inherit the topology struct's visibility; each refs field inherits the
-/// corresponding topology field's visibility. A `pub` topology with `pub`
-/// fields can therefore be wired from another module or crate.
+/// The refs struct and the generated constructors inherit the topology
+/// struct's visibility; each refs field inherits the corresponding topology
+/// field's visibility. A `pub` topology with `pub` fields can therefore be
+/// wired from another module or crate.
 ///
 /// # Compile-time guarantees
 ///
@@ -338,17 +345,16 @@ fn parse_factory_attributes(
 ///   exactly one slot token per field;
 /// * a `#[topology(dynamic)]` field whose type is not `DynamicScope` fails to
 ///   compile;
-/// * `scope` and `dynamic` on one field, more than one `leader` field, a
-///   `leader` that is not first, a `leader` with no scope to own, and
-///   `leader_strategy` without a `leader` are all rejected; and
-/// * a `label` that is empty or contains `.` is rejected.
+/// * `scope` and `dynamic` on one field is rejected;
+/// * a `label` that is empty or contains `.` is rejected; and
+/// * two nodes sharing a name — whether from field names or `label`
+///   overrides — are rejected.
 ///
 /// # Errors
 ///
-/// `graph`, `graph_with_refs`, and `graph_with` return `GraphBuildError` for
-/// the runtime configuration checks that remain, such as passing `graph_with`
-/// a builder that already has an actor registered under the same id as a
-/// topology field.
+/// `graph` and `graph_with` return `GraphBuildError` for the runtime
+/// configuration checks that remain, such as passing `graph_with` a builder
+/// that already has an actor registered under the same id as a topology field.
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
@@ -423,7 +429,7 @@ fn parse_factory_attributes(
 /// }
 ///
 /// # fn main() -> Result<(), TopologyBuildError> {
-/// let (runtime, refs) = App::runtime_with_refs(|_refs| AppFactories {
+/// let (runtime, refs) = App::runtime(|_refs| AppFactories {
 ///     ingest: || Worker,
 ///     workers: WorkersFactories {
 ///         parse: || Worker,
@@ -450,7 +456,6 @@ fn parse_factory_attributes(
 /// | `restart` | Default restart policy inherited by actor fields. |
 /// | `shutdown` | Default shutdown policy inherited by actor fields. |
 /// | `restart_intensity` | This scope's restart-intensity window. |
-/// | `leader_strategy` | Relates a `leader` field to the scope it owns. |
 ///
 /// ## Field attributes
 ///
@@ -466,12 +471,6 @@ fn parse_factory_attributes(
 ///   factory, which both configures the scope
 ///   (`Runtime::dynamic().restart(..)`) and makes its mount handle available
 ///   before any actor is built, so a factory can capture it.
-/// * `leader` — an actor started before, and owning, the scope formed by the
-///   struct's remaining fields. It must be the first field, and lowers to
-///   `SupervisionTree::leader`, relating the two by `leader_strategy`
-///   (`Strategy::RestForOne` by default). A topology with a `leader` is a
-///   fragment rather than an application root, so it generates no `graph`,
-///   `tree`, or `runtime` constructors — use it as a `scope` field.
 ///
 #[proc_macro_derive(Topology, attributes(topology))]
 pub fn derive_topology(input: TokenStream) -> TokenStream {
@@ -485,7 +484,6 @@ pub fn derive_topology(input: TokenStream) -> TokenStream {
 #[derive(Default)]
 struct ScopeAttrs {
     strategy: Option<Expr>,
-    leader_strategy: Option<Expr>,
     restart: Option<Expr>,
     shutdown: Option<Expr>,
     restart_intensity: Option<Expr>,
@@ -505,7 +503,6 @@ enum FieldKind {
 /// Field-level `#[topology(...)]` configuration.
 struct FieldAttrs {
     kind: FieldKind,
-    leader: bool,
     label: Option<String>,
     options: Option<Expr>,
     restart: Option<Expr>,
@@ -517,7 +514,6 @@ impl Default for FieldAttrs {
     fn default() -> Self {
         Self {
             kind: FieldKind::Actor,
-            leader: false,
             label: None,
             options: None,
             restart: None,
@@ -547,9 +543,6 @@ fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
             if meta.path.is_ident("strategy") {
                 return take_expr(&mut parsed.strategy, &meta, "strategy");
             }
-            if meta.path.is_ident("leader_strategy") {
-                return take_expr(&mut parsed.leader_strategy, &meta, "leader_strategy");
-            }
             if meta.path.is_ident("restart") {
                 return take_expr(&mut parsed.restart, &meta, "restart");
             }
@@ -560,8 +553,8 @@ fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
                 return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
             }
             Err(meta.error(
-                "expected `strategy`, `leader_strategy`, `restart`, `shutdown`, \
-                 or `restart_intensity`, each `= <expression>`",
+                "expected `strategy`, `restart`, `shutdown`, or `restart_intensity`, \
+                 each `= <expression>`",
             ))
         })?;
     }
@@ -590,13 +583,6 @@ fn parse_topology_field(field: &Field) -> syn::Result<FieldAttrs> {
                 }
                 kind_span = Some(attr.span());
                 parsed.kind = kind;
-                return Ok(());
-            }
-            if meta.path.is_ident("leader") {
-                if parsed.leader {
-                    return Err(meta.error("duplicate `leader` option"));
-                }
-                parsed.leader = true;
                 return Ok(());
             }
             if meta.path.is_ident("label") {
@@ -630,25 +616,17 @@ fn parse_topology_field(field: &Field) -> syn::Result<FieldAttrs> {
                 return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
             }
             Err(meta.error(
-                "expected `scope`, `dynamic`, `leader`, `label = \"...\"`, \
+                "expected `scope`, `dynamic`, `label = \"...\"`, \
                  or `options`/`restart`/`shutdown`/`restart_intensity` = <expression>",
             ))
         })?;
     }
 
-    if parsed.kind != FieldKind::Actor {
-        if parsed.leader {
-            return Err(syn::Error::new_spanned(
-                field,
-                "`leader` applies only to actor fields",
-            ));
-        }
-        if parsed.options.is_some() {
-            return Err(syn::Error::new_spanned(
-                field,
-                "`options` applies only to actor fields; a nested scope configures its own",
-            ));
-        }
+    if parsed.kind != FieldKind::Actor && parsed.options.is_some() {
+        return Err(syn::Error::new_spanned(
+            field,
+            "`options` applies only to actor fields; a nested scope configures its own",
+        ));
     }
     if parsed.kind == FieldKind::Scope
         && (parsed.restart.is_some()
@@ -724,39 +702,6 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         .map(parse_topology_field)
         .collect::<syn::Result<Vec<_>>>()?;
 
-    let leaders: Vec<usize> = field_attrs
-        .iter()
-        .enumerate()
-        .filter(|(_, attrs)| attrs.leader)
-        .map(|(index, _)| index)
-        .collect();
-    if let Some(&extra) = leaders.get(1) {
-        return Err(syn::Error::new_spanned(
-            &fields[extra],
-            "a topology can declare at most one `leader` field",
-        ));
-    }
-    let leader_index = leaders.first().copied();
-    if let Some(index) = leader_index {
-        if index != 0 {
-            return Err(syn::Error::new_spanned(
-                &fields[index],
-                "the `leader` field must come first: it is started before the scope it owns",
-            ));
-        }
-        if fields.len() < 2 {
-            return Err(syn::Error::new_spanned(
-                &topology,
-                "a `leader` field requires at least one more field to form the scope it owns",
-            ));
-        }
-    } else if let Some(strategy) = &scope_attrs.leader_strategy {
-        return Err(syn::Error::new_spanned(
-            strategy,
-            "`leader_strategy` requires a `#[topology(leader)]` field",
-        ));
-    }
-
     let refs = format_ident!("{topology}Refs");
     let factories = format_ident!("{topology}Factories");
     let slots = format_ident!("{topology}Slots");
@@ -771,6 +716,21 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         .zip(&field_attrs)
         .map(|(ident, attrs)| attrs.label.clone().unwrap_or_else(|| ident.to_string()))
         .collect();
+
+    // Names address nodes in both the graph label path and the supervisor
+    // scope, so a collision would silently shadow a node rather than fail at
+    // build time.
+    let mut seen_names = std::collections::HashSet::with_capacity(node_names.len());
+    for (index, name) in node_names.iter().enumerate() {
+        if !seen_names.insert(name) {
+            return Err(syn::Error::new_spanned(
+                &fields[index],
+                format!(
+                    "duplicate node name `{name}`; node names must be unique within a topology"
+                ),
+            ));
+        }
+    }
 
     // Type parameters are minted only for fields that carry a factory, so a
     // `dynamic` marker field neither takes a parameter nor appears in the
@@ -922,13 +882,9 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         .map(|ident| format_ident!("{ident}_slot"))
         .collect();
 
-    // Scope construction, in declaration order and skipping the leader, which
-    // its parent installs ahead of the scope this builds.
+    // Scope construction, in declaration order.
     let mut scope_stmts = Vec::new();
     for (index, field) in fields.iter().enumerate() {
-        if Some(index) == leader_index {
-            continue;
-        }
         let ident = field_idents[index];
         let ty = &field.ty;
         let attrs = &field_attrs[index];
@@ -980,141 +936,86 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         scope_root = quote! { #scope_root.restart_intensity(#intensity) };
     }
 
-    let node_body = match leader_index {
-        Some(index) => {
-            let spec = actor_spec_expr(&node_names[index], &field_attrs[index]);
-            let strategy = scope_attrs.leader_strategy.clone().map_or_else(
-                || quote! { ::tokio_otp::Strategy::RestForOne },
-                |strategy| quote! { #strategy },
-            );
-            quote! {
-                ::tokio_otp::SupervisionTree::leader(
-                    id,
-                    #spec,
-                    Self::__topology_scope(graph, scopes, prefix),
-                    #strategy,
-                )
+    let node_body = quote! { Self::__topology_scope(graph, scopes, prefix).id(id) };
+
+    let root_constructors = quote! {
+        impl #topology {
+            #vis fn graph<#(#all_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Graph, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                Self::graph_with(::tokio_otp::GraphBuilder::new(), wire)
             }
-        }
-        None => quote! { Self::__topology_scope(graph, scopes, prefix).id(id) },
-    };
 
-    // A leader topology is a fragment: its node is an actor-with-scope child,
-    // which has no meaning without a parent to own it. Root constructors are
-    // therefore generated only for ordinary scopes.
-    let root_constructors = if leader_index.is_some() {
-        quote! {}
-    } else {
-        quote! {
-            impl #topology {
-                #vis fn graph<#(#all_params),*>(
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<::tokio_otp::Graph, ::tokio_otp::GraphBuildError>
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::graph_with_refs(wire).map(|(graph, _refs)| graph)
-                }
+            #vis fn graph_with<#(#all_params),*>(
+                builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Graph, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                Self::__topology_graph(builder, wire).map(|(graph, refs, _scopes)| (graph, refs))
+            }
 
-                #vis fn graph_with_refs<#(#all_params),*>(
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    (::tokio_otp::Graph, #refs),
-                    ::tokio_otp::GraphBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::__topology_graph(::tokio_otp::GraphBuilder::new(), wire)
-                        .map(|(graph, refs, _scopes)| (graph, refs))
-                }
+            #vis fn tree<#(#all_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::SupervisionTree, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                Self::tree_with(::tokio_otp::GraphBuilder::new(), wire)
+            }
 
-                #vis fn graph_with<#(#all_params),*>(
-                    builder: ::tokio_otp::GraphBuilder,
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<::tokio_otp::Graph, ::tokio_otp::GraphBuildError>
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::__topology_graph(builder, wire).map(|(graph, _refs, _scopes)| graph)
-                }
+            #vis fn tree_with<#(#all_params),*>(
+                builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::SupervisionTree, #refs),
+                ::tokio_otp::GraphBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                let (graph, refs, scopes) = Self::__topology_graph(builder, wire)?;
+                let tree = Self::__topology_scope(&graph, scopes, "");
+                ::core::result::Result::Ok((tree, refs))
+            }
 
-                #vis fn tree<#(#all_params),*>(
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    ::tokio_otp::SupervisionTree,
-                    ::tokio_otp::GraphBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::tree_with_refs(wire).map(|(tree, _refs)| tree)
-                }
+            #vis fn runtime<#(#all_params),*>(
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Runtime, #refs),
+                ::tokio_otp::TopologyBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                Self::runtime_with(::tokio_otp::GraphBuilder::new(), wire)
+            }
 
-                #vis fn tree_with_refs<#(#all_params),*>(
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    (::tokio_otp::SupervisionTree, #refs),
-                    ::tokio_otp::GraphBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::tree_with(::tokio_otp::GraphBuilder::new(), wire)
-                }
-
-                #vis fn tree_with<#(#all_params),*>(
-                    builder: ::tokio_otp::GraphBuilder,
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    (::tokio_otp::SupervisionTree, #refs),
-                    ::tokio_otp::GraphBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    let (graph, refs, scopes) = Self::__topology_graph(builder, wire)?;
-                    let tree = Self::__topology_scope(&graph, scopes, "");
-                    ::core::result::Result::Ok((tree, refs))
-                }
-
-                #vis fn runtime<#(#all_params),*>(
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    ::tokio_otp::Runtime,
-                    ::tokio_otp::TopologyBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::runtime_with_refs(wire).map(|(runtime, _refs)| runtime)
-                }
-
-                #vis fn runtime_with_refs<#(#all_params),*>(
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    (::tokio_otp::Runtime, #refs),
-                    ::tokio_otp::TopologyBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    Self::runtime_with(::tokio_otp::GraphBuilder::new(), wire)
-                }
-
-                #vis fn runtime_with<#(#all_params),*>(
-                    builder: ::tokio_otp::GraphBuilder,
-                    wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-                ) -> ::core::result::Result<
-                    (::tokio_otp::Runtime, #refs),
-                    ::tokio_otp::TopologyBuildError,
-                >
-                where
-                    #(#factory_bounds,)*
-                {
-                    let (tree, refs) = Self::tree_with(builder, wire)?;
-                    ::core::result::Result::Ok((tree.build()?, refs))
-                }
+            #vis fn runtime_with<#(#all_params),*>(
+                builder: ::tokio_otp::GraphBuilder,
+                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
+            ) -> ::core::result::Result<
+                (::tokio_otp::Runtime, #refs),
+                ::tokio_otp::TopologyBuildError,
+            >
+            where
+                #(#factory_bounds,)*
+            {
+                let (tree, refs) = Self::tree_with(builder, wire)?;
+                ::core::result::Result::Ok((tree.build()?, refs))
             }
         }
     };

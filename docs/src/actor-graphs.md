@@ -19,10 +19,10 @@ a normal exit to watches and supervision. `RestartPolicy::Always` restarts it;
 `OnFailure` and `Never` do not.
 
 The usual static graph is a struct whose fields are the actors. Deriving
-`Topology` gives that struct a `graph_with_refs` method; its wiring closure
-receives a cloneable refs struct with one typed `ActorRef` per field, so cycles
-and forward references do not require string lookup. The method returns the
-same refs bundle with the graph for use as application entry points:
+`Topology` gives that struct a `graph` method; its wiring closure receives a
+cloneable refs struct with one typed `ActorRef` per field, so cycles and
+forward references do not require string lookup. The method returns that same
+refs bundle alongside the graph, for use as application entry points:
 
 ```rust,no_run
 use tokio_otp::prelude::Continue;
@@ -98,7 +98,7 @@ struct PrintShop {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (graph, refs) = PrintShop::graph_with_refs(|refs| {
+    let (graph, refs) = PrintShop::graph(|refs| {
         PrintShopFactories {
             front_desk: {
                 let refs = refs.clone();
@@ -195,10 +195,10 @@ custom synchronous construction rather than `Default`.
 `RawActor`. Field names become actor labels, qualified by the path of any
 enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
-Rename a node with `#[topology(label = "...")]`. The generated
-`graph_with_refs` returns both the graph and its cloneable typed refs. The
-generated `graph` preserves the graph-only API, and `graph_with` accepts a
-preconfigured `GraphBuilder` for graph name and mailbox capacity.
+Rename a node with `#[topology(label = "...")]`. The generated `graph` returns
+both the graph and its cloneable typed refs — write `let (graph, _) = ...` when
+the refs are not needed — and `graph_with` does the same from a preconfigured
+`GraphBuilder`, for graph name and mailbox capacity.
 
 The same derive can declare the supervision tree that runs those actors — see
 [Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
@@ -211,6 +211,8 @@ The derive keeps topology shape in the type system:
   `<Topology>Factories` struct literal
 - each factory's `ActorFactory::Actor` must be its declared actor type
 - a topology with no actors is a compile error
+- two nodes sharing a name, from field names or `label` overrides, is a
+  compile error
 
 Configure an individual actor's mailbox or message-size observation with a
 normal Rust expression in `#[topology(options = ...)]`. Annotated fields use

@@ -95,7 +95,7 @@ pub trait TopologyFactories<T: Topology> {
 /// // Reserved before wiring, so the manager can hold it across restarts.
 /// let mount = sessions.handle();
 ///
-/// let runtime = App::runtime(|_refs| AppFactories {
+/// let (runtime, _refs) = App::runtime(|_refs| AppFactories {
 ///     manager: move || Manager {
 ///         sessions: mount.clone(),
 ///     },

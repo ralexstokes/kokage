@@ -1,5 +1,5 @@
 //! Supervision-shaped `#[derive(Topology)]`: nested scopes, path-qualified
-//! labels, dynamic marker scopes, and actor-with-scope leaders.
+//! labels, and dynamic marker scopes.
 
 use std::time::Duration;
 
@@ -54,7 +54,7 @@ fn app_factories(_refs: &AppRefs) -> AppWiring {
 
 #[test]
 fn a_nested_scope_becomes_a_named_subtree_with_path_qualified_labels() {
-    let (tree, _refs) = App::tree_with_refs(app_factories).expect("tree builds");
+    let (tree, _refs) = App::tree(app_factories).expect("tree builds");
     let outline = tree.outline();
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
@@ -81,7 +81,7 @@ fn a_nested_scope_becomes_a_named_subtree_with_path_qualified_labels() {
 
 #[test]
 fn graph_labels_are_qualified_by_scope_path() {
-    let graph = App::graph(app_factories).expect("graph builds");
+    let (graph, _refs) = App::graph(app_factories).expect("graph builds");
     let mut labels: Vec<_> = graph.actors().iter().map(|actor| actor.label()).collect();
     labels.sort_unstable();
     assert_eq!(labels, ["ingest", "workers.parse", "workers.render"]);
@@ -89,7 +89,7 @@ fn graph_labels_are_qualified_by_scope_path() {
 
 #[tokio::test]
 async fn a_derived_runtime_runs_actors_across_scope_levels() {
-    let (runtime, refs) = App::runtime_with_refs(app_factories).expect("runtime builds");
+    let (runtime, refs) = App::runtime(app_factories).expect("runtime builds");
     let handle = runtime.spawn();
 
     for actor in [&refs.ingest, &refs.workers.parse, &refs.workers.render] {
@@ -143,13 +143,13 @@ fn a_label_attribute_overrides_the_field_name_in_paths_and_child_ids() {
             render: || Worker,
         },
     };
-    let graph = Renamed::graph(wire).expect("graph builds");
+    let (graph, _refs) = Renamed::graph(wire).expect("graph builds");
 
     let mut labels: Vec<_> = graph.actors().iter().map(|actor| actor.label()).collect();
     labels.sort_unstable();
     assert_eq!(labels, ["collector", "pool.parse", "pool.render"]);
 
-    let (tree, _refs) = Renamed::tree_with_refs(wire).expect("tree builds");
+    let (tree, _refs) = Renamed::tree(wire).expect("tree builds");
     assert_eq!(tree.outline().child_ids(), ["collector", "pool"]);
 }
 
@@ -162,7 +162,7 @@ struct WithDynamic {
 
 #[test]
 fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
-    let (tree, _refs) = WithDynamic::tree_with_refs(|_refs| WithDynamicFactories {
+    let (tree, _refs) = WithDynamic::tree(|_refs| WithDynamicFactories {
         manager: || Worker,
         sessions: Runtime::dynamic().restart(RestartPolicy::Never),
     })
@@ -185,7 +185,7 @@ fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
 
 #[tokio::test]
 async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
-    let runtime = WithDynamic::runtime(|_refs| WithDynamicFactories {
+    let (runtime, _refs) = WithDynamic::runtime(|_refs| WithDynamicFactories {
         manager: || Worker,
         sessions: Runtime::dynamic(),
     })
@@ -210,80 +210,6 @@ async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
 }
 
 #[derive(Topology)]
-#[topology(leader_strategy = Strategy::OneForAll)]
-struct Pool {
-    #[topology(leader)]
-    manager: Worker,
-    #[topology(dynamic)]
-    workers: DynamicScope,
-}
-
-#[derive(Topology)]
-struct LeaderApp {
-    front: Worker,
-    #[topology(scope)]
-    pool: Pool,
-}
-
-#[test]
-fn a_leader_field_lowers_to_an_actor_with_scope_node() {
-    let (tree, _refs) = LeaderApp::tree_with_refs(|_refs| LeaderAppFactories {
-        front: || Worker,
-        pool: PoolFactories {
-            manager: || Worker,
-            workers: Runtime::dynamic(),
-        },
-    })
-    .expect("tree builds");
-    let outline = tree.outline();
-
-    assert_eq!(outline.child_ids(), ["front", "pool"]);
-    let ChildOutline::ActorWithScope {
-        leader,
-        children,
-        strategy,
-        ..
-    } = outline.child("pool").expect("pool node is declared")
-    else {
-        panic!("expected an actor-with-scope node");
-    };
-    assert_eq!(*strategy, Strategy::OneForAll);
-    assert_eq!(leader.id(), "manager");
-    assert_eq!(children.child_ids(), ["workers"]);
-}
-
-#[tokio::test]
-async fn a_leader_runs_ahead_of_the_scope_it_owns() {
-    let (runtime, refs) = LeaderApp::runtime_with_refs(|_refs| LeaderAppFactories {
-        front: || Worker,
-        pool: PoolFactories {
-            manager: || Worker,
-            workers: Runtime::dynamic(),
-        },
-    })
-    .expect("runtime builds");
-    let handle = runtime.spawn();
-
-    assert_eq!(
-        refs.pool
-            .manager
-            .call(CALL_TIMEOUT, |reply| reply)
-            .await
-            .expect("leader replies"),
-        7
-    );
-    assert_eq!(
-        refs.front
-            .call(CALL_TIMEOUT, |reply| reply)
-            .await
-            .expect("front replies"),
-        7
-    );
-
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[derive(Topology)]
 struct Flat {
     ingest: Worker,
     parse: Worker,
@@ -291,12 +217,12 @@ struct Flat {
 
 #[test]
 fn a_topology_without_supervision_attributes_matches_a_whole_graph_tree() {
-    let (tree, _refs) = Flat::tree_with_refs(|_refs| FlatFactories {
+    let (tree, _refs) = Flat::tree(|_refs| FlatFactories {
         ingest: || Worker,
         parse: || Worker,
     })
     .expect("tree builds");
-    let graph = Flat::graph(|_refs| FlatFactories {
+    let (graph, _refs) = Flat::graph(|_refs| FlatFactories {
         ingest: || Worker,
         parse: || Worker,
     })
@@ -343,7 +269,7 @@ async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
     let sessions = Runtime::dynamic();
     let mount = sessions.handle();
 
-    let (runtime, refs) = Mounted::runtime_with_refs(|_refs| MountedFactories {
+    let (runtime, refs) = Mounted::runtime(|_refs| MountedFactories {
         mounter: move || Mounter {
             sessions: mount.clone(),
         },

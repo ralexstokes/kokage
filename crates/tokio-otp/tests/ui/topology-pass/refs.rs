@@ -28,7 +28,7 @@ mod application {
 fn assert_clone<T: Clone>(_: &T) {}
 
 fn main() {
-    let (graph, refs) = application::Application::graph_with_refs(|_| {
+    let (graph, refs) = application::Application::graph(|_| {
         application::ApplicationFactories {
             worker: || application::Worker,
         }
