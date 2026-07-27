@@ -46,8 +46,8 @@ pub struct ActorStats {
     pub lineage: Option<u64>,
     /// Messages delivered to the actor for handling.
     ///
-    /// This includes actor-local continuations and timer events, which bypass
-    /// the mailbox. It can also be lower than
+    /// This includes actor-local continuations, timer events, and offload
+    /// completions, which bypass the mailbox. It can also be lower than
     /// [`messages_accepted`](Self::messages_accepted): accepted messages may be
     /// conflated before receipt or discarded when an incarnation stops.
     pub messages_received: u64,

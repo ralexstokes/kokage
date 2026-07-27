@@ -638,8 +638,7 @@ impl Drop for ActorLifetime {
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
 /// the incoming [`mailbox`](Self::recv) and explicit
 /// [`mark_ready`](Self::mark_ready) alongside the ambient capabilities —
-/// a bounded
-/// [`offload`](Self::offload) primitive for bounded asynchronous work, a
+/// an [`offload`](Self::offload) primitive for bounded asynchronous work, a
 /// [`shutdown_token`](Self::shutdown_token) for cooperative shutdown, and
 /// [`run_blocking`](Self::run_blocking) for blocking work.
 ///
@@ -1011,6 +1010,9 @@ impl<M: Send + 'static> ActorContext<M> {
     /// with [`DrainPolicy::Drain`](crate::DrainPolicy). Queued
     /// [`call`](ActorRef::call)s whose reply messages are dropped observe
     /// [`CallError::ReplyDropped`](crate::CallError::ReplyDropped).
+    ///
+    /// A panic in an [`offload`](Self::offload) future or continuation resumes
+    /// here, on the actor task.
     pub async fn recv(&mut self) -> Option<M> {
         let shutdown = self.shutdown.clone();
         let message = tokio::select! {
@@ -1041,6 +1043,9 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`Actor`](crate::Actor) with
     /// [`DrainPolicy::Drain`](crate::DrainPolicy) so the framework owns the
     /// drain loop.
+    ///
+    /// A panic in an [`offload`](Self::offload) future or continuation resumes
+    /// here, on the actor task.
     pub fn try_recv(&mut self) -> Result<M, TryRecvError> {
         let message = self.try_delivery().map_err(|error| match error {
             tokio::sync::mpsc::error::TryRecvError::Empty => TryRecvError::Empty,
