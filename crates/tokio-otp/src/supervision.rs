@@ -92,7 +92,9 @@ impl SupervisionScope {
 /// equivalent declaration as data before anything runs; `RuntimeBuilder::build`
 /// itself lowers through that same tree. Constructing a `SupervisionTree`
 /// directly also lets one graph's actors occupy different scope levels while
-/// retaining the typed wiring established by the graph.
+/// retaining the typed wiring established by the graph;
+/// [`#[derive(Supervision)]`](crate::Supervision) is the static shorthand for
+/// exactly that, declaring the graph and this tree from one struct.
 ///
 /// [`outline`](Self::outline) removes factories and other executable payloads,
 /// producing a [`SupervisionOutline`] that can be compared, debug-printed, and,
@@ -205,7 +207,7 @@ impl ActorSpec {
     ///
     /// Child ids are local to one supervisor, while an actor label is unique
     /// across the whole graph. They coincide by default. A nested derived
-    /// topology sets a local id here so the supervisor path spells the
+    /// scope sets a local id here so the supervisor path spells the
     /// qualified label once — `root.workers.parse` rather than
     /// `root.workers.workers.parse` — instead of repeating the scope name.
     #[must_use]

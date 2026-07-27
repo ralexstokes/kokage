@@ -1,6 +1,0 @@
-error: a dynamic scope takes its policy from the `DynamicRuntimeBuilder` wired for this field, as in `Runtime::dynamic().restart(..)`
-  --> tests/ui/topology/dynamic_policy_attribute.rs:16:5
-   |
-16 | /     #[topology(dynamic, restart = tokio_otp::RestartPolicy::Never)]
-17 | |     sessions: DynamicScope,
-   | |__________________________^

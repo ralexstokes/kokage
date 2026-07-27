@@ -1,7 +1,7 @@
 //! A multi-venue trading engine exercising the library's supervision,
 //! messaging, and timer features together.
 //!
-//! The topology is one `#[derive(Topology)]` declaration (`TradingEngine`):
+//! The whole shape is one `#[derive(Supervision)]` declaration (`TradingEngine`):
 //! a root scope of core actors with a nested `venues` scope, both one-for-one
 //! with sequential start. Struct nesting is scope nesting, and every actor
 //! joins a single graph, so the mutual references resolve without opening
@@ -176,33 +176,33 @@ fn feed_options() -> ActorOptions<FeedMsg> {
 
 /// One scope per venue-facing pair, restart-budgeted as a group. Labels are
 /// pinned so the qualified ids stay `venues.venue-a-feed` and friends.
-#[derive(Topology)]
-#[topology(
+#[derive(Supervision)]
+#[supervision(
     strategy = Strategy::OneForOne,
     restart_intensity = RestartIntensity::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
-    #[topology(label = "venue-a-feed", options = feed_options())]
+    #[supervision(label = "venue-a-feed", options = feed_options())]
     venue_a_feed: VenueFeed,
-    #[topology(label = "venue-a-gateway", options = venue_options())]
+    #[supervision(label = "venue-a-gateway", options = venue_options())]
     venue_a_gateway: VenueGateway,
-    #[topology(label = "venue-b-feed", options = feed_options())]
+    #[supervision(label = "venue-b-feed", options = feed_options())]
     venue_b_feed: VenueFeed,
-    #[topology(label = "venue-b-gateway", options = venue_options())]
+    #[supervision(label = "venue-b-gateway", options = venue_options())]
     venue_b_gateway: VenueGateway,
 }
 
 /// The whole engine. `venues` comes first so the venue scope starts ahead of
 /// the core actors, matching the subtree-before-actors order the runtime
 /// builder used before.
-#[derive(Topology)]
-#[topology(strategy = Strategy::OneForOne)]
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForOne)]
 struct TradingEngine {
-    #[topology(scope)]
+    #[supervision(scope)]
     venues: Venues,
     reconciler: Reconciler,
     ledger: Ledger,
-    #[topology(label = "order-router")]
+    #[supervision(label = "order-router")]
     router: OrderRouter,
     control: Control,
     health: Health,

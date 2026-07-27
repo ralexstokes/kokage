@@ -1,0 +1,5 @@
+error[E0271]: type mismatch resolving `<Worker as RawActor>::Msg == String`
+  --> tests/ui/supervision/wrong_type_define.rs:17:13
+   |
+17 |     builder.define(slot, || Worker);
+   |             ^^^^^^ expected `String`, found `()`

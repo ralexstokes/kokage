@@ -1,7 +1,7 @@
 # Actor Graphs
 
 The actor layer of `tokio-otp` models a group of async actors with typed
-mailboxes. Each actor declares one message type, and a topology mints
+mailboxes. Each actor declares one message type, and the derive mints
 restart-stable `ActorRef<M>` handles that can be stored in other actors'
 state.
 
@@ -19,7 +19,7 @@ a normal exit to watches and supervision. `RestartPolicy::Always` restarts it;
 `OnFailure` and `Never` do not.
 
 The usual static graph is a struct whose fields are the actors. Deriving
-`Topology` gives that struct a `graph` method; its wiring closure receives a
+`Supervision` gives that struct a `graph` method; its wiring closure receives a
 cloneable refs struct with one typed `ActorRef` per field, so cycles and
 forward references do not require string lookup. The method returns that same
 refs bundle alongside the graph, for use as application entry points:
@@ -27,7 +27,7 @@ refs bundle alongside the graph, for use as application entry points:
 ```rust,no_run
 use tokio_otp::prelude::Continue;
 use std::time::Duration;
-use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, Reply, Runtime, Topology};
+use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, Reply, Runtime, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -89,7 +89,7 @@ impl Actor for Shipping {
     }
 }
 
-#[derive(Topology)]
+#[derive(Supervision)]
 struct PrintShop {
     front_desk: FrontDesk,
     press: Press,
@@ -189,13 +189,13 @@ factory value or closure captures outlive incarnations, while the actor
 returned by `build` does not. Hand-write `ActorFactory` when local state needs
 custom synchronous construction rather than `Default`.
 
-## Struct Topologies
+## Struct Declarations
 
-`#[derive(Topology)]` supports named-field structs whose fields implement
+`#[derive(Supervision)]` supports named-field structs whose fields implement
 `RawActor`. Field names become actor labels, qualified by the path of any
 enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
-Rename a node with `#[topology(label = "...")]`. The generated `graph` returns
+Rename a node with `#[supervision(label = "...")]`. The generated `graph` returns
 both the graph and its cloneable typed refs — write `let (graph, _) = ...` when
 the refs are not needed — and `graph_with` does the same from a preconfigured
 `GraphBuilder`, for graph name and mailbox capacity.
@@ -203,28 +203,28 @@ the refs are not needed — and `graph_with` does the same from a preconfigured
 The same derive can declare the supervision tree that runs those actors — see
 [Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
 
-The derive keeps topology shape in the type system:
+The derive keeps that shape in the type system:
 
 - a field whose type is not an actor is a compile error
 - wiring a ref with the wrong message type is a compile error
 - every factory field must be present exactly once in the generated
-  `<Topology>Factories` struct literal
+  `<Name>Factories` struct literal
 - each factory's `ActorFactory::Actor` must be its declared actor type
-- a topology with no actors is a compile error
+- a declaration with no actors is a compile error
 - two nodes sharing a name, from field names or `label` overrides, is a
   compile error
 
 Configure an individual actor's mailbox or message-size observation with a
-normal Rust expression in `#[topology(options = ...)]`. Annotated fields use
+normal Rust expression in `#[supervision(options = ...)]`. Annotated fields use
 `GraphBuilder::slot_with_options`; other fields retain the default FIFO
 mailbox without message-size observation:
 
 ```rust,ignore
-use tokio_otp::{ActorOptions, MailboxMode, Topology};
+use tokio_otp::{ActorOptions, MailboxMode, Supervision};
 
-#[derive(Topology)]
+#[derive(Supervision)]
 struct MarketData {
-    #[topology(options = ActorOptions::new()
+    #[supervision(options = ActorOptions::new()
         .mailbox(MailboxMode::Conflate)
         .message_size())]
     snapshots: SnapshotActor,

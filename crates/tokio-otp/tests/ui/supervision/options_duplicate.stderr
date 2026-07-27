@@ -1,0 +1,5 @@
+error: duplicate `options` option
+  --> tests/ui/supervision/options_duplicate.rs:17:19
+   |
+17 |     #[supervision(options = tokio_otp::ActorOptions::new())]
+   |                   ^^^^^^^

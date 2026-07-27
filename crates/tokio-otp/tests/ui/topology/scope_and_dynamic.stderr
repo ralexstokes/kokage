@@ -1,5 +1,0 @@
-error: `scope` and `dynamic` are mutually exclusive
-  --> tests/ui/topology/scope_and_dynamic.rs:16:23
-   |
-16 |     #[topology(scope, dynamic)]
-   |                       ^^^^^^^

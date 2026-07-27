@@ -158,27 +158,27 @@ or configure them as a runtime subtree for a scoped restart boundary.
 ## Declaring a Tree with the Derive
 
 `Runtime::builder` reconciles a flat graph with a hierarchical tree by hand.
-When the shape is static, `#[derive(Topology)]` can declare both at once:
+When the shape is static, `#[derive(Supervision)]` can declare both at once:
 struct nesting is scope nesting.
 
 ```rust,ignore
-use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Topology};
+use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Supervision};
 
-#[derive(Topology)]
-#[topology(strategy = Strategy::OneForAll)]
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForAll)]
 struct Workers {
     parse: Parser,
     render: Renderer,
 }
 
-#[derive(Topology)]
-#[topology(strategy = Strategy::OneForOne)]
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForOne)]
 struct App {
-    #[topology(restart = RestartPolicy::Never)]
+    #[supervision(restart = RestartPolicy::Never)]
     ingest: Ingest,
-    #[topology(scope)]
+    #[supervision(scope)]
     workers: Workers,
-    #[topology(dynamic)]
+    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 
@@ -218,9 +218,9 @@ the ones that follow. Reordering fields changes restart behaviour.
 
 Two field attributes select what a field is:
 
-- `#[topology(scope)]` — a nested derived topology, becoming a named child
+- `#[supervision(scope)]` — a nested derived struct, becoming a named child
   scope.
-- `#[topology(dynamic)]` — an empty scope whose membership is written at
+- `#[supervision(dynamic)]` — an empty scope whose membership is written at
   runtime. The field type is the `DynamicScope` marker, which is never
   constructed; its wiring entry is a `DynamicRuntimeBuilder`. Supplying the
   builder is what makes the scope's mount handle available *before* wiring, so
@@ -237,7 +237,8 @@ in tests through `outline()`.
 Each of `graph`, `tree`, and `runtime` has a `_with` form taking a
 `GraphBuilder`. That builder is for graph-wide configuration — name and mailbox
 capacity — and must not have actors registered on it already: `tree_with` and
-`runtime_with` place only the topology's own fields in the supervision tree, so
+`runtime_with` place only the derived struct's own fields in the supervision
+tree, so
 a pre-registered actor joins the graph but is never started. Use `graph_with`
 when composing a graph by hand and hosting it yourself.
 

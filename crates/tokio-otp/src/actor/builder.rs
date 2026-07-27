@@ -335,7 +335,7 @@ impl GraphBuilder {
     /// If multiple actors have the same type name, later registrations receive
     /// `-2`, `-3`, and so on. Renaming the actor type therefore renames tracing
     /// fields; users who need stable observability names
-    /// should use [`actor`](Self::actor) or `#[derive(Topology)]` field names.
+    /// should use [`actor`](Self::actor) or `#[derive(Supervision)]` field names.
     /// See [`ActorFactory`] for the incarnation lifecycle contract.
     pub fn add<F>(&mut self, factory: F) -> ActorRef<<F::Actor as RawActor>::Msg>
     where

@@ -3,7 +3,7 @@
 //! Derive macros for `tokio-otp`.
 //!
 //! Do not depend on this crate directly: `tokio-otp` re-exports
-//! `#[derive(ActorFactory)]` and `#[derive(Topology)]` under its default
+//! `#[derive(ActorFactory)]` and `#[derive(Supervision)]` under its default
 //! `derive` feature, and the generated code refers to `tokio_otp` paths.
 
 use proc_macro::TokenStream;
@@ -186,19 +186,19 @@ fn parse_factory_attributes(
     Ok(defaults)
 }
 
-/// Derives a static actor topology from a named-field struct.
+/// Derives a static actor graph and the supervision scope running it.
 ///
 /// Each field declares one actor type in the graph. Every field type must
 /// implement `tokio_otp::RawActor`; any `Actor` qualifies through the blanket
 /// impl. For a struct named `Pipeline`, the derive generates:
 ///
-/// * a `PipelineRefs` struct with one field per topology field, typed
+/// * a `PipelineRefs` struct with one field per struct field, typed
 ///   `ActorRef<<FieldType as RawActor>::Msg>`;
-/// * a generic `PipelineFactories` struct with one factory field per topology
-///   field, implementing `tokio_otp::TopologyFactories<Pipeline>`;
+/// * a generic `PipelineFactories` struct with one factory field per struct
+///   field, implementing `tokio_otp::SupervisionFactories<Pipeline>`;
 /// * a `PipelineSlots` struct holding the unfilled graph slots;
 /// * a `PipelineScopes` struct holding the reserved dynamic scopes;
-/// * an implementation of the `tokio_otp::Topology` trait; and
+/// * an implementation of the `tokio_otp::Supervision` trait; and
 /// * three families of constructors, each in a plain and a `_with`
 ///   (preconfigured `GraphBuilder`) form:
 ///   * `Pipeline::graph(wire)` — the actor graph alone;
@@ -212,7 +212,7 @@ fn parse_factory_attributes(
 ///
 /// The `GraphBuilder` a `_with` form takes is for graph-wide configuration —
 /// name and mailbox capacity — and must not have actors registered on it
-/// already: `tree_with` and `runtime_with` place only the topology's own
+/// already: `tree_with` and `runtime_with` place only this struct's own
 /// actors in the supervision tree, so a pre-registered actor joins the graph
 /// but is never started. Use `graph_with` when composing a graph by hand.
 ///
@@ -260,7 +260,7 @@ fn parse_factory_attributes(
 /// #     }
 /// # }
 /// #
-/// #[derive(tokio_otp::Topology)]
+/// #[derive(tokio_otp::Supervision)]
 /// struct Pipeline {
 ///     frontend: Frontend,
 ///     parser: Parser,
@@ -297,14 +297,14 @@ fn parse_factory_attributes(
 /// cycles inherit the deadlock hazard: two actors that `send` to each other
 /// while both mailboxes are full wait forever, and a `call` cycle deadlocks
 /// at depth one. Use `try_send` on feedback edges, and `call` only
-/// "downhill" along a DAG ordering of the topology.
+/// "downhill" along a DAG ordering of the declared actors.
 ///
 /// # Actor labels
 ///
 /// Field names become actor labels, qualified by the path of enclosing
 /// scopes: a `parse` field inside a `workers` scope is labelled
 /// `workers.parse`. Root-level fields are unqualified. Override the name of
-/// any node — actor or scope — with `#[topology(label = "...")]`; the
+/// any node — actor or scope — with `#[supervision(label = "...")]`; the
 /// override replaces that one path component, so it must not contain `.`.
 ///
 /// Labels are display names, not addresses: they appear in tracing fields and
@@ -321,10 +321,10 @@ fn parse_factory_attributes(
 ///
 /// # Visibility
 ///
-/// The refs struct and the generated constructors inherit the topology
-/// struct's visibility; each refs field inherits the corresponding topology
-/// field's visibility. A `pub` topology with `pub` fields can therefore be
-/// wired from another module or crate.
+/// The refs struct and the generated constructors inherit the derived
+/// struct's visibility; each refs field inherits the corresponding field's
+/// visibility. A `pub` struct with `pub` fields can therefore be wired from
+/// another module or crate.
 ///
 /// # Compile-time guarantees
 ///
@@ -343,25 +343,29 @@ fn parse_factory_attributes(
 /// * returning the wrong actor type from a field factory fails to compile;
 /// * filling the same slot twice is unrepresentable — the generated code owns
 ///   exactly one slot token per field;
-/// * a `#[topology(dynamic)]` field whose type is not `DynamicScope` fails to
+/// * a `#[supervision(dynamic)]` field whose type is not `DynamicScope` fails to
 ///   compile;
 /// * `scope` and `dynamic` on one field is rejected;
 /// * a `label` that is empty or contains `.` is rejected; and
 /// * two nodes sharing a name — whether from field names or `label`
 ///   overrides — are rejected.
 ///
+/// `SupervisionBuildError`, returned by `runtime` and `runtime_with`, is this
+/// derive's own error union; the `SupervisorBuildError` it wraps is the
+/// lower-level validation error from `tokio-supervisor`.
+///
 /// # Errors
 ///
 /// `graph` and `graph_with` return `GraphBuildError` for the runtime
 /// configuration checks that remain, such as passing `graph_with` a builder
-/// that already has an actor registered under the same id as a topology field.
+/// that already has an actor registered under the same id as a declared field.
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
 ///
 /// # Per-actor options
 ///
-/// Add `#[topology(options = expression)]` to a field to pass an
+/// Add `#[supervision(options = expression)]` to a field to pass an
 /// `ActorOptions` expression to `GraphBuilder::slot_with_options`. Fields
 /// without this attribute continue to use the default options:
 ///
@@ -382,9 +386,9 @@ fn parse_factory_attributes(
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }
-/// #[derive(tokio_otp::Topology)]
+/// #[derive(tokio_otp::Supervision)]
 /// struct MarketData {
-///     #[topology(options = ActorOptions::new()
+///     #[supervision(options = ActorOptions::new()
 ///         .mailbox(MailboxMode::Conflate)
 ///         .message_size())]
 ///     snapshots: SnapshotActor,
@@ -393,15 +397,15 @@ fn parse_factory_attributes(
 ///
 /// # Supervision shape
 ///
-/// Struct nesting is scope nesting. A `#[topology(scope)]` field whose type is
-/// another derived topology becomes a named child scope; the actors still join
+/// Struct nesting is scope nesting. A `#[supervision(scope)]` field whose type
+/// is another derived struct becomes a named child scope; the actors still join
 /// one shared graph, so refs cross scope boundaries freely and cyclic wiring
 /// keeps working. Only supervision placement is hierarchical.
 ///
 /// ```
 /// # use tokio_otp::{
 /// #     Actor, ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime, Strategy,
-/// #     TopologyBuildError, prelude::Continue,
+/// #     SupervisionBuildError, prelude::Continue,
 /// # };
 /// # struct Worker;
 /// # impl Actor for Worker {
@@ -410,25 +414,25 @@ fn parse_factory_attributes(
 /// #         Ok(Continue)
 /// #     }
 /// # }
-/// #[derive(tokio_otp::Topology)]
-/// #[topology(strategy = Strategy::OneForAll)]
+/// #[derive(tokio_otp::Supervision)]
+/// #[supervision(strategy = Strategy::OneForAll)]
 /// struct Workers {
 ///     parse: Worker,
 ///     render: Worker,
 /// }
 ///
-/// #[derive(tokio_otp::Topology)]
-/// #[topology(strategy = Strategy::OneForOne)]
+/// #[derive(tokio_otp::Supervision)]
+/// #[supervision(strategy = Strategy::OneForOne)]
 /// struct App {
-///     #[topology(restart = RestartPolicy::Never)]
+///     #[supervision(restart = RestartPolicy::Never)]
 ///     ingest: Worker,
-///     #[topology(scope)]
+///     #[supervision(scope)]
 ///     workers: Workers,
-///     #[topology(dynamic)]
+///     #[supervision(dynamic)]
 ///     sessions: DynamicScope,
 /// }
 ///
-/// # fn main() -> Result<(), TopologyBuildError> {
+/// # fn main() -> Result<(), SupervisionBuildError> {
 /// let (runtime, refs) = App::runtime(|_refs| AppFactories {
 ///     ingest: || Worker,
 ///     workers: WorkersFactories {
@@ -464,7 +468,7 @@ fn parse_factory_attributes(
 /// the enclosing scope's defaults for one actor. A nested scope declares those
 /// three on its own struct instead. The remaining keys select what a field is:
 ///
-/// * `scope` — a nested derived topology, contributing a named child scope.
+/// * `scope` — a nested derived struct, contributing a named child scope.
 /// * `dynamic` — an empty scope whose membership is written at runtime. The
 ///   field type must be `DynamicScope`, a marker that is never constructed.
 ///   Its wiring entry is a `DynamicRuntimeBuilder` rather than an actor
@@ -472,15 +476,15 @@ fn parse_factory_attributes(
 ///   (`Runtime::dynamic().restart(..)`) and makes its mount handle available
 ///   before any actor is built, so a factory can capture it.
 ///
-#[proc_macro_derive(Topology, attributes(topology))]
-pub fn derive_topology(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(Supervision, attributes(supervision))]
+pub fn derive_supervision(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    expand_topology(input)
+    expand_supervision(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-/// Scope-level `#[topology(...)]` configuration.
+/// Scope-level `#[supervision(...)]` configuration.
 #[derive(Default)]
 struct ScopeAttrs {
     strategy: Option<Expr>,
@@ -489,18 +493,18 @@ struct ScopeAttrs {
     restart_intensity: Option<Expr>,
 }
 
-/// What a topology field declares.
+/// What a declared field is.
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum FieldKind {
     /// An actor, the default.
     Actor,
-    /// A nested topology, contributing a named child scope.
+    /// A nested derived struct, contributing a named child scope.
     Scope,
     /// An empty runtime-written scope, declared by a `DynamicScope` marker.
     Dynamic,
 }
 
-/// Field-level `#[topology(...)]` configuration.
+/// Field-level `#[supervision(...)]` configuration.
 struct FieldAttrs {
     kind: FieldKind,
     label: Option<String>,
@@ -538,7 +542,10 @@ fn take_expr(
 fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
     let mut parsed = ScopeAttrs::default();
 
-    for attr in attrs.iter().filter(|attr| attr.path().is_ident("topology")) {
+    for attr in attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("supervision"))
+    {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("strategy") {
                 return take_expr(&mut parsed.strategy, &meta, "strategy");
@@ -562,14 +569,14 @@ fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
     Ok(parsed)
 }
 
-fn parse_topology_field(field: &Field) -> syn::Result<FieldAttrs> {
+fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
     let mut parsed = FieldAttrs::default();
     let mut kind_span = None;
 
     for attr in field
         .attrs
         .iter()
-        .filter(|attr| attr.path().is_ident("topology"))
+        .filter(|attr| attr.path().is_ident("supervision"))
     {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("scope") || meta.path.is_ident("dynamic") {
@@ -654,14 +661,14 @@ fn parse_topology_field(field: &Field) -> syn::Result<FieldAttrs> {
     Ok(parsed)
 }
 
-fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
-    let topology = input.ident;
+fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let declared = input.ident;
     let vis = input.vis;
 
     if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
         return Err(syn::Error::new_spanned(
             input.generics,
-            "Topology cannot be derived for generic structs",
+            "Supervision cannot be derived for generic structs",
         ));
     }
 
@@ -671,41 +678,41 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             Fields::Unnamed(fields) => {
                 return Err(syn::Error::new_spanned(
                     fields,
-                    "Topology can only be derived for structs with named fields",
+                    "Supervision can only be derived for structs with named fields",
                 ));
             }
             Fields::Unit => {
                 return Err(syn::Error::new_spanned(
-                    &topology,
-                    "Topology can only be derived for structs with named fields",
+                    &declared,
+                    "Supervision can only be derived for structs with named fields",
                 ));
             }
         },
         _ => {
             return Err(syn::Error::new_spanned(
-                &topology,
-                "Topology can only be derived for structs with named fields",
+                &declared,
+                "Supervision can only be derived for structs with named fields",
             ));
         }
     };
 
     if fields.is_empty() {
         return Err(syn::Error::new_spanned(
-            &topology,
-            "Topology requires at least one actor field",
+            &declared,
+            "Supervision requires at least one actor field",
         ));
     }
 
     let scope_attrs = parse_scope_attributes(&input.attrs)?;
     let field_attrs = fields
         .iter()
-        .map(parse_topology_field)
+        .map(parse_supervision_field)
         .collect::<syn::Result<Vec<_>>>()?;
 
-    let refs = format_ident!("{topology}Refs");
-    let factories = format_ident!("{topology}Factories");
-    let slots = format_ident!("{topology}Slots");
-    let scopes = format_ident!("{topology}Scopes");
+    let refs = format_ident!("{declared}Refs");
+    let factories = format_ident!("{declared}Factories");
+    let slots = format_ident!("{declared}Slots");
+    let scopes = format_ident!("{declared}Scopes");
 
     let field_idents: Vec<_> = fields
         .iter()
@@ -726,7 +733,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             return Err(syn::Error::new_spanned(
                 &fields[index],
                 format!(
-                    "duplicate node name `{name}`; node names must be unique within a topology"
+                    "duplicate node name `{name}`; node names must be unique within one struct"
                 ),
             ));
         }
@@ -814,10 +821,10 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                     .as_ref()
                     .expect("scope field parameter");
                 let ref_ty = quote_spanned! {ty.span()=>
-                    <#ty as ::tokio_otp::Topology>::Refs
+                    <#ty as ::tokio_otp::Supervision>::Refs
                 };
                 let slot_ty = quote_spanned! {ty.span()=>
-                    <#ty as ::tokio_otp::Topology>::Slots
+                    <#ty as ::tokio_otp::Supervision>::Slots
                 };
                 slot_fields.push(quote! { #field_vis #ident: #slot_ty });
                 refs_fields.push(quote! {
@@ -828,20 +835,20 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                     #[allow(dead_code)]
                     #field_vis #ident: #param
                 });
-                factory_bounds.push(quote! { #param: ::tokio_otp::TopologyFactories<#ty> });
+                factory_bounds.push(quote! { #param: ::tokio_otp::SupervisionFactories<#ty> });
                 bound_idents.push(ident);
                 open_stmts.push(quote_spanned! {ty.span()=>
-                    let (#slot_ident, #ident) = <#ty as ::tokio_otp::Topology>::open(
+                    let (#slot_ident, #ident) = <#ty as ::tokio_otp::Supervision>::open(
                         builder,
                         &::tokio_otp::qualified_label(prefix, #name),
                     );
                 });
                 scope_fields.push(quote! {
-                    #field_vis #ident: <#ty as ::tokio_otp::Topology>::Scopes
+                    #field_vis #ident: <#ty as ::tokio_otp::Supervision>::Scopes
                 });
                 scope_ctor.push(ident);
                 define_stmts.push(quote! {
-                    let #ident = <#param as ::tokio_otp::TopologyFactories<#ty>>::define(
+                    let #ident = <#param as ::tokio_otp::SupervisionFactories<#ty>>::define(
                         self.#ident,
                         builder,
                         slots.#ident,
@@ -897,7 +904,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             }
             FieldKind::Scope => {
                 scope_stmts.push(quote! {
-                    let tree = tree.child(<#ty as ::tokio_otp::Topology>::node(
+                    let tree = tree.child(<#ty as ::tokio_otp::Supervision>::node(
                         graph,
                         scopes.#ident,
                         #name,
@@ -936,10 +943,10 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
         scope_root = quote! { #scope_root.restart_intensity(#intensity) };
     }
 
-    let node_body = quote! { Self::__topology_scope(graph, scopes, prefix).id(id) };
+    let node_body = quote! { Self::__supervision_scope(graph, scopes, prefix).id(id) };
 
     let root_constructors = quote! {
-        impl #topology {
+        impl #declared {
             #vis fn graph<#(#all_params),*>(
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
@@ -962,7 +969,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             where
                 #(#factory_bounds,)*
             {
-                Self::__topology_graph(builder, wire).map(|(graph, refs, _scopes)| (graph, refs))
+                Self::__supervision_graph(builder, wire).map(|(graph, refs, _scopes)| (graph, refs))
             }
 
             #vis fn tree<#(#all_params),*>(
@@ -987,8 +994,8 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             where
                 #(#factory_bounds,)*
             {
-                let (graph, refs, scopes) = Self::__topology_graph(builder, wire)?;
-                let tree = Self::__topology_scope(&graph, scopes, "");
+                let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
+                let tree = Self::__supervision_scope(&graph, scopes, "");
                 ::core::result::Result::Ok((tree, refs))
             }
 
@@ -996,7 +1003,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
                 (::tokio_otp::Runtime, #refs),
-                ::tokio_otp::TopologyBuildError,
+                ::tokio_otp::SupervisionBuildError,
             >
             where
                 #(#factory_bounds,)*
@@ -1009,7 +1016,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
                 (::tokio_otp::Runtime, #refs),
-                ::tokio_otp::TopologyBuildError,
+                ::tokio_otp::SupervisionBuildError,
             >
             where
                 #(#factory_bounds,)*
@@ -1045,7 +1052,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             #(#factory_fields,)*
         }
 
-        impl<#(#all_params),*> ::tokio_otp::TopologyFactories<#topology>
+        impl<#(#all_params),*> ::tokio_otp::SupervisionFactories<#declared>
             for #factories<#(#all_params),*>
         where
             #(#factory_bounds,)*
@@ -1053,14 +1060,14 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             fn define(
                 self,
                 builder: &mut ::tokio_otp::GraphBuilder,
-                slots: <#topology as ::tokio_otp::Topology>::Slots,
-            ) -> <#topology as ::tokio_otp::Topology>::Scopes {
+                slots: <#declared as ::tokio_otp::Supervision>::Slots,
+            ) -> <#declared as ::tokio_otp::Supervision>::Scopes {
                 #(#define_stmts)*
                 #scopes { #(#scope_ctor,)* }
             }
         }
 
-        impl ::tokio_otp::Topology for #topology {
+        impl ::tokio_otp::Supervision for #declared {
             type Refs = #refs;
             type Slots = #slots;
             type Scopes = #scopes;
@@ -1069,10 +1076,10 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 builder: &mut ::tokio_otp::GraphBuilder,
                 prefix: &str,
             ) -> (Self::Slots, Self::Refs) {
-                // The topology struct is never constructed; its fields only name actor types.
+                // The derived struct is never constructed; its fields only name actor types.
                 // Destructuring it here marks the user's fields as read so they do not trigger
                 // `dead_code` warnings on every derive.
-                let _mark_topology_fields_used = |value: Self| {
+                let _mark_declared_fields_used = |value: Self| {
                     let Self { #(#field_idents),* } = value;
                     let _ = (#(#field_idents),*);
                 };
@@ -1095,9 +1102,9 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             }
         }
 
-        impl #topology {
+        impl #declared {
             #[doc(hidden)]
-            fn __topology_scope(
+            fn __supervision_scope(
                 graph: &::tokio_otp::Graph,
                 scopes: #scopes,
                 prefix: &str,
@@ -1108,7 +1115,7 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
             }
 
             #[doc(hidden)]
-            fn __topology_graph<#(#all_params),*>(
+            fn __supervision_graph<#(#all_params),*>(
                 mut builder: ::tokio_otp::GraphBuilder,
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
@@ -1119,10 +1126,10 @@ fn expand_topology(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
                 #(#factory_bounds,)*
             {
                 let (slots, refs) =
-                    <Self as ::tokio_otp::Topology>::open(&mut builder, "");
+                    <Self as ::tokio_otp::Supervision>::open(&mut builder, "");
                 let factories = wire(&refs);
                 let scopes =
-                    ::tokio_otp::TopologyFactories::<Self>::define(factories, &mut builder, slots);
+                    ::tokio_otp::SupervisionFactories::<Self>::define(factories, &mut builder, slots);
                 let graph = builder.build()?;
                 ::core::result::Result::Ok((graph, refs, scopes))
             }
@@ -1138,7 +1145,7 @@ fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
         ::tokio_otp::ActorSpec::new(
             graph
                 .actor(&::tokio_otp::qualified_label(prefix, #name))
-                .expect("a derived topology places actors it declared")
+                .expect("a derived scope places actors it declared")
                 .clone(),
         )
         .child_id(#name)

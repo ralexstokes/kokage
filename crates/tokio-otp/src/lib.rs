@@ -103,14 +103,15 @@
 //! actors, [`CancellationHandle::cancel`] suppresses future delivery, and
 //! permanent removal of either actor membership ends the watch.
 //!
-//! # Static topologies
+//! # Static declarations
 //!
 //! Use `#[derive(ActorFactory)]` on named-field actors to generate reusable
-//! factory structs without repeating configuration fields or clone code. For cyclic
-//! actor graphs, derive [`Topology`] on a named-field struct whose fields are
-//! the actors. The wiring closure receives typed refs for every field before
-//! any actor is constructed; see the [`Topology`] docs for the full contract,
-//! and mind the bounded-mailbox cycle hazard documented on [`GraphBuilder`].
+//! factory structs without repeating configuration fields or clone code. For
+//! cyclic actor graphs and the supervision scopes that run them, derive
+//! [`Supervision`] on a named-field struct whose fields are the actors. The
+//! wiring closure receives typed refs for every field before any actor is
+//! constructed; see the [`Supervision`] docs for the full contract, and mind
+//! the bounded-mailbox cycle hazard documented on [`GraphBuilder`].
 //!
 //! # Hand-driving actors
 //!
@@ -216,7 +217,8 @@
 //!
 //! - `examples/supervised_actors.rs` — per-actor supervision with default
 //!   policies.
-//! - `examples/topology.rs` — a cyclic graph wired with `#[derive(Topology)]`.
+//! - `examples/supervision.rs` — a cyclic graph wired with
+//!   `#[derive(Supervision)]`.
 //! - `examples/drain_policy.rs` — draining queued actor messages during
 //!   shutdown.
 //! - `examples/individual_actor_policies.rs` — per-actor restart/shutdown
@@ -240,14 +242,14 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | yes | Re-exports `#[derive(ActorFactory)]` and `#[derive(Topology)]`. |
+//! | `derive` | yes | Re-exports `#[derive(ActorFactory)]` and `#[derive(Supervision)]`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
 
 mod actor;
 mod builder;
 mod runtime;
 mod supervision;
-mod topology;
+mod supervision_derive;
 
 /// Common imports for `tokio-otp` consumers.
 ///
@@ -257,8 +259,8 @@ mod topology;
 /// composition surfaces remain available at the crate root without being
 /// injected by a glob import.
 pub mod prelude {
-    // Resolves the `Topology` trait, and additionally the derive macro of the
-    // same name when the `derive` feature is on.
+    // Resolves the `Supervision` trait, and additionally the derive macro of
+    // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
         BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken, Down,
@@ -267,8 +269,8 @@ pub mod prelude {
         Graph, GraphBuilder, LifecycleWatchGuard, LiveContext, MailboxMode, MessageContext,
         MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, Runtime,
         RuntimeBuilder, RuntimeHandle, SendError, StartContext, StartingScope, StateTimeoutSlot,
-        StopContext, StoppingScope, SupervisionTree, Topology, TopologyBuildError,
-        TopologyFactories,
+        StopContext, StoppingScope, Supervision, SupervisionBuildError, SupervisionFactories,
+        SupervisionTree,
     };
     pub use tokio_supervisor::{
         AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView, ChildSnapshot,
@@ -281,7 +283,7 @@ pub mod prelude {
 }
 
 #[cfg(feature = "derive")]
-pub use tokio_otp_derive::{ActorFactory, Topology};
+pub use tokio_otp_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
@@ -299,6 +301,11 @@ pub use runtime::{
 pub use supervision::{
     ActorSpec, ChildOutline, SupervisionOutline, SupervisionScope, SupervisionTree,
 };
+#[doc(hidden)]
+pub use supervision_derive::qualified_label;
+pub use supervision_derive::{
+    DynamicScope, Supervision, SupervisionBuildError, SupervisionFactories,
+};
 pub use tokio_supervisor::{
     AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildContext, ChildMembershipView,
     ChildResult, ChildSnapshot, ChildSpec, ChildStateView, CompletionGuard, CompletionOutcome,
@@ -310,6 +317,3 @@ pub use tokio_supervisor::{
     SupervisorStateView, SupervisorToken, prelude::SupervisorSnapshotReceiverExt,
 };
 pub use tokio_util::sync::CancellationToken;
-#[doc(hidden)]
-pub use topology::qualified_label;
-pub use topology::{DynamicScope, Topology, TopologyBuildError, TopologyFactories};

@@ -1,5 +1,0 @@
-error[E0063]: missing field `second` in initializer of `ApplicationFactories<_, _>`
-  --> tests/ui/topology/incomplete_factories.rs:20:28
-   |
-20 |     Application::graph(|_| ApplicationFactories { first: || Worker }).unwrap();
-   |                            ^^^^^^^^^^^^^^^^^^^^ missing `second`

@@ -5,7 +5,7 @@
 //! per-conversation subtrees added and removed at runtime via
 //! `RuntimeHandle::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
-//! a readiness-gated `RawActor` bridge, and a `#[derive(Topology)]` supervision
+//! a readiness-gated `RawActor` bridge, and a `#[derive(Supervision)]` supervision
 //! tree with a real budget ↔ guard cycle.
 //!
 //! # Modules
@@ -29,9 +29,9 @@
 //! | `messages`  | shared ids, protocol enums, reports, timing constants      |
 //! | `telemetry` | application-owned latency aggregates for the final dump    |
 //!
-//! # Supervision topology
+//! # Supervision shape
 //!
-//! The shape below is one `#[derive(Topology)]` declaration (`AgentControl`),
+//! The shape below is one `#[derive(Supervision)]` declaration (`AgentControl`),
 //! so struct nesting is scope nesting and every actor label is qualified by its
 //! scope path (`gateway.inbound`, `core.journal`). Supervisor child ids stay
 //! local, so the paths read `root.gateway.inbound` and `root.core.journal`.
@@ -46,7 +46,7 @@
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
 //! └── sessions  empty subtree mount; per-conversation subtrees at runtime
-//!               (a `#[topology(dynamic)]` field, so the router can capture its
+//!               (a `#[supervision(dynamic)]` field, so the router can capture its
 //!                mount handle at wiring time)
 //!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
 //!         │                        every incarnation's id unique, so respawn
@@ -160,24 +160,24 @@ fn gateway_options<M: Send + 'static>() -> ActorOptions<M> {
 /// Sequential start: outbound → progress → inbound. `RestForOne` puts the
 /// bridge last, so an inbound panic restarts only inbound while an
 /// outbound/progress failure also recycles the bridge that depends on them.
-#[derive(Topology)]
-#[topology(strategy = Strategy::RestForOne)]
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::RestForOne)]
 struct Gateway {
-    #[topology(options = gateway_options())]
+    #[supervision(options = gateway_options())]
     outbound: Outbound,
-    #[topology(options = gateway_options()
+    #[supervision(options = gateway_options()
         .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat())))]
     progress: Progress,
-    #[topology(options = gateway_options())]
+    #[supervision(options = gateway_options())]
     inbound: Inbound,
 }
 
 /// The budget↔guard cycle is what justifies deriving rather than ordering
 /// registrations by hand.
-#[derive(Topology)]
-#[topology(strategy = Strategy::OneForOne)]
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForOne)]
 struct Core {
-    #[topology(options = ActorOptions::new().message_size())]
+    #[supervision(options = ActorOptions::new().message_size())]
     journal: Journal,
     budget: Budget,
     guard: Guard,
@@ -188,14 +188,14 @@ struct Core {
 /// The whole application. `sessions` is a dynamic scope: its builder is wired
 /// like any other field, which is what lets the router capture its mount handle
 /// before any actor is constructed.
-#[derive(Topology)]
-#[topology(strategy = Strategy::OneForOne)]
+#[derive(Supervision)]
+#[supervision(strategy = Strategy::OneForOne)]
 struct AgentControl {
-    #[topology(scope)]
+    #[supervision(scope)]
     gateway: Gateway,
-    #[topology(scope)]
+    #[supervision(scope)]
     core: Core,
-    #[topology(dynamic)]
+    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 
@@ -645,7 +645,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         .send(BudgetMsg::SetGlobalCap { tokens: u64::MAX })
         .await?;
     await_until(|| async { !paused(&app.guard).await.unwrap_or(true) }).await?;
-    println!("PHASE 6 OK — #[derive(Topology)] budget↔guard cycle + recoverable probe backoff");
+    println!("PHASE 6 OK — #[derive(Supervision)] budget↔guard cycle + recoverable probe backoff");
     Ok(())
 }
 
