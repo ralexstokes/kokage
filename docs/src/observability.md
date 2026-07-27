@@ -23,11 +23,19 @@ Every `ChildSnapshot` also carries a `membership_epoch`. A restart increments
 new child under the same id assigns a later epoch even though the replacement
 starts at generation zero. Treat `(id, membership_epoch)` as the identity of a
 direct child membership. Epochs start at zero, include statically configured
-children in declaration order, and are monotonic only within one supervisor
-incarnation. Nested supervisors allocate their own sequences, so identify a
-nested child by its snapshot path, including each parent's membership epoch
-and generation. The `u64` counter saturates at its maximum rather than changing
-supervisor control semantics in the practically unreachable overflow case.
+children in declaration order, and are monotonic across every incarnation of
+one restart-stable supervisor identity. Each nested supervisor identity
+allocates its own local sequence; epochs are not global. In a recursive view,
+identify a child by the full supervisor path together with its local
+`(id, membership_epoch)`. Each path segment includes the containing
+supervisor's id, parent-assigned membership epoch, and generation.
+
+Removing a subtree and inserting another under the same id creates a new
+membership in the parent and a new stable supervisor identity. The new
+subtree's local membership sequence may therefore begin at zero even if its
+predecessor used the same local epochs; the parent path distinguishes the two.
+The `u64` counter saturates at its maximum rather than changing supervisor
+control semantics in the practically unreachable overflow case.
 For dynamically added task children, `SupervisorHandle::add_child` returns the
 same epoch that the supervisor assigned while inserting the child. Consumers
 that need to associate their own state with that exact membership should retain
