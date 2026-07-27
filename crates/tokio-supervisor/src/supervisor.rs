@@ -264,27 +264,26 @@ impl Supervisor {
         let startup_ctx = ctx.clone();
         let task_done_tx = done_tx.clone();
         let initial_snapshot = initial_snapshot(&self.config);
-        // Reconcile retained stable identities before exposing the new
-        // incarnation's initial attachment view. This prevents a displaced
-        // dynamic same-id supervisor from leaking into the static view during
-        // the interval before the runtime publishes its first snapshot.
-        reconcile_stable_identities(&self.config.children, &nested_channels);
-        let initial_attached_children = initial_attached_children(&self.config, &nested_channels);
 
-        // Rebind before the runtime task can publish so observers never see
-        // the previous incarnation's final snapshot through the new binding.
+        // Reconcile and rebind as one ownership transaction. This prevents a
+        // displaced dynamic same-id supervisor from leaking into the static
+        // view, and prevents an old pending removal from retiring an identity
+        // after the replacement has selected it.
         let Some(BoundIncarnation {
             guard: binding,
             binding_epoch,
             snapshots: snapshots_tx,
             lifecycle,
-        }) = channels.bind(
+        }) = channels.bind_prepared(
             generation,
             shutdown_tx.clone(),
             command_tx,
             done_rx,
             initial_snapshot,
-            initial_attached_children,
+            || {
+                reconcile_stable_identities(&self.config.children, &nested_channels);
+                initial_attached_children(&self.config, &nested_channels)
+            },
         )
         else {
             // Reconciliation may have installed fresh descendant identities
