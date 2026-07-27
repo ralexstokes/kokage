@@ -7,7 +7,10 @@
 //! rather than as supervisor configuration, so the completion rule lives with
 //! the code that cares about it instead of in the control loop.
 
-use std::{collections::HashSet, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use tokio_util::sync::CancellationToken;
 
@@ -206,6 +209,13 @@ struct CompletionSet {
     /// removed, or may not have been added yet. Only a child seen at least
     /// once can be treated as removed.
     seen: HashSet<String>,
+    /// Newest membership lineage observed for each awaited child id.
+    ///
+    /// A replacement supervisor incarnation can begin before its displaced
+    /// predecessor finishes shutting down. Events from that predecessor are
+    /// still delivered, but their older lineage must not alter the replacement
+    /// membership's completion state.
+    latest_lineages: HashMap<String, u64>,
 }
 
 impl CompletionSet {
@@ -218,6 +228,7 @@ impl CompletionSet {
             awaited: ids.into_iter().map(Into::into).collect(),
             satisfied: HashSet::new(),
             seen: HashSet::new(),
+            latest_lineages: HashMap::new(),
         }
     }
 
@@ -233,6 +244,14 @@ impl CompletionSet {
         if !self.awaits(&event.child_id) {
             return;
         }
+        let latest_lineage = self
+            .latest_lineages
+            .entry(event.child_id.clone())
+            .or_insert(event.lineage);
+        if event.lineage < *latest_lineage {
+            return;
+        }
+        *latest_lineage = event.lineage;
         self.seen.insert(event.child_id.clone());
 
         match &event.kind {
@@ -266,6 +285,14 @@ impl CompletionSet {
         for id in &self.awaited {
             let satisfied = match snapshot.child(id) {
                 Some(child) => {
+                    if self
+                        .latest_lineages
+                        .get(id)
+                        .is_some_and(|latest| *latest > child.lineage)
+                    {
+                        continue;
+                    }
+                    self.latest_lineages.insert(id.clone(), child.lineage);
                     self.seen.insert(id.clone());
                     is_completed(child)
                 }
@@ -297,10 +324,19 @@ mod tests {
     use crate::{Strategy, snapshot::SupervisorStateView};
 
     fn event(seq: u64, child_id: &str, kind: LifecycleEventKind) -> LifecycleEvent {
+        event_with_lineage(seq, child_id, 0, kind)
+    }
+
+    fn event_with_lineage(
+        seq: u64,
+        child_id: &str,
+        lineage: u64,
+        kind: LifecycleEventKind,
+    ) -> LifecycleEvent {
         LifecycleEvent {
             seq,
             child_id: child_id.to_owned(),
-            lineage: 0,
+            lineage,
             total_restarts: 0,
             child_restart_count: 0,
             kind,
@@ -417,6 +453,52 @@ mod tests {
             ChildStateView::Running,
         )]));
         assert!(!set.is_complete(), "the child is running again");
+    }
+
+    #[test]
+    fn displaced_membership_events_do_not_change_replacement_completion() {
+        let mut set = CompletionSet::new(["source"]);
+        set.realign(&snapshot(vec![
+            ChildSnapshot::new("source", 0, ChildStateView::Running).lineage(2),
+        ]));
+
+        set.apply(&event_with_lineage(
+            1,
+            "source",
+            1,
+            LifecycleEventKind::Removed,
+        ));
+        assert!(
+            !set.is_complete(),
+            "an old removal must not complete the replacement membership"
+        );
+
+        set.apply(&event_with_lineage(
+            2,
+            "source",
+            2,
+            LifecycleEventKind::Exited {
+                generation: 0,
+                reason: ExitStatusView::Completed,
+                cancelled: false,
+            },
+        ));
+        assert!(set.is_complete());
+
+        set.apply(&event_with_lineage(
+            3,
+            "source",
+            1,
+            LifecycleEventKind::Exited {
+                generation: 0,
+                reason: ExitStatusView::Completed,
+                cancelled: true,
+            },
+        ));
+        assert!(
+            set.is_complete(),
+            "an old cancelled exit must not un-complete the replacement membership"
+        );
     }
 
     #[test]
