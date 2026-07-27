@@ -404,13 +404,13 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     Actor, ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime, Strategy,
+/// #     Actor, ActorResult, DynamicScope, MessageContext, RestartPolicy, Runtime, Strategy,
 /// #     SupervisionBuildError, prelude::Continue,
 /// # };
 /// # struct Worker;
 /// # impl Actor for Worker {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut ActorContext<()>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
 /// #         Ok(Continue)
 /// #     }
 /// # }

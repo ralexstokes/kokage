@@ -411,16 +411,13 @@ impl SupervisionTree {
     /// when a node is built separately from the scope that will adopt it and
     /// appended with [`child`](Self::child).
     ///
-    /// # Panics
-    ///
-    /// Panics unless this node is an ordered or dynamic scope: actor, child
-    /// spec, and actor-with-scope nodes carry their id in the declaration
-    /// itself.
+    /// Ignored on a child node — actor, child spec, and actor-with-scope nodes
+    /// carry their id in the declaration itself — like the other scope setters.
     #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
-        self.scope_mut()
-            .expect("an id applies only to scope nodes")
-            .id = Some(id.into());
+        if let Some(scope) = self.scope_mut() {
+            scope.id = Some(id.into());
+        }
         self
     }
 

@@ -15,7 +15,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         reply: Reply<u32>,
-        _ctx: &mut ActorContext<Reply<u32>>,
+        _ctx: &mut MessageContext<'_, Reply<u32>>,
     ) -> ActorResult {
         reply.send(7);
         Ok(Continue)
@@ -55,7 +55,7 @@ fn app_factories(_refs: &AppRefs) -> AppWiring {
 #[test]
 fn a_nested_scope_becomes_a_named_subtree_with_path_qualified_labels() {
     let (tree, _refs) = App::tree(app_factories).expect("tree builds");
-    let outline = tree.outline();
+    let outline = tree.outline().expect("valid tree has an outline");
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::OneForOne);
@@ -150,7 +150,12 @@ fn a_label_attribute_overrides_the_field_name_in_paths_and_child_ids() {
     assert_eq!(labels, ["collector", "pool.parse", "pool.render"]);
 
     let (tree, _refs) = Renamed::tree(wire).expect("tree builds");
-    assert_eq!(tree.outline().child_ids(), ["collector", "pool"]);
+    assert_eq!(
+        tree.outline()
+            .expect("valid tree has an outline")
+            .child_ids(),
+        ["collector", "pool"]
+    );
 }
 
 #[derive(Supervision)]
@@ -167,7 +172,7 @@ fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
         sessions: Runtime::dynamic().restart(RestartPolicy::Never),
     })
     .expect("tree builds");
-    let outline = tree.outline();
+    let outline = tree.outline().expect("valid tree has an outline");
 
     assert_eq!(outline.child_ids(), ["manager", "sessions"]);
     let ChildOutline::Scope {
@@ -228,7 +233,12 @@ fn a_declaration_without_scope_attributes_matches_a_whole_graph_tree() {
     })
     .expect("graph builds");
 
-    assert_eq!(tree.outline(), SupervisionTree::graph(&graph).outline());
+    assert_eq!(
+        tree.outline().expect("valid tree has an outline"),
+        SupervisionTree::graph(&graph)
+            .outline()
+            .expect("valid tree has an outline")
+    );
 }
 
 /// An actor holding the mount handle of a dynamic scope declared beside it.
@@ -242,7 +252,7 @@ impl Actor for Mounter {
     async fn handle(
         &mut self,
         reply: Reply<u32>,
-        _ctx: &mut ActorContext<Reply<u32>>,
+        _ctx: &mut MessageContext<'_, Reply<u32>>,
     ) -> ActorResult {
         let worker = self
             .sessions
