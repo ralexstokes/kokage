@@ -35,6 +35,8 @@ smoke:
     cargo run --locked -p tokio-otp --example drain_policy
     cargo run --locked -p tokio-otp --example dynamic_actors
     cargo run --locked -p tokio-otp --example directory
+    cargo run --locked -p tokio-supervisor --example dynamic_children
+    cargo run --locked -p tokio-supervisor --example nested_supervisor
 
 nixfmt-check:
     nixfmt --check flake.nix nix/crane-checks.nix
