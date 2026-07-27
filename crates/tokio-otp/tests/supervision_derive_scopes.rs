@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use tokio_otp::{ChildOutline, DynamicActorOptions, DynamicScope, ScopeKind, prelude::*};
+use tokio_otp::{
+    ChildOutline, DynamicActorOptions, DynamicScope, ScopeKind, SupervisorBuildError, prelude::*,
+};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -239,6 +241,35 @@ fn a_declaration_without_scope_attributes_matches_a_whole_graph_tree() {
             .outline()
             .expect("valid tree has an outline")
     );
+}
+
+#[test]
+fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
+    // `node` resolves each declared actor out of the graph `open` populated.
+    // Handing it a different graph used to panic inside generated code; it now
+    // poisons the scope, so the mismatch arrives as an ordinary build error.
+    let mut builder = GraphBuilder::new();
+    let (slots, _refs) = <Flat as Supervision>::open(&mut builder, "");
+    let scopes = FlatFactories {
+        ingest: || Worker,
+        parse: || Worker,
+    }
+    .define(&mut builder, slots);
+    builder.build().expect("the declared graph still builds");
+
+    let mut foreign = GraphBuilder::new();
+    foreign.actor("unrelated", || Worker);
+    let foreign = foreign.build().expect("foreign graph builds");
+
+    let tree = <Flat as Supervision>::node(&foreign, scopes, "flat", "");
+    assert!(matches!(
+        tree.outline(),
+        Err(SupervisorBuildError::InvalidConfig(_))
+    ));
+    assert!(matches!(
+        tree.build(),
+        Err(SupervisorBuildError::InvalidConfig(_))
+    ));
 }
 
 /// An actor holding the mount handle of a dynamic scope declared beside it.

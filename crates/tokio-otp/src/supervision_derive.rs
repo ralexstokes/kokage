@@ -40,8 +40,13 @@ pub trait Supervision: Sized {
 
     /// Builds this struct's supervision node, named `id` in its parent scope.
     ///
-    /// `prefix` must be the same value passed to [`open`](Self::open), so that
-    /// the node resolves the actors it was built with.
+    /// `graph` must be the graph [`open`](Self::open) populated, and `prefix`
+    /// the same value passed to it, so that the node resolves the actors it was
+    /// built with. A node handed some other graph cannot find them; it records
+    /// the mismatch on the scope rather than failing here, so
+    /// [`SupervisionTree::build`] and [`outline`](SupervisionTree::outline)
+    /// report it as
+    /// [`InvalidConfig`](tokio_supervisor::SupervisorBuildError::InvalidConfig).
     fn node(graph: &Graph, scopes: Self::Scopes, id: &str, prefix: &str) -> SupervisionTree;
 }
 

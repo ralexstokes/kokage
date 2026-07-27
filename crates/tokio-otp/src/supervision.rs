@@ -421,6 +421,32 @@ impl SupervisionTree {
         self
     }
 
+    /// Records that a declared actor was not found in the graph.
+    ///
+    /// Not a stable surface: `#[derive(Supervision)]` calls this from the code
+    /// it generates for [`Supervision::node`](crate::Supervision::node) when
+    /// the graph it was handed does not contain an actor the scope declared,
+    /// which happens only when `node` receives a different graph from the one
+    /// its [`open`](crate::Supervision::open) populated. The mismatch then
+    /// surfaces from [`build`](Self::build) and [`outline`](Self::outline) as
+    /// [`SupervisorBuildError::InvalidConfig`] rather than panicking inside
+    /// generated code.
+    ///
+    /// The message is `&'static str`, so it cannot name the missing label; the
+    /// qualified label is the scope path joined to the field name, or to its
+    /// `label` override.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn missing_actor(mut self) -> Self {
+        if let Some(scope) = self.scope_mut() {
+            scope.invalid_config.get_or_insert(
+                "a derived scope references an actor that is not in this graph; \
+                 `Supervision::node` must receive the graph its `open` populated",
+            );
+        }
+        self
+    }
+
     /// Appends a named nested ordered or dynamic scope.
     #[must_use]
     pub fn subtree(mut self, id: impl Into<String>, tree: impl Into<SupervisionTree>) -> Self {

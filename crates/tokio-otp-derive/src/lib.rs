@@ -900,7 +900,15 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         match attrs.kind {
             FieldKind::Actor => {
                 let spec = actor_spec_expr(name, attrs);
-                scope_stmts.push(quote! { let tree = tree.actor(#spec); });
+                // A graph other than the one `open` populated cannot supply
+                // this actor. Record the mismatch on the scope instead of
+                // panicking: `build` and `outline` report it.
+                scope_stmts.push(quote! {
+                    let tree = match graph.actor(&::tokio_otp::qualified_label(prefix, #name)) {
+                        ::core::option::Option::Some(actor) => tree.actor(#spec),
+                        ::core::option::Option::None => tree.missing_actor(),
+                    };
+                });
             }
             FieldKind::Scope => {
                 scope_stmts.push(quote! {
@@ -1140,15 +1148,12 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 }
 
 /// Builds the `ActorSpec` expression placing one actor field in its scope.
+///
+/// The expression reads an `actor` binding holding the resolved
+/// `&RunnableActor`, which the caller matches out of the graph.
 fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
     let mut spec = quote! {
-        ::tokio_otp::ActorSpec::new(
-            graph
-                .actor(&::tokio_otp::qualified_label(prefix, #name))
-                .expect("a derived scope places actors it declared")
-                .clone(),
-        )
-        .child_id(#name)
+        ::tokio_otp::ActorSpec::new(::core::clone::Clone::clone(actor)).child_id(#name)
     };
     if let Some(restart) = &attrs.restart {
         spec = quote! { #spec.restart(#restart) };
