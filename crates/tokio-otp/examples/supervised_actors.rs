@@ -18,7 +18,11 @@ struct Frontend {
 impl Actor for Frontend {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut HandleContext<'_, String>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        order: String,
+        _ctx: &mut MessageContext<'_, String>,
+    ) -> ActorResult {
         let worker = self.worker.clone();
         worker.send(order).await?;
         Ok(Continue)
@@ -40,7 +44,11 @@ impl Actor for Worker {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, order: String, _ctx: &mut HandleContext<'_, String>) -> ActorResult {
+    async fn handle(
+        &mut self,
+        order: String,
+        _ctx: &mut MessageContext<'_, String>,
+    ) -> ActorResult {
         if self.run == 0 && order.contains("jam") {
             return Err::<_, BoxError>(Box::new(io::Error::other("press jam")));
         }

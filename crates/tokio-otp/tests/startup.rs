@@ -27,7 +27,7 @@ impl Actor for Probe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.order.lock().await.push(message);
         Ok(Continue)
@@ -70,7 +70,7 @@ impl Actor for AddsChildOnStart {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self::Msg>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -172,7 +172,7 @@ impl Actor for FailsOnStart {
         Err(std::io::Error::other("actor init failed").into())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self::Msg>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -211,7 +211,7 @@ impl Actor for DrainContinuation {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" || message == "hold-and-continue" {
@@ -313,7 +313,7 @@ impl Actor for DrainPhaseProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.observed
             .lock()
@@ -445,7 +445,7 @@ impl Actor for StopsOnStart {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.events.lock().await.push(message);
         Ok(Continue)
@@ -593,7 +593,7 @@ impl Actor for DefaultPolicy {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" {

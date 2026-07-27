@@ -9,7 +9,7 @@ mod coverage_probe {
         use tokio_otp::prelude::{
             Actor, ActorOptions, ActorRef, ActorResult, BoxError, CallError, CancellationHandle,
             CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuilder,
-            HandleContext, MailboxMode, MessageSize, MonitorEvent, RawActor, Reply, SendError,
+            MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor, Reply, SendError,
             Stop, Topology,
         };
     }
@@ -50,7 +50,7 @@ struct BlockingWorker {
 impl Actor for BlockingWorker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         let observed = self.observed.clone();
         let actor_id = ctx.id().to_owned();
         ctx.run_blocking(move |token| {

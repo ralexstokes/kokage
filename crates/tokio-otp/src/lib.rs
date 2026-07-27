@@ -14,7 +14,7 @@
 //! impl Actor for Echo {
 //!     type Msg = String;
 //!
-//!     async fn handle(&mut self, message: String, _ctx: &mut HandleContext<'_, String>) -> ActorResult {
+//!     async fn handle(&mut self, message: String, _ctx: &mut MessageContext<'_, String>) -> ActorResult {
 //!         println!("{message}");
 //!         Ok(Continue)
 //!     }
@@ -52,7 +52,7 @@
 //! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
 //! | [`ActorContext`] | The full context a [`RawActor`] run receives: mailbox, watches, timers, blocking work, shutdown token. |
-//! | [`StartContext`] / [`HandleContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
+//! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
 //! | [`LiveContext`] | The capabilities shared by the running stages; the type shared helpers take. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
@@ -121,7 +121,7 @@
 //!
 //! ```
 //! use tokio_otp::{
-//!     Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, HandleContext,
+//!     Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, MessageContext,
 //!     Reply, RestartPolicy,
 //! };
 //! use tokio_otp::prelude::Continue;
@@ -141,7 +141,7 @@
 //!     async fn handle(
 //!         &mut self,
 //!         message: CounterMsg,
-//!         _ctx: &mut HandleContext<'_, CounterMsg>,
+//!         _ctx: &mut MessageContext<'_, CounterMsg>,
 //!     ) -> ActorResult {
 //!         match message {
 //!             CounterMsg::Add(n) => self.total += n,
@@ -263,7 +263,7 @@ pub mod prelude {
         BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken, Down,
         DownReason, DrainPolicy, DynamicRuntimeBuilder, Flow,
         Flow::{Continue, Stop},
-        Graph, GraphBuilder, HandleContext, LifecycleWatchGuard, LiveContext, MailboxMode,
+        Graph, GraphBuilder, LifecycleWatchGuard, LiveContext, MailboxMode, MessageContext,
         MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, Runtime,
         RuntimeBuilder, RuntimeHandle, SendError, StartContext, StartingScope, StateTimeoutSlot,
         StopContext, StoppingScope, SupervisionTree,
@@ -285,7 +285,7 @@ pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, BlockingCancelled, BoxError, CallError, CancellationHandle,
     DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuildError,
-    GraphBuilder, HandleContext, LiveContext, MailboxMode, MessageSize, MonitorEvent,
+    GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
     OffloadDeadline, OffloadHandle, RawActor, Reply, RunnableActor, RunnableActorBuilder,
     SendError, StartContext, StartingScope, StateTimeoutSlot, StopContext, StoppingScope,
     SupervisorPathSegment, TryRecvError,

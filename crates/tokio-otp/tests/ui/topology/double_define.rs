@@ -1,4 +1,4 @@
-use tokio_otp::{HandleContext, ActorResult, GraphBuilder, Actor};
+use tokio_otp::{MessageContext, ActorResult, GraphBuilder, Actor};
 
 #[derive(Clone)]
 struct Worker;
@@ -6,7 +6,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

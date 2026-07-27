@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorResult, GraphBuilder, HandleContext, LiveContext, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, GraphBuilder, LiveContext, MessageContext, prelude::Continue};
 
 mod support;
 
@@ -21,7 +21,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: WorkMsg,
-        ctx: &mut HandleContext<'_, WorkMsg>,
+        ctx: &mut MessageContext<'_, WorkMsg>,
     ) -> ActorResult {
         match message {
             WorkMsg::Process(input) => {

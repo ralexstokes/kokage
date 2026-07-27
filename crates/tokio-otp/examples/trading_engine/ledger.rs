@@ -27,7 +27,7 @@ impl Actor for Ledger {
     async fn handle(
         &mut self,
         message: LedgerMsg,
-        _ctx: &mut HandleContext<'_, LedgerMsg>,
+        _ctx: &mut MessageContext<'_, LedgerMsg>,
     ) -> ActorResult {
         match message {
             LedgerMsg::Ack { key, venue } => {

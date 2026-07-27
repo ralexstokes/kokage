@@ -9,7 +9,7 @@ use std::{
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
     Actor, ActorResult, AddSubtreeError, BoxError, ControlError, DynamicActorOptions, GraphBuilder,
-    HandleContext, LiveContext, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle,
+    LiveContext, MessageContext, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle,
     ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
     prelude::{Continue, Stop},
 };
@@ -22,7 +22,7 @@ struct Idle;
 impl Actor for Idle {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -105,7 +105,7 @@ impl Actor for ScopeProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             LeaderMsg::AddFromHandler => {
@@ -144,7 +144,7 @@ struct StopProbe(Arc<AtomicBool>);
 impl Actor for StopProbe {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 
@@ -170,7 +170,7 @@ impl Actor for BuilderHandleOwner {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -490,7 +490,7 @@ impl Actor for RestartProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         if matches!(message, LeaderMsg::Crash) {
             panic!("scripted crash");

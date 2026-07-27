@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::actor::{
-    context::{ActorContext, HandleContext, StartContext, StopContext},
+    context::{ActorContext, MessageContext, StartContext, StopContext},
     raw::{ActorResult, BoxError, Flow, RawActor},
 };
 
@@ -68,7 +68,7 @@ pub enum DrainPolicy {
     /// lifecycle state. There is no separate sender-visible `Draining` state.
     ///
     /// The handler itself can see the phase:
-    /// [`HandleContext::is_draining`](crate::HandleContext::is_draining) is
+    /// [`MessageContext::is_draining`](crate::MessageContext::is_draining) is
     /// `true` for exactly the calls made here. Use it to skip work whose only
     /// effect would be to queue something the drain will drop.
     ///
@@ -142,7 +142,7 @@ pub trait Actor: Send + Sync + 'static {
     fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> impl Future<Output = ActorResult> + Send;
 
     /// Runs once before the first message of each actor run.
@@ -253,7 +253,7 @@ impl<H: Actor> RawActor for H {
             ctx.myself.record_received();
             ctx.observability.emit_message_received(&ctx.id);
             stopping = self
-                .handle(message, &mut HandleContext::new(&mut ctx))
+                .handle(message, &mut MessageContext::new(&mut ctx))
                 .await?
                 == Flow::Stop;
         }
@@ -295,7 +295,7 @@ impl<H: Actor> RawActor for H {
                 // for the context to drop with the incarnation, and reported
                 // below. A handler that cares can ask `is_draining`.
                 let _ = self
-                    .handle(message, &mut HandleContext::draining(&mut ctx))
+                    .handle(message, &mut MessageContext::draining(&mut ctx))
                     .await?;
             }
         } else {

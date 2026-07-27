@@ -1,4 +1,4 @@
-use tokio_otp::{Actor, HandleContext, ActorResult, Topology};
+use tokio_otp::{Actor, MessageContext, ActorResult, Topology};
 
 mod application {
     use super::*;
@@ -13,7 +13,7 @@ mod application {
         async fn handle(
             &mut self,
             _: Message,
-            _: &mut HandleContext<'_, Message>,
+            _: &mut MessageContext<'_, Message>,
         ) -> ActorResult {
             Ok(tokio_otp::prelude::Continue)
         }

@@ -8,7 +8,7 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorFactory, ActorResult, GraphBuilder, HandleContext, LifecycleWatch, Reply,
+    Actor, ActorFactory, ActorResult, GraphBuilder, LifecycleWatch, MessageContext, Reply,
     RestartPolicy, Runtime, RuntimeHandle, StartContext, prelude::Continue,
 };
 
@@ -56,7 +56,7 @@ impl Actor for DerivedActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {

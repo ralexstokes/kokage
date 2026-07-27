@@ -110,7 +110,7 @@ impl Actor for Reconciler {
     async fn handle(
         &mut self,
         message: ReconcilerMsg,
-        ctx: &mut HandleContext<'_, ReconcilerMsg>,
+        ctx: &mut MessageContext<'_, ReconcilerMsg>,
     ) -> ActorResult {
         match message {
             ReconcilerMsg::Market(snapshot) => {

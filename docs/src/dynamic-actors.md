@@ -28,7 +28,7 @@ impl Actor for FrontDesk {
     async fn handle(
         &mut self,
         message: FrontDeskMsg,
-        _ctx: &mut HandleContext<'_, FrontDeskMsg>,
+        _ctx: &mut MessageContext<'_, FrontDeskMsg>,
     ) -> ActorResult {
         match message {
             FrontDeskMsg::SetRushPress(rush) => self.rush = Some(rush),
@@ -49,7 +49,7 @@ struct RushPress;
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut HandleContext<'_, String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, String>) -> ActorResult {
         println!("RUSH printed {order}");
         Ok(Continue)
     }
@@ -234,7 +234,7 @@ one identity.
 
 ## Scope handles inside actors
 
-`HandleContext::supervisor()` returns the actor-aware handle for the actor's
+`MessageContext::supervisor()` returns the actor-aware handle for the actor's
 enclosing scope. Observation always works. Membership changes work only for a
 dynamic scope; an ordered scope returns
 `ControlError::UnsupportedByScopeKind`. Awaiting ordinary scope operations is

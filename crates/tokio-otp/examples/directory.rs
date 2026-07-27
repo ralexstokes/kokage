@@ -2,8 +2,8 @@ use std::{collections::HashMap, error::Error, time::Duration};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder, HandleContext, Reply, Runtime,
-    prelude::Continue,
+    Actor, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder, MessageContext, Reply,
+    Runtime, prelude::Continue,
 };
 
 enum DirectoryMsg<M> {
@@ -29,7 +29,7 @@ impl<M: Send + 'static> Actor for Directory<M> {
     async fn handle(
         &mut self,
         message: DirectoryMsg<M>,
-        _ctx: &mut HandleContext<'_, DirectoryMsg<M>>,
+        _ctx: &mut MessageContext<'_, DirectoryMsg<M>>,
     ) -> ActorResult {
         match message {
             DirectoryMsg::Insert(name, actor_ref) => {
@@ -52,7 +52,7 @@ impl Actor for Printer {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut HandleContext<'_, String>,
+        _ctx: &mut MessageContext<'_, String>,
     ) -> ActorResult {
         self.printed.send(message).expect("receiver alive");
         Ok(Continue)

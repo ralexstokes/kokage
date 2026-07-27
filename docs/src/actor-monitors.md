@@ -29,7 +29,7 @@ impl Actor for Coordinator {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         let CoordinatorMsg::Worker(event) = message;
         match event {

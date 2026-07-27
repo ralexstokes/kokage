@@ -10,7 +10,7 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, BoxError, GraphBuilder, HandleContext, Runtime, StartContext,
+    Actor, ActorRef, ActorResult, BoxError, GraphBuilder, MessageContext, Runtime, StartContext,
     prelude::Continue,
 };
 use tokio_supervisor::{RestartIntensity, Strategy};
@@ -26,7 +26,7 @@ impl Actor for Frontend {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut HandleContext<'_, String>,
+        _ctx: &mut MessageContext<'_, String>,
     ) -> ActorResult {
         let worker = self.worker.clone();
         worker.send(message).await?;
@@ -52,7 +52,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut HandleContext<'_, String>,
+        _ctx: &mut MessageContext<'_, String>,
     ) -> ActorResult {
         println!("worker generation {} received `{message}`", self.run);
         if message == "fail-worker" {

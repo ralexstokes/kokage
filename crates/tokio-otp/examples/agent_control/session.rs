@@ -11,8 +11,8 @@ use std::{
 use tokio::time::Instant;
 use tokio_otp::{
     Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, HandleContext, LiveContext, RestartPolicy, StartContext, StateTimeoutSlot,
-    prelude::Continue,
+    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext,
+    StateTimeoutSlot, prelude::Continue,
 };
 
 use crate::{
@@ -88,7 +88,7 @@ impl Session {
         role: Role,
         attempt: u64,
         input: PendingInput,
-        ctx: &mut HandleContext<'_, SessionMsg>,
+        ctx: &mut MessageContext<'_, SessionMsg>,
     ) -> ActorResult {
         self.idle.clear();
         if self.heartbeat.is_none() {
@@ -155,7 +155,7 @@ impl Session {
     async fn start_input(
         &mut self,
         input: PendingInput,
-        ctx: &mut HandleContext<'_, SessionMsg>,
+        ctx: &mut MessageContext<'_, SessionMsg>,
     ) -> ActorResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
@@ -219,7 +219,7 @@ impl Actor for Session {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             SessionMsg::Rehydrate => {

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, DrainPolicy, HandleContext, RawActor,
+    Actor, ActorContext, ActorRef, ActorResult, DrainPolicy, MessageContext, RawActor,
     prelude::Continue,
 };
 
@@ -31,7 +31,7 @@ impl Actor for Outbound {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             OutboundMsg::Reply { chat, text } | OutboundMsg::Notice { chat, text } => {
@@ -63,7 +63,7 @@ impl Actor for Progress {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         let (chat, line) = match message {
             ProgressMsg::Delta { chat, line } => (chat, line),

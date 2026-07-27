@@ -20,7 +20,7 @@ pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::CancellationHandle;
 pub use context::{
-    ActorContext, ActorRef, HandleContext, LiveContext, OffloadHandle, Reply, StartContext,
+    ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, StartContext,
     StartingScope, StateTimeoutSlot, StopContext, StoppingScope,
 };
 pub use error::{

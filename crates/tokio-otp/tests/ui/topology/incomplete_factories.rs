@@ -1,11 +1,11 @@
-use tokio_otp::{Actor, HandleContext, ActorResult, Topology};
+use tokio_otp::{Actor, MessageContext, ActorResult, Topology};
 
 struct Worker;
 
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{Actor, ActorRef, ActorResult, HandleContext, LiveContext, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, LiveContext, MessageContext, prelude::Continue};
 
 use crate::{
     messages::{
@@ -68,7 +68,7 @@ impl Actor for Guard {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             GuardMsg::RunFailureObserved { chat, task } => {

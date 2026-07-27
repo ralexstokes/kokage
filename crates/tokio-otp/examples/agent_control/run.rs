@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio_otp::LiveContext;
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, CancellationToken, HandleContext, StartContext,
+    Actor, ActorRef, ActorResult, CancellationToken, MessageContext, StartContext,
     prelude::{Continue, Stop},
 };
 
@@ -143,7 +143,7 @@ impl Actor for AgentRun {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             RunMsg::Step => self.start_model(ctx),

@@ -16,8 +16,8 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
-    DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, HandleContext,
-    LiveContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
+    DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, LiveContext,
+    MessageContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
     StopContext, TryRecvError, prelude::Continue,
 };
 use tokio_util::sync::CancellationToken;
@@ -300,7 +300,7 @@ impl Actor for HandlerCounter {
     async fn handle(
         &mut self,
         message: HandlerCounterMsg,
-        _ctx: &mut HandleContext<'_, HandlerCounterMsg>,
+        _ctx: &mut MessageContext<'_, HandlerCounterMsg>,
     ) -> ActorResult {
         match message {
             HandlerCounterMsg::Add(n) => self.total += n,
@@ -359,7 +359,7 @@ impl Actor for LifecycleHandler {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, _message: (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Handled)
             .expect("receiver alive");
@@ -417,7 +417,7 @@ impl Actor for FailingStartHandler {
         Err(io::Error::other("start failed").into())
     }
 
-    async fn handle(&mut self, _message: (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Handled)
             .expect("receiver alive");
@@ -468,7 +468,7 @@ struct FailingHandler;
 impl Actor for FailingHandler {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut HandleContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
         Err(io::Error::other("handle failed").into())
     }
 }
@@ -529,7 +529,7 @@ impl Actor for GateHandler {
     async fn handle(
         &mut self,
         message: GateMsg,
-        ctx: &mut HandleContext<'_, GateMsg>,
+        ctx: &mut MessageContext<'_, GateMsg>,
     ) -> ActorResult {
         match message {
             GateMsg::Hold => {
@@ -1165,7 +1165,7 @@ mod runnable_actor {
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
-        GraphBuilder, HandleContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
+        GraphBuilder, MessageContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
         RunnableActorBuilder, SendError, StartContext, SupervisionTree, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
@@ -2057,7 +2057,11 @@ mod runnable_actor {
             Ok(Continue)
         }
 
-        async fn handle(&mut self, message: u32, _ctx: &mut HandleContext<'_, u32>) -> ActorResult {
+        async fn handle(
+            &mut self,
+            message: u32,
+            _ctx: &mut MessageContext<'_, u32>,
+        ) -> ActorResult {
             // D10: shutdown is concurrent, so a sibling may already be gone.
             // A drain must treat its SendError as skippable, not fatal.
             let outcome = self.sink.send(message).await;
@@ -2143,7 +2147,11 @@ mod runnable_actor {
             Ok(Continue)
         }
 
-        async fn handle(&mut self, message: u32, _ctx: &mut HandleContext<'_, u32>) -> ActorResult {
+        async fn handle(
+            &mut self,
+            message: u32,
+            _ctx: &mut MessageContext<'_, u32>,
+        ) -> ActorResult {
             self.sink.send(message).await?;
             Ok(Continue)
         }

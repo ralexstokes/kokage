@@ -489,7 +489,7 @@ impl<T> fmt::Debug for Reply<T> {
 ///
 /// Handler-style [`Actor`](crate::Actor) implementations do not see this type.
 /// The framework owns their loop and hands each lifecycle hook a narrower view
-/// of the same context: [`StartContext`], [`HandleContext`], and
+/// of the same context: [`StartContext`], [`MessageContext`], and
 /// [`StopContext`]. Those views omit what the stage cannot act on, so
 /// mailbox-stealing `recv` calls and no-op `continue_with` calls are compile
 /// errors rather than silent misbehavior.
@@ -1021,7 +1021,7 @@ mod sealed {
 /// Live is the whole condition: every capability here ends in a delivery to
 /// this incarnation, so the trait covers exactly the stages that still have
 /// someone to deliver to. Implemented by [`StartContext`] and
-/// [`HandleContext`]. It is the type a shared helper should take when it is
+/// [`MessageContext`]. It is the type a shared helper should take when it is
 /// called from both `on_start` and `handle`:
 ///
 /// ```no_run
@@ -1084,7 +1084,7 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// dropped before `on_stop` runs.
     ///
     /// A handler that wants to avoid queueing work the drain will throw away
-    /// can ask [`HandleContext::is_draining`] first — the drain path is the
+    /// can ask [`MessageContext::is_draining`] first — the drain path is the
     /// one of the two that is not visible from the type.
     fn continue_with(&mut self, message: M) {
         self.cx_mut().push_continuation(message);
@@ -1395,7 +1395,8 @@ pub struct StartContext<'a, M> {
     cx: &'a mut ActorContext<M>,
 }
 
-/// Context handed to [`Actor::handle`](crate::Actor::handle).
+/// Context handed to [`Actor::handle`](crate::Actor::handle) — the context in
+/// which one message is handled.
 ///
 /// The ambient capabilities plus [`continue_with`](Self::continue_with) and
 /// full scope handles. The mailbox is absent because the provided receive loop
@@ -1405,7 +1406,7 @@ pub struct StartContext<'a, M> {
 /// This is the only hook the provided loop calls from two different phases, so
 /// it is also the only one that has to say which: see
 /// [`is_draining`](Self::is_draining).
-pub struct HandleContext<'a, M> {
+pub struct MessageContext<'a, M> {
     cx: &'a mut ActorContext<M>,
     draining: bool,
 }
@@ -1426,7 +1427,7 @@ pub struct StopContext<'a, M> {
 }
 
 live_context!(StartContext);
-live_context!(HandleContext);
+live_context!(MessageContext);
 
 impl<'a, M: Send + 'static> StartContext<'a, M> {
     pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
@@ -1451,7 +1452,7 @@ impl<'a, M: Send + 'static> StartContext<'a, M> {
     }
 }
 
-impl<'a, M: Send + 'static> HandleContext<'a, M> {
+impl<'a, M: Send + 'static> MessageContext<'a, M> {
     pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
         Self {
             cx,

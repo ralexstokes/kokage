@@ -9,9 +9,9 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ChildMembershipView, ControlError, GraphBuilder, HandleContext,
-    LifecycleEventKind, LifecycleWatchGuard, LiveContext, RuntimeHandle, StartContext, Strategy,
-    SupervisionTree, SupervisorSnapshot, prelude::Continue,
+    Actor, ActorRef, ActorResult, ChildMembershipView, ControlError, GraphBuilder,
+    LifecycleEventKind, LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle,
+    StartContext, Strategy, SupervisionTree, SupervisorSnapshot, prelude::Continue,
 };
 
 use crate::{
@@ -291,7 +291,7 @@ impl Actor for Router {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut HandleContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             RouterMsg::MountLifecycle(event) => {

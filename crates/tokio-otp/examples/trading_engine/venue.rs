@@ -185,7 +185,7 @@ impl Actor for VenueFeed {
     async fn handle(
         &mut self,
         message: FeedMsg,
-        _ctx: &mut HandleContext<'_, FeedMsg>,
+        _ctx: &mut MessageContext<'_, FeedMsg>,
     ) -> ActorResult {
         let started = Instant::now();
         match message {
@@ -244,7 +244,7 @@ impl Actor for VenueGateway {
     async fn handle(
         &mut self,
         message: GatewayMsg,
-        ctx: &mut HandleContext<'_, GatewayMsg>,
+        ctx: &mut MessageContext<'_, GatewayMsg>,
     ) -> ActorResult {
         let started = Instant::now();
         match message {

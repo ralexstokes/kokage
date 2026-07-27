@@ -31,7 +31,7 @@ impl Actor for Worker {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: Message, _ctx: &mut HandleContext<'_, Message>) -> ActorResult {
+    async fn handle(&mut self, message: Message, _ctx: &mut MessageContext<'_, Message>) -> ActorResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
             Message::Reconcile => { /* reconcile periodically */ }
@@ -126,7 +126,7 @@ impl Actor for Order {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, message: Message, ctx: &mut HandleContext<'_, Message>) -> ActorResult {
+    async fn handle(&mut self, message: Message, ctx: &mut MessageContext<'_, Message>) -> ActorResult {
         match (&self.phase, message) {
             (Phase::PendingFill, Message::Filled) => {
                 self.deadline.clear();

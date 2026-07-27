@@ -16,7 +16,7 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, BoxError, CancellationHandle, ChildMembershipView,
     ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy, DynamicActorOptions,
-    DynamicSupervisorBuilder, GraphBuilder, HandleContext, MailboxMode, MessageSize, MonitorEvent,
+    DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageContext, MessageSize, MonitorEvent,
     RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy,
     StartContext, StopContext, SupervisorBuilder,
     prelude::{Continue, Stop},
@@ -77,7 +77,7 @@ impl Actor for CleanStop {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut HandleContext<'_, Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self::Msg>) -> ActorResult {
         Ok(Stop)
     }
 }
@@ -391,7 +391,7 @@ impl Actor for RemovalProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut HandleContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
     ) -> ActorResult {
         match message {
             RemovalMsg::Hold => {
