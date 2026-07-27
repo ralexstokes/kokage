@@ -1249,14 +1249,15 @@ impl SupervisorRuntime {
         }
         self.children_by_id.remove(&entry.id);
         self.child_order.retain(|&existing| existing != key);
-        if matches!(&entry.runtime.definition.kind, ChildKind::Supervisor(_)) {
-            self.nested_channels
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&entry.id);
-            if let Some(channels) = entry.nested_channels.as_ref() {
-                channels.terminal();
-            }
+        if matches!(&entry.runtime.definition.kind, ChildKind::Supervisor(_))
+            && let Some(channels) = entry.nested_channels.as_ref()
+        {
+            self.own_handle.retire_nested_identity(
+                self.meta.binding_epoch,
+                &self.nested_channels,
+                &entry.id,
+                channels,
+            );
         }
         let id = entry.id.clone();
         // Dropping a task definition may emit its terminal lifecycle signal.
@@ -2534,6 +2535,91 @@ mod tests {
             handle.snapshot().children.is_empty(),
             "the displaced incarnation must not restore its snapshot after a same-generation rebind"
         );
+        drop(replacement);
+        drop(bound.guard);
+    }
+
+    #[test]
+    fn displaced_parent_cannot_retire_reconciled_nested_identity() {
+        let supervisor = SupervisorBuilder::new()
+            .supervisor(SupervisorSpec::new("nested", empty_supervisor()))
+            .build()
+            .expect("supervisor builds");
+        let channels = supervisor.stable_channels(false);
+        let handle = channels.internal_handle();
+        let config = supervisor.config.clone();
+        let control_capacity = config.control_channel_capacity;
+        let nested_channels = channels.nested_channels();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (command_tx, command_rx) = mpsc::channel(control_capacity);
+        let (_done_tx, done_rx) = watch::channel(None);
+        let bound = channels
+            .bind(
+                0,
+                shutdown_tx,
+                command_tx,
+                done_rx,
+                initial_snapshot(&config),
+                Vec::new(),
+            )
+            .expect("first incarnation binds");
+        let mut old_runtime = SupervisorRuntime::new(
+            config.clone(),
+            shutdown_rx,
+            Arc::clone(&bound.lifecycle),
+            bound.snapshots.clone(),
+            channels.attached_children(),
+            bound.binding_epoch,
+            command_rx,
+            Arc::clone(&nested_channels),
+            Vec::new(),
+            None,
+            true,
+            handle.clone(),
+        );
+        let key = *old_runtime
+            .children_by_id
+            .get("nested")
+            .expect("static nested child exists");
+        let nested_identity = old_runtime.children[key]
+            .nested_channels
+            .as_ref()
+            .expect("nested child has stable channels")
+            .clone();
+        let nested_snapshots = nested_identity.snapshots_rx();
+
+        let (replacement_shutdown_tx, _replacement_shutdown_rx) = watch::channel(false);
+        let (replacement_command_tx, _replacement_command_rx) = mpsc::channel(control_capacity);
+        let (_replacement_done_tx, replacement_done_rx) = watch::channel(None);
+        let replacement = channels
+            .bind_prepared(
+                0,
+                replacement_shutdown_tx,
+                replacement_command_tx,
+                replacement_done_rx,
+                initial_snapshot(&config),
+                || {
+                    reconcile_stable_identities(&config.children, &nested_channels);
+                    Vec::new()
+                },
+            )
+            .expect("replacement incarnation binds");
+
+        old_runtime.finalize_removed_child(key, false);
+
+        let retained = nested_channels
+            .lock()
+            .expect("nested channel map")
+            .get("nested")
+            .expect("replacement retains the nested identity")
+            .clone();
+        assert!(Arc::ptr_eq(&retained, &nested_identity));
+        assert!(
+            nested_snapshots.has_changed().is_ok(),
+            "the displaced removal must not terminalize the reconciled identity"
+        );
+        assert!(handle.supervisor("nested").is_some());
+
         drop(replacement);
         drop(bound.guard);
     }

@@ -452,8 +452,35 @@ impl StableSupervisorChannels {
         shutdown_tx: watch::Sender<bool>,
         command_tx: mpsc::Sender<SupervisorCommand>,
         done_rx: DoneReceiver,
+        initial_snapshot: SupervisorSnapshot,
+        initial_attached_children: Vec<AttachedChildState>,
+    ) -> Option<BoundIncarnation> {
+        self.bind_prepared(
+            generation,
+            shutdown_tx,
+            command_tx,
+            done_rx,
+            initial_snapshot,
+            || initial_attached_children,
+        )
+    }
+
+    /// Binds a new incarnation after preparing its stable descendants under
+    /// the binding lock.
+    ///
+    /// A displaced incarnation can still finish a pending child removal while
+    /// its replacement is being constructed. Serializing preparation with the
+    /// binding handoff ensures either that removal wins before reconciliation,
+    /// or that the replacement owns the identity before the old removal can
+    /// retire it.
+    pub(crate) fn bind_prepared(
+        self: &Arc<Self>,
+        generation: u64,
+        shutdown_tx: watch::Sender<bool>,
+        command_tx: mpsc::Sender<SupervisorCommand>,
+        done_rx: DoneReceiver,
         mut initial_snapshot: SupervisorSnapshot,
-        mut initial_attached_children: Vec<AttachedChildState>,
+        prepare_attached_children: impl FnOnce() -> Vec<AttachedChildState>,
     ) -> Option<BoundIncarnation> {
         let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal {
@@ -461,6 +488,7 @@ impl StableSupervisorChannels {
         }
         let binding_epoch = binding.next_binding_epoch;
         binding.next_binding_epoch = binding.next_binding_epoch.wrapping_add(1);
+        let mut initial_attached_children = prepare_attached_children();
 
         // Keep terminalization excluded through snapshot/attachment reset and
         // publication of the new control binding. Every sender needed by the
@@ -539,6 +567,38 @@ impl StableSupervisorChannels {
             snapshots,
             lifecycle,
         })
+    }
+
+    /// Retires a nested stable identity only if `binding_epoch` still owns
+    /// this parent identity.
+    fn retire_nested_identity(
+        &self,
+        binding_epoch: u64,
+        nested_channels: &NestedChannels,
+        id: &str,
+        child_channels: &Arc<StableSupervisorChannels>,
+    ) {
+        let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
+        if binding.terminal
+            || !binding
+                .current
+                .as_ref()
+                .is_some_and(|binding| binding.binding_epoch == binding_epoch)
+        {
+            return;
+        }
+
+        let mut channels = nested_channels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if channels
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, child_channels))
+        {
+            channels.remove(id);
+        }
+        drop(channels);
+        child_channels.terminal();
     }
 
     fn current_binding(&self) -> Option<IncarnationBinding> {
@@ -1382,6 +1442,17 @@ impl std::fmt::Debug for SupervisorHandle {
 impl SupervisorHandle {
     pub(crate) fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
         self.channels.publish_snapshot(binding_epoch, snapshot);
+    }
+
+    pub(crate) fn retire_nested_identity(
+        &self,
+        binding_epoch: u64,
+        nested_channels: &NestedChannels,
+        id: &str,
+        child_channels: &Arc<StableSupervisorChannels>,
+    ) {
+        self.channels
+            .retire_nested_identity(binding_epoch, nested_channels, id, child_channels);
     }
 
     /// Requests a graceful shutdown of the supervisor.
