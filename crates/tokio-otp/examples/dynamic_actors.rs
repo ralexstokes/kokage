@@ -4,7 +4,6 @@ use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime, prelude::Continue,
 };
-use tokio_supervisor::Strategy;
 
 #[derive(Clone)]
 struct Frontend {
@@ -60,7 +59,7 @@ impl Actor for RushPress {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let runtime = Runtime::builder().strategy(Strategy::OneForOne).build()?;
+    let runtime = Runtime::dynamic().build()?;
     let handle = runtime.spawn();
 
     let orders = handle

@@ -45,12 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
-        .strategy(Strategy::OneForOne)
-        .child(metrics)
-        .build()?;
+    let supervisor = DynamicSupervisorBuilder::new().build()?;
 
     let handle = supervisor.spawn();
+    handle.add_child(metrics).await?;
     handle
         .add_supervisor(SupervisorSpec::new("nested-pipeline", nested_supervisor))
         .await?;

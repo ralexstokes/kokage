@@ -65,10 +65,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let directory = graph.actor("directory", || Directory::<String> {
         entries: HashMap::new(),
     });
-    let handle = Runtime::builder().graph(graph.build()?).build()?.spawn();
+    let handle = Runtime::builder()
+        .graph(graph.build()?)
+        .subtree("dynamic", Runtime::dynamic())
+        .build()?
+        .spawn();
+    handle.wait_started().await?;
+    let dynamic = handle
+        .subtree("dynamic")
+        .expect("dynamic subtree is available");
 
     let (printed, mut output) = mpsc::unbounded_channel();
-    let printer = handle
+    let printer = dynamic
         .add_actor(
             "printer",
             move || Printer {

@@ -1,0 +1,40 @@
+name: Examples
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: examples-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  examples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
+
+      - name: Restore Cargo target cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            target
+            !target/debug/incremental/**
+          key: cargo-examples-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}
+
+      - name: Run all examples
+        run: nix develop --command just all-examples
