@@ -61,7 +61,7 @@ impl Actor for Outcomes {
 }
 
 #[tokio::test]
-async fn offload_and_offload_or_post_total_and_fallback_outcomes() {
+async fn offload_and_offload_or_deliver_total_and_fallback_outcomes() {
     let (observed, mut outcomes) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.add(move || Outcomes {
@@ -181,7 +181,7 @@ impl Actor for StaleActor {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn offload_is_aborted_and_never_posts_to_a_fresh_incarnation() {
+async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     let constructed = Arc::new(AtomicUsize::new(0));
     let drop_started = Arc::new(AtomicBool::new(false));
     let release_drop = Arc::new(AtomicBool::new(false));
@@ -297,6 +297,151 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
 }
 
 #[derive(Debug)]
+enum ReadyAbortMsg {
+    Start,
+    Done,
+}
+
+struct ReadyAbortActor {
+    handle: mpsc::UnboundedSender<OffloadHandle>,
+    release: Arc<Notify>,
+    observed: mpsc::UnboundedSender<()>,
+}
+
+impl Actor for ReadyAbortActor {
+    type Msg = ReadyAbortMsg;
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        match message {
+            ReadyAbortMsg::Start => {
+                let handle = ctx.offload(Duration::from_secs(1), async {}, |_| ReadyAbortMsg::Done);
+                self.handle.send(handle).unwrap();
+                self.release.notified().await;
+            }
+            ReadyAbortMsg::Done => self.observed.send(()).unwrap(),
+        }
+        Ok(Continue)
+    }
+}
+
+#[tokio::test]
+async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
+    let (handle_tx, mut handle_rx) = mpsc::unbounded_channel();
+    let (observed, mut observed_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let mut graph = GraphBuilder::new();
+    let actor = graph.add({
+        let release = release.clone();
+        move || ReadyAbortActor {
+            handle: handle_tx.clone(),
+            release: release.clone(),
+            observed: observed.clone(),
+        }
+    });
+    let runtime = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .build()
+        .unwrap()
+        .spawn();
+    runtime.wait_started().await.unwrap();
+    actor.send(ReadyAbortMsg::Start).await.unwrap();
+    let offload = handle_rx.recv().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !offload.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    offload.abort();
+    release.notify_one();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), observed_rx.recv())
+            .await
+            .is_err()
+    );
+    runtime.shutdown_and_wait().await.unwrap();
+}
+
+enum DrainAbortMsg {
+    Start,
+    Done,
+}
+
+struct DrainAbortActor {
+    handle: mpsc::UnboundedSender<OffloadHandle>,
+    shutdown_seen: Arc<Notify>,
+}
+
+impl Actor for DrainAbortActor {
+    type Msg = DrainAbortMsg;
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        match message {
+            DrainAbortMsg::Start => {
+                let shutdown = ctx.shutdown_token().clone();
+                let shutdown_seen = self.shutdown_seen.clone();
+                let handle = ctx.offload(
+                    Duration::from_secs(10),
+                    async move {
+                        shutdown.cancelled().await;
+                        shutdown_seen.notify_one();
+                        pending::<()>().await;
+                    },
+                    |_| DrainAbortMsg::Done,
+                );
+                self.handle.send(handle).unwrap();
+            }
+            DrainAbortMsg::Done => panic!("aborted offload completion was delivered"),
+        }
+        Ok(Continue)
+    }
+
+    fn drain_policy(&self) -> DrainPolicy {
+        DrainPolicy::Drain
+    }
+}
+
+#[tokio::test]
+async fn drain_reaps_an_offload_aborted_during_shutdown() {
+    let (handle_tx, mut handle_rx) = mpsc::unbounded_channel();
+    let shutdown_seen = Arc::new(Notify::new());
+    let mut graph = GraphBuilder::new();
+    let actor = graph.add({
+        let shutdown_seen = shutdown_seen.clone();
+        move || DrainAbortActor {
+            handle: handle_tx.clone(),
+            shutdown_seen: shutdown_seen.clone(),
+        }
+    });
+    let runtime = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .build()
+        .unwrap()
+        .spawn();
+    runtime.wait_started().await.unwrap();
+    actor.send(DrainAbortMsg::Start).await.unwrap();
+    let offload = handle_rx.recv().await.unwrap();
+    let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
+    shutdown_seen.notified().await;
+    tokio::task::yield_now().await;
+    offload.abort();
+    tokio::time::timeout(Duration::from_secs(1), shutdown)
+        .await
+        .expect("drain finished after abort")
+        .unwrap()
+        .unwrap();
+}
+
+#[derive(Debug)]
 enum DrainMsg {
     Start,
     Queued,
@@ -388,7 +533,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
 }
 
 #[tokio::test]
-async fn drain_interleaves_a_full_mailbox_with_offload_completion() {
+async fn drain_processes_a_full_mailbox_and_offload_completion() {
     let observed = shutdown_case(DrainPolicy::Drain).await;
     assert_eq!(observed.first(), Some(&"queued"));
     assert!(observed.contains(&"nested"));
@@ -442,7 +587,7 @@ impl Actor for BackpressureActor {
 }
 
 #[tokio::test]
-async fn offload_postback_uses_mailbox_backpressure() {
+async fn offload_completion_bypasses_mailbox_backpressure() {
     let handler_release = Arc::new(Notify::new());
     let offload_release = Arc::new(Notify::new());
     let offload_registered = Arc::new(Notify::new());
@@ -474,14 +619,19 @@ async fn offload_postback_uses_mailbox_backpressure() {
     let stats = actor.stats();
     assert_eq!(stats.mailbox_depth, 1);
     assert_eq!(stats.outstanding_offloads, 1);
+    assert_eq!(stats.messages_accepted, 2);
     handler_release.notify_one();
-    assert_eq!(receiver.recv().await, Some("fill"));
-    assert_eq!(receiver.recv().await, Some("done"));
+    let mut received = [
+        receiver.recv().await.unwrap(),
+        receiver.recv().await.unwrap(),
+    ];
+    received.sort_unstable();
+    assert_eq!(received, ["done", "fill"]);
     runtime.shutdown_and_wait().await.unwrap();
 }
 
 #[tokio::test]
-async fn offload_postback_uses_conflating_mailbox_policy() {
+async fn offload_completion_does_not_participate_in_conflation() {
     let handler_release = Arc::new(Notify::new());
     let offload_release = Arc::new(Notify::new());
     let offload_registered = Arc::new(Notify::new());
@@ -512,16 +662,17 @@ async fn offload_postback_uses_conflating_mailbox_policy() {
     offload_registered.notified().await;
     actor.send(BackpressureMsg::Fill).await.unwrap();
     offload_release.notify_one();
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while actor.stats().messages_conflated != 1 || actor.stats().outstanding_offloads != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    tokio::task::yield_now().await;
+    assert_eq!(actor.stats().messages_conflated, 0);
+    assert_eq!(actor.stats().mailbox_depth, 1);
+    assert_eq!(actor.stats().outstanding_offloads, 1);
     handler_release.notify_one();
-    assert_eq!(receiver.recv().await, Some("done"));
-    assert!(receiver.try_recv().is_err());
+    let mut received = [
+        receiver.recv().await.unwrap(),
+        receiver.recv().await.unwrap(),
+    ];
+    received.sort_unstable();
+    assert_eq!(received, ["done", "fill"]);
     runtime.shutdown_and_wait().await.unwrap();
 }
 
@@ -565,7 +716,7 @@ impl Actor for DeadlineDrainActor {
 }
 
 #[tokio::test]
-async fn drain_waits_for_offload_deadline_and_handles_its_postback() {
+async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
     let registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
@@ -591,4 +742,88 @@ async fn drain_waits_for_offload_deadline_and_handles_its_postback() {
         .unwrap();
     assert!(matches!(outcome, Err(OffloadDeadline)));
     shutdown.await.unwrap().unwrap();
+}
+
+struct RawCompletion {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl RawActor for RawCompletion {
+    type Msg = &'static str;
+
+    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+        ctx.offload(Duration::from_secs(1), async {}, |_| "done");
+        let message = ctx.recv().await.expect("offload completion");
+        self.observed.send(message).unwrap();
+        while ctx.recv().await.is_some() {}
+        Ok(Continue)
+    }
+}
+
+#[tokio::test]
+async fn raw_actor_recv_reaps_offload_completions() {
+    let (observed, mut receiver) = mpsc::unbounded_channel();
+    let mut graph = GraphBuilder::new();
+    graph.add(move || RawCompletion {
+        observed: observed.clone(),
+    });
+    let runtime = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .build()
+        .unwrap()
+        .spawn();
+    assert_eq!(receiver.recv().await, Some("done"));
+    runtime.shutdown_and_wait().await.unwrap();
+}
+
+enum PanicMsg {
+    Start,
+}
+
+struct PanicActor;
+
+impl Actor for PanicActor {
+    type Msg = PanicMsg;
+
+    async fn handle(
+        &mut self,
+        _message: Self::Msg,
+        ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        ctx.offload(
+            Duration::from_secs(1),
+            async { panic!("offload panic") },
+            |_| PanicMsg::Start,
+        );
+        Ok(Continue)
+    }
+}
+
+#[tokio::test]
+async fn offload_panic_fails_the_actor_and_is_supervised() {
+    let constructed = Arc::new(AtomicUsize::new(0));
+    let mut graph = GraphBuilder::new();
+    let actor = graph.add({
+        let constructed = constructed.clone();
+        move || {
+            constructed.fetch_add(1, Ordering::Relaxed);
+            PanicActor
+        }
+    });
+    let runtime = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .restart(RestartPolicy::OnFailure)
+        .build()
+        .unwrap()
+        .spawn();
+    runtime.wait_started().await.unwrap();
+    actor.send(PanicMsg::Start).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while constructed.load(Ordering::Relaxed) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("actor restarted after offload panic");
+    runtime.shutdown_and_wait().await.unwrap();
 }

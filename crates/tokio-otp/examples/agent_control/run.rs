@@ -49,7 +49,7 @@ impl AgentRun {
         Ok(Continue)
     }
 
-    fn start_model(&self, ctx: &impl LiveContext<RunMsg>) {
+    fn start_model(&self, ctx: &mut impl LiveContext<RunMsg>) {
         let request = TurnRequest {
             chat: self.chat,
             task: self.task,
@@ -69,7 +69,7 @@ impl AgentRun {
         );
     }
 
-    async fn start_tool(&self, index: usize, ctx: &impl LiveContext<RunMsg>) -> ActorResult {
+    async fn start_tool(&self, index: usize, ctx: &mut impl LiveContext<RunMsg>) -> ActorResult {
         let call = self.tools[index].clone();
         let key = format!("{}:{}:{index}", self.chat, self.task);
         let _ = self

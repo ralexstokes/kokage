@@ -4,13 +4,14 @@ use std::{
     future::Future,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use tokio::{
-    sync::{Notify, oneshot, watch},
+    sync::{oneshot, watch},
+    task::{AbortHandle, JoinError, JoinSet},
     time::{Instant, timeout},
 };
 use tokio_util::sync::CancellationToken;
@@ -115,15 +116,11 @@ impl<M> ActorRef<M> {
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     pub fn stats(&self) -> ActorStats {
-        let (outstanding_offloads, depth, capacity) = match &*self.binding.borrow() {
-            BindingState::Bound(mailbox) => {
-                let (depth, capacity) = mailbox.usage();
-                (mailbox.outstanding_offloads(), depth, capacity)
-            }
-            BindingState::Unbound | BindingState::Terminated => (0, 0, 0),
+        let (depth, capacity) = match &*self.binding.borrow() {
+            BindingState::Bound(mailbox) => mailbox.usage(),
+            BindingState::Unbound | BindingState::Terminated => (0, 0),
         };
-        self.stats
-            .snapshot(&self.actor_id, outstanding_offloads, depth, capacity)
+        self.stats.snapshot(&self.actor_id, depth, capacity)
     }
 
     fn current_mailbox(&self) -> Result<MailboxRef<M>, SendError> {
@@ -392,18 +389,8 @@ impl<M> ActorRef<M> {
         self.stats.record_received();
     }
 
-    async fn post_to_incarnation(&self, mailbox: MailboxRef<M>, message: M) {
-        let message_size = self
-            .message_size
-            .as_ref()
-            .map(|observer| observer.size_hint(&message));
-        if let SendOutcome::Accepted { conflated } = mailbox.send_internal_retaining(message).await
-        {
-            self.observe_send(MessageOperation::Send, None);
-            self.stats.record_send(true);
-            self.stats.record_conflated(conflated);
-            self.record_message_size(message_size);
-        }
+    fn set_outstanding_offloads(&self, outstanding: usize) {
+        self.stats.set_outstanding_offloads(outstanding);
     }
 }
 
@@ -420,23 +407,24 @@ pub struct Reply<T> {
 ///
 /// Dropping the handle does not affect the offload. [`abort`](Self::abort)
 /// abandons the future and prevents its continuation message from being
-/// posted. Aborting a request only abandons the local wait: it cannot retract
+/// delivered. Aborting a request only abandons the local wait: it cannot retract
 /// work that another actor or external service already accepted.
 #[derive(Clone, Debug)]
 pub struct OffloadHandle {
-    cancellation: CancellationToken,
-    finished: Arc<AtomicBool>,
+    abort: AbortHandle,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl OffloadHandle {
     /// Aborts the offload and suppresses its continuation message.
     pub fn abort(&self) {
-        self.cancellation.cancel();
+        self.cancelled.store(true, Ordering::Release);
+        self.abort.abort();
     }
 
     /// Returns whether the offload has finished or its abort has been observed.
     pub fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
+        self.abort.is_finished()
     }
 }
 
@@ -491,6 +479,16 @@ enum TimerSlot {
     Default,
     Keyed(TimerKey),
     Anonymous,
+}
+
+enum Delivery<M> {
+    Mailbox(Option<M>),
+    Offload(Result<OffloadCompletion<M>, JoinError>),
+}
+
+pub(crate) struct OffloadCompletion<M> {
+    message: M,
+    cancelled: Arc<AtomicBool>,
 }
 
 struct TimerEntry<M> {
@@ -641,7 +639,7 @@ impl Drop for ActorLifetime {
 /// the incoming [`mailbox`](Self::recv) and explicit
 /// [`mark_ready`](Self::mark_ready) alongside the ambient capabilities —
 /// a bounded
-/// [`offload`](Self::offload) primitive for asynchronous postbacks, a
+/// [`offload`](Self::offload) primitive for bounded asynchronous work, a
 /// [`shutdown_token`](Self::shutdown_token) for cooperative shutdown, and
 /// [`run_blocking`](Self::run_blocking) for blocking work.
 ///
@@ -655,7 +653,6 @@ pub struct ActorContext<M> {
     pub(crate) id: Arc<str>,
     pub(crate) mailbox: MailboxReceiver<M>,
     pub(crate) myself: ActorRef<M>,
-    pub(crate) incarnation: MailboxRef<M>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) observability: GraphObservability,
     pub(crate) timers: TimerTable<M>,
@@ -663,7 +660,7 @@ pub struct ActorContext<M> {
     pub(crate) monitors: Arc<ActorMonitors>,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
-    pub(crate) offloads: ActorOffloads,
+    pub(crate) offloads: JoinSet<OffloadCompletion<M>>,
     pub(crate) supervisor: RuntimeHandle,
     pub(crate) children: Option<RuntimeHandle>,
 }
@@ -706,8 +703,81 @@ impl<M: Send + 'static> ActorContext<M> {
         self.observability.emit_message_received(&self.id);
     }
 
+    fn sync_offload_gauge(&self) {
+        self.myself.set_outstanding_offloads(self.offloads.len());
+    }
+
+    fn joined_offload(&mut self, joined: Result<OffloadCompletion<M>, JoinError>) -> Option<M> {
+        self.sync_offload_gauge();
+        match joined {
+            Ok(completion) if !completion.cancelled.load(Ordering::Acquire) => {
+                Some(completion.message)
+            }
+            Ok(_) => None,
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(_) => None,
+        }
+    }
+
+    pub(crate) async fn next_delivery(&mut self) -> Option<M> {
+        loop {
+            let has_offloads = !self.offloads.is_empty();
+            let delivery = tokio::select! {
+                message = self.mailbox.recv() => Delivery::Mailbox(message),
+                joined = self.offloads.join_next(), if has_offloads => {
+                    Delivery::Offload(joined.expect("non-empty offload set returned no task"))
+                }
+            };
+            match delivery {
+                Delivery::Mailbox(message) => return message,
+                Delivery::Offload(joined) => {
+                    if let Some(message) = self.joined_offload(joined) {
+                        return Some(message);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn try_delivery(&mut self) -> Result<M, tokio::sync::mpsc::error::TryRecvError> {
+        while let Some(joined) = self.offloads.try_join_next() {
+            if let Some(message) = self.joined_offload(joined) {
+                return Ok(message);
+            }
+        }
+        self.mailbox.try_recv()
+    }
+
+    pub(crate) async fn next_drain_delivery(&mut self) -> Option<M> {
+        loop {
+            if let Ok(message) = self.try_delivery() {
+                return Some(message);
+            }
+            if self.offloads.is_empty() {
+                return None;
+            }
+
+            let delivery = tokio::select! {
+                message = self.mailbox.recv() => Delivery::Mailbox(message),
+                joined = self.offloads.join_next() => {
+                    Delivery::Offload(joined.expect("non-empty offload set returned no task"))
+                }
+            };
+            match delivery {
+                Delivery::Mailbox(Some(message)) => return Some(message),
+                Delivery::Mailbox(None) => return None,
+                Delivery::Offload(joined) => {
+                    if let Some(message) = self.joined_offload(joined) {
+                        return Some(message);
+                    }
+                }
+            }
+        }
+    }
+
     /// Runs a bounded future and substitutes `fallback` when its deadline
-    /// expires, then posts the resulting value back as an ordinary message.
+    /// expires, then returns the resulting value to the receive loop as an
+    /// ordinary message.
     ///
     /// This is the usual way to pipeline bounded work from an actor. A timed
     /// out offload may already have initiated an external effect, so `fallback`
@@ -715,7 +785,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// Use [`Self::offload`] when the continuation needs to distinguish a
     /// deadline from a value returned by the future.
     pub fn offload_or<F, T, C>(
-        &self,
+        &mut self,
         deadline: Duration,
         future: F,
         fallback: T,
@@ -732,14 +802,14 @@ impl<M: Send + 'static> ActorContext<M> {
     }
 
     /// Runs a bounded future without blocking this actor's receive loop and
-    /// posts its total outcome back as an ordinary message.
+    /// returns its total outcome to this actor's receive loop as an ordinary
+    /// message.
     ///
     /// This is the lower-level form of [`Self::offload_or`]. The continuation is
     /// total: it receives either the future's value or [`OffloadDeadline`] and
-    /// must produce a message in both cases. Delivery uses this actor's normal
-    /// mailbox policy and FIFO backpressure. It is stamped to this exact
-    /// incarnation, so a completion racing a restart is silently dropped
-    /// rather than delivered to fresh state.
+    /// must produce a message in both cases. Completion ordering relative to
+    /// external messages is unspecified, and completions do not consume
+    /// mailbox capacity or participate in conflation.
     ///
     /// Offloads are incarnation-owned. They are aborted when the incarnation
     /// fails, restarts, or uses [`DrainPolicy::Discard`](crate::DrainPolicy).
@@ -754,58 +824,37 @@ impl<M: Send + 'static> ActorContext<M> {
     /// untracked local state directly. Domain cancellation can still be
     /// captured explicitly in `future`.
     ///
-    /// `offload` lives on the shared context type, but its drain integration is
-    /// provided by the framework-owned [`Actor`](crate::Actor) loop. A custom
-    /// [`RawActor`](crate::RawActor) remains responsible for its own shutdown
-    /// and draining protocol.
-    pub fn offload<F, T, C>(&self, deadline: Duration, future: F, continuation: C) -> OffloadHandle
+    /// Panics in the future or continuation resume on the actor task, so
+    /// supervision treats them like an ordinary actor panic.
+    pub fn offload<F, T, C>(
+        &mut self,
+        deadline: Duration,
+        future: F,
+        continuation: C,
+    ) -> OffloadHandle
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
         C: FnOnce(Result<T, OffloadDeadline>) -> M + Send + 'static,
     {
-        let (cancellation, finished) = self.offloads.start();
-        let handle = OffloadHandle {
-            cancellation: cancellation.clone(),
-            finished: Arc::clone(&finished),
-        };
-        let offloads = self.offloads.inner();
-        let myself = self.myself.clone();
-        let incarnation = self.incarnation.clone();
-        let guard = OffloadGuard { offloads, finished };
-        tokio::spawn(async move {
-            // Constructed before spawning so dropping an unpolled task still
-            // decrements the outstanding count and marks its handle finished.
-            let _guard = guard;
-            let outcome = tokio::select! {
-                biased;
-                () = cancellation.cancelled() => return,
-                outcome = timeout(deadline, future) => outcome.map_err(|_| OffloadDeadline),
-            };
-            let message = continuation(outcome);
-            tokio::select! {
-                biased;
-                () = cancellation.cancelled() => {}
-                () = myself.post_to_incarnation(incarnation, message) => {}
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let task_cancelled = Arc::clone(&cancelled);
+        let abort = self.offloads.spawn(async move {
+            OffloadCompletion {
+                message: continuation(timeout(deadline, future).await.map_err(|_| OffloadDeadline)),
+                cancelled: task_cancelled,
             }
         });
-        handle
+        self.sync_offload_gauge();
+        OffloadHandle { abort, cancelled }
     }
 
     pub(crate) fn close_external_intake(&mut self) {
         self.mailbox.close_external();
     }
 
-    pub(crate) fn abort_offloads(&self) {
+    pub(crate) fn abort_offloads(&mut self) {
         self.offloads.abort_all();
-    }
-
-    pub(crate) fn outstanding_offloads(&self) -> usize {
-        self.offloads.outstanding()
-    }
-
-    pub(crate) fn offload_change_notify(&self) -> Arc<Notify> {
-        self.offloads.change_notify()
     }
 
     /// Returns the actor's unique identifier within the graph.
@@ -952,8 +1001,8 @@ impl<M: Send + 'static> ActorContext<M> {
         monitor
     }
 
-    /// Waits for the next mailbox message, or `None` once shutdown has been
-    /// requested or the mailbox has been closed.
+    /// Waits for the next mailbox message or offload completion, or `None`
+    /// once shutdown has been requested or the mailbox has been closed.
     ///
     /// Shutdown is checked first: as soon as shutdown is requested this
     /// returns `None`, even when messages are still queued. Queued messages
@@ -963,10 +1012,11 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`call`](ActorRef::call)s whose reply messages are dropped observe
     /// [`CallError::ReplyDropped`](crate::CallError::ReplyDropped).
     pub async fn recv(&mut self) -> Option<M> {
+        let shutdown = self.shutdown.clone();
         let message = tokio::select! {
             biased;
-            _ = self.shutdown.cancelled() => None,
-            message = self.mailbox.recv() => message,
+            _ = shutdown.cancelled() => None,
+            message = self.next_delivery() => message,
         };
 
         if message.is_some() {
@@ -977,8 +1027,8 @@ impl<M: Send + 'static> ActorContext<M> {
         message
     }
 
-    /// Attempts to receive a queued message without waiting and without
-    /// consulting the shutdown token.
+    /// Attempts to receive a queued mailbox message or completed offload
+    /// without waiting and without consulting the shutdown token.
     ///
     /// This is intended for drain-then-exit loops in hand-written
     /// [`RawActor::run`](crate::RawActor::run) implementations: after
@@ -992,7 +1042,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`DrainPolicy::Drain`](crate::DrainPolicy) so the framework owns the
     /// drain loop.
     pub fn try_recv(&mut self) -> Result<M, TryRecvError> {
-        let message = self.mailbox.try_recv().map_err(|error| match error {
+        let message = self.try_delivery().map_err(|error| match error {
             tokio::sync::mpsc::error::TryRecvError::Empty => TryRecvError::Empty,
             tokio::sync::mpsc::error::TryRecvError::Disconnected => TryRecvError::Disconnected,
         });
@@ -1045,6 +1095,12 @@ impl<M: Send + 'static> ActorContext<M> {
                 Err(_) => Err(BlockingCancelled),
             }
         }
+    }
+}
+
+impl<M> Drop for ActorContext<M> {
+    fn drop(&mut self) {
+        self.myself.set_outstanding_offloads(0);
     }
 }
 
@@ -1225,7 +1281,7 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     ///
     /// See [`ActorContext::offload_or`].
     fn offload_or<F, T, C>(
-        &self,
+        &mut self,
         deadline: Duration,
         future: F,
         fallback: T,
@@ -1236,20 +1292,20 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         T: Send + 'static,
         C: FnOnce(T) -> M + Send + 'static,
     {
-        self.cx()
+        self.cx_mut()
             .offload_or(deadline, future, fallback, continuation)
     }
 
     /// Runs a bounded future without blocking this actor's receive loop.
     ///
     /// See [`ActorContext::offload`].
-    fn offload<F, T, C>(&self, deadline: Duration, future: F, continuation: C) -> OffloadHandle
+    fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> OffloadHandle
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
         C: FnOnce(Result<T, OffloadDeadline>) -> M + Send + 'static,
     {
-        self.cx().offload(deadline, future, continuation)
+        self.cx_mut().offload(deadline, future, continuation)
     }
 
     /// Runs blocking work on Tokio's blocking pool.
@@ -1634,75 +1690,6 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
         R: Send + 'static,
     {
         self.cx.run_blocking(f)
-    }
-}
-
-pub(crate) struct ActorOffloads {
-    inner: Arc<ActorOffloadsInner>,
-    cancellation: CancellationToken,
-}
-
-struct ActorOffloadsInner {
-    changed: Arc<Notify>,
-    outstanding: Arc<AtomicU64>,
-}
-
-impl ActorOffloads {
-    pub(crate) fn new() -> Self {
-        Self {
-            inner: Arc::new(ActorOffloadsInner {
-                changed: Arc::new(Notify::new()),
-                outstanding: Arc::new(AtomicU64::new(0)),
-            }),
-            // Unlike timers, this token is independent from graph shutdown:
-            // Drain actors keep their offloads until their own deadlines.
-            cancellation: CancellationToken::new(),
-        }
-    }
-
-    fn start(&self) -> (CancellationToken, Arc<AtomicBool>) {
-        let cancellation = self.cancellation.child_token();
-        self.inner.outstanding.fetch_add(1, Ordering::Relaxed);
-        (cancellation, Arc::new(AtomicBool::new(false)))
-    }
-
-    fn inner(&self) -> Arc<ActorOffloadsInner> {
-        Arc::clone(&self.inner)
-    }
-
-    pub(crate) fn gauge(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.inner.outstanding)
-    }
-
-    fn abort_all(&self) {
-        self.cancellation.cancel();
-    }
-
-    fn outstanding(&self) -> usize {
-        self.inner.outstanding.load(Ordering::Acquire) as usize
-    }
-
-    fn change_notify(&self) -> Arc<Notify> {
-        Arc::clone(&self.inner.changed)
-    }
-}
-
-impl Drop for ActorOffloads {
-    fn drop(&mut self) {
-        self.cancellation.cancel();
-    }
-}
-
-struct OffloadGuard {
-    offloads: Arc<ActorOffloadsInner>,
-    finished: Arc<AtomicBool>,
-}
-
-impl Drop for OffloadGuard {
-    fn drop(&mut self) {
-        self.offloads.outstanding.fetch_sub(1, Ordering::Release);
-        self.finished.store(true, Ordering::Release);
-        self.offloads.changed.notify_one();
     }
 }
 

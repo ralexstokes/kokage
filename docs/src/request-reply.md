@@ -91,5 +91,7 @@ its duration is an explicit, accepted trade-off.
 
 For fan-out and routing actors it rarely is. Pipeline the request off the
 handler loop instead of awaiting it, so the mailbox keeps moving while the
-call is outstanding: [Bounded actor offloads](actor-offloads.md) covers the
-mechanism and works the routing case end to end.
+call is outstanding. The loop owns the eventual completion separately from
+the mailbox, so it does not consume mailbox capacity:
+[Bounded actor offloads](actor-offloads.md) covers the mechanism and works the
+routing case end to end.
