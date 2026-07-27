@@ -247,8 +247,9 @@ identity fields because those surfaces have no supervisor context.
 
 `ActorStats::outstanding_offloads` is a point-in-time gauge of bounded futures
 owned by the current actor incarnation. It rises when `ActorContext::offload`
-starts work and returns to zero on completion, timeout, or abort, making actors
-with in-flight requests visible without inspecting anonymous Tokio tasks.
+starts work and falls when the actor loop reaps its completion or observes its
+abort, making actors with in-flight requests visible without inspecting
+anonymous Tokio tasks.
 
 `ActorStats::message_bytes_accepted` is then `Some(total)`; ordinary actors
 report `None` and do not sample message sizes. With the `metrics` feature,

@@ -127,7 +127,7 @@ impl Router {
         &mut self,
         chat: ChatId,
         buffered: Vec<PendingInput>,
-        ctx: &impl LiveContext<RouterMsg>,
+        ctx: &mut impl LiveContext<RouterMsg>,
     ) {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
@@ -190,7 +190,12 @@ impl Router {
         );
     }
 
-    fn pipeline_remove(&self, chat: ChatId, subtree_id: String, ctx: &impl LiveContext<RouterMsg>) {
+    fn pipeline_remove(
+        &self,
+        chat: ChatId,
+        subtree_id: String,
+        ctx: &mut impl LiveContext<RouterMsg>,
+    ) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
         ctx.offload_or(
@@ -214,7 +219,7 @@ impl Router {
 
     /// Removes a subtree that no live slot routes to: an orphan minted by a
     /// previous router incarnation, or a stale duplicate retirement request.
-    fn pipeline_sweep(&self, subtree_id: String, ctx: &impl LiveContext<RouterMsg>) {
+    fn pipeline_sweep(&self, subtree_id: String, ctx: &mut impl LiveContext<RouterMsg>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
         ctx.offload_or(
@@ -262,7 +267,7 @@ impl Router {
     /// This is shared by initial watch alignment and lifecycle overflow. A
     /// removal already in progress needs no second request; every active
     /// membership not owned by this router incarnation is swept.
-    fn reconcile_mount_snapshot(&mut self, ctx: &impl LiveContext<RouterMsg>) {
+    fn reconcile_mount_snapshot(&mut self, ctx: &mut impl LiveContext<RouterMsg>) {
         let (alignment_seq, orphaned) =
             mount_reconciliation(self.mount.snapshot(), |id| self.routes_subtree(id));
         self.alignment_seq = alignment_seq;

@@ -46,8 +46,8 @@ pub struct ActorStats {
     pub lineage: Option<u64>,
     /// Messages delivered to the actor for handling.
     ///
-    /// This includes actor-local continuations and timer events, which bypass
-    /// the mailbox. It can also be lower than
+    /// This includes actor-local continuations, timer events, and offload
+    /// completions, which bypass the mailbox. It can also be lower than
     /// [`messages_accepted`](Self::messages_accepted): accepted messages may be
     /// conflated before receipt or discarded when an incarnation stops.
     pub messages_received: u64,
@@ -98,6 +98,7 @@ pub(crate) struct ActorStatsCounters {
     messages_conflated: AtomicU64,
     sends_rejected: AtomicU64,
     message_bytes_accepted: Option<AtomicU64>,
+    outstanding_offloads: AtomicU64,
 }
 
 impl ActorStatsCounters {
@@ -108,6 +109,7 @@ impl ActorStatsCounters {
             messages_conflated: AtomicU64::new(0),
             sends_rejected: AtomicU64::new(0),
             message_bytes_accepted: observe_message_size.then(|| AtomicU64::new(0)),
+            outstanding_offloads: AtomicU64::new(0),
         }
     }
 
@@ -136,10 +138,14 @@ impl ActorStatsCounters {
         }
     }
 
+    pub(crate) fn set_outstanding_offloads(&self, outstanding: usize) {
+        self.outstanding_offloads
+            .store(outstanding as u64, Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(
         &self,
         actor_id: &str,
-        outstanding_offloads: u64,
         mailbox_depth: usize,
         mailbox_capacity: usize,
     ) -> ActorStats {
@@ -155,7 +161,7 @@ impl ActorStatsCounters {
                 .as_ref()
                 .map(|total| total.load(Ordering::Relaxed)),
             sends_rejected: self.sends_rejected.load(Ordering::Relaxed),
-            outstanding_offloads,
+            outstanding_offloads: self.outstanding_offloads.load(Ordering::Relaxed),
             mailbox_depth,
             mailbox_capacity,
         }
@@ -327,7 +333,6 @@ pub(crate) enum SendOutcome<M> {
 pub(crate) struct MailboxRef<M> {
     actor_id: Arc<str>,
     sender: MailboxSender<M>,
-    outstanding_offloads: Arc<AtomicU64>,
 }
 
 impl<M> Clone for MailboxRef<M> {
@@ -335,44 +340,31 @@ impl<M> Clone for MailboxRef<M> {
         Self {
             actor_id: Arc::clone(&self.actor_id),
             sender: self.sender.clone(),
-            outstanding_offloads: Arc::clone(&self.outstanding_offloads),
         }
     }
 }
 
 impl<M> MailboxRef<M> {
-    pub(crate) fn new(
-        actor_id: Arc<str>,
-        sender: MailboxSender<M>,
-        outstanding_offloads: Arc<AtomicU64>,
-    ) -> Self {
-        Self {
-            actor_id,
-            sender,
-            outstanding_offloads,
-        }
+    pub(crate) fn new(actor_id: Arc<str>, sender: MailboxSender<M>) -> Self {
+        Self { actor_id, sender }
     }
 
     /// Sends, returning the message on failure so callers can retry after a
     /// rebind.
     pub(crate) async fn send_retaining(&self, message: M) -> SendOutcome<M> {
-        self.send_message_retaining(message, false).await
-    }
-
-    async fn send_message_retaining(&self, message: M, internal: bool) -> SendOutcome<M> {
         match &self.sender {
             MailboxSender::Queue {
                 sender,
                 accepting_external,
             } => {
-                if !internal && !accepting_external.load(Ordering::Acquire) {
+                if !accepting_external.load(Ordering::Acquire) {
                     return SendOutcome::Closed(message);
                 }
                 match sender.reserve().await {
                     // This narrows the close race after reserving capacity;
                     // close_external is an intake signal, not a linearizable
                     // fence against a sender already in this operation.
-                    Ok(permit) if internal || accepting_external.load(Ordering::Acquire) => {
+                    Ok(permit) if accepting_external.load(Ordering::Acquire) => {
                         permit.send(message);
                         SendOutcome::Accepted { conflated: 0 }
                     }
@@ -384,13 +376,9 @@ impl<M> MailboxRef<M> {
                 // still drops the message, matching `ActorRef::send`'s
                 // cancellation contract.
                 tokio::task::coop::consume_budget().await;
-                sender.send(message, internal)
+                sender.send(message)
             }
         }
-    }
-
-    pub(crate) async fn send_internal_retaining(&self, message: M) -> SendOutcome<M> {
-        self.send_message_retaining(message, true).await
     }
 
     pub(crate) fn try_send(&self, message: M) -> Result<u64, SendError> {
@@ -419,7 +407,7 @@ impl<M> MailboxRef<M> {
                     }),
                 }
             }
-            MailboxSender::Conflating(sender) => match sender.send(message, false) {
+            MailboxSender::Conflating(sender) => match sender.send(message) {
                 SendOutcome::Accepted { conflated } => Ok(conflated),
                 SendOutcome::Closed(_) => Err(SendError::MailboxClosed {
                     actor_id: self.actor_id.to_string(),
@@ -434,10 +422,6 @@ impl<M> MailboxRef<M> {
 
     pub(crate) fn usage(&self) -> (usize, usize) {
         self.sender.usage()
-    }
-
-    pub(crate) fn outstanding_offloads(&self) -> u64 {
-        self.outstanding_offloads.load(Ordering::Relaxed)
     }
 }
 
@@ -515,9 +499,9 @@ pub(crate) struct ConflatingSender<M> {
 }
 
 impl<M> ConflatingSender<M> {
-    fn send(&self, message: M, internal: bool) -> SendOutcome<M> {
+    fn send(&self, message: M) -> SendOutcome<M> {
         let mut state = self.shared.lock();
-        if state.receiver_closed || (!internal && !state.accepting_external) {
+        if state.receiver_closed || !state.accepting_external {
             return SendOutcome::Closed(message);
         }
 
@@ -768,15 +752,11 @@ impl<M> BindingCore<M> {
 
     pub(crate) fn stats(&self) -> ActorStats {
         let state = self.current.borrow();
-        let (outstanding_offloads, depth, capacity) = match &*state {
-            BindingState::Bound(mailbox) => {
-                let (depth, capacity) = mailbox.usage();
-                (mailbox.outstanding_offloads(), depth, capacity)
-            }
-            BindingState::Unbound | BindingState::Terminated => (0, 0, 0),
+        let (depth, capacity) = match &*state {
+            BindingState::Bound(mailbox) => mailbox.usage(),
+            BindingState::Unbound | BindingState::Terminated => (0, 0),
         };
-        self.stats
-            .snapshot(&self.actor_id, outstanding_offloads, depth, capacity)
+        self.stats.snapshot(&self.actor_id, depth, capacity)
     }
 
     fn bind(&self, mailbox: MailboxRef<M>) {
