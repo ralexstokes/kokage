@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+# Run a command inside this checkout's Nix devshell.
+#
+#     ./scripts/dev just ci
+#     ./scripts/dev cargo nextest run --workspace
+#
+# .envrc loads the devshell through direnv, but `direnv allow` is keyed on the
+# absolute path of .envrc, so every new git worktree starts blocked — and the
+# base PATH carries no cargo, just, or nextest. A shell spawned from another
+# checkout also leaks that checkout's devshell in, which silently builds a
+# worktree against the wrong toolchain. This wrapper sidesteps both: `nix` is
+# always on PATH, so it works from a cold environment in any worktree.
+#
+# It exec's straight through (no overhead) when this checkout's devshell is
+# already active, and costs about a second otherwise.
+
+set -eu
+
+if [ "$#" -eq 0 ]; then
+    echo "usage: ./scripts/dev <command> [args...]" >&2
+    exit 2
+fi
+
+# The checkout root is one level up from this script's own directory; physical
+# path so the marker comparison is immune to symlinked spellings of the same dir.
+here=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+
+# IN_NIX_SHELL is not a sufficient test: it stays set when a shell rooted in
+# another checkout spawns us. Only skip re-entry when the active devshell
+# matches both this checkout and its current flake inputs — a branch switch
+# that changes flake.nix/flake.lock invalidates the marker. .envrc exports the
+# same path:fingerprint format.
+want="$here:$(cat "$here/flake.nix" "$here/flake.lock" 2>/dev/null | sha256sum | cut -d' ' -f1)"
+if [ "${TOKIO_OTP_DEVSHELL:-}" = "$want" ]; then
+    exec "$@"
+fi
+
+# Pass the flake reference explicitly rather than cd'ing, so the command still
+# runs in the caller's working directory. warn-dirty is off because the tree is
+# dirty on nearly every invocation and the warning just clutters agent logs.
+exec nix develop --option warn-dirty false --no-update-lock-file "$here" \
+    --command env "TOKIO_OTP_DEVSHELL=$want" "$@"

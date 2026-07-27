@@ -98,13 +98,26 @@ to crates.io — use a git dependency as shown above.
 
 ## Development
 
-The Nix flake provides both local tooling and CI:
+The Nix flake provides both local tooling and CI. Interactively, approve the
+checkout for [direnv](https://direnv.net) once and the devshell loads on `cd`;
+bare commands work from there:
 
 ```sh
-nix develop
+direnv allow
 just ci      # pull-request fast lane (fmt, clippy, build, tests, book)
 just ci-nix  # full clean Nix lane used on main and for Nix-related changes
 ```
+
+Automation, agents, and other shells direnv never touches use the wrapper
+instead, which enters the correct devshell from any state (and is a free
+passthrough when one is already active):
+
+```sh
+./scripts/dev just ci
+```
+
+See [`AGENTS.md`](AGENTS.md) for the details, particularly around git
+worktrees.
 
 ## License
 

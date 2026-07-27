@@ -1,21 +1,39 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo check *)",
-      "Bash(cargo build *)",
-      "Bash(cargo test *)",
-      "Bash(cargo nextest *)",
-      "Bash(cargo +nightly clippy *)",
-      "Bash(cargo +nightly fmt *)",
       "Bash(git add *)",
       "Bash(git checkout *)",
       "Bash(git commit *)",
       "Bash(git push *)",
-      "Bash(nix develop *)",
-      "Bash(just ci)",
-      "Bash(just check)",
-      "Bash(just test)",
-      "Bash(just ci-nix)"
+      "Bash(./scripts/dev just *)",
+      "Bash(./scripts/dev cargo check *)",
+      "Bash(./scripts/dev cargo build *)",
+      "Bash(./scripts/dev cargo test *)",
+      "Bash(./scripts/dev cargo nextest *)",
+      "Bash(./scripts/dev cargo +nightly clippy *)",
+      "Bash(./scripts/dev cargo +nightly fmt *)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "direnv allow \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$(sed -n 's/.*\"worktree_path\" *: *\"\\([^\"]*\\)\".*/\\1/p'); direnv allow \"${d:-$CLAUDE_PROJECT_DIR}\" 2>/dev/null || true"
+          }
+        ]
+      }
     ]
   }
 }
