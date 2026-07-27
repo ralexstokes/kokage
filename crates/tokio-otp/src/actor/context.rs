@@ -504,6 +504,17 @@ struct TimerEntry<M> {
 
 type TimerRepeat<M> = (Duration, fn(&M) -> M);
 
+/// Far-future cap for deadlines that would otherwise overflow, mirroring the
+/// horizon tokio's own timer wheel saturates to.
+const FAR_FUTURE: Duration = Duration::from_secs(86400 * 365 * 30);
+
+/// Deadline `delay` from now, saturating instead of panicking: `Instant + Duration`
+/// panics on overflow, and `Duration::MAX` is a plausible "never" sentinel.
+pub(crate) fn deadline_after(delay: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(delay).unwrap_or_else(|| now + FAR_FUTURE)
+}
+
 pub(crate) struct TimerTable<M> {
     entries: Vec<TimerEntry<M>>,
     next_id: u64,
@@ -542,7 +553,7 @@ impl<M> TimerTable<M> {
         self.entries.push(TimerEntry {
             id,
             slot,
-            deadline: Instant::now() + delay,
+            deadline: deadline_after(delay),
             message,
             cancellation,
             repeat,
@@ -593,7 +604,7 @@ impl<M> TimerTable<M> {
         }
         if let Some((period, clone_message)) = self.entries[index].repeat {
             let message = clone_message(&self.entries[index].message);
-            self.entries[index].deadline = Instant::now() + period;
+            self.entries[index].deadline = deadline_after(period);
             Some(message)
         } else {
             Some(self.entries.swap_remove(index).message)

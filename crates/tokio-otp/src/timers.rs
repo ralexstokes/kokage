@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::MissedTickBehavior;
 
-use crate::{ActorRef, CancellationHandle, Lifetime};
+use crate::{ActorRef, CancellationHandle, Lifetime, actor::deadline_after};
 
 /// Sends `message` to `target` after `delay` has elapsed.
 ///
@@ -68,7 +68,7 @@ pub fn interval_to<T: Clone + Send + 'static>(
     let lifetime = lifetime.clone();
     let target = target.clone();
     tokio::spawn(async move {
-        let start = Instant::now() + period;
+        let start = deadline_after(period);
         let mut interval = tokio::time::interval_at(start, period);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 

@@ -325,6 +325,54 @@ async fn keyed_timeouts_replace_per_key_and_remain_independent() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
+struct FarFutureTimers {
+    timers: Vec<CancellationHandle>,
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for FarFutureTimers {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+        ctx.set_timeout("never-timeout", Duration::MAX);
+        self.timers
+            .push(ctx.send_after("never-after", Duration::MAX));
+        self.timers
+            .push(ctx.interval("never-interval", Duration::MAX));
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed.send(message).expect("observer alive");
+        Ok(Continue)
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn far_future_delays_saturate_instead_of_panicking() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, actor_ref) = build_runtime(move || FarFutureTimers {
+        timers: Vec::new(),
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn();
+
+    actor_ref.send("ping").await.expect("actor alive");
+    assert_eq!(
+        timeout(Duration::from_secs(1), observed_rx.recv())
+            .await
+            .expect("ordinary message handled"),
+        Some("ping")
+    );
+    assert!(observed_rx.try_recv().is_err());
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
 struct ElapsedCancellation {
     timer: mpsc::UnboundedSender<CancellationHandle>,
     release: Arc<Notify>,

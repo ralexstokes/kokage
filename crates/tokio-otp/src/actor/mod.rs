@@ -16,6 +16,8 @@ mod monitor;
 mod observability;
 mod raw;
 
+pub(crate) use context::deadline_after;
+
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::{CancellationHandle, Lifetime};
