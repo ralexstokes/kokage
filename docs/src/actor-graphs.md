@@ -337,6 +337,14 @@ If an actor should instead stop at once and drop what is queued, return
 awaited. That is the right choice when queued work is replaceable — recomputed
 next run, conflated into a later snapshot, or retried by the sender.
 
+A drained message reaches the same `handle` as any other, so a handler that
+behaves differently on the way out has to ask: `ctx.is_draining()` is `true`
+for exactly the calls the drain makes. Reach for it when the handler would
+otherwise queue work that nothing will run — a `continue_with`, a fresh timer,
+a follow-up offload. It is not `ctx.is_shutting_down()`: a drain also follows
+the actor's own `Ok(Stop)`, where the graph is not shutting down and
+`is_shutting_down()` stays `false` the whole time.
+
 Hand-written `RawActor::run` loops are
 still available as the escape hatch for custom loop control; after
 `ctx.recv().await` returns `None` because shutdown was requested, such actors

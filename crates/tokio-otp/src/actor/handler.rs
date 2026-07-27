@@ -67,6 +67,11 @@ pub enum DrainPolicy {
     /// closed mailbox and an awaited `send` waits for the binding's final
     /// lifecycle state. There is no separate sender-visible `Draining` state.
     ///
+    /// The handler itself can see the phase:
+    /// [`HandleContext::is_draining`](crate::HandleContext::is_draining) is
+    /// `true` for exactly the calls made here. Use it to skip work whose only
+    /// effect would be to queue something the drain will drop.
+    ///
     /// # Shutdown budget
     ///
     /// The drain has no clock of its own. It spends the surrounding host's
@@ -288,9 +293,9 @@ impl<H: Actor> RawActor for H {
                 // Once stopping begins, flow values do not change the drain
                 // decision. Continuations queued by drain handlers are left
                 // for the context to drop with the incarnation, and reported
-                // below.
+                // below. A handler that cares can ask `is_draining`.
                 let _ = self
-                    .handle(message, &mut HandleContext::new(&mut ctx))
+                    .handle(message, &mut HandleContext::draining(&mut ctx))
                     .await?;
             }
         } else {

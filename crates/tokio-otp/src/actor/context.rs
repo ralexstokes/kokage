@@ -1082,6 +1082,10 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// with the incarnation. The provided receive loop cannot refuse them at
     /// compile time, so it emits a `WARN` naming the actor and the number
     /// dropped before `on_stop` runs.
+    ///
+    /// A handler that wants to avoid queueing work the drain will throw away
+    /// can ask [`HandleContext::is_draining`] first — the drain path is the
+    /// one of the two that is not visible from the type.
     fn continue_with(&mut self, message: M) {
         self.cx_mut().push_continuation(message);
     }
@@ -1397,8 +1401,13 @@ pub struct StartContext<'a, M> {
 /// full scope handles. The mailbox is absent because the provided receive loop
 /// owns it; a handler that reads it directly would bypass drain accounting and
 /// the continuation queue.
+///
+/// This is the only hook the provided loop calls from two different phases, so
+/// it is also the only one that has to say which: see
+/// [`is_draining`](Self::is_draining).
 pub struct HandleContext<'a, M> {
     cx: &'a mut ActorContext<M>,
+    draining: bool,
 }
 
 /// Context handed to [`Actor::on_stop`](crate::Actor::on_stop).
@@ -1444,7 +1453,40 @@ impl<'a, M: Send + 'static> StartContext<'a, M> {
 
 impl<'a, M: Send + 'static> HandleContext<'a, M> {
     pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
-        Self { cx }
+        Self {
+            cx,
+            draining: false,
+        }
+    }
+
+    pub(crate) fn draining(cx: &'a mut ActorContext<M>) -> Self {
+        Self { cx, draining: true }
+    }
+
+    /// Returns `true` when this `handle` call comes from the drain phase
+    /// rather than from ordinary message handling.
+    ///
+    /// The provided receive loop calls `handle` from two phases. Ordinarily it
+    /// is pulling from a live mailbox and the actor keeps running afterwards.
+    /// Once the loop has exited and external intake is closed,
+    /// [`DrainPolicy::Drain`](crate::DrainPolicy) replays what is already
+    /// queued — mailbox messages and offload completions — and this returns
+    /// `true` for every one of those calls. Nothing follows the drain except
+    /// [`on_stop`](crate::Actor::on_stop), so work a handler defers here is
+    /// work that will not happen: continuations are dropped, new timers and
+    /// intervals never fire, and a fresh
+    /// [`offload`](LiveContext::offload) is racing the shutdown budget.
+    ///
+    /// This is not [`is_shutting_down`](LiveContext::is_shutting_down), and
+    /// the difference is the reason it exists. A drain also follows the
+    /// actor's own [`Flow::Stop`](crate::Flow), where the graph is not
+    /// shutting down at all and `is_shutting_down` is `false` throughout.
+    /// Conversely a handler can observe `is_shutting_down` as `true` while
+    /// still on the ordinary path, when shutdown is requested during an
+    /// in-flight call. Ask this when the question is "will anything I queue be
+    /// run"; ask `is_shutting_down` when the question is about the graph.
+    pub fn is_draining(&self) -> bool {
+        self.draining
     }
 
     /// Returns the actor-aware handle for this actor's enclosing scope.

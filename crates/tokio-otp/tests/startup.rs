@@ -294,6 +294,136 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     assert_eq!(&*handled.lock().await, &["hold-and-continue", "mailbox"]);
 }
 
+/// One `handle` call as the probe saw it: the message, `is_draining`, and
+/// `is_shutting_down`.
+type HandleCalls = Arc<Mutex<Vec<(&'static str, bool, bool)>>>;
+
+/// Records, for every handled message, which phase the provided loop called
+/// `handle` from and whether the graph was shutting down at the time.
+#[derive(Clone)]
+struct DrainPhaseProbe {
+    observed: HandleCalls,
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+impl Actor for DrainPhaseProbe {
+    type Msg = &'static str;
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        ctx: &mut HandleContext<'_, Self::Msg>,
+    ) -> ActorResult {
+        self.observed
+            .lock()
+            .await
+            .push((message, ctx.is_draining(), ctx.is_shutting_down()));
+        match message {
+            "hold" => {
+                self.started.notify_one();
+                self.release.notified().await;
+                // Returning only once the request is visible keeps the next
+                // queued message on the drain path rather than the ordinary
+                // one, which is what this test is about.
+                while !ctx.shutdown_token().is_cancelled() {
+                    tokio::task::yield_now().await;
+                }
+                Ok(Continue)
+            }
+            "stop" => {
+                self.started.notify_one();
+                self.release.notified().await;
+                Ok(Stop)
+            }
+            _ => Ok(Continue),
+        }
+    }
+
+    fn drain_policy(&self) -> DrainPolicy {
+        DrainPolicy::Drain
+    }
+}
+
+fn drain_phase_probe_graph(
+    observed: &HandleCalls,
+    started: &Arc<Notify>,
+    release: &Arc<Notify>,
+) -> (GraphBuilder, ActorRef<&'static str>) {
+    let mut graph = GraphBuilder::new();
+    let observed = observed.clone();
+    let started = started.clone();
+    let release = release.clone();
+    let actor = graph.add(move || DrainPhaseProbe {
+        observed: observed.clone(),
+        started: started.clone(),
+        release: release.clone(),
+    });
+    (graph, actor)
+}
+
+#[tokio::test]
+async fn is_draining_separates_the_drain_phase_from_ordinary_handling() {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
+    let handle = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .build()
+        .unwrap()
+        .spawn();
+    handle.wait_started().await.unwrap();
+
+    actor.send("hold").await.unwrap();
+    started.notified().await;
+    actor.send("queued").await.unwrap();
+    handle.shutdown();
+    release.notify_one();
+    handle.shutdown_and_wait().await.unwrap();
+
+    assert_eq!(
+        &*observed.lock().await,
+        &[("hold", false, false), ("queued", true, true)]
+    );
+}
+
+#[tokio::test]
+async fn is_draining_is_true_after_a_self_stop_that_never_shuts_the_graph_down() {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
+    let handle = Runtime::builder()
+        .graph(graph.build().unwrap())
+        .restart(RestartPolicy::Never)
+        .build()
+        .unwrap()
+        .spawn();
+    handle.wait_started().await.unwrap();
+
+    actor.send("stop").await.unwrap();
+    started.notified().await;
+    actor.send("queued").await.unwrap();
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while observed.lock().await.len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // The drain runs because the actor asked to stop, not because the graph
+    // is going away: `is_shutting_down` is false for the drained message that
+    // `is_draining` reports as drained.
+    assert_eq!(
+        &*observed.lock().await,
+        &[("stop", false, false), ("queued", true, false)]
+    );
+    handle.shutdown_and_wait().await.unwrap();
+}
+
 #[derive(Clone)]
 struct StopsOnStart {
     started: Arc<Notify>,
