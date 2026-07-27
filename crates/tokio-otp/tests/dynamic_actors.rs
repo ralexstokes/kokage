@@ -148,7 +148,11 @@ async fn wait_for_child(handle: &RuntimeHandle, id: &str, present: bool) {
     .expect("child membership reached expected state");
 }
 
-async fn wait_for_terminal_child(handle: &RuntimeHandle, id: &str) {
+// A child that recorded its exit but has not been dropped from membership yet
+// is also observable on the removal path, so seeing that snapshot alone does not
+// prove retention. Settling a later control operation flushes the removal path,
+// and only then is the surviving entry a retention decision.
+async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
     timeout(Duration::from_secs(1), async {
         let mut snapshots = handle.subscribe_snapshots();
         loop {
@@ -167,6 +171,24 @@ async fn wait_for_terminal_child(handle: &RuntimeHandle, id: &str) {
     })
     .await
     .expect("terminal child remains in membership");
+
+    handle
+        .add_actor("settle", Drain::<()>::new, DynamicActorOptions::new())
+        .await
+        .expect("settling actor added");
+    handle
+        .remove_child("settle")
+        .await
+        .expect("settling actor removed");
+    wait_for_child(handle, "settle", false).await;
+
+    assert!(
+        handle
+            .snapshot()
+            .child(id)
+            .is_some_and(|child| child.last_exit.is_some()),
+        "terminal child stays retained once the control loop has settled"
+    );
 }
 
 async fn next_monitor_event(events: &mut mpsc::UnboundedReceiver<MonitorEvent>) -> MonitorEvent {
@@ -934,7 +956,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
         .await
         .expect("retained transient actor added");
     transient_release.notify_one();
-    wait_for_terminal_child(&handle, "transient-retained").await;
+    wait_for_retained_terminal_child(&handle, "transient-retained").await;
 
     let reversed_release = Arc::new(Notify::new());
     handle
@@ -954,7 +976,27 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
         .await
         .expect("reversed retained transient actor added");
     reversed_release.notify_one();
-    wait_for_terminal_child(&handle, "transient-retained-reversed").await;
+    wait_for_retained_terminal_child(&handle, "transient-retained-reversed").await;
+
+    let never_release = Arc::new(Notify::new());
+    handle
+        .add_actor(
+            "never-retained",
+            {
+                let release = never_release.clone();
+                move || GatedExit {
+                    release: release.clone(),
+                    fail: false,
+                }
+            },
+            DynamicActorOptions::new()
+                .restart(RestartPolicy::Never)
+                .remove_on_exit(false),
+        )
+        .await
+        .expect("retained never actor added");
+    never_release.notify_one();
+    wait_for_retained_terminal_child(&handle, "never-retained").await;
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
