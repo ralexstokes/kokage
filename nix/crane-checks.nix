@@ -66,6 +66,7 @@ in
         cargo test --locked --workspace --doc --all-features
         cargo run --locked -p tokio-otp --example trading_engine --features metrics
         cargo run --locked -p tokio-otp --example agent_control --features metrics
+        cargo run --locked -p tokio-otp --example build_farm
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
       '';
       doInstallCargoArtifacts = false;

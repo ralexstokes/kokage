@@ -237,6 +237,8 @@
 //!   tracing and snapshot observability.
 //! - `examples/json_edge.rs` — decoding byte-oriented JSON frames into typed
 //!   actor messages with `serde_json` at the application boundary.
+//! - `examples/build_farm/` — a finite build graph executed by a dynamically
+//!   sized worker scope, with completion-driven runtime shutdown.
 //!
 //! # Cargo features
 //!

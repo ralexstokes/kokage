@@ -28,6 +28,7 @@ doc-check:
 smoke:
     cargo run --locked -p tokio-otp --example trading_engine --features metrics
     cargo run --locked -p tokio-otp --example agent_control --features metrics
+    cargo run --locked -p tokio-otp --example build_farm
 
 all-examples:
     bash scripts/run-all-examples.sh
