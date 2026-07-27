@@ -146,7 +146,8 @@ pub trait Actor: Send + Sync + 'static {
     /// [`Flow::Stop`] requests a clean stop before the ordinary receive loop.
     /// [`DrainPolicy::Discard`] drops messages queued during startup, while
     /// [`DrainPolicy::Drain`] handles the externally accepted mailbox queue;
-    /// actor-local continuations are dropped under either policy. An error
+    /// actor-local continuations are dropped under either policy, and their
+    /// loss is reported as a `WARN` before [`on_stop`](Self::on_stop). An error
     /// here fails the run like a [`handle`](Self::handle) error, so under
     /// supervision it is an ordinary restartable failure.
     fn on_start(
@@ -286,13 +287,25 @@ impl<H: Actor> RawActor for H {
                 ctx.observability.emit_message_received(&ctx.id);
                 // Once stopping begins, flow values do not change the drain
                 // decision. Continuations queued by drain handlers are left
-                // for the context to drop with the incarnation.
+                // for the context to drop with the incarnation, and reported
+                // below.
                 let _ = self
                     .handle(message, &mut HandleContext::new(&mut ctx))
                     .await?;
             }
         } else {
             ctx.abort_offloads();
+        }
+
+        // Only the receive loop above takes continuations, so anything still
+        // queued here is dropped with the incarnation: pushed by a drain
+        // handler, or by an `on_start` that then returned `Flow::Stop`. Both
+        // reach `continue_with` through a context type that is legitimately
+        // able to queue work at other times, so neither is expressible as a
+        // compile error the way `on_stop` and `RawActor` are. Report it.
+        if !ctx.continuations.is_empty() {
+            ctx.observability
+                .emit_continuations_dropped(&ctx.id, ctx.continuations.len());
         }
 
         self.on_stop(&mut StopContext::new(&mut ctx)).await?;

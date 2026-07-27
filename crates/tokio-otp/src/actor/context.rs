@@ -1072,6 +1072,14 @@ pub trait ActorScope<M: Send + 'static>: sealed::Sealed<M> {
     /// [`ActorStats`](crate::ActorStats), but not as externally accepted
     /// mailbox messages. They are abandoned once the actor begins stopping,
     /// which is why [`StopContext`] is outside this trait.
+    ///
+    /// Two stopping paths still reach this method, because they run in a
+    /// context that can queue work at other times: a handler called on the
+    /// drain path, and an [`on_start`](crate::Actor::on_start) that returns
+    /// [`Flow::Stop`](crate::Flow). Continuations queued there are dropped
+    /// with the incarnation. The provided receive loop cannot refuse them at
+    /// compile time, so it emits a `WARN` naming the actor and the number
+    /// dropped before `on_stop` runs.
     fn continue_with(&mut self, message: M) {
         self.cx_mut().push_continuation(message);
     }
