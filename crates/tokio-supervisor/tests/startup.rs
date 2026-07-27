@@ -6,24 +6,30 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio_supervisor::{
     ChildSpec, RestartIntensity, RestartPolicy, Strategy, SupervisorBuilder, SupervisorSpec,
 };
+
+mod common;
 
 #[tokio::test]
 async fn sequential_start_waits_for_explicit_readiness() {
     let order = Arc::new(Mutex::new(Vec::new()));
     let release = Arc::new(Notify::new());
+    let first_started = Arc::new(Notify::new());
 
     let first = ChildSpec::new("first", {
         let order = Arc::clone(&order);
         let release = Arc::clone(&release);
+        let first_started = Arc::clone(&first_started);
         move |ctx| {
             let order = Arc::clone(&order);
             let release = Arc::clone(&release);
+            let first_started = Arc::clone(&first_started);
             async move {
                 order.lock().await.push("first");
+                first_started.notify_one();
                 release.notified().await;
                 ctx.mark_ready();
                 ctx.shutdown_token().cancelled().await;
@@ -53,7 +59,9 @@ async fn sequential_start_waits_for_explicit_readiness() {
         .unwrap()
         .spawn();
 
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    tokio::time::timeout(Duration::from_secs(1), first_started.notified())
+        .await
+        .expect("first child should enter its readiness gate");
     assert_eq!(&*order.lock().await, &["first"]);
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
@@ -61,7 +69,9 @@ async fn sequential_start_waits_for_explicit_readiness() {
         .unwrap()
         .unwrap();
     assert_eq!(&*order.lock().await, &["first", "second"]);
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "sequential readiness test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -116,7 +126,9 @@ async fn one_for_all_restart_preserves_sequential_readiness_order() {
         .build()
         .unwrap()
         .spawn();
-    handle.wait_started().await.unwrap();
+    common::wait_started(&handle, "initial one-for-all startup")
+        .await
+        .unwrap();
     fail.notify_one();
 
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -141,7 +153,9 @@ async fn one_for_all_restart_preserves_sequential_readiness_order() {
     })
     .await
     .unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "one-for-all readiness test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -176,10 +190,12 @@ async fn startup_failure_is_skipped_before_later_sequential_children_start() {
         .await
         .expect("a terminal startup failure should be skipped");
     assert!(matches!(
-        handle.wait_started().await,
+        common::wait_started(&handle, "startup-abort result").await,
         Err(tokio_supervisor::SupervisorError::StartupAborted(_))
     ));
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "startup failure test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -228,35 +244,58 @@ async fn sequential_start_resumes_after_pre_ready_restart() {
     tokio::time::timeout(Duration::from_secs(1), later_started.notified())
         .await
         .unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "pre-ready restart test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn wait_started_accepts_an_immediate_child_that_already_completed() {
+    let completed = Arc::new(Notify::new());
     let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("oneshot", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .child(
+            ChildSpec::new("oneshot", {
+                let completed = Arc::clone(&completed);
+                move |_| {
+                    let completed = Arc::clone(&completed);
+                    async move {
+                        completed.notify_one();
+                        Ok(())
+                    }
+                }
+            })
+            .restart(RestartPolicy::Never),
+        )
         .build()
         .unwrap()
         .spawn();
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::time::timeout(Duration::from_secs(1), completed.notified())
+        .await
+        .expect("immediate child should complete before wait_started is called");
     tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
         .await
         .unwrap()
         .unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "immediate completion test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn nested_supervisor_gates_later_parent_siblings() {
     let release = Arc::new(Notify::new());
-    let later_started = Arc::new(Notify::new());
+    let nested_started = Arc::new(Notify::new());
+    let (later_started_tx, mut later_started_rx) = mpsc::unbounded_channel();
     let nested = SupervisorBuilder::new()
         .child(
             ChildSpec::new("nested-child", {
                 let release = Arc::clone(&release);
+                let nested_started = Arc::clone(&nested_started);
                 move |ctx| {
                     let release = Arc::clone(&release);
+                    let nested_started = Arc::clone(&nested_started);
                     async move {
+                        nested_started.notify_one();
                         release.notified().await;
                         ctx.mark_ready();
                         ctx.shutdown_token().cancelled().await;
@@ -269,11 +308,13 @@ async fn nested_supervisor_gates_later_parent_siblings() {
         .build()
         .unwrap();
     let later = ChildSpec::new("later", {
-        let later_started = Arc::clone(&later_started);
+        let later_started_tx = later_started_tx.clone();
         move |ctx| {
-            let later_started = Arc::clone(&later_started);
+            let later_started_tx = later_started_tx.clone();
             async move {
-                later_started.notify_one();
+                later_started_tx
+                    .send(())
+                    .expect("later start receiver alive");
                 ctx.mark_ready();
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -287,17 +328,25 @@ async fn nested_supervisor_gates_later_parent_siblings() {
         .build()
         .unwrap()
         .spawn();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), later_started.notified())
-            .await
-            .is_err()
-    );
+    tokio::time::timeout(Duration::from_secs(1), nested_started.notified())
+        .await
+        .expect("nested child should enter its readiness gate");
+    assert!(matches!(
+        later_started_rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
         .await
         .unwrap()
         .unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(1), later_started_rx.recv())
+        .await
+        .expect("later child should start after nested readiness")
+        .expect("later start sender remains live");
+    common::shutdown_and_wait(&handle, "nested readiness test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -367,12 +416,16 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     .expect("nested children should continuously emit lifecycle updates");
 
     release_gated.notify_one();
-    tokio::time::timeout(Duration::from_millis(250), later_started.notified())
+    tokio::time::timeout(Duration::from_secs(2), later_started.notified())
         .await
         .expect("queued readiness must preempt continuous nested traffic");
 
-    handle.wait_started().await.unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    common::wait_started(&handle, "noisy nested readiness completion")
+        .await
+        .unwrap();
+    common::shutdown_and_wait(&handle, "noisy nested readiness test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -439,7 +492,9 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
         .build()
         .unwrap()
         .spawn();
-    handle.wait_started().await.unwrap();
+    common::wait_started(&handle, "initial rest-for-one startup")
+        .await
+        .unwrap();
     fail.notify_one();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -464,7 +519,9 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
     })
     .await
     .unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "rest-for-one readiness test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -513,7 +570,9 @@ async fn pre_ready_one_for_all_failure_does_not_duplicate_children() {
         .unwrap();
     assert_eq!(first_attempts.load(Ordering::SeqCst), 2);
     assert_eq!(second_runs.load(Ordering::SeqCst), 1);
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "pre-ready one-for-all test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -556,7 +615,9 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
     tokio::time::timeout(Duration::from_secs(1), sibling_stopped.notified())
         .await
         .unwrap();
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "nested startup-abort test shutdown")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -613,5 +674,7 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
         Err(tokio_supervisor::SupervisorError::StartupAborted(_))
     ));
     assert!(handle.snapshot().child("never").unwrap().startup_aborted);
-    handle.shutdown_and_wait().await.unwrap();
+    common::shutdown_and_wait(&handle, "drained pre-ready child test shutdown")
+        .await
+        .unwrap();
 }

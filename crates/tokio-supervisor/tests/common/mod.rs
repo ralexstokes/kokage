@@ -17,7 +17,7 @@ use tokio::{
 use tokio_supervisor::{
     BoxError, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView, LifecycleEventKind,
     RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
-    RestartIntensity, RestartPolicy, SupervisorHandle, SupervisorSnapshot,
+    RestartIntensity, RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -36,6 +36,16 @@ where
         .await
         .expect("timed out waiting for channel event")
         .expect("channel closed before expected event arrived")
+}
+
+pub async fn recv_bounded_event<T>(rx: &mut mpsc::Receiver<T>) -> T
+where
+    T: Debug,
+{
+    timeout(EVENT_TIMEOUT, rx.recv())
+        .await
+        .expect("timed out waiting for bounded channel event")
+        .expect("bounded channel closed before expected event arrived")
 }
 
 pub async fn recv_n<T>(rx: &mut mpsc::UnboundedReceiver<T>, n: usize) -> Vec<T>
@@ -365,24 +375,51 @@ pub async fn wait_for_snapshot(
     snapshots: &mut watch::Receiver<SupervisorSnapshot>,
     predicate: impl Fn(&SupervisorSnapshot) -> bool,
 ) -> SupervisorSnapshot {
-    if predicate(&snapshots.borrow()) {
-        return snapshots.borrow().clone();
-    }
-
-    loop {
-        timeout(EVENT_TIMEOUT, snapshots.changed())
-            .await
-            .expect("timed out waiting for snapshot update")
-            .expect("snapshot stream closed unexpectedly");
-
-        let snapshot = snapshots.borrow().clone();
-        if predicate(&snapshot) {
-            return snapshot;
+    timeout(EVENT_TIMEOUT, async {
+        if predicate(&snapshots.borrow()) {
+            return snapshots.borrow().clone();
         }
-    }
+
+        loop {
+            snapshots
+                .changed()
+                .await
+                .expect("snapshot stream closed unexpectedly");
+
+            let snapshot = snapshots.borrow().clone();
+            if predicate(&snapshot) {
+                return snapshot;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for matching supervisor snapshot")
 }
 
 pub async fn shutdown(handle: SupervisorHandle) {
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    wait(&handle, "supervisor shutdown")
+        .await
+        .expect("shutdown should succeed");
+}
+
+pub async fn wait(handle: &SupervisorHandle, phase: &str) -> Result<(), SupervisorError> {
+    timeout(EVENT_TIMEOUT, handle.wait())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+}
+
+pub async fn shutdown_and_wait(
+    handle: &SupervisorHandle,
+    phase: &str,
+) -> Result<(), SupervisorError> {
+    timeout(EVENT_TIMEOUT, handle.shutdown_and_wait())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+}
+
+pub async fn wait_started(handle: &SupervisorHandle, phase: &str) -> Result<(), SupervisorError> {
+    timeout(EVENT_TIMEOUT, handle.wait_started())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
 }

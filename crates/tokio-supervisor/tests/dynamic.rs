@@ -87,7 +87,9 @@ async fn ordered_membership_operations_name_the_rejected_operation_and_kind() {
         }
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    common::shutdown_and_wait(&handle, "dynamic add/remove test shutdown")
+        .await
+        .expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -179,7 +181,9 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
     assert_eq!(common::recv_event(&mut explicit_rx).await, 0);
     common::assert_no_event(&mut explicit_rx).await;
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    common::shutdown_and_wait(&handle, "dynamic policy test shutdown")
+        .await
+        .expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -604,7 +608,9 @@ async fn add_child_starts_it_immediately() {
     assert_eq!(common::recv_event(&mut dynamic_rx).await, 0);
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "dynamic child startup test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -654,7 +660,9 @@ async fn remove_child_stops_it_without_restarting() {
     common::assert_no_event(&mut starts_rx).await;
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "dynamic restart test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -681,7 +689,9 @@ async fn duplicate_add_and_unknown_remove_are_rejected() {
     assert_eq!(missing, ControlError::UnknownChildId("missing".to_owned()));
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "unknown child test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -702,7 +712,9 @@ async fn removing_the_last_active_child_leaves_an_idle_supervisor() {
     assert!(handle.snapshot().children.is_empty());
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "empty dynamic supervisor test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -746,7 +758,7 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
     let second_remove_task =
         tokio::spawn(async move { second_remove_handle.remove_child("removable").await });
 
-    let err = timeout(common::QUIET_TIMEOUT, second_remove_task)
+    let err = timeout(common::EVENT_TIMEOUT, second_remove_task)
         .await
         .expect("second removal should be dispatched while the first is pending")
         .expect("second remove task should join")
@@ -763,7 +775,9 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
         .expect("first removal should succeed");
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "concurrent removal test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -810,7 +824,9 @@ async fn shutdown_absorbs_and_completes_a_pending_removal() {
         .expect("remove task should join")
         .expect("shutdown should finalize the pending removal");
 
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "pending removal shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -873,7 +889,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
         .expect("remove task should join");
     assert_eq!(remove_result, Err(ControlError::SupervisorStopping));
     assert_eq!(
-        handle.wait().await,
+        common::wait(&handle, "fatal-exit shutdown result").await,
         Err(SupervisorError::RestartIntensityExceeded)
     );
 }
@@ -906,7 +922,7 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
 
     let remove_handle = handle.clone();
     let remove_task = tokio::spawn(async move { remove_handle.remove_child("retiring").await });
-    bounce_rx.recv().await.expect("first bounced message");
+    common::recv_bounded_event(&mut bounce_rx).await;
 
     let same_id_error = handle
         .add_child(ChildSpec::new("retiring", |_| async { Ok(()) }))
@@ -918,7 +934,7 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
     );
 
     timeout(
-        common::QUIET_TIMEOUT,
+        common::EVENT_TIMEOUT,
         handle.add_supervisor(SupervisorSpec::new(
             "replacement",
             DynamicSupervisorBuilder::new()
@@ -930,15 +946,17 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
     .expect("distinct-id add should not queue behind the drain")
     .expect("replacement should be inserted");
 
-    bounce_rx.recv().await.expect("second bounced message");
-    bounce_rx.recv().await.expect("third bounced message");
-    timeout(common::QUIET_TIMEOUT, remove_task)
+    common::recv_bounded_event(&mut bounce_rx).await;
+    common::recv_bounded_event(&mut bounce_rx).await;
+    timeout(common::EVENT_TIMEOUT, remove_task)
         .await
         .expect("removal should finish before its grace expires")
         .expect("remove task should join")
         .expect("cooperative removal should succeed");
 
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+    common::shutdown_and_wait(&handle, "cooperative drain test shutdown")
+        .await
+        .expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -967,7 +985,9 @@ async fn distinct_removals_drain_independently() {
         ],
     )
     .await;
-    handle.wait_started().await.expect("children start");
+    common::wait_started(&handle, "independent removal children startup")
+        .await
+        .expect("children start");
 
     let first_remove = tokio::spawn({
         let handle = handle.clone();
@@ -978,20 +998,14 @@ async fn distinct_removals_drain_independently() {
         async move { handle.remove_child("second").await }
     });
     let mut cancelled = vec![
-        timeout(common::QUIET_TIMEOUT, cancelled_rx.recv())
-            .await
-            .expect("first cancellation should be dispatched")
-            .expect("cancellation sender remains open"),
-        timeout(common::QUIET_TIMEOUT, cancelled_rx.recv())
-            .await
-            .expect("second cancellation should be dispatched")
-            .expect("cancellation sender remains open"),
+        common::recv_event(&mut cancelled_rx).await,
+        common::recv_event(&mut cancelled_rx).await,
     ];
     cancelled.sort_unstable();
     assert_eq!(cancelled, vec!["first", "second"]);
 
     release_second.notify_one();
-    timeout(common::QUIET_TIMEOUT, second_remove)
+    timeout(common::EVENT_TIMEOUT, second_remove)
         .await
         .expect("second removal should not wait for first")
         .expect("second remove task should join")
@@ -1003,7 +1017,9 @@ async fn distinct_removals_drain_independently() {
         .expect("first remove task should join")
         .expect("first removal succeeds");
 
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+    common::shutdown_and_wait(&handle, "independent removals test shutdown")
+        .await
+        .expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -1034,7 +1050,9 @@ async fn cooperative_then_abort_removal_replies_after_the_abort_join() {
         .expect("then-abort removal reports success");
     assert!(handle.snapshot().child("stubborn").is_none());
 
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+    common::shutdown_and_wait(&handle, "then-abort removal test shutdown")
+        .await
+        .expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -1062,7 +1080,9 @@ async fn control_plane_remains_available_after_all_children_exit() {
     assert!(handle.snapshot().child("late").is_some());
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "long-backoff removal test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -1071,9 +1091,9 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
 
     let handle = spawn_dynamic(
         DynamicSupervisorBuilder::new().restart_intensity(
-            tokio_supervisor::RestartIntensity::new(4, std::time::Duration::from_secs(1))
+            tokio_supervisor::RestartIntensity::new(4, std::time::Duration::from_secs(60))
                 .with_backoff(tokio_supervisor::BackoffPolicy::Fixed(
-                    std::time::Duration::from_secs(1),
+                    std::time::Duration::from_secs(30),
                 )),
         ),
         [
@@ -1094,48 +1114,28 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
         ],
     )
     .await;
-    let mut events = common::event_watch(&handle);
-
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
+    let mut snapshots = handle.subscribe_snapshots();
+    common::wait_for_snapshot(&mut snapshots, |snapshot| {
+        snapshot
+            .child("removable")
+            .and_then(|child| child.next_restart_in)
+            .is_some_and(|delay| delay > common::EVENT_TIMEOUT)
+    })
+    .await;
 
-    loop {
-        match common::recv_supervisor_event(&mut events).await {
-            ObservedEvent::ChildRestartScheduled { id, delay, .. } if id == "removable" => {
-                assert!(
-                    delay >= std::time::Duration::from_secs(1),
-                    "test requires a long restart backoff"
-                );
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    timeout(common::QUIET_TIMEOUT, handle.remove_child("removable"))
+    timeout(common::EVENT_TIMEOUT, handle.remove_child("removable"))
         .await
         .expect("remove_child should not wait for the restart backoff")
         .expect("child removal should succeed during backoff");
-
-    let mut saw_removed = false;
-    while !saw_removed {
-        match common::recv_supervisor_event(&mut events).await {
-            ObservedEvent::ChildRemoved { id, .. } if id == "removable" => {
-                saw_removed = true;
-            }
-            ObservedEvent::ChildStarted { id, generation, .. }
-                if id == "removable" && generation > 0 =>
-            {
-                panic!("removed child restarted while removal was pending");
-            }
-            _ => {}
-        }
-    }
-
+    assert!(handle.snapshot().child("removable").is_none());
     while starts_rx.try_recv().is_ok() {}
     common::assert_no_event(&mut starts_rx).await;
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "restart-backoff removal test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1175,7 +1175,7 @@ async fn remove_child_preempts_zero_delay_restart() {
         }
     }
 
-    timeout(common::QUIET_TIMEOUT, handle.remove_child("removable"))
+    timeout(common::EVENT_TIMEOUT, handle.remove_child("removable"))
         .await
         .expect("remove_child should beat the zero-delay restart")
         .expect("child removal should succeed");
@@ -1185,7 +1185,9 @@ async fn remove_child_preempts_zero_delay_restart() {
     common::assert_no_event(&mut starts_rx).await;
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "zero-delay removal test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1234,30 +1236,27 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
     add_result.expect("first queued command should add the replacement");
     remove_result.expect("second queued command should cancel the pending restart");
 
-    let interleaved_restart = timeout(common::QUIET_TIMEOUT, async {
-        loop {
-            match events.recv().await {
-                Ok(ObservedEvent::ChildRestarted { id, .. }) if id == "removable" => {
-                    return true;
-                }
-                Ok(_) => {}
-                Err(common::EventRecvError::Lagged(skipped)) => {
-                    panic!("lagged while checking command ordering: skipped {skipped}");
-                }
-                Err(common::EventRecvError::Closed) => return false,
+    let mut saw_removal = false;
+    let mut saw_replacement_start = false;
+    while !saw_removal || !saw_replacement_start {
+        match common::recv_supervisor_event(&mut events).await {
+            ObservedEvent::ChildRemoved { id } if id == "removable" => saw_removal = true,
+            ObservedEvent::ChildStarted { id, .. } if id == "replacement" => {
+                saw_replacement_start = true;
             }
+            ObservedEvent::ChildRestarted { id, .. } if id == "removable" => {
+                panic!("restart interleaved before the full queued command batch");
+            }
+            _ => {}
         }
-    })
-    .await;
-    assert!(
-        !matches!(interleaved_restart, Ok(true)),
-        "restart interleaved before the full queued command batch"
-    );
+    }
 
     assert!(handle.snapshot().child("removable").is_none());
     assert!(handle.snapshot().child("replacement").is_some());
 
-    handle.shutdown_and_wait().await.expect("shutdown succeeds");
+    common::shutdown_and_wait(&handle, "queued command batch test shutdown")
+        .await
+        .expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -1325,5 +1324,7 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     common::assert_no_event(&mut replacement_rx).await;
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "recycled slot test shutdown")
+        .await
+        .expect("shutdown should succeed");
 }

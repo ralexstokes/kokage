@@ -666,7 +666,8 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::OnFailure),
+            .restart(RestartPolicy::OnFailure)
+            .shutdown(ShutdownPolicy::abort()),
         )
         .child(
             ChildSpec::new("fatal", move |_ctx| {
@@ -677,7 +678,8 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::abort()),
         )
         .build()
         .expect("valid middle supervisor");
@@ -861,7 +863,8 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                 Ok(())
             }
         })
-        .restart(RestartPolicy::OnFailure),
+        .restart(RestartPolicy::OnFailure)
+        .shutdown(ShutdownPolicy::abort()),
     );
     let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
     let leaf = leaf_builder.build().expect("valid leaf supervisor");
@@ -877,7 +880,8 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                     Err(common::test_error("sibling boom"))
                 }
             })
-            .restart(RestartPolicy::OnFailure),
+            .restart(RestartPolicy::OnFailure)
+            .shutdown(ShutdownPolicy::abort()),
         )
         .build()
         .expect("valid supervisor")
@@ -1147,7 +1151,8 @@ fn middle_supervisor(
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::abort()),
         )
         .build()
         .expect("valid leaf supervisor");
@@ -1163,7 +1168,8 @@ fn middle_supervisor(
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::abort()),
         )
         .build()
         .expect("valid middle supervisor")

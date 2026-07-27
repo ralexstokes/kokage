@@ -1,18 +1,19 @@
 use std::{
-    future::pending,
+    future::{Future, pending, poll_fn},
     io,
     marker::PhantomData,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    task::Poll,
     time::Duration,
 };
 
 use tokio::{
     sync::{Notify, mpsc, oneshot},
     task::JoinHandle,
-    time::{sleep, timeout},
+    time::timeout,
 };
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
@@ -201,15 +202,14 @@ async fn send_to_never_started_graph_waits_until_graph_runs() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let send_task = tokio::spawn({
-        let echo = echo.clone();
-        async move { echo.send(7).await }
-    });
-    sleep(Duration::from_millis(25)).await;
+    let echo_for_send = echo.clone();
+    let mut send = Box::pin(async move { echo_for_send.send(7).await });
+    let first_poll = poll_fn(|cx| Poll::Ready(send.as_mut().poll(cx))).await;
     assert!(
-        !send_task.is_finished(),
+        first_poll.is_pending(),
         "send should wait until the graph binds the actor mailbox"
     );
+    let send_task = tokio::spawn(send);
 
     let (stop, task) = start_graph(&graph);
     assert_eq!(recv(&mut seen_rx, "message after graph start").await, 7);
@@ -1257,6 +1257,21 @@ mod runnable_actor {
     }
 
     #[derive(Clone)]
+    struct StartSignallingDrain {
+        started: mpsc::UnboundedSender<()>,
+    }
+
+    impl RawActor for StartSignallingDrain {
+        type Msg = ();
+
+        async fn run(&mut self, mut ctx: ActorContext<()>) -> ActorResult {
+            self.started.send(()).expect("start receiver alive");
+            while ctx.recv().await.is_some() {}
+            Ok(Continue)
+        }
+    }
+
+    #[derive(Clone)]
     struct NeverStops;
 
     impl RawActor for NeverStops {
@@ -1671,13 +1686,19 @@ mod runnable_actor {
 
     #[tokio::test]
     async fn runnable_actor_rejects_concurrent_runs() {
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
         let mut builder = GraphBuilder::new();
-        builder.actor("worker", Drain::<()>::new);
+        builder.actor("worker", move || StartSignallingDrain {
+            started: started_tx.clone(),
+        });
         let graph = builder.build().expect("valid graph");
 
         let worker = single_actor(&graph, "worker");
         let (stop, task) = start_actor(worker.clone());
-        sleep(Duration::from_millis(20)).await;
+        timeout(Duration::from_secs(1), started_rx.recv())
+            .await
+            .expect("first run should bind the actor promptly")
+            .expect("start sender remains alive");
 
         assert!(matches!(
             worker
@@ -1904,12 +1925,17 @@ mod runnable_actor {
             .send(Work("second"))
             .await
             .expect("second send");
-        assert!(
-            timeout(Duration::from_millis(100), observed_rx.recv())
-                .await
-                .is_err(),
-            "frontend should hold the message until worker restarts"
-        );
+        timeout(Duration::from_secs(1), async {
+            while frontend_ref.stats().messages_received < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("frontend should receive the message while the worker is unbound");
+        assert!(matches!(
+            observed_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
 
         let (second_worker_stop, second_worker_task) =
             start_actor_with_policy(worker, RestartPolicy::OnFailure);

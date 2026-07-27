@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc,
+    Arc, Barrier as ThreadBarrier,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
@@ -9,12 +9,21 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
-    LifecycleEventKind, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
-    SupervisorBuilder, SupervisorError,
+    LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy,
+    ShutdownMode, ShutdownPolicy, SupervisorBuilder, SupervisorError,
 };
 
 mod common;
 use common::ObservedEvent;
+
+async fn next_lifecycle_event(
+    lifecycle: &mut LifecycleWatch,
+    phase: &str,
+) -> Option<LifecycleEvent> {
+    timeout(common::EVENT_TIMEOUT, lifecycle.next())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
+}
 
 #[tokio::test]
 async fn external_shutdown_stops_all_children() {
@@ -46,7 +55,9 @@ async fn external_shutdown_stops_all_children() {
     common::recv_event(&mut started_rx).await;
     handle.shutdown();
 
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "external shutdown")
+        .await
+        .expect("shutdown should succeed");
     assert_eq!(exits.load(Ordering::SeqCst), 2);
 }
 
@@ -82,7 +93,9 @@ async fn supervisor_token_observes_ordered_and_dynamic_shutdown() {
     assert_eq!(common::recv_event(&mut started_rx).await, "ordered");
     ordered.shutdown();
     assert_eq!(common::recv_event(&mut stopping_rx).await, "ordered");
-    ordered.wait().await.expect("ordered shutdown succeeds");
+    common::wait(&ordered, "ordered supervisor-token shutdown")
+        .await
+        .expect("ordered shutdown succeeds");
 
     let dynamic = DynamicSupervisorBuilder::new()
         .build()
@@ -95,7 +108,9 @@ async fn supervisor_token_observes_ordered_and_dynamic_shutdown() {
     assert_eq!(common::recv_event(&mut started_rx).await, "dynamic");
     dynamic.shutdown();
     assert_eq!(common::recv_event(&mut stopping_rx).await, "dynamic");
-    dynamic.wait().await.expect("dynamic shutdown succeeds");
+    common::wait(&dynamic, "dynamic supervisor-token shutdown")
+        .await
+        .expect("dynamic shutdown succeeds");
 }
 
 #[tokio::test]
@@ -115,8 +130,12 @@ async fn shutdown_is_idempotent_across_handle_clones() {
     clone.shutdown();
     handle.shutdown();
 
-    handle.wait().await.expect("first waiter should resolve");
-    clone.wait().await.expect("second waiter should resolve");
+    common::wait(&handle, "first cloned shutdown waiter")
+        .await
+        .expect("first waiter should resolve");
+    common::wait(&clone, "second cloned shutdown waiter")
+        .await
+        .expect("second waiter should resolve");
 }
 
 #[tokio::test]
@@ -195,7 +214,9 @@ async fn cooperative_child_observes_cancellation_before_shutdown_finishes() {
     let handle = supervisor.spawn();
     handle.shutdown();
 
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "cooperative child shutdown")
+        .await
+        .expect("shutdown should succeed");
     assert!(saw_cancel.load(Ordering::SeqCst));
 }
 
@@ -230,7 +251,9 @@ async fn stubborn_child_is_aborted_in_cooperative_then_abort_mode() {
     let handle = supervisor.spawn();
     handle.shutdown();
 
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "stubborn child shutdown")
+        .await
+        .expect("shutdown should succeed");
     assert!(!saw_cancel.load(Ordering::SeqCst));
     assert!(
         !live_flag.is_live(),
@@ -242,17 +265,22 @@ async fn stubborn_child_is_aborted_in_cooperative_then_abort_mode() {
 async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (blocking_tx, mut blocking_rx) = mpsc::unbounded_channel();
+    let release_blocking_poll = Arc::new(ThreadBarrier::new(2));
     let supervisor = SupervisorBuilder::new()
         .child(
-            ChildSpec::new("non-yielding", move |ctx| {
-                let started_tx = started_tx.clone();
-                let blocking_tx = blocking_tx.clone();
-                async move {
-                    started_tx.send(()).expect("test receiver dropped");
-                    ctx.shutdown_token().cancelled().await;
-                    blocking_tx.send(()).expect("test receiver dropped");
-                    std::thread::sleep(Duration::from_millis(500));
-                    Ok(())
+            ChildSpec::new("non-yielding", {
+                let release_blocking_poll = Arc::clone(&release_blocking_poll);
+                move |ctx| {
+                    let started_tx = started_tx.clone();
+                    let blocking_tx = blocking_tx.clone();
+                    let release_blocking_poll = Arc::clone(&release_blocking_poll);
+                    async move {
+                        started_tx.send(()).expect("test receiver dropped");
+                        ctx.shutdown_token().cancelled().await;
+                        blocking_tx.send(()).expect("test receiver dropped");
+                        release_blocking_poll.wait();
+                        Ok(())
+                    }
                 }
             })
             .shutdown(ShutdownPolicy::cooperative_then_abort(
@@ -264,17 +292,13 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
     let handle = supervisor.spawn();
     common::recv_event(&mut started_rx).await;
 
-    let started_at = Instant::now();
     handle.shutdown();
     common::recv_event(&mut blocking_rx).await;
-    timeout(Duration::from_millis(200), handle.wait())
-        .await
-        .expect("ordered shutdown should advance after issuing the abort")
+    let wait_result = timeout(common::EVENT_TIMEOUT, handle.wait()).await;
+    release_blocking_poll.wait();
+    wait_result
+        .expect("ordered shutdown should advance without joining the blocked poll")
         .expect("cooperative-then-abort shutdown succeeds");
-    assert!(
-        started_at.elapsed() < Duration::from_millis(200),
-        "the post-abort join must not become an unbounded extra grace"
-    );
 }
 
 #[tokio::test]
@@ -393,22 +417,18 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
 async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     const GRACE: Duration = Duration::from_millis(20);
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let (finished_tx, mut finished_rx) = mpsc::unbounded_channel();
     let live_flag = common::LiveFlag::new();
     let live = live_flag.clone();
     let handle = SupervisorBuilder::new()
         .child(
             ChildSpec::new("slow-wrapper", move |ctx| {
                 let started_tx = started_tx.clone();
-                let finished_tx = finished_tx.clone();
                 let live = live.clone();
                 async move {
                     let _guard = live.guard();
                     started_tx.send(()).expect("test receiver dropped");
                     ctx.abort_token().cancelled().await;
-                    // Far longer than any tidy beat the grace can buy.
-                    sleep(Duration::from_secs(30)).await;
-                    finished_tx.send(()).expect("test receiver dropped");
+                    std::future::pending::<()>().await;
                     Ok(())
                 }
             })
@@ -420,27 +440,18 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     let mut lifecycle = handle.watch_lifecycle();
     common::recv_event(&mut started_rx).await;
 
-    let started_at = Instant::now();
     assert_eq!(
-        handle.shutdown_and_wait().await,
+        timeout(common::EVENT_TIMEOUT, handle.shutdown_and_wait())
+            .await
+            .expect("hard-abort shutdown should remain bounded"),
         Err(SupervisorError::ShutdownTimedOut("slow-wrapper".to_owned()))
-    );
-    let elapsed = started_at.elapsed();
-
-    assert!(
-        elapsed < Duration::from_secs(1),
-        "hard abort must not wait out the wrapper's own work: {elapsed:?}"
     );
     assert!(
         !live_flag.is_live(),
         "an overrunning wrapper is aborted rather than left running"
     );
-    assert!(
-        finished_rx.try_recv().is_err(),
-        "the wrapper never completed its post-escalation work"
-    );
 
-    while let Some(event) = lifecycle.next().await {
+    while let Some(event) = next_lifecycle_event(&mut lifecycle, "wrapper timeout exit").await {
         if let LifecycleEventKind::Exited { reason, .. } = event.kind {
             assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
             return;
@@ -498,16 +509,16 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
     common::recv_n(&mut started_rx, 2).await;
 
     handle.shutdown();
-    timeout(Duration::from_millis(200), short_escalated_rx.recv())
-        .await
-        .expect("short child escalated at its own grace")
-        .expect("short escalation sender remained live");
+    common::recv_event(&mut short_escalated_rx).await;
     assert_eq!(
-        handle.wait().await,
+        timeout(common::EVENT_TIMEOUT, handle.wait())
+            .await
+            .expect("dynamic shutdown should finish after the short child times out"),
         Err(SupervisorError::ShutdownTimedOut("short".to_owned()))
     );
 
-    while let Some(event) = lifecycle.next().await {
+    while let Some(event) = next_lifecycle_event(&mut lifecycle, "dynamic child timeout exit").await
+    {
         if event.child_id == "short"
             && let LifecycleEventKind::Exited { reason, .. } = event.kind
         {
@@ -568,7 +579,9 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         "timed-out cooperative removal should abort the child before returning"
     );
     loop {
-        let event = lifecycle.next().await.expect("keeper keeps scope live");
+        let event = next_lifecycle_event(&mut lifecycle, "drop-triggered child exit")
+            .await
+            .expect("keeper keeps scope live");
         if event.child_id == "stubborn"
             && let LifecycleEventKind::Exited { reason, .. } = event.kind
         {
@@ -578,7 +591,9 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
     }
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "drop-triggered dynamic shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -613,7 +628,9 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
     assert!(live_flag.is_live());
 
     handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "drop-triggered handle shutdown")
+        .await
+        .expect("shutdown should succeed");
     assert!(
         !live_flag.is_live(),
         "child must be dropped before wait completes"
@@ -663,7 +680,9 @@ async fn shutdown_preempts_zero_delay_restart() {
         }
     }
 
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "zero-delay restart shutdown")
+        .await
+        .expect("shutdown should succeed");
 }
 
 #[tokio::test]
@@ -732,7 +751,9 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
         }
     }
 
-    handle.wait().await.expect("shutdown should succeed");
+    common::wait(&handle, "delayed restart shutdown")
+        .await
+        .expect("shutdown should succeed");
     assert!(
         saw_cancel.load(Ordering::SeqCst),
         "cooperative child should observe shutdown cancellation"
@@ -765,12 +786,14 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
         .build()
         .expect("ordered supervisor builds")
         .spawn();
-    handle.wait_started().await.expect("children started");
+    common::wait_started(&handle, "ordered shutdown children startup")
+        .await
+        .expect("children started");
     let mut lifecycle = handle.watch_lifecycle();
 
     let shutdown = tokio::spawn({
         let handle = handle.clone();
-        async move { handle.shutdown_and_wait().await }
+        async move { common::shutdown_and_wait(&handle, "ordered staged shutdown").await }
     });
     assert_eq!(common::recv_event(&mut cancelled_rx).await, "third");
     assert!(
@@ -846,12 +869,14 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
         .build()
         .expect("ordered supervisor builds")
         .spawn();
-    handle.wait_started().await.expect("children start");
+    common::wait_started(&handle, "dynamic deadline children startup")
+        .await
+        .expect("children start");
     assert!(stubborn_live.is_live());
 
     let shutdown = tokio::spawn({
         let handle = handle.clone();
-        async move { handle.shutdown_and_wait().await }
+        async move { common::shutdown_and_wait(&handle, "dynamic deadline shutdown").await }
     });
     assert_eq!(common::recv_event(&mut cancelled_rx).await, "stubborn");
     assert_eq!(common::recv_event(&mut cancelled_rx).await, "dependency");
@@ -902,7 +927,9 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .build()
         .expect("root builds")
         .spawn();
-    handle.wait_started().await.expect("nested tree starts");
+    common::wait_started(&handle, "slow nested tree startup")
+        .await
+        .expect("nested tree starts");
 
     timeout(common::EVENT_TIMEOUT, async {
         let shutdown = handle.shutdown_and_wait();
@@ -965,7 +992,9 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .build()
         .expect("root supervisor builds")
         .spawn();
-    handle.wait_started().await.expect("nested tree starts");
+    common::wait_started(&handle, "deep nested tree startup")
+        .await
+        .expect("nested tree starts");
     assert!(leaf_live.is_live());
 
     timeout(common::EVENT_TIMEOUT, handle.shutdown_and_wait())
@@ -1041,10 +1070,12 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
             .await
             .expect("dynamic member added");
     }
-    dynamic.wait_started().await.expect("dynamic members start");
+    common::wait_started(&dynamic, "dynamic shutdown members startup")
+        .await
+        .expect("dynamic members start");
     let shutdown = tokio::spawn({
         let dynamic = dynamic.clone();
-        async move { dynamic.shutdown_and_wait().await }
+        async move { common::shutdown_and_wait(&dynamic, "concurrent dynamic shutdown").await }
     });
     let mut cancelled = common::recv_n(&mut cancelled_rx, 3).await;
     cancelled.sort_unstable();
