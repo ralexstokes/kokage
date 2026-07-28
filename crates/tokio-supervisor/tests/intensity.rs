@@ -70,10 +70,11 @@ async fn jittered_exponential_backoff_delays_restart_attempts() {
     let supervisor = SupervisorBuilder::new()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1)).with_backoff(
-                BackoffPolicy::JitteredExponential {
+                BackoffPolicy::Exponential {
                     base: Duration::from_millis(80),
                     factor: 2,
                     max: Duration::from_millis(500),
+                    jitter: true,
                 },
             ),
         )
@@ -109,6 +110,7 @@ async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
                     base: Duration::from_millis(40),
                     factor: 2,
                     max: Duration::from_millis(200),
+                    jitter: false,
                 },
             ),
         )
@@ -162,6 +164,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
                     base: Duration::from_millis(50),
                     factor: 4,
                     max: Duration::from_secs(2),
+                    jitter: false,
                 },
             ),
         )

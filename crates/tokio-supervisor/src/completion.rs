@@ -458,9 +458,9 @@ mod tests {
     #[test]
     fn displaced_membership_events_do_not_change_replacement_completion() {
         let mut set = CompletionSet::new(["source"]);
-        set.realign(&snapshot(vec![
-            ChildSnapshot::new("source", 0, ChildStateView::Running).lineage(2),
-        ]));
+        let mut source = ChildSnapshot::new("source", 0, ChildStateView::Running);
+        source.lineage = 2;
+        set.realign(&snapshot(vec![source]));
 
         set.apply(&event_with_lineage(
             1,

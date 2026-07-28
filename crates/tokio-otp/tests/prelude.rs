@@ -21,8 +21,7 @@ mod coverage_probe {
             ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
             LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
             RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
-            ShutdownPolicy, Strategy, SupervisorSnapshot, SupervisorSnapshotReceiverExt as _,
-            SupervisorStateView,
+            ShutdownPolicy, Strategy, SupervisorSnapshot, SupervisorStateView,
         };
     }
 
@@ -35,7 +34,7 @@ mod coverage_probe {
             ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind,
             LifecyclePathSegment, LifecycleWatch, LiveContext, RecursiveLifecycleEvent,
             RecursiveLifecycleEventKind, RecursiveLifecycleWatch, Supervisor, SupervisorBuildError,
-            SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec, SupervisorToken,
+            SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec,
         };
     }
 }
@@ -77,8 +76,6 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .expect("runtime builds");
     let handle = runtime.spawn();
     let mut events = handle.watch_lifecycle_recursive();
-    let mut snapshots = handle.subscribe_snapshots();
-
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -112,17 +109,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         }) if child_id == "worker"
     ));
 
-    let snapshot = timeout(
-        EVENT_TIMEOUT,
-        snapshots.wait_for_snapshot(|snapshot| {
-            snapshot
-                .child("worker")
-                .is_some_and(|child| child.state == ChildStateView::Running)
-        }),
-    )
-    .await
-    .expect("timed out waiting for running snapshot")
-    .expect("snapshot stream should remain open");
+    let snapshot = handle.snapshot();
     assert_eq!(
         snapshot
             .child("worker")

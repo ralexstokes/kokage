@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::{ActorRef, ActorSpec, Graph, RunnableActorBuilder, RuntimeHandle, SupervisionTree};
+use crate::{
+    ActorRef, ActorSpec, Graph, RuntimeHandle, SupervisionTree, actor::RunnableActorBuilder,
+};
 use std::sync::Arc;
 use tokio_supervisor::{
     ChildSpec, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy,

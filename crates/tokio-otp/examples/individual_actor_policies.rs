@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .generation;
     frontend.send("fail-worker".to_owned()).await?;
     lifecycle
-        .wait_started("worker", baseline)
+        .started_after("worker", baseline)
         .await
         .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;

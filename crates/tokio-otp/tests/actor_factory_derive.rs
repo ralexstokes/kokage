@@ -24,7 +24,7 @@ fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
     lifecycle
-        .wait_started(id, baseline)
+        .started_after(id, baseline)
         .await
         .expect("runtime remains live");
 }

@@ -795,7 +795,7 @@ fn restart_observer(handle: &tokio_otp::SupervisorHandle, id: &str) -> (Lifecycl
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
     lifecycle
-        .wait_started(id, baseline)
+        .started_after(id, baseline)
         .await
         .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
 }

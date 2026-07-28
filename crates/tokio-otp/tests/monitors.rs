@@ -5,9 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down,
-    DownReason, DynamicActorOptions, MonitorEvent, RawActor, RestartPolicy, RunnableActor,
-    RunnableActorBuilder, Runtime, prelude::Continue,
+    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
+    Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent, RawActor, RestartPolicy,
+    RunnableActor, Runtime, prelude::Continue,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -84,15 +84,31 @@ struct Fixture {
     observed: mpsc::UnboundedReceiver<MonitorEvent>,
 }
 
+fn runnable_actor<F>(
+    label: &str,
+    factory: F,
+) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
+where
+    F: ActorFactory,
+{
+    let mut builder = GraphBuilder::new();
+    let actor_ref = builder.actor(label, factory);
+    let graph = builder.build().expect("test graph builds");
+    let actor = graph
+        .actor(label)
+        .expect("test actor is registered")
+        .clone();
+    (actor, actor_ref)
+}
+
 fn fixture(cancel_watch: bool) -> Fixture {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let (observed_tx, observed) = mpsc::unbounded_channel();
     let (observer_started_tx, observer_started) = mpsc::unbounded_channel();
-    let (observer, observer_ref) = builder.actor("observer", {
+    let (observer, observer_ref) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         move || Observer {
             peer: peer_ref.clone(),
@@ -456,15 +472,14 @@ impl RawActor for TaggedObserver {
 
 #[tokio::test]
 async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let registrations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
-    let (observer, observer_ref) = builder.actor("observer", {
+    let (observer, observer_ref) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         let registrations = registrations.clone();
         move || TaggedObserver {
@@ -612,15 +627,14 @@ impl RawActor for AliasedObserver {
 
 #[tokio::test]
 async fn repeated_watch_calls_alias_until_cancelled() {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let (watch_tx, mut watch_rx) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
-    let (observer, observer_ref) = builder.actor("observer", {
+    let (observer, observer_ref) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         move || AliasedObserver {
             peer: peer_ref.clone(),
@@ -720,14 +734,13 @@ impl RawActor for ManagedObserver {
 
 #[tokio::test]
 async fn observer_membership_removal_cancels_its_watches() {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let (watch_tx, mut watch_rx) = mpsc::unbounded_channel();
     let (observed_tx, _observed_rx) = mpsc::unbounded_channel();
-    let (observer, observer_ref) = builder.actor("observer", {
+    let (observer, observer_ref) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         move || ManagedObserver {
             peer: peer_ref.clone(),
@@ -773,14 +786,13 @@ async fn observer_membership_removal_cancels_its_watches() {
 
 #[tokio::test]
 async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let (watch_tx, mut watch_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
-    let (observer, _) = builder.actor("observer", {
+    let (observer, _) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         move || ManagedObserver {
             peer: peer_ref.clone(),
@@ -857,16 +869,15 @@ async fn watching_terminated_peer_delivers_immediate_terminated() {
 
 #[tokio::test]
 async fn watching_detached_peer_delivers_immediate_terminated() {
-    let builder = RunnableActorBuilder::new();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (started_tx, mut observer_started) = mpsc::unbounded_channel();
     let detached_peer = {
-        let (_, peer_ref) = builder.actor("detached-peer", || Peer {
+        let (_, peer_ref) = runnable_actor("detached-peer", || Peer {
             started: mpsc::unbounded_channel().0,
         });
         peer_ref
     };
-    let (observer, _) = builder.actor("observer", move || Observer {
+    let (observer, _) = runnable_actor("observer", move || Observer {
         peer: detached_peer.clone(),
         observed: observed_tx.clone(),
         started: started_tx.clone(),
@@ -1113,10 +1124,9 @@ async fn shutdown_request_reports_normal_exit() {
 #[tokio::test]
 async fn two_observers_receive_the_same_events() {
     let mut fixture = fixture(false);
-    let builder = RunnableActorBuilder::new();
     let (second_observed_tx, mut second_observed) = mpsc::unbounded_channel();
     let (second_started_tx, mut second_started) = mpsc::unbounded_channel();
-    let (second_observer, _) = builder.actor("second-observer", {
+    let (second_observer, _) = runnable_actor("second-observer", {
         let peer_ref = fixture.peer_ref.clone();
         move || Observer {
             peer: peer_ref.clone(),
@@ -1204,15 +1214,14 @@ impl RawActor for GatedObserver {
 
 #[tokio::test]
 async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let gate = Arc::new(Notify::new());
     let (watch_tx, mut watch_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
-    let (observer, observer_ref) = builder.actor("observer", {
+    let (observer, observer_ref) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         let gate = gate.clone();
         move || GatedObserver {
@@ -1389,14 +1398,13 @@ impl RawActor for PanickingMapper {
 
 #[tokio::test]
 async fn mapping_panic_does_not_change_target_exit() {
-    let builder = RunnableActorBuilder::new();
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let (peer, peer_ref) = builder.actor("peer", move || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
     });
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     let (mapped_tx, mut mapped_rx) = mpsc::unbounded_channel();
-    let (observer, _) = builder.actor("observer", {
+    let (observer, _) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         move || PanickingMapper {
             peer: peer_ref.clone(),
@@ -1441,13 +1449,12 @@ async fn mapping_panic_does_not_change_target_exit() {
 
 #[tokio::test]
 async fn pending_target_can_be_dropped_from_non_runtime_thread() {
-    let builder = RunnableActorBuilder::new();
-    let (peer, peer_ref) = builder.actor("peer", || Peer {
+    let (peer, peer_ref) = runnable_actor("peer", || Peer {
         started: mpsc::unbounded_channel().0,
     });
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
-    let (observer, _) = builder.actor("observer", move || Observer {
+    let (observer, _) = runnable_actor("observer", move || Observer {
         peer: peer_ref.clone(),
         observed: observed_tx.clone(),
         started: observer_started_tx.clone(),

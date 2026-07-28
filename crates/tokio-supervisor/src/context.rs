@@ -39,16 +39,13 @@ impl ReadySignal {
 /// Runtime context passed to a child function on each (re)start.
 ///
 /// The child should select on [`shutdown_token`](Self::shutdown_token) to
-/// detect when the supervisor asks it to stop. The
-/// [`supervisor_token`](Self::supervisor_token) provides a read-only view of
-/// the parent supervisor's cancellation state.
+/// detect when the supervisor asks it to stop.
 #[derive(Clone, Debug)]
 pub struct ChildContext {
     id: String,
     generation: u64,
     token: CancellationToken,
     abort_token: CancellationToken,
-    supervisor: SupervisorToken,
     scope: SupervisorHandle,
     ready: Option<ReadySignal>,
 }
@@ -59,7 +56,6 @@ impl ChildContext {
         generation: u64,
         token: CancellationToken,
         abort_token: CancellationToken,
-        supervisor: SupervisorToken,
         scope: SupervisorHandle,
         ready: Option<ReadySignal>,
     ) -> Self {
@@ -68,7 +64,6 @@ impl ChildContext {
             generation,
             token,
             abort_token,
-            supervisor,
             scope,
             ready,
         }
@@ -110,21 +105,6 @@ impl ChildContext {
         &self.abort_token
     }
 
-    /// Returns a read-only view of the supervisor's cancellation state.
-    ///
-    /// This fires when the supervisor begins a shutdown, in both ordered and
-    /// dynamic scopes, and independently of when this particular child is
-    /// cancelled. It does not fire when a supervisor dies of its own failure
-    /// (for example [`SupervisorError::RestartIntensityExceeded`]): that path
-    /// drops the child tasks rather than stopping them. Use it to observe an
-    /// orderly stop, not as a general liveness signal for the supervisor.
-    ///
-    /// [`SupervisorError::RestartIntensityExceeded`]:
-    ///     crate::SupervisorError::RestartIntensityExceeded
-    pub fn supervisor_token(&self) -> &SupervisorToken {
-        &self.supervisor
-    }
-
     /// Returns the stable handle for this child's enclosing supervisor scope.
     ///
     /// Awaiting control operations on the enclosing scope is safe. The
@@ -152,27 +132,5 @@ impl ChildContext {
         if let Some(ready) = &self.ready {
             ready.send();
         }
-    }
-}
-
-/// Read-only view of the supervisor's cancellation token.
-///
-/// Children can observe supervisor-level cancellation but cannot trigger it.
-#[derive(Clone, Debug)]
-pub struct SupervisorToken(CancellationToken);
-
-impl SupervisorToken {
-    pub(crate) fn new(token: CancellationToken) -> Self {
-        Self(token)
-    }
-
-    /// Returns a future that completes when the supervisor is cancelled.
-    pub async fn cancelled(&self) {
-        self.0.cancelled().await;
-    }
-
-    /// Returns `true` if the supervisor has been cancelled.
-    pub fn is_cancelled(&self) -> bool {
-        self.0.is_cancelled()
     }
 }

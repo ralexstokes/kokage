@@ -20,7 +20,7 @@ use tokio_otp::{
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
+    ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
     SupervisorStateView,
 };
 
@@ -107,7 +107,7 @@ fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) -> u64 {
     lifecycle
-        .wait_started(id, baseline)
+        .started_after(id, baseline)
         .await
         .expect("runtime remains live")
 }
@@ -1274,9 +1274,10 @@ async fn child_grace_bounds_the_whole_actor_drain() {
     });
     let handle = Runtime::builder()
         .graph(graph.build().expect("graph builds"))
-        .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
-            20,
-        )))
+        .shutdown(ShutdownPolicy::new(
+            Duration::from_millis(20),
+            ShutdownMode::CooperativeStrict,
+        ))
         .build()
         .expect("runtime builds")
         .spawn();
@@ -1333,9 +1334,10 @@ async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
     });
     let runtime = Runtime::builder()
         .graph(builder.build().expect("valid graph"))
-        .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
-            20,
-        )))
+        .shutdown(ShutdownPolicy::new(
+            Duration::from_millis(20),
+            ShutdownMode::CooperativeStrict,
+        ))
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
@@ -1377,8 +1379,9 @@ async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
     });
     let runtime = Runtime::builder()
         .graph(builder.build().expect("valid graph"))
-        .shutdown(ShutdownPolicy::cooperative_then_abort(
+        .shutdown(ShutdownPolicy::new(
             Duration::from_millis(20),
+            ShutdownMode::CooperativeThenAbort,
         ))
         .build()
         .expect("runtime builds");

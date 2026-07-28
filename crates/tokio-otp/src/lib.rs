@@ -279,7 +279,7 @@ pub mod prelude {
         LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
         RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
         RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy,
-        SupervisorSnapshot, SupervisorStateView, prelude::SupervisorSnapshotReceiverExt,
+        SupervisorSnapshot, SupervisorStateView,
     };
 }
 
@@ -288,12 +288,11 @@ pub use tokio_otp_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, BlockingCancelled, BoxError, CallError, CancellationHandle,
+    ActorSlot, ActorStats, BlockingCancelled, CallError, CancellationHandle,
     DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuildError,
     GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
-    OffloadDeadline, OffloadHandle, RawActor, Reply, RunnableActor, RunnableActorBuilder,
-    SendError, StartContext, StartingScope, StopContext, StoppingScope, SupervisorPathSegment,
-    TimerKey, TryRecvError,
+    OffloadDeadline, OffloadHandle, RawActor, Reply, RunnableActor, SendError, StartContext,
+    StartingScope, StopContext, StoppingScope, SupervisorPathSegment, TimerKey, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 pub use runtime::{
@@ -308,13 +307,13 @@ pub use supervision_derive::{
     DynamicScope, Supervision, SupervisionBuildError, SupervisionFactories,
 };
 pub use tokio_supervisor::{
-    AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildContext, ChildMembershipView,
-    ChildResult, ChildSnapshot, ChildSpec, ChildStateView, CompletionGuard, CompletionOutcome,
-    ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView, LifecycleEvent,
-    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent,
-    RecursiveLifecycleEventKind, RecursiveLifecycleWatch, RestartIntensity, RestartPolicy,
-    ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
-    SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
-    SupervisorStateView, SupervisorToken, prelude::SupervisorSnapshotReceiverExt,
+    AttachedChild, AttachedChildIdentity, BackoffPolicy, BoxError, ChildContext,
+    ChildMembershipView, ChildResult, ChildSnapshot, ChildSpec, ChildStateView, CompletionGuard,
+    CompletionOutcome, ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView,
+    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
+    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
+    RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
+    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSpec, SupervisorStateView,
 };
 pub use tokio_util::sync::CancellationToken;

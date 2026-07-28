@@ -118,7 +118,7 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
             child_restart_count: 1,
         } if child_id == "worker" && delay == Duration::from_millis(40)
     ));
-    assert_eq!(tree.wait_started(&[], "worker", 0).await, Some(1));
+    assert_eq!(tree.started_after(&[], "worker", 0).await, Some(1));
 
     handle.shutdown();
     next_recursive_for(&mut tree, |event| {
@@ -365,7 +365,7 @@ async fn restart_is_an_ordered_exit_started_pair() {
 }
 
 #[tokio::test]
-async fn wait_started_reports_membership_removal() {
+async fn started_after_reports_membership_removal() {
     let handle = DynamicSupervisorBuilder::new()
         .build()
         .expect("valid supervisor")
@@ -389,7 +389,7 @@ async fn wait_started_reports_membership_removal() {
         .remove_child("worker")
         .await
         .expect("worker removal succeeds");
-    assert_eq!(lifecycle.wait_started("worker", baseline).await, None);
+    assert_eq!(lifecycle.started_after("worker", baseline).await, None);
 
     shutdown(handle).await;
 }
@@ -1204,7 +1204,7 @@ fn completing_supervisor(
 /// that may have carried the awaited `Started`, so scanning past it on an id
 /// mismatch would wait for a transition this watch can no longer deliver.
 #[tokio::test]
-async fn wait_started_reports_a_start_lost_to_overflow() {
+async fn started_after_reports_a_start_lost_to_overflow() {
     const RESTARTS: usize = 80;
     let handle = DynamicSupervisorBuilder::new()
         .build()
@@ -1250,9 +1250,9 @@ async fn wait_started_reports_a_start_lost_to_overflow() {
 
     // The storm has evicted every "quiet" transition, so the marker that now
     // fronts the buffer is stamped with a "storm" envelope.
-    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.wait_started("quiet", 0))
+    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.started_after("quiet", 0))
         .await
-        .expect("wait_started must not outlive the transitions it awaits");
+        .expect("started_after must not outlive the transitions it awaits");
     assert_eq!(waited, None);
 
     shutdown(handle).await;

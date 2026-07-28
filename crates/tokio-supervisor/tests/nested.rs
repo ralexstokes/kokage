@@ -562,7 +562,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .generation;
     fail_first.notify_one();
     let restarted_generation = lifecycle
-        .wait_started("nested", baseline)
+        .started_after("nested", baseline)
         .await
         .expect("outer supervisor remains live");
     assert_eq!(restarted_generation, baseline + 1);

@@ -37,7 +37,6 @@ pub struct SupervisorBuilder {
     strategy: Strategy,
     restart_intensity: RestartIntensity,
     children: Vec<Arc<ChildDefinition>>,
-    control_channel_capacity: usize,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
 
@@ -50,7 +49,6 @@ pub struct DynamicSupervisorBuilder {
     restart_intensity: RestartIntensity,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
-    control_channel_capacity: usize,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
 
@@ -83,7 +81,6 @@ impl SupervisorBuilder {
             strategy: Strategy::default(),
             restart_intensity: RestartIntensity::default(),
             children: Vec::new(),
-            control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
             channels: None,
         };
         let config = builder.config();
@@ -99,7 +96,7 @@ impl SupervisorBuilder {
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             children: self.children.clone(),
-            control_channel_capacity: self.control_channel_capacity,
+            control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
         }
     }
 
@@ -167,29 +164,15 @@ impl SupervisorBuilder {
         self
     }
 
-    /// Sets the bounded capacity of the internal control channel used for
-    /// runtime commands (add/remove child). Defaults to 64.
-    #[must_use]
-    pub fn control_channel_capacity(mut self, capacity: usize) -> Self {
-        self.control_channel_capacity = capacity;
-        self
-    }
-
     /// Validates the configuration and returns a ready-to-run [`Supervisor`].
     ///
     /// # Errors
     ///
     /// Returns [`SupervisorBuildError`] if:
     /// - Two children share the same id.
-    /// - The control channel capacity is zero.
     /// - Any restart intensity or backoff configuration is invalid.
     pub fn build(mut self) -> Result<Supervisor, SupervisorBuildError> {
         self.restart_intensity.validate()?;
-        if self.control_channel_capacity == 0 {
-            return Err(SupervisorBuildError::InvalidConfig(
-                "control channel capacity must be non-zero",
-            ));
-        }
         let mut ids = HashSet::new();
         for child in &self.children {
             if child.id.is_empty() {
@@ -229,7 +212,6 @@ impl DynamicSupervisorBuilder {
             restart_intensity: RestartIntensity::default(),
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
-            control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
             channels: None,
         };
         let config = builder.config();
@@ -245,7 +227,7 @@ impl DynamicSupervisorBuilder {
             default_restart: self.default_restart,
             default_shutdown: self.default_shutdown,
             children: Vec::new(),
-            control_channel_capacity: self.control_channel_capacity,
+            control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
         }
     }
 
@@ -285,21 +267,9 @@ impl DynamicSupervisorBuilder {
         self
     }
 
-    /// Sets the bounded capacity of the internal control channel.
-    #[must_use]
-    pub fn control_channel_capacity(mut self, capacity: usize) -> Self {
-        self.control_channel_capacity = capacity;
-        self
-    }
-
     /// Validates the configuration and returns an empty dynamic supervisor.
     pub fn build(mut self) -> Result<Supervisor, SupervisorBuildError> {
         self.restart_intensity.validate()?;
-        if self.control_channel_capacity == 0 {
-            return Err(SupervisorBuildError::InvalidConfig(
-                "control channel capacity must be non-zero",
-            ));
-        }
         let config = self.config();
         let channels = self
             .channels

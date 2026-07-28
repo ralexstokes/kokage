@@ -38,10 +38,11 @@ fn invalid_jittered_restart_intensity_is_rejected() {
     let err = SupervisorBuilder::new()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1)).with_backoff(
-                BackoffPolicy::JitteredExponential {
+                BackoffPolicy::Exponential {
                     base: Duration::ZERO,
                     factor: 2,
                     max: Duration::from_millis(10),
+                    jitter: true,
                 },
             ),
         )
@@ -75,6 +76,7 @@ fn invalid_exponential_restart_factor_is_rejected() {
                     base: Duration::from_millis(10),
                     factor: 0,
                     max: Duration::from_millis(20),
+                    jitter: false,
                 },
             ),
         )
@@ -94,6 +96,7 @@ fn invalid_exponential_restart_max_is_rejected() {
                     base: Duration::from_millis(10),
                     factor: 2,
                     max: Duration::ZERO,
+                    jitter: false,
                 },
             ),
         )
@@ -125,19 +128,6 @@ fn empty_child_id_is_rejected() {
         .expect_err("empty child id must be rejected");
 
     assert!(matches!(err, SupervisorBuildError::InvalidConfig(_)));
-}
-
-#[test]
-fn zero_control_channel_capacity_is_rejected() {
-    let control_err = SupervisorBuilder::new()
-        .control_channel_capacity(0)
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
-        .build()
-        .expect_err("zero control channel capacity must be rejected");
-    assert!(matches!(
-        control_err,
-        SupervisorBuildError::InvalidConfig(_)
-    ));
 }
 
 #[test]

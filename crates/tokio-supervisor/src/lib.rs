@@ -228,11 +228,12 @@ mod snapshot;
 mod strategy;
 mod supervisor;
 
+#[doc(hidden)]
 pub use attachment::{AttachedChild, AttachedChildIdentity};
 pub use builder::{DynamicSupervisorBuilder, SupervisorBuilder};
 pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
 pub use completion::{CompletionGuard, CompletionOutcome};
-pub use context::{ChildContext, SupervisorToken};
+pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::ExitStatusView;
 pub use handle::SupervisorHandle;

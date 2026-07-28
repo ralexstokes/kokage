@@ -48,6 +48,8 @@ pub enum BackoffPolicy {
     /// clamped to `max`. The attempt count tracks consecutive restarts and
     /// resets after an incarnation runs longer than the restart intensity's
     /// `within` duration. It is independent of the sliding intensity window.
+    /// When `jitter` is enabled, each delay is uniformly jittered into
+    /// `[delay/2, delay]` (equal jitter) to decorrelate concurrent restarts.
     Exponential {
         /// Initial delay applied on the first restart.
         base: Duration,
@@ -55,17 +57,8 @@ pub enum BackoffPolicy {
         factor: u32,
         /// Upper bound on the computed delay.
         max: Duration,
-    },
-    /// Same progression as [`Exponential`](BackoffPolicy::Exponential), but
-    /// each delay is uniformly jittered into `[delay/2, delay]` (equal jitter)
-    /// to decorrelate concurrent restarts.
-    JitteredExponential {
-        /// Initial delay applied on the first restart.
-        base: Duration,
-        /// Multiplicative factor applied per attempt.
-        factor: u32,
-        /// Upper bound on the computed delay before jitter is applied.
-        max: Duration,
+        /// Whether to apply equal jitter to the computed delay.
+        jitter: bool,
     },
 }
 
@@ -76,8 +69,9 @@ impl BackoffPolicy {
             Self::Fixed(delay) => {
                 require_non_zero_duration(delay, "fixed backoff delay must be non-zero")
             }
-            Self::Exponential { base, factor, max }
-            | Self::JitteredExponential { base, factor, max } => {
+            Self::Exponential {
+                base, factor, max, ..
+            } => {
                 require_non_zero_duration(base, "exponential backoff base must be non-zero")?;
                 if factor == 0 {
                     return Err(SupervisorBuildError::InvalidConfig(

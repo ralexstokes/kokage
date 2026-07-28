@@ -10,7 +10,7 @@ use crate::{
 /// A type-erased, thread-safe error type used as the `Err` half of
 /// [`ChildResult`].
 ///
-/// This is identical to and interchangeable with `tokio_otp::BoxError`.
+/// This is re-exported as `tokio_otp::BoxError` by the actor layer.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// The result type returned by every supervised child function.
@@ -131,6 +131,7 @@ impl SupervisorSpec {
     /// [`SupervisorHandle::attached_children`](crate::SupervisorHandle::attached_children)
     /// and is deliberately excluded from serializable snapshots.
     #[must_use]
+    #[doc(hidden)]
     pub fn attachment<T>(mut self, attachment: T) -> Self
     where
         T: Any + Send + Sync,
@@ -265,6 +266,7 @@ impl ChildSpec {
     /// [`SupervisorHandle::attached_children`](crate::SupervisorHandle::attached_children)
     /// and is deliberately excluded from serializable snapshots.
     #[must_use]
+    #[doc(hidden)]
     pub fn attachment<T>(self, attachment: T) -> Self
     where
         T: Any + Send + Sync,
@@ -295,6 +297,7 @@ impl ChildSpec {
     }
 
     /// Returns the child's restart policy.
+    #[doc(hidden)]
     pub fn restart_policy(&self) -> RestartPolicy {
         self.inner.restart
     }
@@ -304,6 +307,7 @@ impl ChildSpec {
     }
 
     /// Returns the child's shutdown policy.
+    #[doc(hidden)]
     pub fn shutdown_policy(&self) -> ShutdownPolicy {
         self.inner.shutdown_policy
     }

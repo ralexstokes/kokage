@@ -165,7 +165,7 @@ async fn one_for_one_restart_flow() {
         .generation;
     trigger_failure.notify_one();
     let generation = lifecycle
-        .wait_started("flaky", baseline)
+        .started_after("flaky", baseline)
         .await
         .expect("supervisor remains live during benchmark");
     black_box(generation);

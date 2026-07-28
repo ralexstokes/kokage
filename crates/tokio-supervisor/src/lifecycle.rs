@@ -262,7 +262,7 @@ impl RecursiveLifecycleWatch {
     /// tree-wide [`RecursiveLifecycleEventKind::Lagged`] marker discarded a
     /// prefix that may have contained it. Pass an empty path to wait in the
     /// watched scope itself.
-    pub async fn wait_started(
+    pub async fn started_after(
         &mut self,
         supervisor_path: &[LifecyclePathSegment],
         child_id: &str,
@@ -356,7 +356,7 @@ impl LifecycleWatch {
     /// happened. Callers that must distinguish them, or that need to resume
     /// waiting after lag, should realign from
     /// [`snapshot`](crate::SupervisorHandle::snapshot).
-    pub async fn wait_started(&mut self, child_id: &str, after_generation: u64) -> Option<u64> {
+    pub async fn started_after(&mut self, child_id: &str, after_generation: u64) -> Option<u64> {
         loop {
             let event = self.next().await?;
             // Checked before the child filter: a marker's envelope describes
