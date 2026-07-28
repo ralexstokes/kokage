@@ -245,8 +245,8 @@ failing `build()`, dropping a built scope before it is spawned or inserted, or
 having an insertion rejected makes the identity terminal and closes retained
 streams.
 
-The same rule applies to `SupervisorBuilder` and
-`DynamicSupervisorBuilder`, whose `handle()` returns a raw
+The same rule applies to the builders returned by `Supervisor::ordered()` and
+`Supervisor::dynamic()`, whose `handle()` returns a raw
 `SupervisorHandle`. A `Supervisor` clone is a new runnable declaration and
 therefore reserves an independent identity; handle clones continue to address
 one identity.
@@ -358,7 +358,7 @@ otherwise identical local ids and lineages in sibling or restarted subtrees.
 Use `RuntimeHandle::add_child(ChildSpec)` for a non-actor task in a dynamic
 scope and `add_subtree` for a nested actor-aware scope. Task children are not
 part of runtime actor stats, but they remain visible in snapshots and lifecycle
-watches. Applications that need raw `Supervisor`, `SupervisorBuilder`, or
+watches. Applications that need raw `Supervisor` construction or
 `SupervisorHandle` APIs should depend on `tokio-supervisor` directly; those
 low-level construction and control types are not re-exported by `tokio-otp`.
 

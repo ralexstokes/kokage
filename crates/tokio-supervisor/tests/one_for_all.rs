@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder,
+    ShutdownPolicy, Strategy, Supervisor,
 };
 
 mod common;
@@ -26,7 +26,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
     let (tail_started_tx, mut tail_started_rx) = mpsc::unbounded_channel();
 
     let trigger_fail = Arc::clone(&fail);
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let fail = Arc::clone(&trigger_fail);
         async move {
             if ctx.generation() == 0 {
@@ -41,7 +41,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
     let middle_cancelled_tx = cancelled_tx.clone();
     let middle_release = Arc::clone(&release_middle);
     let middle_ready = Arc::clone(&release_middle_ready);
-    let middle = ChildSpec::new("middle", move |ctx| {
+    let middle = ChildSpec::task("middle", move |ctx| {
         let cancelled_tx = middle_cancelled_tx.clone();
         let release_middle = Arc::clone(&middle_release);
         let release_middle_ready = Arc::clone(&middle_ready);
@@ -62,7 +62,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
     })
     .wait_for_ready();
     let tail_release = Arc::clone(&release_tail);
-    let tail = ChildSpec::new("tail", move |ctx| {
+    let tail = ChildSpec::task("tail", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         let release_tail = Arc::clone(&tail_release);
         let tail_started_tx = tail_started_tx.clone();
@@ -78,7 +78,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
         }
     })
     .wait_for_ready();
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)
         .child(middle)
@@ -125,7 +125,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
 
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
         async move {
@@ -142,7 +142,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -154,7 +154,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)
         .child(peer)
@@ -179,7 +179,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let temporary = ChildSpec::new("temporary", move |ctx| {
+    let temporary = ChildSpec::task("temporary", move |ctx| {
         let temporary_tx = temporary_tx.clone();
         async move {
             temporary_tx
@@ -191,7 +191,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     .restart(RestartPolicy::Never);
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
@@ -210,7 +210,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -222,7 +222,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(temporary)
         .child(trigger)
@@ -254,7 +254,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
         async move {
@@ -271,7 +271,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let live_instances = live_instances.clone();
         let peer_tx = peer_tx.clone();
         async move {
@@ -287,7 +287,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)
         .child(peer)
@@ -307,7 +307,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
 }
 
 #[tokio::test]
-async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_peer() {
+async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
     let release_failure = Arc::new(Notify::new());
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
     let peer_live_flag = common::LiveFlag::new();
@@ -315,7 +315,7 @@ async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_pee
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         async move {
@@ -329,13 +329,10 @@ async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_pee
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::new(
-        common::SHORT_GRACE,
-        ShutdownMode::CooperativeThenAbort,
-    ));
+    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
 
     let peer_live_flag_for_child = peer_live_flag.clone();
-    let peer = ChildSpec::new("stubborn-peer", move |ctx| {
+    let peer = ChildSpec::task("stubborn-peer", move |ctx| {
         let peer_live_flag = peer_live_flag_for_child.clone();
         let peer_tx = peer_tx.clone();
         async move {
@@ -343,17 +340,18 @@ async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_pee
             peer_tx
                 .send(ctx.generation())
                 .expect("test receiver dropped");
-            std::future::pending::<()>().await;
+            if ctx.generation() == 0 {
+                std::future::pending::<()>().await;
+            } else {
+                ctx.shutdown_token().cancelled().await;
+            }
             Ok(())
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::new(
-        common::SHORT_GRACE,
-        ShutdownMode::CooperativeThenAbort,
-    ));
+    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)
         .child(peer)
@@ -365,32 +363,39 @@ async fn one_for_all_restarts_after_aborting_stubborn_cooperative_then_abort_pee
     assert_eq!(common::recv_event(&mut peer_rx).await, 0);
     release_failure.notify_one();
     assert_eq!(common::recv_event(&mut peer_rx).await, 1);
+    assert!(
+        peer_live_flag.is_live(),
+        "the replacement starts only after the stubborn generation is dropped"
+    );
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
-    assert!(
-        !peer_live_flag.is_live(),
-        "stubborn peer should be dropped before wait resolves"
-    );
 }
 
-/// `ShutdownMode::Abort` promises an abort, not preemption of a non-yielding
-/// future, so a child whose next poll boundary is past the ordered drain's
-/// cursor window must not fail the group restart. It is reconciled against the
-/// drain group's longest grace, exactly as a dynamic scope would.
+/// A cooperative grace expiry must not skip reconciliation of an unrelated
+/// abort-mode straggler. `ShutdownPolicy::Abort` promises an abort, not
+/// preemption of a non-yielding future, so a child whose next poll boundary is
+/// past the ordered drain's cursor window is reconciled against the drain
+/// group's longest grace, exactly as it would be in a dynamic scope.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     let release_failure = Arc::new(Notify::new());
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let cooperative = ChildSpec::new("cooperative", |ctx| async move {
-        ctx.shutdown_token().cancelled().await;
+    let cooperative = ChildSpec::task("stubborn-cooperative", |ctx| async move {
+        if ctx.generation() == 0 {
+            std::future::pending::<()>().await;
+        } else {
+            ctx.shutdown_token().cancelled().await;
+        }
         Ok(())
-    });
+    })
+    .restart(RestartPolicy::Always)
+    .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(200)));
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         async move {
@@ -406,7 +411,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     .restart(RestartPolicy::OnFailure);
 
     // Blocks between polls, so its abort cannot land inside the cursor window.
-    let late_peer = ChildSpec::new("late-abort-peer", move |ctx| {
+    let late_peer = ChildSpec::task("late-abort-peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -421,7 +426,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     .restart(RestartPolicy::Always)
     .shutdown(ShutdownPolicy::abort());
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(cooperative)
         .child(trigger)
@@ -454,7 +459,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
 
     let release_failure_for_child = release_failure.clone();
     let finish_generation_one_for_trigger = finish_generation_one.clone();
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let finish_generation_one = finish_generation_one_for_trigger.clone();
         let trigger_attempts = trigger_attempts.clone();
@@ -475,7 +480,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
     .restart(RestartPolicy::OnFailure);
 
     let finish_generation_one_for_peer = finish_generation_one.clone();
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let finish_generation_one = finish_generation_one_for_peer.clone();
         let peer_attempts = peer_attempts.clone();
         let peer_tx = peer_tx.clone();
@@ -494,7 +499,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)
         .child(peer)
@@ -544,7 +549,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
         async move {
@@ -562,7 +567,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(RestartIntensity::new(1, Duration::from_secs(1)));
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -575,7 +580,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
     .restart(RestartPolicy::Always)
     .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)));
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
         .child(trigger)
@@ -596,7 +601,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
 async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
 
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         async move {
             if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -609,13 +614,13 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", |ctx| async move {
+    let peer = ChildSpec::task("peer", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
     .restart(RestartPolicy::Always);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_intensity(
             RestartIntensity::new(2, Duration::from_secs(1))
@@ -733,7 +738,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     let peer_attempts = Arc::new(AtomicUsize::new(0));
 
     let release_trigger_failure_for_child = release_trigger_failure.clone();
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let release_trigger_failure = release_trigger_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         async move {
@@ -748,7 +753,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let peer_attempts = peer_attempts.clone();
         async move {
             if peer_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -764,7 +769,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_intensity(
             RestartIntensity::new(2, Duration::from_secs(1))

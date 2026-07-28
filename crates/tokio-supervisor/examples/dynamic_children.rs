@@ -3,13 +3,13 @@ use tokio_supervisor::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch, pre
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = DynamicSupervisorBuilder::new().build()?;
+    let supervisor = Supervisor::dynamic().build()?;
 
     let handle = supervisor.spawn();
     let mut events = handle.watch_lifecycle_recursive();
 
     handle
-        .add_child(ChildSpec::new("api", |ctx| async move {
+        .add_child(ChildSpec::task("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
             println!("api shutting down");
@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_child_started(&mut events, "api").await?;
 
     handle
-        .add_child(ChildSpec::new("cache-warmer", |ctx| async move {
+        .add_child(ChildSpec::task("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
             loop {
@@ -47,17 +47,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_child_removed(&mut events, "cache-warmer").await?;
     println!("cache-warmer removed at runtime");
 
-    let nested = DynamicSupervisorBuilder::new().build()?;
+    let nested = Supervisor::dynamic().build()?;
 
     handle
-        .add_supervisor(SupervisorSpec::new("nested", nested))
+        .add_child(ChildSpec::supervisor("nested", nested))
         .await?;
     wait_for_nested_supervisor_started(&mut events, "nested").await?;
     let nested = handle
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
     nested
-        .add_child(ChildSpec::new("seed", |ctx| async move {
+        .add_child(ChildSpec::task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
             println!("nested seed shutting down");
@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("nested supervisor added at runtime");
 
     nested
-        .add_child(ChildSpec::new("nested-cache", |ctx| async move {
+        .add_child(ChildSpec::task("nested-cache", |ctx| async move {
             println!("nested-cache started in generation {}", ctx.generation());
 
             loop {

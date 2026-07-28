@@ -9,14 +9,14 @@ and a `press` that keeps jamming. Along the way we meet every knob a
 use std::time::Duration;
 
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartPolicy, RestartIntensity, ShutdownMode, ShutdownPolicy,
-    Strategy, SupervisorBuilder,
+    BackoffPolicy, ChildSpec, RestartPolicy, RestartIntensity, ShutdownPolicy, Strategy,
+    Supervisor,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A press that jams shortly after starting.
-    let press = ChildSpec::new("press", |ctx| async move {
+    let press = ChildSpec::task("press", |ctx| async move {
         println!("press starting (generation {})", ctx.generation());
         tokio::time::sleep(Duration::from_millis(200)).await;
         Err("paper jam".into())
@@ -26,19 +26,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RestartIntensity::new(3, Duration::from_secs(10))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
     )
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_secs(1),
-        ShutdownMode::CooperativeThenAbort,
-    ));
+    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
 
     // A front desk that runs until asked to stop.
-    let front_desk = ChildSpec::new("front-desk", |ctx| async move {
+    let front_desk = ChildSpec::task("front-desk", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .child(press)
         .child(front_desk)
@@ -97,16 +94,16 @@ resets once a run survives longer than the intensity window. A shutdown
 request always wins over a pending restart delay.
 
 Intensity can be set on the supervisor as a whole
-(`SupervisorBuilder::restart_intensity`) or overridden per child, as we did
+(`Supervisor::ordered().restart_intensity(...)`) or overridden per child, as we did
 for the press.
 
 ## Ordered startup and readiness
 
-`SupervisorBuilder` creates an ordered scope. It starts the declared child
+`Supervisor::ordered()` creates an ordered scope builder. It starts the declared child
 sequence one at a time, waiting at each opted-in readiness signal:
 
 ```rust,ignore
-let database = ChildSpec::new("database", |ctx| async move {
+let database = ChildSpec::task("database", |ctx| async move {
     connect_and_migrate().await?;
     ctx.mark_ready();
     ctx.shutdown_token().cancelled().await;
@@ -114,7 +111,7 @@ let database = ChildSpec::new("database", |ctx| async move {
 })
 .wait_for_ready();
 
-let supervisor = SupervisorBuilder::new()
+let supervisor = Supervisor::ordered()
     .child(database)
     .child(api)
     .build()?;
@@ -129,13 +126,13 @@ expensive follow-up work as the actor's next message without delaying later
 siblings. Call `handle.wait_started().await` when code outside the tree needs
 to wait until all current children are running. Ordered membership is immutable
 at runtime, so add and remove operations return
-`ControlError::UnsupportedByScopeKind`. Use `DynamicSupervisorBuilder` for an
+`ControlError::UnsupportedByScopeKind`. Use `Supervisor::dynamic()` for an
 empty runtime-written scope; its children start immediately. There is no
 implicit readiness timeout.
 
 Ordered startup latency is cumulative: the scope becomes ready after the sum
 of its declared readiness gates' `on_start` times. This is now the default for
-`SupervisorBuilder` and `SupervisionTree::new()`; use a dynamic scope when members
+`Supervisor::ordered()` and `SupervisionTree::new()`; use a dynamic scope when members
 should start independently and immediate runtime insertion is the right
 ownership model.
 
@@ -171,12 +168,12 @@ example] pins the last-child behavior with per-child restart-count assertions.
 When a child must stop — on supervisor shutdown, removal, or a group restart —
 its [`ShutdownPolicy`] governs how:
 
-- **`ShutdownPolicy::new(grace, ShutdownMode::CooperativeStrict)`** — cancel
-  the child's token and wait up to `grace` for a voluntary exit; abort *and
-  report a timeout error* otherwise.
-- **`ShutdownPolicy::new(grace, ShutdownMode::CooperativeThenAbort)`**
-  (default, 5 s grace) — same, but the enclosing shutdown operation does not
-  return an error. The child's lifecycle exit still reads `ShutdownTimedOut`.
+- **`ShutdownPolicy::cooperative(grace)`** (default, 5 s grace) — cancel
+  the child's token and wait up to `grace` for a voluntary exit. On shutdown
+  or removal, abort *and report a timeout error* otherwise; callers that only
+  need best-effort cleanup may explicitly ignore that error. During a group
+  restart, grace expiry escalates the old generation to abort and the restart
+  continues once the old task exits.
 - **`ShutdownPolicy::abort()`** — abort immediately.
 
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
@@ -211,10 +208,10 @@ wrapper aborts and joins the inner actor task, terminates its mailbox binding,
 and publishes actor observability before returning. If the wrapper does not
 finish within a short accounting beat — a tenth of the child's own grace,
 clamped to between 1 ms and 10 ms — the supervisor hard-aborts it.
-`ShutdownMode::CooperativeThenAbort` still lets the enclosing shutdown
-operation succeed; `ShutdownMode::CooperativeStrict` also returns a timeout
-error. Both modes expose the same truthful `ShutdownTimedOut` reason in
-snapshots and lifecycle streams.
+The enclosing shutdown or removal reports the timeout, and snapshots and
+lifecycle streams expose the same truthful `ShutdownTimedOut` reason. A group
+restart records that exit reason too, but treats the expiry as successful
+escalation once the old task has actually terminated.
 
 Ordered scopes stop children in reverse declaration order and give each child
 its complete grace, plus that child's accounting beat if it times out. Dynamic
@@ -237,7 +234,7 @@ children in [`shutdown_on_completion`], taken from a pre-spawn handle so a child
 that finishes immediately is still observed:
 
 ```rust,ignore
-let builder = SupervisorBuilder::new()
+let builder = Supervisor::ordered()
     .child(source.restart(RestartPolicy::OnFailure))
     .child(indexer.restart(RestartPolicy::Never))
     .child(metrics_reporter);
@@ -276,12 +273,12 @@ A supervisor is a first-class child kind, giving each subsystem its own
 restart budget while failures that exhaust it escalate to the parent:
 
 ```rust,ignore
-let pressroom = SupervisorBuilder::new()
+let pressroom = Supervisor::ordered()
     .child(press) // ... the flaky press from above
     .build()?;
 
-let shop = SupervisorBuilder::new()
-    .supervisor(SupervisorSpec::new("pressroom", pressroom))
+let shop = Supervisor::ordered()
+    .child(ChildSpec::supervisor("pressroom", pressroom))
     .child(front_desk)
     .build()?;
 ```
@@ -294,12 +291,12 @@ compare, or assemble that shape directly.
 
 ## Dynamic children
 
-`DynamicSupervisorBuilder` creates an empty scope whose children are added and
+`Supervisor::dynamic()` creates an empty scope whose children are added and
 removed while it is running:
 
 ```rust,ignore
 let lineage = handle
-    .add_child(ChildSpec::new("night-shift-press", factory))
+    .add_child(ChildSpec::task("night-shift-press", factory))
     .await?;
 handle.remove_child("night-shift-press").await?;
 
@@ -325,7 +322,7 @@ actors](dynamic-actors.md) chapter.
 [`RestartIntensity`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.RestartIntensity.html
 [`BackoffPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.BackoffPolicy.html
 [`Strategy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.Strategy.html
-[`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ShutdownPolicy.html
+[`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ShutdownPolicy.html
 [`shutdown_on_completion`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
 [`wait_completed`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.wait_completed
 [`LifecycleEvent::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.LifecycleEvent.html#variant.Exited

@@ -19,7 +19,7 @@ use tokio_otp::{
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity,
-    RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy, SupervisorError, SupervisorStateView,
+    RestartPolicy, ShutdownPolicy, Strategy, SupervisorError, SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -297,7 +297,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
         .subtree("raw-members")
         .expect("dynamic raw-members subtree");
     raw_members
-        .add_child(ChildSpec::new("raw", |ctx| async move {
+        .add_child(ChildSpec::task("raw", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -550,7 +550,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .await
         .expect("tracked actor removed through runtime handle");
     handle
-        .add_child(ChildSpec::new("worker", |ctx| async move {
+        .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -655,7 +655,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     sampler.await.expect("restart-window sampler completed");
 
     dynamic
-        .add_child(ChildSpec::new("dynamic-worker", |ctx| async move {
+        .add_child(ChildSpec::task("dynamic-worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -949,7 +949,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
     let graph = builder.build().expect("valid graph");
     let sidecar_started = Arc::new(Notify::new());
 
-    let sidecar = ChildSpec::new("sidecar", {
+    let sidecar = ChildSpec::task("sidecar", {
         let sidecar_started = sidecar_started.clone();
         move |ctx| {
             let sidecar_started = sidecar_started.clone();
@@ -1269,10 +1269,7 @@ async fn child_grace_bounds_the_whole_actor_drain() {
         }
     });
     let handle = SupervisionTree::graph(&graph.build().expect("graph builds"))
-        .default_shutdown(ShutdownPolicy::new(
-            Duration::from_millis(20),
-            ShutdownMode::CooperativeStrict,
-        ))
+        .default_shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20)))
         .build()
         .expect("runtime builds")
         .spawn();
@@ -1318,7 +1315,7 @@ impl RawActor for PendingActor {
 }
 
 #[tokio::test]
-async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
+async fn actor_shutdown_timeout_is_truthful_across_layers() {
     let started = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
     let (actor_slot, _) = builder.slot("worker");
@@ -1329,10 +1326,7 @@ async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
         }
     });
     let runtime = SupervisionTree::graph(&builder.build().expect("valid graph"))
-        .default_shutdown(ShutdownPolicy::new(
-            Duration::from_millis(20),
-            ShutdownMode::CooperativeStrict,
-        ))
+        .default_shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20)))
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
@@ -1345,51 +1339,6 @@ async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
         handle.shutdown_and_wait().await,
         Err(SupervisorError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
     ));
-    assert_eq!(
-        handle
-            .snapshot()
-            .child("worker")
-            .expect("actor remains in static membership")
-            .last_exit,
-        Some(ExitStatusView::ShutdownTimedOut)
-    );
-    while let Some(event) = lifecycle.next().await {
-        if let LifecycleEvent::Exited { reason, .. } = event {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
-            return;
-        }
-    }
-    panic!("timeout exit was not published");
-}
-
-#[tokio::test]
-async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
-    let started = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, {
-        let started = started.clone();
-        move || PendingActor {
-            started: started.clone(),
-        }
-    });
-    let runtime = SupervisionTree::graph(&builder.build().expect("valid graph"))
-        .default_shutdown(ShutdownPolicy::new(
-            Duration::from_millis(20),
-            ShutdownMode::CooperativeThenAbort,
-        ))
-        .build()
-        .expect("runtime builds");
-    let handle = runtime.spawn();
-    let mut lifecycle = handle.watch_lifecycle();
-
-    timeout(Duration::from_secs(1), started.notified())
-        .await
-        .expect("actor started");
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("cooperative-then-abort keeps shutdown successful");
     assert_eq!(
         handle
             .snapshot()

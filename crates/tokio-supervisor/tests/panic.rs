@@ -5,7 +5,7 @@ use std::sync::{
 
 use tokio::sync::{Notify, mpsc};
 use tokio_supervisor::{
-    ChildSpec, ExitStatusView, RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder,
+    ChildSpec, ExitStatusView, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
 };
 
 mod common;
@@ -15,9 +15,9 @@ async fn transient_child_panic_causes_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("panic-worker", move |ctx| {
+            ChildSpec::task("panic-worker", move |ctx| {
                 let attempts = attempts.clone();
                 let starts_tx = starts_tx.clone();
                 async move {
@@ -59,7 +59,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
     let (peer_starts_tx, mut peer_starts_rx) = mpsc::unbounded_channel();
 
-    let peer = ChildSpec::new("abort-peer", move |ctx| {
+    let peer = ChildSpec::task("abort-peer", move |ctx| {
         let peer_starts_tx = peer_starts_tx.clone();
         async move {
             peer_starts_tx
@@ -73,7 +73,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     .shutdown(ShutdownPolicy::abort());
 
     let trigger_failure_for_child = Arc::clone(&trigger_failure);
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let trigger_failure = Arc::clone(&trigger_failure_for_child);
         let trigger_attempts = Arc::clone(&trigger_attempts);
         async move {
@@ -88,7 +88,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(peer)
         .child(trigger)
@@ -112,9 +112,9 @@ async fn transient_factory_panic_causes_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("panic-worker", move |ctx| {
+            ChildSpec::task("panic-worker", move |ctx| {
                 starts_tx
                     .send(ctx.generation())
                     .expect("test receiver dropped");
@@ -146,7 +146,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let panic_child = ChildSpec::new("panic-worker", move |ctx| {
+    let panic_child = ChildSpec::task("panic-worker", move |ctx| {
         let attempts = attempts.clone();
         let panic_tx = panic_tx.clone();
         async move {
@@ -163,7 +163,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -175,7 +175,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(panic_child)
         .child(peer)
@@ -197,7 +197,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let panic_child = ChildSpec::new("panic-worker", move |ctx| {
+    let panic_child = ChildSpec::task("panic-worker", move |ctx| {
         panic_tx
             .send(ctx.generation())
             .expect("test receiver dropped");
@@ -212,7 +212,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let peer = ChildSpec::new("peer", move |ctx| {
+    let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -224,7 +224,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(panic_child)
         .child(peer)

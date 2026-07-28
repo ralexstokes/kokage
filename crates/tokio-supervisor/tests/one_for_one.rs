@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-    Strategy, SupervisorBuilder,
+    Strategy, Supervisor,
 };
 
 mod common;
@@ -22,7 +22,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
     let (slow_tx, mut slow_rx) = mpsc::unbounded_channel();
     let (fast_tx, mut fast_rx) = mpsc::unbounded_channel();
 
-    let slow = ChildSpec::new("slow", {
+    let slow = ChildSpec::task("slow", {
         let slow_failure = Arc::clone(&slow_failure);
         move |ctx| {
             let slow_failure = Arc::clone(&slow_failure);
@@ -46,7 +46,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         RestartIntensity::new(4, Duration::from_secs(2))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(30))),
     );
-    let fast = ChildSpec::new("fast", {
+    let fast = ChildSpec::task("fast", {
         let fast_failure = Arc::clone(&fast_failure);
         move |ctx| {
             let fast_failure = Arc::clone(&fast_failure);
@@ -66,7 +66,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         }
     })
     .restart(RestartPolicy::OnFailure);
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(slow)
         .child(fast)
         .build()
@@ -110,7 +110,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let flaky_attempts = attempts.clone();
-    let flaky = ChildSpec::new("flaky", move |ctx| {
+    let flaky = ChildSpec::task("flaky", move |ctx| {
         let flaky_attempts = flaky_attempts.clone();
         let flaky_tx = flaky_tx.clone();
         async move {
@@ -128,7 +128,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
     .restart(RestartPolicy::OnFailure);
 
     let sibling_ticks_for_child = sibling_ticks.clone();
-    let sibling = ChildSpec::new("sibling", move |ctx| {
+    let sibling = ChildSpec::task("sibling", move |ctx| {
         let sibling_ticks_for_child = sibling_ticks_for_child.clone();
         let sibling_tx = sibling_tx.clone();
         async move {
@@ -146,7 +146,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
         }
     });
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .child(flaky)
         .child(sibling)
@@ -178,7 +178,7 @@ async fn permanent_child_restarts_after_completion() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let child = ChildSpec::new("permanent", move |ctx| {
+    let child = ChildSpec::task("permanent", move |ctx| {
         let attempts = attempts.clone();
         let starts_tx = starts_tx.clone();
         async move {
@@ -195,7 +195,7 @@ async fn permanent_child_restarts_after_completion() {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(child)
         .build()
         .expect("valid supervisor");
@@ -214,9 +214,9 @@ async fn permanent_child_restarts_after_completion() {
 async fn temporary_child_does_not_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("temporary", move |ctx| {
+            ChildSpec::task("temporary", move |ctx| {
                 let starts_tx = starts_tx.clone();
                 async move {
                     starts_tx
@@ -271,7 +271,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
     let child_a_attempts = Arc::new(AtomicUsize::new(0));
     let child_b_attempts = Arc::new(AtomicUsize::new(0));
 
-    let child_a = ChildSpec::new("child-a", move |ctx| {
+    let child_a = ChildSpec::task("child-a", move |ctx| {
         let child_a_attempts = child_a_attempts.clone();
         let child_a_tx = child_a_tx.clone();
         async move {
@@ -289,7 +289,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(child_restart_intensity);
 
-    let child_b = ChildSpec::new("child-b", move |ctx| {
+    let child_b = ChildSpec::task("child-b", move |ctx| {
         let child_b_attempts = child_b_attempts.clone();
         let child_b_tx = child_b_tx.clone();
         async move {
@@ -307,7 +307,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(child_restart_intensity);
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
         .child(child_a)
@@ -330,13 +330,13 @@ async fn child_restart_intensity_is_isolated_per_child() {
 async fn restart_events_follow_exit_schedule_start_restart_order() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(2, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
         )
         .child(
-            ChildSpec::new("flaky", move |ctx| {
+            ChildSpec::task("flaky", move |ctx| {
                 let attempts = attempts.clone();
                 async move {
                     if attempts.fetch_add(1, Ordering::SeqCst) == 0 {

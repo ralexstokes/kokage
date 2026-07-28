@@ -323,7 +323,7 @@ pub fn fail_on_generations(
     trigger_failure: Arc<Notify>,
     generations_to_fail: u64,
 ) -> ChildSpec {
-    ChildSpec::new(id, move |ctx| {
+    ChildSpec::task(id, move |ctx| {
         let trigger_failure = trigger_failure.clone();
         async move {
             if ctx.generation() < generations_to_fail {
@@ -344,7 +344,7 @@ pub fn failing_child(
     error: &'static str,
 ) -> ChildSpec {
     let trigger_failure = trigger_failure.clone();
-    ChildSpec::new(id, move |_ctx| {
+    ChildSpec::task(id, move |_ctx| {
         let trigger_failure = trigger_failure.clone();
         async move {
             trigger_failure.notified().await;

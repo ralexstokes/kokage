@@ -93,11 +93,9 @@ pub enum DrainPolicy {
     /// messages that were lost — what surfaces is a timed-out exit
     /// ([`ActorRunError::ShutdownTimedOut`](crate::ActorRunError::ShutdownTimedOut)
     /// standalone, [`ExitStatusView::ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut)
-    /// under supervision), and under
-    /// [`CooperativeThenAbort`](crate::ShutdownMode::CooperativeThenAbort) not
-    /// even an error from the enclosing shutdown call. A `Drain` actor under a
-    /// too-short grace period therefore behaves like a slower `Discard`, which
-    /// is the failure mode to watch for. In particular,
+    /// under supervision). A `Drain` actor under a too-short grace period
+    /// therefore behaves like a slower `Discard`, which is the failure mode to
+    /// watch for. The enclosing shutdown also reports the timeout. In particular,
     /// [`ShutdownPolicy::abort`](crate::ShutdownPolicy::abort) has a zero grace
     /// period and leaves effectively no drain window at all.
     ///
@@ -105,9 +103,7 @@ pub enum DrainPolicy {
     /// mailbox depth times worst-case handler latency, plus room for
     /// [`on_stop`](Actor::on_stop). Ordered siblings stop one at a time, so
     /// sibling drains add up rather than overlap. Where the drain must finish
-    /// for correctness, prefer
-    /// [`CooperativeStrict`](crate::ShutdownMode::CooperativeStrict), which
-    /// reports the overrun as an error instead of absorbing it.
+    /// for correctness, handle the timeout reported by cooperative shutdown.
     #[default]
     Drain,
 }

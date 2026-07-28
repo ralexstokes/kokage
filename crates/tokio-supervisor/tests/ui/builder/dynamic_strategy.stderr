@@ -1,0 +1,5 @@
+error[E0599]: no method named `strategy` found for struct `DynamicSupervisorBuilder` in the current scope
+ --> tests/ui/builder/dynamic_strategy.rs:4:35
+  |
+4 |     let _ = Supervisor::dynamic().strategy(Strategy::RestForOne);
+  |                                   ^^^^^^^^ method not found in `DynamicSupervisorBuilder`

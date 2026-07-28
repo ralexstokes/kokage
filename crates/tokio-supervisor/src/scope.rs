@@ -8,8 +8,6 @@ pub use crate::builder::ScopeKind;
 pub enum ControlOperation {
     /// Add a task child.
     AddChild,
-    /// Add a nested supervisor child.
-    AddSupervisor,
     /// Remove a child or nested supervisor.
     RemoveChild,
 }
@@ -18,7 +16,6 @@ impl std::fmt::Display for ControlOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let operation = match self {
             Self::AddChild => "add_child",
-            Self::AddSupervisor => "add_supervisor",
             Self::RemoveChild => "remove_child",
         };
         f.write_str(operation)

@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEvent,
-    LifecycleWatch, RestartIntensity, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
+    ChildSpec, ChildStateView, ControlError, LifecycleEvent, LifecycleWatch, RestartIntensity,
+    Strategy, Supervisor, SupervisorError,
 };
 
 mod common;
@@ -11,7 +11,7 @@ mod common;
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn waiting_child(id: &str) -> ChildSpec {
-    ChildSpec::new(id, |ctx| async move {
+    ChildSpec::task(id, |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
@@ -27,7 +27,7 @@ async fn wait_for_lifecycle_end(watch: &mut LifecycleWatch, message: &str) {
 
 #[tokio::test]
 async fn retained_builder_handle_is_unavailable_then_binds_to_the_spawned_root() {
-    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
     assert!(matches!(
         handle.add_child(waiting_child("early")).await,
@@ -51,7 +51,7 @@ async fn retained_builder_handle_is_unavailable_then_binds_to_the_spawned_root()
 
 #[tokio::test]
 async fn fluent_reconfiguration_updates_snapshot_without_pre_spawn_lifecycle_events() {
-    let builder = SupervisorBuilder::new();
+    let builder = Supervisor::ordered();
     let handle = builder.handle();
     let mut lifecycle = handle.watch_lifecycle();
     let builder = builder
@@ -82,7 +82,7 @@ async fn fluent_reconfiguration_updates_snapshot_without_pre_spawn_lifecycle_eve
 
 #[tokio::test]
 async fn watch_before_spawn_observes_first_added_and_started_after_declared_baseline() {
-    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle.snapshot();
@@ -115,7 +115,7 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
 #[tokio::test]
 async fn dropped_builder_and_failed_build_terminalize_every_stream() {
     for abandonment in ["builder", "failed-build", "built-supervisor"] {
-        let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+        let builder = Supervisor::ordered().child(waiting_child("worker"));
         let handle = builder.handle();
         let mut snapshots = handle.subscribe_snapshots();
         let mut events = common::event_watch(&handle);
@@ -155,11 +155,11 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
 
 #[tokio::test]
 async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
-    let parent = SupervisorBuilder::new()
+    let parent = Supervisor::ordered()
         .build()
         .expect("ordered parent builds")
         .spawn();
-    let nested_builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let nested_builder = Supervisor::ordered().child(waiting_child("worker"));
     let nested_handle = nested_builder.handle();
     let mut snapshots = nested_handle.subscribe_snapshots();
     let mut lifecycle = nested_handle.watch_lifecycle();
@@ -167,7 +167,7 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
 
     assert!(matches!(
         parent
-            .add_supervisor(SupervisorSpec::new("nested", nested))
+            .add_child(ChildSpec::supervisor("nested", nested))
             .await,
         Err(ControlError::UnsupportedByScopeKind { .. })
     ));
@@ -186,13 +186,13 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
 
 #[tokio::test]
 async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_scope() {
-    let parent = DynamicSupervisorBuilder::new()
+    let parent = Supervisor::dynamic()
         .build()
         .expect("dynamic parent builds")
         .spawn();
     parent.wait_started().await.expect("dynamic parent starts");
     let (stopped_tx, mut stopped_rx) = mpsc::unbounded_channel();
-    let nested_builder = SupervisorBuilder::new().child(ChildSpec::new("worker", move |ctx| {
+    let nested_builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {
         let stopped_tx = stopped_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -203,7 +203,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
     let retained = nested_builder.handle();
     let nested = nested_builder.build().expect("nested scope builds");
     parent
-        .add_supervisor(SupervisorSpec::new("nested", nested))
+        .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested scope inserts");
     retained.wait_started().await.expect("nested scope starts");
@@ -238,15 +238,15 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
 
 #[tokio::test]
 async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
-    let leaf = DynamicSupervisorBuilder::new()
+    let leaf = Supervisor::dynamic()
         .build()
         .expect("leaf supervisor builds");
-    let middle = SupervisorBuilder::new()
-        .supervisor(SupervisorSpec::new("leaf", leaf))
+    let middle = Supervisor::ordered()
+        .child(ChildSpec::supervisor("leaf", leaf))
         .build()
         .expect("middle supervisor builds");
-    let original = SupervisorBuilder::new()
-        .supervisor(SupervisorSpec::new("middle", middle))
+    let original = Supervisor::ordered()
+        .child(ChildSpec::supervisor("middle", middle))
         .build()
         .expect("supervisor builds");
     let original_pre_spawn = original.handle();
@@ -313,7 +313,7 @@ async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
 
 #[tokio::test]
 async fn wait_on_a_reserved_handle_waits_for_the_scope_to_run_and_stop() {
-    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
 
     // Nothing has bound yet, so `wait` is waiting for a scope that has not
@@ -341,7 +341,7 @@ async fn wait_on_a_reserved_handle_waits_for_the_scope_to_run_and_stop() {
 
 #[tokio::test]
 async fn wait_on_an_abandoned_reserved_handle_reports_terminality() {
-    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
 
     let mut waiting = Box::pin(handle.wait());
@@ -363,7 +363,7 @@ async fn wait_on_an_abandoned_reserved_handle_reports_terminality() {
 
 #[tokio::test]
 async fn recursive_lifecycle_watch_created_before_build_reaches_the_spawned_scope() {
-    let builder = SupervisorBuilder::new().child(waiting_child("worker"));
+    let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
     let mut events = common::event_watch(&handle);
 

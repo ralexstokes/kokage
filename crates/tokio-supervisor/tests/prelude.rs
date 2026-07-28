@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_supervisor::{BackoffPolicy, ChildStateView, ShutdownMode, prelude::*};
+use tokio_supervisor::{BackoffPolicy, ChildStateView, prelude::*};
 
 mod common;
 use common::ObservedEvent;
@@ -11,9 +11,8 @@ mod coverage_probe {
     mod expected {
         use tokio_supervisor::prelude::{
             BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-            RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
-            SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle,
-            SupervisorSpec,
+            OrderedSupervisorBuilder, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy,
+            Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
         };
     }
 
@@ -21,7 +20,7 @@ mod coverage_probe {
         use tokio_supervisor::{
             BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard,
             CompletionOutcome, ControlOperation, ExitStatusView, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, ScopeKind, ShutdownMode, SupervisorSnapshot,
+            LifecyclePathSegment, LifecycleWatch, ScopeKind, SupervisorSnapshot,
             SupervisorStateView,
         };
     }
@@ -64,8 +63,8 @@ fn closed_policy_sets_can_be_matched_exhaustively_in_the_supervisor_crate() {
 async fn prelude_supports_handle_event_and_snapshot_helpers() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
-    let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", move |ctx| {
+    let handle = Supervisor::ordered()
+        .child(ChildSpec::task("worker", move |ctx| {
             let started_tx = started_tx.clone();
             async move {
                 started_tx
@@ -122,8 +121,8 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
 async fn prelude_snapshot_helpers_walk_nested_children() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
 
-    let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("leaf", move |ctx| {
+    let nested = Supervisor::ordered()
+        .child(ChildSpec::task("leaf", move |ctx| {
             let leaf_started_tx = leaf_started_tx.clone();
             async move {
                 leaf_started_tx.send(()).expect("test receiver dropped");
@@ -134,18 +133,15 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(
-            ChildSpec::new("anchor", |ctx| async move {
+            ChildSpec::task("anchor", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(ShutdownPolicy::new(
-                Duration::from_millis(25),
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(25))),
         )
-        .supervisor(SupervisorSpec::new("nested", nested))
+        .child(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -171,8 +167,7 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 
 #[test]
 fn prelude_policy_types_cover_common_configuration() {
-    assert_eq!(ShutdownPolicy::abort().mode, ShutdownMode::Abort);
-    assert!(ShutdownPolicy::abort().grace.is_zero());
+    assert_eq!(ShutdownPolicy::abort(), ShutdownPolicy::Abort);
 
     assert_eq!(
         RestartIntensity::new(3, Duration::from_secs(10)),

@@ -1,7 +1,7 @@
-use tokio_supervisor::{ChildSpec, DynamicSupervisorBuilder, SupervisorBuilder, SupervisorSpec};
+use tokio_supervisor::{ChildSpec, Supervisor};
 
 fn waiting_child(id: &str) -> ChildSpec {
-    ChildSpec::new(id, |ctx| async move {
+    ChildSpec::task(id, |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
@@ -9,13 +9,13 @@ fn waiting_child(id: &str) -> ChildSpec {
 
 #[tokio::test]
 async fn attached_children_walk_direct_memberships_before_descendants() {
-    let nested = SupervisorBuilder::new()
+    let nested = Supervisor::ordered()
         .child(waiting_child("leaf").attachment("leaf metadata".to_owned()))
         .build()
         .expect("nested supervisor builds");
-    let root = SupervisorBuilder::new()
+    let root = Supervisor::ordered()
         .child(waiting_child("worker").attachment("worker metadata".to_owned()))
-        .supervisor(SupervisorSpec::new("branch", nested).attachment("branch metadata".to_owned()))
+        .child(ChildSpec::supervisor("branch", nested).attachment("branch metadata".to_owned()))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -48,7 +48,7 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
 
 #[tokio::test]
 async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
-    let handle = DynamicSupervisorBuilder::new()
+    let handle = Supervisor::dynamic()
         .build()
         .expect("supervisor builds")
         .spawn();
@@ -83,7 +83,7 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
 #[cfg(feature = "serde")]
 #[tokio::test]
 async fn attachments_are_absent_from_serialized_snapshots() {
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(waiting_child("worker").attachment("not serialized".to_owned()))
         .build()
         .expect("supervisor builds")

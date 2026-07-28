@@ -1,7 +1,8 @@
 use thiserror::Error;
 
-/// Errors returned when building a [`Supervisor`](crate::Supervisor) from a
-/// [`SupervisorBuilder`](crate::SupervisorBuilder).
+/// Errors returned when building a [`Supervisor`](crate::Supervisor) from
+/// the builders returned by [`Supervisor::ordered`](crate::Supervisor::ordered)
+/// and [`Supervisor::dynamic`](crate::Supervisor::dynamic).
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SupervisorBuildError {

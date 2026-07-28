@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
+    builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder},
     child::{ChildDefinition, ChildKind, ChildResult},
     context::ChildContext,
     error::SupervisorError,
@@ -41,9 +42,9 @@ use crate::{
 /// the clone continues to address the original:
 ///
 /// ```no_run
-/// # use tokio_supervisor::SupervisorBuilder;
+/// # use tokio_supervisor::Supervisor;
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let supervisor = SupervisorBuilder::new().build()?;
+/// let supervisor = Supervisor::ordered().build()?;
 /// let handle = supervisor.handle();
 ///
 /// supervisor.clone().spawn(); // spawns the clone's identity, not `handle`'s
@@ -116,6 +117,16 @@ impl ParentLink {
 }
 
 impl Supervisor {
+    /// Starts an ordered-supervisor declaration.
+    pub fn ordered() -> OrderedSupervisorBuilder {
+        OrderedSupervisorBuilder::new()
+    }
+
+    /// Starts an empty dynamic-supervisor declaration.
+    pub fn dynamic() -> DynamicSupervisorBuilder {
+        DynamicSupervisorBuilder::new()
+    }
+
     pub(crate) fn new(config: SupervisorConfig) -> Self {
         let channels = stable_channels_for_config(&config);
         Self {

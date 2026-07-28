@@ -62,7 +62,7 @@ impl Actor for ScopeProbe {
         // Task insertion schedules startup rather than awaiting readiness, so
         // it remains available on the restricted startup-stage handle.
         let before_ready = children
-            .add_child(ChildSpec::new("too-early", |_| async { Ok(()) }))
+            .add_child(ChildSpec::task("too-early", |_| async { Ok(()) }))
             .await;
         assert!(matches!(before_ready, Err(ControlError::Unavailable)));
         self.reports
@@ -174,7 +174,7 @@ impl Actor for RestrictedTaskAdder {
     async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         let children = ctx.children().expect("actor owns a dynamic scope");
         let lineage = children
-            .add_child(ChildSpec::new("task", |ctx| async move {
+            .add_child(ChildSpec::task("task", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
@@ -246,7 +246,7 @@ async fn reserved_trees_terminalize_handles_when_dropped() {
     assert_eq!(handle.snapshot().kind, ScopeKind::Ordered);
     assert!(matches!(
         handle
-            .add_child(ChildSpec::new("early", |_| async { Ok(()) }))
+            .add_child(ChildSpec::task("early", |_| async { Ok(()) }))
             .await,
         Err(ControlError::Unavailable)
     ));
@@ -284,7 +284,7 @@ fn reserved_tree_strategy_preserves_declared_pre_spawn_snapshot() {
     let graph = graph.build().expect("graph builds");
     let tree = SupervisionTree::new()
         .task(
-            ChildSpec::new("task", |_| async { Ok(()) }),
+            ChildSpec::task("task", |_| async { Ok(()) }),
             RestartPolicy::default(),
             ShutdownPolicy::default(),
         )
@@ -318,12 +318,12 @@ fn reserved_tree_strategy_preserves_declared_pre_spawn_snapshot() {
 async fn runtime_build_errors_and_rejected_subtrees_terminalize_reserved_handles() {
     let tree = SupervisionTree::new()
         .task(
-            ChildSpec::new("duplicate", |_| async { Ok(()) }),
+            ChildSpec::task("duplicate", |_| async { Ok(()) }),
             RestartPolicy::default(),
             ShutdownPolicy::default(),
         )
         .task(
-            ChildSpec::new("duplicate", |_| async { Ok(()) }),
+            ChildSpec::task("duplicate", |_| async { Ok(()) }),
             RestartPolicy::default(),
             ShutdownPolicy::default(),
         )
@@ -712,7 +712,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 #[tokio::test]
 async fn cloning_a_plain_tree_reserves_a_fresh_identity_for_each_copy() {
     let tree = SupervisionTree::new().task(
-        ChildSpec::new("task", |ctx| async move {
+        ChildSpec::task("task", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }),
@@ -728,7 +728,7 @@ async fn cloning_a_plain_tree_reserves_a_fresh_identity_for_each_copy() {
     spawned.wait_started().await.expect("the clone starts");
     assert!(matches!(
         reserved
-            .add_child(ChildSpec::new("late", |_| async { Ok(()) }))
+            .add_child(ChildSpec::task("late", |_| async { Ok(()) }))
             .await,
         Err(ControlError::Unavailable)
     ));

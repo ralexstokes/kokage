@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use tokio_supervisor::{
-    ChildSpec, DynamicSupervisorBuilder, RestartIntensity, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder, SupervisorSpec,
+    ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartIntensity, RestartPolicy,
+    ScopeKind, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
 };
 
 use crate::{
@@ -71,7 +71,7 @@ enum SupervisionChild {
 }
 
 enum ReservedScopeBuilder {
-    Ordered(Option<SupervisorBuilder>),
+    Ordered(Option<OrderedSupervisorBuilder>),
     Dynamic(Option<DynamicSupervisorBuilder>),
 }
 
@@ -336,6 +336,8 @@ impl SupervisionTree<false> {
     /// [`Strategy::OneForAll`] recycles both when either fails, and
     /// [`Strategy::RestForOne`] recycles the owned scope when the leader fails
     /// while an owned-scope failure leaves the leader running.
+    /// The generated leader and `children` edges inherit this enclosing
+    /// scope's restart and shutdown defaults unless the leader overrides them.
     #[must_use]
     pub fn actor_with_scope<const CHILD_DYNAMIC: bool>(
         mut self,
@@ -500,7 +502,7 @@ impl ScopeNode {
                         .take()
                         .expect("live reservation owns its dynamic builder"),
                     Some(ReservedScopeBuilder::Ordered(_)) => unreachable!("scope kind matches"),
-                    None => DynamicSupervisorBuilder::new(),
+                    None => Supervisor::dynamic(),
                 };
                 builder = builder
                     .restart(config.default_restart)
@@ -516,9 +518,12 @@ impl ScopeNode {
                         .take()
                         .expect("live reservation owns its ordered builder"),
                     Some(ReservedScopeBuilder::Dynamic(_)) => unreachable!("scope kind matches"),
-                    None => SupervisorBuilder::new(),
+                    None => Supervisor::ordered(),
                 };
-                let mut builder = builder.strategy(config.strategy);
+                let mut builder = builder
+                    .strategy(config.strategy)
+                    .restart(config.default_restart)
+                    .shutdown(config.default_shutdown);
                 if let Some(intensity) = config.restart_intensity {
                     builder = builder.restart_intensity(intensity);
                 }
@@ -592,12 +597,12 @@ impl SupervisionChild {
 
     fn lower(
         self,
-        builder: SupervisorBuilder,
+        builder: OrderedSupervisorBuilder,
         actors: &Arc<ActorRuntimeState>,
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
         reservations: &mut Vec<ScopeReservation>,
-    ) -> Result<SupervisorBuilder, SupervisorBuildError> {
+    ) -> Result<OrderedSupervisorBuilder, SupervisorBuildError> {
         Ok(match self {
             Self::Actor(ActorSpec {
                 actor,
@@ -622,8 +627,8 @@ impl SupervisionChild {
             } => builder.child(child.restart(restart).shutdown(shutdown)),
             Self::Scope { id, node } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
-                builder.supervisor(
-                    SupervisorSpec::new(id, nested)
+                builder.child(
+                    ChildSpec::supervisor(id, nested)
                         .attachment(RuntimeAttachment::subtree(actors, nested_actors)),
                 )
             }
@@ -661,16 +666,18 @@ impl SupervisionChild {
                     .child_id(child_id)
                     .children(children_handle),
                 );
-                let owned = SupervisorBuilder::new()
+                let owned = Supervisor::ordered()
                     .strategy(strategy)
+                    .restart(default_restart)
+                    .shutdown(default_shutdown)
                     .child(leader)
-                    .supervisor(
-                        SupervisorSpec::new("children", children_supervisor)
+                    .child(
+                        ChildSpec::supervisor("children", children_supervisor)
                             .attachment(RuntimeAttachment::subtree(&owned_actors, children_actors)),
                     )
                     .build()?;
-                builder.supervisor(
-                    SupervisorSpec::new(id, owned)
+                builder.child(
+                    ChildSpec::supervisor(id, owned)
                         .attachment(RuntimeAttachment::subtree(actors, owned_actors)),
                 )
             }
@@ -690,12 +697,8 @@ impl<const DYNAMIC: bool> ReservedSupervisionTree<DYNAMIC> {
             tree.config().default_shutdown,
         ));
         let builder = match tree.node {
-            ScopeNode::Ordered { .. } => {
-                ReservedScopeBuilder::Ordered(Some(SupervisorBuilder::new()))
-            }
-            ScopeNode::Dynamic { .. } => {
-                ReservedScopeBuilder::Dynamic(Some(DynamicSupervisorBuilder::new()))
-            }
+            ScopeNode::Ordered { .. } => ReservedScopeBuilder::Ordered(Some(Supervisor::ordered())),
+            ScopeNode::Dynamic { .. } => ReservedScopeBuilder::Dynamic(Some(Supervisor::dynamic())),
         };
         let mut reserved = Self {
             tree,

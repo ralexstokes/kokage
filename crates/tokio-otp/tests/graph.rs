@@ -1338,7 +1338,7 @@ mod runnable_actor {
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
         GraphBuilder, MessageContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
-        SendError, ShutdownMode, StartContext, SupervisionTree,
+        SendError, StartContext, SupervisionTree,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1656,10 +1656,9 @@ mod runnable_actor {
             .add_actor_with(
                 "worker",
                 || NeverStops,
-                DynamicActorOptions::default().shutdown(tokio_supervisor::ShutdownPolicy::new(
-                    Duration::from_millis(100),
-                    ShutdownMode::CooperativeStrict,
-                )),
+                DynamicActorOptions::default().shutdown(
+                    tokio_supervisor::ShutdownPolicy::cooperative(Duration::from_millis(100)),
+                ),
             )
             .await
             .expect("dynamic actor added");

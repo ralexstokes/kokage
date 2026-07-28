@@ -4,8 +4,8 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("http-server", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("http-server", |ctx| async move {
             println!("http-server started");
 
             loop {

@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let fetch = {
         let starts_tx = starts_tx.clone();
-        ChildSpec::new("fetch", move |ctx| {
+        ChildSpec::task("fetch", move |ctx| {
             let starts_tx = starts_tx.clone();
             async move {
                 starts_tx
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let decode = {
         let starts_tx = starts_tx.clone();
         let decode_attempts = Arc::clone(&decode_attempts);
-        ChildSpec::new("decode", move |ctx| {
+        ChildSpec::task("decode", move |ctx| {
             let starts_tx = starts_tx.clone();
             let decode_attempts = Arc::clone(&decode_attempts);
             async move {
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let sink = {
         let starts_tx = starts_tx.clone();
-        ChildSpec::new("sink", move |ctx| {
+        ChildSpec::task("sink", move |ctx| {
             let starts_tx = starts_tx.clone();
             async move {
                 starts_tx
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(RestartPolicy::Always)
     };
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(fetch)
         .child(decode)

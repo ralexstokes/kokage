@@ -60,7 +60,7 @@ impl Actor for AddsChildOnStart {
         };
         let added_started = Arc::clone(&self.added_started);
         handle
-            .add_child(ChildSpec::new("added-from-on-start", move |ctx| {
+            .add_child(ChildSpec::task("added-from-on-start", move |ctx| {
                 let added_started = Arc::clone(&added_started);
                 async move {
                     added_started.notify_one();

@@ -308,7 +308,7 @@ pub use tokio_supervisor::{
     BackoffPolicy, BoxError, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
     CompletionGuard, CompletionOutcome, ControlError, ControlOperation, ExitStatusView,
     LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
-    ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
-    SupervisorSnapshot, SupervisorStateView,
+    ScopeKind, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorSnapshot,
+    SupervisorStateView,
 };
 pub use tokio_util::sync::CancellationToken;

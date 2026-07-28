@@ -11,10 +11,9 @@
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`SupervisorBuilder`] | Constructs and validates a supervisor. |
-//! | [`Supervisor`] | A configured supervisor, ready to [`spawn`](Supervisor::spawn). |
+//! | [`Supervisor`] | Constructs ordered or dynamic supervisors and spawns built ones. |
 //! | [`SupervisorHandle`] | Control and observe a running supervisor. |
-//! | [`ChildSpec`] | Pairs an async factory with restart/shutdown policies. |
+//! | [`ChildSpec`] | Declares a task or nested supervisor with restart/shutdown policies. |
 //! | [`ChildContext`] | Per-spawn context given to each child (id, generation, cancellation token). |
 //!
 //! # Strategies
@@ -53,12 +52,12 @@
 //!
 //! Each child has a [`ShutdownPolicy`] that controls how it is stopped:
 //!
-//! - **[`CooperativeStrict`](ShutdownMode::CooperativeStrict)** — cancel the
-//!   child's token and wait up to the grace period. If the child does not
-//!   exit, a timeout error is reported after aborting the Tokio task.
-//! - **[`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort)** (default,
-//!   5 s grace) — cooperative with a fallback Tokio abort.
-//! - **[`Abort`](ShutdownMode::Abort)** — abort the Tokio task immediately.
+//! - **[`Cooperative`](ShutdownPolicy::Cooperative)** (default, 5 s grace) —
+//!   cancel the child's token and wait up to its grace period, then abort and
+//!   report a timeout for shutdown or removal if it does not exit. During a
+//!   group restart, the old generation is escalated to abort and the restart
+//!   proceeds once that task exits.
+//! - **[`Abort`](ShutdownPolicy::Abort)** — abort the Tokio task immediately.
 //!
 //! Ordered scopes drain in reverse declaration order, giving each cooperative
 //! child its own grace period before moving to the previous child. Once an
@@ -68,16 +67,16 @@
 //! grace. Ordered group and full-shutdown drains are atomic critical sections,
 //! so observation never sees a later generation overlap an earlier one.
 //!
-//! All shutdown modes are cooperative at Tokio poll boundaries. A non-yielding
+//! Tokio aborts take effect at poll boundaries. A non-yielding
 //! future is never forcibly preempted. If you need hard-stop guarantees for
 //! blocking work, isolate it in a dedicated blocking pool or external process
 //! and supervise the boundary.
 //!
 //! # Scope kinds
 //!
-//! [`SupervisorBuilder`] creates an ordered scope: a declared sequence with
+//! [`Supervisor::ordered`] creates an ordered builder: a declared sequence with
 //! readiness-gated startup, reverse sequential teardown, and immutable runtime
-//! membership. [`DynamicSupervisorBuilder`] creates an empty dynamic scope:
+//! membership. [`Supervisor::dynamic`] creates a dynamic builder for an empty scope:
 //! membership is written at runtime, startup is immediate, teardown is
 //! concurrent, and the strategy is always [`OneForOne`](Strategy::OneForOne).
 //!
@@ -86,9 +85,9 @@
 //! - [`add_child`](SupervisorHandle::add_child) /
 //!   [`remove_child`](SupervisorHandle::remove_child) target that handle's
 //!   supervisor.
-//! - [`add_supervisor`](SupervisorHandle::add_supervisor) adds a first-class
-//!   nested supervisor; [`supervisor`](SupervisorHandle::supervisor) returns
-//!   its restart-stable handle.
+//! - [`ChildSpec::supervisor`] declares a first-class nested supervisor through
+//!   that same `add_child` method; [`supervisor`](SupervisorHandle::supervisor)
+//!   returns its restart-stable handle.
 //!
 //! Successful dynamic adds resolve once membership is inserted and immediate
 //! startup is scheduled; use [`SupervisorHandle::wait_started`] for readiness.
@@ -102,9 +101,9 @@
 //!
 //! # Nested supervisors
 //!
-//! A [`Supervisor`] is added as a first-class child with
-//! [`SupervisorBuilder::supervisor`] or
-//! [`SupervisorHandle::add_supervisor`]. The nested supervisor:
+//! A [`Supervisor`] is wrapped with [`ChildSpec::supervisor`] and added through
+//! an ordered builder's `child` method or [`SupervisorHandle::add_child`]. The
+//! nested supervisor:
 //!
 //! - Appears in ancestor
 //!   [`watch_lifecycle_recursive`](SupervisorHandle::watch_lifecycle_recursive)
@@ -113,8 +112,8 @@
 //!   [`ChildSnapshot::supervisor`] field.
 //! - Has a restart-stable direct handle whose subscriptions and snapshots
 //!   survive nested restarts.
-//! - Is restarted by the parent according to its [`SupervisorSpec`] policies.
-//! - Is recursively hard-aborted when its wrapper uses [`ShutdownMode::Abort`]
+//! - Is restarted by the parent according to its [`ChildSpec`] policies.
+//! - Is recursively hard-aborted when its wrapper uses [`ShutdownPolicy::Abort`]
 //!   or when a terminal, non-revivable ancestor fails. A parent-restartable
 //!   failed incarnation lets nested runtimes finish cooperatively before their
 //!   stable identities rebind; a normal cooperative stop likewise applies the
@@ -170,7 +169,7 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use tokio_supervisor::{ChildSpec, SupervisorBuilder};
+//! use tokio_supervisor::{ChildSpec, Supervisor};
 //! use tracing_subscriber::FmtSubscriber;
 //!
 //! # #[tokio::main]
@@ -178,8 +177,8 @@
 //! let subscriber = FmtSubscriber::builder().finish();
 //! tracing::subscriber::set_global_default(subscriber)?;
 //!
-//! let supervisor = SupervisorBuilder::new()
-//!     .child(ChildSpec::new("worker", |ctx| async move {
+//! let supervisor = Supervisor::ordered()
+//!     .child(ChildSpec::task("worker", |ctx| async move {
 //!         ctx.shutdown_token().cancelled().await;
 //!         Ok(())
 //!     }))
@@ -238,8 +237,8 @@ mod supervisor;
 
 #[doc(hidden)]
 pub use attachment::{AttachedChild, AttachedChildIdentity};
-pub use builder::{DynamicSupervisorBuilder, SupervisorBuilder};
-pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
+pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
+pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
@@ -248,7 +247,7 @@ pub use handle::SupervisorHandle;
 pub use lifecycle::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch};
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
 pub use scope::{ControlOperation, ScopeKind};
-pub use shutdown::{ShutdownMode, ShutdownPolicy};
+pub use shutdown::ShutdownPolicy;
 pub use snapshot::{
     ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
 };

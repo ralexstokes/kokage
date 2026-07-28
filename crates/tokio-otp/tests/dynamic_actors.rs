@@ -18,8 +18,8 @@ use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
     ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
     DynamicActorOptions, GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize,
-    MonitorEvent, RawActor, RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownMode,
-    ShutdownPolicy, StartContext, StopContext, SupervisionTree,
+    MonitorEvent, RawActor, RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy,
+    StartContext, StopContext, SupervisionTree,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -1344,10 +1344,8 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         .add_actor_with(
             "dynamic",
             || PendingActor,
-            DynamicActorOptions::new().shutdown(ShutdownPolicy::new(
-                Duration::from_millis(20),
-                ShutdownMode::CooperativeStrict,
-            )),
+            DynamicActorOptions::new()
+                .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20))),
         )
         .await
         .expect("actor added");
@@ -1379,7 +1377,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 async fn ordered_tree_rejects_runtime_membership_changes() {
     let handle = SupervisionTree::new()
         .task(
-            ChildSpec::new("seed", |ctx| async move {
+            ChildSpec::task("seed", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }),

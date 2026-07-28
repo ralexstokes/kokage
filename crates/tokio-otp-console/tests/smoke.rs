@@ -15,7 +15,7 @@ use tokio::{
 use tokio_otp::{Actor, ActorResult, MessageContext, SupervisionTree};
 use tokio_otp_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use tokio_supervisor::{
-    ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder, Strategy, SupervisorHandle,
+    ChildSnapshot, ChildSpec, ChildStateView, Strategy, Supervisor, SupervisorHandle,
     SupervisorSnapshot, SupervisorStateView,
 };
 use tokio_tungstenite::{
@@ -74,7 +74,7 @@ async fn spawn_console_with_stats(
     SupervisorHandle,
 ) {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let lifecycle = DynamicSupervisorBuilder::new()
+    let lifecycle = Supervisor::dynamic()
         .build()
         .expect("test lifecycle supervisor builds")
         .spawn();
@@ -222,7 +222,7 @@ async fn accepts_matching_browser_websocket_origin() {
 #[tokio::test]
 async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let lifecycle = DynamicSupervisorBuilder::new()
+    let lifecycle = Supervisor::dynamic()
         .build()
         .expect("test lifecycle supervisor builds")
         .spawn();
@@ -312,7 +312,7 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
 #[tokio::test]
 async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let lifecycle = DynamicSupervisorBuilder::new()
+    let lifecycle = Supervisor::dynamic()
         .build()
         .expect("test lifecycle supervisor builds")
         .spawn();
@@ -336,7 +336,7 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 #[test]
 fn non_loopback_bind_requires_token() {
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
-    let lifecycle = DynamicSupervisorBuilder::new();
+    let lifecycle = Supervisor::dynamic();
     let lifecycle_handle = lifecycle.handle();
     let error = Console::builder()
         .snapshots(snapshot_rx)
@@ -459,7 +459,7 @@ async fn ws_streams_events() {
     read_handshake(&mut socket).await;
 
     lifecycle
-        .add_child(ChildSpec::new("worker", |ctx| async move {
+        .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -495,7 +495,7 @@ async fn dynamic_tree_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
-        .add_child(ChildSpec::new("worker", |ctx| async move {
+        .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let nested_worker = {
         let nested_attempts = Arc::clone(&nested_attempts);
-        ChildSpec::new("nested-worker", move |ctx| {
+        ChildSpec::task("nested-worker", move |ctx| {
             let nested_attempts = Arc::clone(&nested_attempts);
             async move {
                 println!("nested-worker started in generation {}", ctx.generation());
@@ -35,9 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(RestartPolicy::OnFailure)
     };
 
-    let nested_supervisor = SupervisorBuilder::new().child(nested_worker).build()?;
+    let nested_supervisor = Supervisor::ordered().child(nested_worker).build()?;
 
-    let metrics = ChildSpec::new("metrics", |ctx| async move {
+    let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
         ctx.shutdown_token().cancelled().await;
         println!("metrics observed shutdown");
@@ -45,12 +45,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = DynamicSupervisorBuilder::new().build()?;
+    let supervisor = Supervisor::dynamic().build()?;
 
     let handle = supervisor.spawn();
     handle.add_child(metrics).await?;
     handle
-        .add_supervisor(SupervisorSpec::new("nested-pipeline", nested_supervisor))
+        .add_child(ChildSpec::supervisor("nested-pipeline", nested_supervisor))
         .await?;
     let nested_handle = handle
         .supervisor("nested-pipeline")

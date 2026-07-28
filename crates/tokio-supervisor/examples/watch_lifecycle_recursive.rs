@@ -3,8 +3,8 @@ use tokio_supervisor::{LifecycleEvent, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
             println!("worker shutting down");

@@ -118,12 +118,12 @@ impl SupervisorHandle {
     /// is still observed:
     ///
     /// ```no_run
-    /// use tokio_supervisor::{ChildSpec, RestartPolicy, SupervisorBuilder};
+    /// use tokio_supervisor::{ChildSpec, RestartPolicy, Supervisor};
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let builder = SupervisorBuilder::new()
-    ///     .child(ChildSpec::new("source", |_| async { Ok(()) }).restart(RestartPolicy::OnFailure))
-    ///     .child(ChildSpec::new("indexer", |_| async { Ok(()) }).restart(RestartPolicy::Never));
+    /// let builder = Supervisor::ordered()
+    ///     .child(ChildSpec::task("source", |_| async { Ok(()) }).restart(RestartPolicy::OnFailure))
+    ///     .child(ChildSpec::task("indexer", |_| async { Ok(()) }).restart(RestartPolicy::Never));
     /// let handle = builder.handle();
     /// let _finished = handle.shutdown_on_completion(["source", "indexer"]);
     /// let supervisor = builder.build()?;

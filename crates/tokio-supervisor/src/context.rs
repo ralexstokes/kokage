@@ -90,7 +90,7 @@ impl ChildContext {
 
     /// Returns the escalation token for this child instance.
     ///
-    /// For cooperative shutdown modes the supervisor first triggers
+    /// With a cooperative shutdown policy the supervisor first triggers
     /// [`shutdown_token`](Self::shutdown_token). If the child is still running
     /// when its grace period expires, it triggers this token and records the
     /// exit as [`ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut).

@@ -1,21 +1,21 @@
 use std::time::Duration;
 
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartIntensity, SupervisorBuildError, SupervisorBuilder,
+    BackoffPolicy, ChildSpec, RestartIntensity, Supervisor, SupervisorBuildError,
 };
 
 #[test]
 fn empty_children_are_accepted() {
-    SupervisorBuilder::new()
+    Supervisor::ordered()
         .build()
         .expect("building without children should succeed");
 }
 
 #[test]
 fn duplicate_child_ids_are_rejected() {
-    let err = SupervisorBuilder::new()
-        .child(ChildSpec::new("dup", |_| async { Ok(()) }))
-        .child(ChildSpec::new("dup", |_| async { Ok(()) }))
+    let err = Supervisor::ordered()
+        .child(ChildSpec::task("dup", |_| async { Ok(()) }))
+        .child(ChildSpec::task("dup", |_| async { Ok(()) }))
         .build()
         .expect_err("duplicate child ids must be rejected");
 
@@ -24,9 +24,9 @@ fn duplicate_child_ids_are_rejected() {
 
 #[test]
 fn invalid_restart_intensity_is_rejected() {
-    let err = SupervisorBuilder::new()
+    let err = Supervisor::ordered()
         .restart_intensity(RestartIntensity::new(1, Duration::ZERO))
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
+        .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero-width restart windows should be rejected");
 
@@ -35,7 +35,7 @@ fn invalid_restart_intensity_is_rejected() {
 
 #[test]
 fn invalid_jittered_restart_intensity_is_rejected() {
-    let err = SupervisorBuilder::new()
+    let err = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1)).with_backoff(
                 BackoffPolicy::Exponential {
@@ -46,7 +46,7 @@ fn invalid_jittered_restart_intensity_is_rejected() {
                 },
             ),
         )
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
+        .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("invalid jittered exponential backoff should be rejected");
 
@@ -55,12 +55,12 @@ fn invalid_jittered_restart_intensity_is_rejected() {
 
 #[test]
 fn invalid_fixed_backoff_delay_is_rejected() {
-    let err = SupervisorBuilder::new()
+    let err = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::ZERO)),
         )
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
+        .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero fixed backoff delay should be rejected");
 
@@ -69,7 +69,7 @@ fn invalid_fixed_backoff_delay_is_rejected() {
 
 #[test]
 fn invalid_exponential_restart_factor_is_rejected() {
-    let err = SupervisorBuilder::new()
+    let err = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1)).with_backoff(
                 BackoffPolicy::Exponential {
@@ -80,7 +80,7 @@ fn invalid_exponential_restart_factor_is_rejected() {
                 },
             ),
         )
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
+        .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero exponential factor should be rejected");
 
@@ -89,7 +89,7 @@ fn invalid_exponential_restart_factor_is_rejected() {
 
 #[test]
 fn invalid_exponential_restart_max_is_rejected() {
-    let err = SupervisorBuilder::new()
+    let err = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1)).with_backoff(
                 BackoffPolicy::Exponential {
@@ -100,7 +100,7 @@ fn invalid_exponential_restart_max_is_rejected() {
                 },
             ),
         )
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
+        .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero exponential max should be rejected");
 
@@ -109,9 +109,9 @@ fn invalid_exponential_restart_max_is_rejected() {
 
 #[test]
 fn invalid_child_restart_intensity_is_rejected() {
-    let err = SupervisorBuilder::new()
+    let err = Supervisor::ordered()
         .child(
-            ChildSpec::new("worker", |_| async { Ok(()) })
+            ChildSpec::task("worker", |_| async { Ok(()) })
                 .restart_intensity(RestartIntensity::new(1, Duration::ZERO)),
         )
         .build()
@@ -122,8 +122,8 @@ fn invalid_child_restart_intensity_is_rejected() {
 
 #[test]
 fn empty_child_id_is_rejected() {
-    let err = SupervisorBuilder::new()
-        .child(ChildSpec::new("", |_| async { Ok(()) }))
+    let err = Supervisor::ordered()
+        .child(ChildSpec::task("", |_| async { Ok(()) }))
         .build()
         .expect_err("empty child id must be rejected");
 
@@ -132,8 +132,8 @@ fn empty_child_id_is_rejected() {
 
 #[test]
 fn valid_configuration_builds() {
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |_| async { Ok(()) }))
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build();
 
     assert!(supervisor.is_ok(), "expected valid configuration to build");

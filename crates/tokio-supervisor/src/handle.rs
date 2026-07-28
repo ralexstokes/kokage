@@ -14,7 +14,7 @@ use tokio::{
 
 use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
-    child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
+    child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
     lifecycle::{LifecycleHub, LifecycleWatch},
     snapshot::{
@@ -42,8 +42,8 @@ impl ControlEndpoint {
             .await
     }
 
-    async fn add_supervisor(&self, supervisor: PendingSupervisorSpec) -> Result<u64, ControlError> {
-        self.send(|reply| SupervisorCommand::AddSupervisor { supervisor, reply })
+    async fn add_nested(&self, child: PendingSupervisorChild) -> Result<u64, ControlError> {
+        self.send(|reply| SupervisorCommand::AddNested { child, reply })
             .await
     }
 
@@ -157,35 +157,37 @@ enum WaitTarget {
     Terminal,
 }
 
-pub(crate) struct PendingSupervisorSpec {
-    supervisor: Option<Box<SupervisorSpec>>,
+pub(crate) struct PendingSupervisorChild {
+    child: Option<Box<ChildSpec>>,
 }
 
-impl PendingSupervisorSpec {
-    fn new(supervisor: SupervisorSpec) -> Self {
+impl PendingSupervisorChild {
+    fn new(child: ChildSpec) -> Self {
         Self {
-            supervisor: Some(Box::new(supervisor)),
+            child: Some(Box::new(child)),
         }
     }
 
-    pub(crate) fn spec_mut(&mut self) -> &mut SupervisorSpec {
-        self.supervisor
+    pub(crate) fn spec_mut(&mut self) -> &mut ChildSpec {
+        self.child
             .as_deref_mut()
-            .expect("pending supervisor spec was already accepted")
+            .expect("pending supervisor child was already accepted")
     }
 
-    pub(crate) fn accept(mut self) -> SupervisorSpec {
+    pub(crate) fn accept(mut self) -> ChildSpec {
         *self
-            .supervisor
+            .child
             .take()
-            .expect("pending supervisor spec was already accepted")
+            .expect("pending supervisor child was already accepted")
     }
 }
 
-impl Drop for PendingSupervisorSpec {
+impl Drop for PendingSupervisorChild {
     fn drop(&mut self) {
-        if let Some(supervisor) = &self.supervisor {
-            supervisor.supervisor.channels.terminal();
+        if let Some(child) = &self.child
+            && let ChildKind::Supervisor(supervisor) = &child.inner.kind
+        {
+            supervisor.channels.terminal();
         }
     }
 }
@@ -1183,13 +1185,13 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_add_terminalizes_when_the_queued_supervisor_is_dropped() {
-        let child = crate::DynamicSupervisorBuilder::new();
+        let child = crate::Supervisor::dynamic();
         let retained = child.handle();
         let child = child.build().expect("nested supervisor builds");
         let (command_tx, mut command_rx) = mpsc::channel(1);
         let endpoint = ControlEndpoint { command_tx };
-        let mut adding = Box::pin(endpoint.add_supervisor(PendingSupervisorSpec::new(
-            SupervisorSpec::new("nested", child),
+        let mut adding = Box::pin(endpoint.add_nested(PendingSupervisorChild::new(
+            ChildSpec::supervisor("nested", child),
         )));
 
         let queued = tokio::select! {
@@ -1365,8 +1367,8 @@ pub(crate) enum SupervisorCommand {
         id: String,
         reply: oneshot::Sender<Result<(), ControlError>>,
     },
-    AddSupervisor {
-        supervisor: PendingSupervisorSpec,
+    AddNested {
+        child: PendingSupervisorChild,
         reply: oneshot::Sender<Result<u64, ControlError>>,
     },
 }
@@ -1496,24 +1498,19 @@ impl SupervisorHandle {
     /// even if the same child id is later removed and reused. Success means the
     /// membership was inserted and its start was
     /// scheduled. This operation is supported only by dynamic supervisors,
-    /// which spawn it immediately. Use [`wait_started`](Self::wait_started)
-    /// when readiness is required.
+    /// which spawn it immediately. A [`ChildSpec::supervisor`] registers the
+    /// nested supervisor's restart-stable handle and attachment at insertion,
+    /// before it is spawned. Use [`wait_started`](Self::wait_started) when
+    /// readiness is required.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.control_endpoint()?.add_child(child).await
-    }
-
-    /// Adds a nested supervisor at runtime with restart-stable observation and
-    /// control channels.
-    ///
-    /// On success, returns the lineage assigned atomically with the
-    /// insertion. The nested handle and attachment are registered at insertion,
-    /// before the child is spawned. This operation is supported only by
-    /// dynamic supervisors; use [`wait_started`](Self::wait_started) to await
-    /// readiness.
-    pub async fn add_supervisor(&self, supervisor: SupervisorSpec) -> Result<u64, ControlError> {
-        let supervisor = PendingSupervisorSpec::new(supervisor);
         let endpoint = self.control_endpoint()?;
-        endpoint.add_supervisor(supervisor).await
+        if matches!(&child.inner.kind, ChildKind::Supervisor(_)) {
+            endpoint
+                .add_nested(PendingSupervisorChild::new(child))
+                .await
+        } else {
+            endpoint.add_child(child).await
+        }
     }
 
     /// Removes a child by id from this supervisor.
@@ -1802,12 +1799,12 @@ impl SupervisorHandle {
     /// # Waiting until all children are running
     ///
     /// ```no_run
-    /// use tokio_supervisor::{ChildSpec, ChildStateView, SupervisorBuilder};
+    /// use tokio_supervisor::{ChildSpec, ChildStateView, Supervisor};
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let supervisor = SupervisorBuilder::new()
-    ///     .child(ChildSpec::new("worker", |ctx| async move {
+    /// let supervisor = Supervisor::ordered()
+    ///     .child(ChildSpec::task("worker", |ctx| async move {
     ///         ctx.shutdown_token().cancelled().await;
     ///         Ok(())
     ///     }))

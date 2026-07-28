@@ -6,8 +6,8 @@ use tokio_supervisor::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("leaf", |ctx| async move {
+    let nested = Supervisor::ordered()
+        .child(ChildSpec::task("leaf", |ctx| async move {
             println!("leaf started");
             ctx.shutdown_token().cancelled().await;
             println!("leaf stopping");
@@ -15,14 +15,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .build()?;
 
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
             println!("worker stopping");
             Ok(())
         }))
-        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
+        .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
         .build()?;
 
     let handle = supervisor.spawn();

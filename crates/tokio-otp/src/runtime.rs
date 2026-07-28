@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio_supervisor::{
     AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
     LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
-    SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
+    SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -422,7 +422,7 @@ impl RuntimeHandle {
 
         UNAVAILABLE
             .get_or_init(|| {
-                let builder = tokio_supervisor::DynamicSupervisorBuilder::new();
+                let builder = tokio_supervisor::Supervisor::dynamic();
                 let supervisor = builder.handle();
                 drop(builder);
                 Self::new(
@@ -482,8 +482,8 @@ impl RuntimeHandle {
         let (nested_supervisor, nested_actors) = tree.build()?.into_parts();
         let lineage = self
             .supervisor
-            .add_supervisor(
-                SupervisorSpec::new(id.clone(), nested_supervisor).attachment(
+            .add_child(
+                ChildSpec::supervisor(id.clone(), nested_supervisor).attachment(
                     RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
                 ),
             )
@@ -872,7 +872,7 @@ pub(crate) fn actor_child_spec(
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
-    let mut child = ChildSpec::new(actor_id, move |ctx| {
+    let mut child = ChildSpec::task(actor_id, move |ctx| {
         let actor = child_guard.actor.clone();
         let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
         let children = children.clone();

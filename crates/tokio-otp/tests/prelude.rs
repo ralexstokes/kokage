@@ -23,14 +23,11 @@ mod coverage_probe {
             DownReason, DrainPolicy, DynamicScope, ExitStatusView, Graph, GraphBuildError,
             LifecycleEvent, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard, Lifetime,
             MailboxMode, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle,
-            ReservedSupervisionTree, RestrictedScope, ScopeKind, ShutdownMode,
-            SupervisionFactories, SupervisionOutline, SupervisorBuildError, SupervisorError,
-            SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView, TimerKey, TryRecvError,
+            ReservedSupervisionTree, RestrictedScope, ScopeKind, SupervisionFactories,
+            SupervisionOutline, SupervisorBuildError, SupervisorError, SupervisorPathSegment,
+            SupervisorSnapshot, SupervisorStateView, TimerKey, TryRecvError,
         };
-        use tokio_supervisor::{
-            ChildContext, ChildResult, DynamicSupervisorBuilder, Supervisor, SupervisorBuilder,
-            SupervisorHandle, SupervisorSpec,
-        };
+        use tokio_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
 }
 

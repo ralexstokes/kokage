@@ -26,6 +26,7 @@ metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
 serde_json.workspace = true
 tracing-subscriber.workspace = true
+trybuild.workspace = true
 
 [[bench]]
 name = "common_flows"

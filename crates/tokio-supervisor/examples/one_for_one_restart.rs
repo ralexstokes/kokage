@@ -14,7 +14,7 @@ fn example_error(message: &'static str) -> BoxError {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let flaky = ChildSpec::new("flaky-worker", move |ctx| {
+    let flaky = ChildSpec::task("flaky-worker", move |ctx| {
         let attempts = Arc::clone(&attempts);
         async move {
             let attempt = attempts.fetch_add(1, Ordering::SeqCst);
@@ -33,14 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let metrics = ChildSpec::new("metrics", |ctx| async move {
+    let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
         ctx.shutdown_token().cancelled().await;
         println!("metrics observed shutdown");
         Ok(())
     });
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .child(flaky)
         .child(metrics)

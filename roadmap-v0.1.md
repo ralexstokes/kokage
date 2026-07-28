@@ -79,7 +79,7 @@ and post-restart reconciliation are application protocol responsibilities.
 
 ### Restart intensity remains per child
 
-`SupervisorBuilder::restart_intensity` supplies the default policy for each
+`Supervisor::ordered().restart_intensity(...)` supplies the default policy for each
 child's independent restart tracker; a child override replaces that default.
 This differs from Erlang/OTP's aggregate supervisor restart budget.
 
@@ -479,10 +479,10 @@ Big shapes that neither application covers, roughly in priority order:
    `shutdown_and_wait()`.
 2. **Supervision without actors.** `tokio-supervisor` is independently
    usable, but both applications go through `Runtime` + actors everywhere.
-   Raw `SupervisorBuilder`/`ChildSpec`/`ChildContext` over plain tokio
+   Raw `Supervisor`/`ChildSpec`/`ChildContext` over plain tokio
    tasks, mixed trees of raw children and actor subtrees, and meaningful use
-   of `ShutdownMode` variants (`Abort`, `CooperativeStrict`) and
-   `ShutdownPolicy` grace tuning have no real-application proof.
+   of both `ShutdownPolicy` variants and cooperative grace tuning have no
+   real-application proof.
 3. **Restart backoff as a load-bearing design.** `BackoffPolicy::Fixed` and
    `Exponential` (with and without jitter) appear only in unit examples. A
    flaky-external-dependency scenario should pin how backoff, the restart

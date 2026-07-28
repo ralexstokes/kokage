@@ -88,12 +88,12 @@ impl Actor for Burst {
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
 fn pipeline_runtime() -> SupervisionTree {
-    let source = ChildSpec::new("source", |ctx| async move {
+    let source = ChildSpec::task("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
 
-    let transform = ChildSpec::new("transform", |ctx| async move {
+    let transform = ChildSpec::task("transform", |ctx| async move {
         tokio::select! {
             _ = ctx.shutdown_token().cancelled() => Ok(()),
             _ = sleep(Duration::from_secs(9)) => {
@@ -123,7 +123,7 @@ fn pipeline_runtime() -> SupervisionTree {
 fn telemetry_runtime() -> SupervisionTree {
     // `Always` restarts even after a clean exit, so this child completes and
     // comes back every 7 seconds.
-    let heartbeat = ChildSpec::new("heartbeat", |ctx| async move {
+    let heartbeat = ChildSpec::task("heartbeat", |ctx| async move {
         tokio::select! {
             _ = ctx.shutdown_token().cancelled() => {}
             _ = sleep(Duration::from_secs(7)) => {}
@@ -133,12 +133,12 @@ fn telemetry_runtime() -> SupervisionTree {
 
     // `Never` runs at most once: this child completes after 3 seconds and
     // stays Stopped for the rest of the run.
-    let migration = ChildSpec::new("schema-migration", |_ctx| async move {
+    let migration = ChildSpec::task("schema-migration", |_ctx| async move {
         sleep(Duration::from_secs(3)).await;
         Ok(())
     });
 
-    let exporter = ChildSpec::new("stdout-exporter", |ctx| async move {
+    let exporter = ChildSpec::task("stdout-exporter", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });

@@ -39,6 +39,12 @@ startup order, reverse-order shutdown, and the suffix restarted by
 `Strategy::RestForOne`. A dynamic scope has no declared children. Its outline
 is still useful because it records the defaults future members inherit.
 
+Restart and shutdown defaults apply to every direct child edge, including an
+edge that wraps a nested supervisor. The nested scope still controls the
+defaults of its own children. For `actor_with_scope`, the generated `leader`
+and `children` edges both inherit the enclosing scope's defaults unless the
+leader carries an explicit override.
+
 ## Place actors instead of whole graphs
 
 A `Graph` establishes typed mailbox wiring, but it does not require all of its

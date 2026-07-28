@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    child::{ChildDefinition, ChildSpec, SupervisorSpec},
+    child::{ChildDefinition, ChildSpec},
     error::SupervisorBuildError,
     handle::{StableSupervisorChannels, SupervisorHandle},
     restart::{RestartIntensity, RestartPolicy},
@@ -16,26 +16,27 @@ use crate::{
 /// Builder for constructing a [`Supervisor`] with validated configuration.
 ///
 /// An ordered supervisor may be built with zero declared children, but its
-/// membership remains immutable. Use [`DynamicSupervisorBuilder`] for a scope
-/// populated at runtime.
+/// membership remains immutable. Create one with [`Supervisor::ordered`].
 ///
 /// # Example
 ///
 /// ```no_run
-/// use tokio_supervisor::{ChildSpec, SupervisorBuilder, Strategy};
+/// use tokio_supervisor::{ChildSpec, Strategy, Supervisor};
 ///
-/// let supervisor = SupervisorBuilder::new()
+/// let supervisor = Supervisor::ordered()
 ///     .strategy(Strategy::OneForOne)
-///     .child(ChildSpec::new("worker", |ctx| async move {
+///     .child(ChildSpec::task("worker", |ctx| async move {
 ///         ctx.shutdown_token().cancelled().await;
 ///         Ok(())
 ///     }))
 ///     .build()
 ///     .expect("valid config");
 /// ```
-pub struct SupervisorBuilder {
+pub struct OrderedSupervisorBuilder {
     strategy: Strategy,
     restart_intensity: RestartIntensity,
+    default_restart: RestartPolicy,
+    default_shutdown: ShutdownPolicy,
     children: Vec<Arc<ChildDefinition>>,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
@@ -44,7 +45,7 @@ pub struct SupervisorBuilder {
 ///
 /// Dynamic supervisors start empty, use [`Strategy::OneForOne`], and start
 /// and stop children concurrently. Children can be added and removed through
-/// the resulting supervisor's handle.
+/// the resulting supervisor's handle. Create one with [`Supervisor::dynamic`].
 pub struct DynamicSupervisorBuilder {
     restart_intensity: RestartIntensity,
     default_restart: RestartPolicy,
@@ -66,14 +67,13 @@ pub enum ScopeKind {
 
 const DEFAULT_CONTROL_CHANNEL_CAPACITY: usize = 64;
 
-impl SupervisorBuilder {
-    /// Creates a new builder with default settings: [`OneForOne`](Strategy::OneForOne)
-    /// strategy, default [`RestartIntensity`], and no children.
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+impl OrderedSupervisorBuilder {
+    pub(crate) fn new() -> Self {
         let mut builder = Self {
             strategy: Strategy::default(),
             restart_intensity: RestartIntensity::default(),
+            default_restart: RestartPolicy::default(),
+            default_shutdown: ShutdownPolicy::default(),
             children: Vec::new(),
             channels: None,
         };
@@ -87,8 +87,8 @@ impl SupervisorBuilder {
             kind: ScopeKind::Ordered,
             strategy: self.strategy,
             restart_intensity: self.restart_intensity,
-            default_restart: RestartPolicy::default(),
-            default_shutdown: ShutdownPolicy::default(),
+            default_restart: self.default_restart,
+            default_shutdown: self.default_shutdown,
             children: self.children.clone(),
             control_channel_capacity: DEFAULT_CONTROL_CHANNEL_CAPACITY,
         }
@@ -136,24 +136,27 @@ impl SupervisorBuilder {
         self
     }
 
+    /// Sets the restart policy inherited by declared children that do not
+    /// carry an explicit override, including nested-supervisor edges.
+    #[must_use]
+    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+        self.default_restart = restart;
+        self
+    }
+
+    /// Sets the shutdown policy inherited by declared children that do not
+    /// carry an explicit override, including nested-supervisor edges.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+        self.default_shutdown = shutdown;
+        self
+    }
+
     /// Appends a child to the supervisor. Declaration order determines
     /// sequential startup and group-restart order.
     #[must_use]
     pub fn child(mut self, child: ChildSpec) -> Self {
         self.children.push(child.inner);
-        self.refresh_declaration();
-        self
-    }
-
-    /// Appends a nested supervisor child.
-    ///
-    /// [`SupervisorSpec::new`] pairs the supervisor with its child id under
-    /// the standard policies; the spec's builder methods customize the
-    /// restart, shutdown, or restart intensity policy.
-    #[must_use]
-    pub fn supervisor(mut self, supervisor: SupervisorSpec) -> Self {
-        self.children
-            .push(Arc::new(ChildDefinition::supervisor(supervisor)));
         self.refresh_declaration();
         self
     }
@@ -182,6 +185,11 @@ impl SupervisorBuilder {
             }
         }
 
+        for child in &mut self.children {
+            ChildDefinition::make_mut_preserving_supervisor_identity(child)
+                .apply_defaults(self.default_restart, self.default_shutdown);
+        }
+
         let config = self.config();
         let channels = self
             .channels
@@ -193,10 +201,7 @@ impl SupervisorBuilder {
 }
 
 impl DynamicSupervisorBuilder {
-    /// Creates an empty dynamic supervisor with the default restart intensity
-    /// and control-channel capacity.
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut builder = Self {
             restart_intensity: RestartIntensity::default(),
             default_restart: RestartPolicy::default(),
@@ -269,7 +274,7 @@ impl DynamicSupervisorBuilder {
     }
 }
 
-impl Drop for SupervisorBuilder {
+impl Drop for OrderedSupervisorBuilder {
     fn drop(&mut self) {
         if let Some(channels) = self.channels.take() {
             channels.terminal();
@@ -282,5 +287,78 @@ impl Drop for DynamicSupervisorBuilder {
         if let Some(channels) = self.channels.take() {
             channels.terminal();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::child::ChildKind;
+
+    #[test]
+    fn ordered_defaults_apply_without_overriding_child_policies() {
+        let inherited_shutdown = ShutdownPolicy::cooperative(Duration::from_millis(20));
+        let explicit_shutdown = ShutdownPolicy::cooperative(Duration::from_secs(2));
+        let supervisor = Supervisor::ordered()
+            .restart(RestartPolicy::Always)
+            .shutdown(inherited_shutdown)
+            .child(ChildSpec::task("inherited", |_| async { Ok(()) }))
+            .child(
+                ChildSpec::task("explicit", |_| async { Ok(()) })
+                    .restart(RestartPolicy::Never)
+                    .shutdown(explicit_shutdown),
+            )
+            .build()
+            .expect("valid ordered supervisor");
+
+        let inherited = &supervisor.config.children[0];
+        assert_eq!(inherited.restart, RestartPolicy::Always);
+        assert_eq!(inherited.shutdown_policy, inherited_shutdown);
+        let explicit = &supervisor.config.children[1];
+        assert_eq!(explicit.restart, RestartPolicy::Never);
+        assert_eq!(explicit.shutdown_policy, explicit_shutdown);
+    }
+
+    #[test]
+    fn cloning_a_nested_child_spec_reserves_a_fresh_supervisor_identity() {
+        let nested = Supervisor::ordered()
+            .build()
+            .expect("valid nested supervisor");
+        let original = ChildSpec::supervisor("nested", nested);
+        let cloned = original.clone();
+
+        let ChildKind::Supervisor(original) = &original.inner.kind else {
+            panic!("nested child keeps its kind");
+        };
+        let ChildKind::Supervisor(cloned) = &cloned.inner.kind else {
+            panic!("cloned nested child keeps its kind");
+        };
+        assert!(!Arc::ptr_eq(&original.channels, &cloned.channels));
+    }
+
+    #[test]
+    fn ordered_defaults_apply_to_nested_children_without_replacing_their_identity() {
+        let inherited_shutdown = ShutdownPolicy::cooperative(Duration::from_millis(20));
+        let nested = Supervisor::ordered()
+            .build()
+            .expect("valid nested supervisor");
+        let nested_channels = Arc::clone(&nested.channels);
+
+        let supervisor = Supervisor::ordered()
+            .restart(RestartPolicy::Always)
+            .shutdown(inherited_shutdown)
+            .child(ChildSpec::supervisor("nested", nested))
+            .build()
+            .expect("valid parent supervisor");
+
+        let definition = &supervisor.config.children[0];
+        assert_eq!(definition.restart, RestartPolicy::Always);
+        assert_eq!(definition.shutdown_policy, inherited_shutdown);
+        let ChildKind::Supervisor(nested) = &definition.kind else {
+            panic!("nested child keeps its kind");
+        };
+        assert!(Arc::ptr_eq(&nested.channels, &nested_channels));
     }
 }

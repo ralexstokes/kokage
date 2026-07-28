@@ -11,7 +11,7 @@ use tokio::{
     time::sleep,
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, SupervisorBuilder, SupervisorError,
+    BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, Supervisor, SupervisorError,
 };
 
 mod common;
@@ -19,10 +19,10 @@ use common::ObservedEvent;
 
 #[tokio::test]
 async fn repeated_failures_can_exceed_restart_intensity() {
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .restart_intensity(RestartIntensity::new(1, Duration::from_secs(1)))
         .child(
-            ChildSpec::new("flaky", |_| async { Err(common::test_error("boom")) })
+            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
                 .restart(RestartPolicy::OnFailure),
         )
         .build()
@@ -39,13 +39,13 @@ async fn repeated_failures_can_exceed_restart_intensity() {
 
 #[tokio::test]
 async fn configured_backoff_delays_restart_attempts() {
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(75))),
         )
         .child(
-            ChildSpec::new("flaky", |_| async { Err(common::test_error("boom")) })
+            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
                 .restart(RestartPolicy::OnFailure),
         )
         .build()
@@ -67,7 +67,7 @@ async fn configured_backoff_delays_restart_attempts() {
 
 #[tokio::test]
 async fn jittered_exponential_backoff_delays_restart_attempts() {
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(1, Duration::from_secs(1)).with_backoff(
                 BackoffPolicy::Exponential {
@@ -79,7 +79,7 @@ async fn jittered_exponential_backoff_delays_restart_attempts() {
             ),
         )
         .child(
-            ChildSpec::new("flaky", |_| async { Err(common::test_error("boom")) })
+            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
                 .restart(RestartPolicy::OnFailure),
         )
         .build()
@@ -103,7 +103,7 @@ async fn jittered_exponential_backoff_delays_restart_attempts() {
 async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(3, Duration::from_secs(1)).with_backoff(
                 BackoffPolicy::Exponential {
@@ -115,7 +115,7 @@ async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
             ),
         )
         .child(
-            ChildSpec::new("flaky", move |ctx| {
+            ChildSpec::task("flaky", move |ctx| {
                 let starts_tx = starts_tx.clone();
                 async move {
                     starts_tx
@@ -157,7 +157,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
     let release = Arc::new(Notify::new());
     let release_for_child = release.clone();
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .restart_intensity(
             RestartIntensity::new(5, Duration::from_millis(200)).with_backoff(
                 BackoffPolicy::Exponential {
@@ -169,7 +169,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
             ),
         )
         .child(
-            ChildSpec::new("flaky", move |ctx| {
+            ChildSpec::task("flaky", move |ctx| {
                 let release = release_for_child.clone();
                 async move {
                     match ctx.generation() {
@@ -230,10 +230,10 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
 
 #[tokio::test]
 async fn child_restart_intensity_override_controls_backoff() {
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
         .child(
-            ChildSpec::new("flaky", |_| async { Err(common::test_error("boom")) })
+            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(
                     RestartIntensity::new(1, Duration::from_secs(1))
@@ -264,7 +264,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
     let (alpha_tx, mut alpha_rx) = mpsc::unbounded_channel();
     let (beta_tx, mut beta_rx) = mpsc::unbounded_channel();
 
-    let alpha = ChildSpec::new("alpha", move |ctx| {
+    let alpha = ChildSpec::task("alpha", move |ctx| {
         let alpha_attempts = alpha_attempts.clone();
         let alpha_tx = alpha_tx.clone();
         async move {
@@ -281,7 +281,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let beta = ChildSpec::new("beta", move |ctx| {
+    let beta = ChildSpec::task("beta", move |ctx| {
         let beta_attempts = beta_attempts.clone();
         let beta_tx = beta_tx.clone();
         async move {
@@ -298,7 +298,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .restart_intensity(RestartIntensity::new(1, Duration::from_secs(1)))
         .child(alpha)
         .child(beta)
@@ -317,10 +317,10 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
 async fn child_restart_intensity_override_is_enforced() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .restart_intensity(RestartIntensity::new(10, Duration::from_secs(1)))
         .child(
-            ChildSpec::new("flaky", move |ctx| {
+            ChildSpec::task("flaky", move |ctx| {
                 let starts_tx = starts_tx.clone();
                 async move {
                     starts_tx
@@ -353,10 +353,10 @@ async fn restart_budget_recovers_after_failures_age_out_of_window() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let release_second_failure_for_child = release_second_failure.clone();
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .restart_intensity(RestartIntensity::new(1, Duration::from_millis(100)))
         .child(
-            ChildSpec::new("flaky", move |ctx| {
+            ChildSpec::task("flaky", move |ctx| {
                 let release_second_failure = release_second_failure_for_child.clone();
                 let starts_tx = starts_tx.clone();
                 async move {
@@ -403,7 +403,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     let (beta_tx, mut beta_rx) = mpsc::unbounded_channel();
 
     let release_alpha_for_child = release_alpha.clone();
-    let alpha = ChildSpec::new("alpha", move |ctx| {
+    let alpha = ChildSpec::task("alpha", move |ctx| {
         let release_alpha = release_alpha_for_child.clone();
         let alpha_tx = alpha_tx.clone();
         async move {
@@ -422,7 +422,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     .restart(RestartPolicy::OnFailure);
 
     let release_beta_for_child = release_beta.clone();
-    let beta = ChildSpec::new("beta", move |ctx| {
+    let beta = ChildSpec::task("beta", move |ctx| {
         let release_beta = release_beta_for_child.clone();
         let beta_tx = beta_tx.clone();
         async move {
@@ -440,7 +440,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(tokio_supervisor::Strategy::OneForAll)
         .restart_intensity(RestartIntensity::new(1, Duration::from_secs(1)))
         .child(alpha)

@@ -1,9 +1,12 @@
 //! Recursive supervision-tree declarations and lowering.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
+
+use tokio::{sync::Notify, time::sleep};
 
 use tokio_otp::{
-    ActorSpec, ChildOutline, ChildSpec, Graph, ScopeKind, SupervisionTree, prelude::*,
+    ActorSpec, ChildOutline, ChildSpec, ChildStateView, ExitStatusView, Graph, ScopeKind,
+    SupervisionTree, prelude::*,
 };
 
 struct Worker;
@@ -41,7 +44,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
             SupervisionTree::new().strategy(Strategy::OneForAll),
         )
         .task(
-            ChildSpec::new("clock", |ctx| async move {
+            ChildSpec::task("clock", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
@@ -199,6 +202,72 @@ async fn actor_with_scope_lowers_to_leader_then_children_scope() {
             .kind,
         ScopeKind::Dynamic
     );
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default() {
+    let (graph, _ingest, _parse) = two_actor_graph();
+    let fail = Arc::new(Notify::new());
+    let fail_child = Arc::clone(&fail);
+    let children = SupervisionTree::new()
+        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+        .task(
+            ChildSpec::task("fatal", move |_| {
+                let fail = Arc::clone(&fail_child);
+                async move {
+                    fail.notified().await;
+                    Err(std::io::Error::other("fatal child failure").into())
+                }
+            }),
+            RestartPolicy::Always,
+            ShutdownPolicy::abort(),
+        );
+    let handle = SupervisionTree::new()
+        .default_restart(RestartPolicy::Never)
+        .actor_with_scope(
+            "owned",
+            graph.actors()[0].clone(),
+            children,
+            Strategy::OneForOne,
+        )
+        .build()
+        .expect("ActorWithScope builds")
+        .spawn();
+    handle.wait_started().await.expect("generated scope starts");
+
+    fail.notify_one();
+    handle
+        .subscribe_snapshots()
+        .wait_for(|snapshot| {
+            snapshot
+                .child("owned")
+                .and_then(|child| child.supervisor.as_ref())
+                .and_then(|owned| owned.child("children"))
+                .is_some_and(|children| {
+                    children.state == ChildStateView::Stopped
+                        && matches!(children.last_exit.as_ref(), Some(ExitStatusView::Failed(_)))
+                })
+        })
+        .await
+        .expect("fatal child scope becomes terminal");
+
+    // A default `OnFailure` edge would immediately restart this nested scope.
+    // Give that zero-delay transition room to occur before inspecting the
+    // stable state promised by the inherited `Never` policy.
+    sleep(Duration::from_millis(50)).await;
+    let snapshot = handle.snapshot();
+    let owned_edge = snapshot.child("owned").expect("owned edge remains visible");
+    assert_eq!(owned_edge.state, ChildStateView::Running);
+    let children_edge = owned_edge
+        .supervisor
+        .as_ref()
+        .and_then(|owned| owned.child("children"))
+        .expect("generated children edge remains visible");
+    assert_eq!(children_edge.generation, 0);
+    assert_eq!(children_edge.restart_count, 0);
+    assert_eq!(children_edge.state, ChildStateView::Stopped);
+
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
