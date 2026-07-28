@@ -264,8 +264,9 @@ pub mod prelude {
     // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
-        BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken, Down,
-        DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Flow,
+        BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken,
+        DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope,
+        Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode,
         MessageContext, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply,
@@ -274,9 +275,8 @@ pub mod prelude {
         SupervisionTree, TimerKey,
     };
     pub use tokio_supervisor::{
-        AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView, ChildSnapshot,
-        ChildStateView, CompletionGuard, CompletionOutcome, ControlOperation, ExitStatusView,
-        LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
+        BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionOutcome,
+        ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
         RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
         RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy,
         SupervisorSnapshot, SupervisorStateView,

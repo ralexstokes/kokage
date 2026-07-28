@@ -8,16 +8,15 @@ mod coverage_probe {
     mod actor {
         use tokio_otp::prelude::{
             Actor, ActorOptions, ActorRef, ActorResult, BoxError, CallError, CancellationHandle,
-            CancellationToken, Continue, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuilder,
-            Lifetime, MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor, Reply,
-            SendError, Stop, Supervision, TimerKey,
+            CancellationToken, Continue, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy,
+            Flow, Graph, GraphBuilder, Lifetime, MailboxMode, MessageContext, MessageSize,
+            MonitorEvent, RawActor, Reply, SendError, Stop, Supervision, TimerKey,
         };
     }
 
     mod supervisor {
         use tokio_otp::prelude::{
-            AttachedChild, AttachedChildIdentity, BackoffPolicy, ChildMembershipView,
-            ChildSnapshot, ChildStateView, CompletionGuard, CompletionOutcome, ControlOperation,
+            BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionOutcome,
             ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
             LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
             RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
