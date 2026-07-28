@@ -17,7 +17,7 @@
 //!
 //!     async fn handle(&mut self, message: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
 //!         println!("{message}");
-//!         Ok(Continue)
+//!         Ok(())
 //!     }
 //! }
 //!
@@ -133,7 +133,6 @@
 //!     Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, MessageContext,
 //!     Reply, RestartPolicy,
 //! };
-//! use tokio_otp::prelude::Continue;
 //!
 //! enum CounterMsg {
 //!     Add(u64),
@@ -156,7 +155,7 @@
 //!             CounterMsg::Add(n) => self.total += n,
 //!             CounterMsg::Total(reply) => reply.send(self.total),
 //!         }
-//!         Ok(Continue)
+//!         Ok(())
 //!     }
 //! }
 //!
@@ -282,13 +281,12 @@ pub mod prelude {
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
         AddSubtreeError, AmbientContext, BlockingCancelled, BoxError, CallError,
         CancellationHandle, CancellationToken, ChildOutline, DEFAULT_SHUTDOWN_BOUND, Down,
-        DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Flow,
-        Flow::{Continue, Stop},
-        Graph, GraphBuilder, LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode,
-        MessageContext, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply,
-        ReservedSupervisionTree, RestrictedScope, Runtime, RuntimeBuilder, RuntimeHandle,
-        SendError, StartContext, StopContext, Supervision, SupervisionBuildError,
-        SupervisionFactories, SupervisionOutline, SupervisionTree, TimerKey,
+        DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Graph, GraphBuilder,
+        LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize,
+        MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, ReservedSupervisionTree,
+        RestrictedScope, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StartContext,
+        StopContext, Supervision, SupervisionBuildError, SupervisionFactories, SupervisionOutline,
+        SupervisionTree, TimerKey,
     };
     pub use tokio_supervisor::{
         BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
@@ -304,10 +302,10 @@ pub use tokio_otp_derive::{ActorFactory, Supervision};
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, ActorSupervisorPathSegment, AmbientContext, BlockingCancelled,
-    CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow,
-    Graph, GraphBuildError, GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext,
-    MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope,
-    RunnableActor, SendError, StartContext, StopContext, TimerKey, TryRecvError,
+    CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph,
+    GraphBuildError, GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize,
+    MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor,
+    SendError, StartContext, StopContext, TimerKey, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 pub use runtime::{

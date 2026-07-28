@@ -15,7 +15,7 @@ impl Actor for Worker {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         reply.send(7);
-        Ok(Continue)
+        Ok(())
     }
 }
 

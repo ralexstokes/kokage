@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, DrainPolicy, MessageContext, RawActor,
-    prelude::Continue,
 };
 
 use crate::{
@@ -38,7 +37,7 @@ impl Actor for Outbound {
                 self.chat.deliver_reply(chat, text);
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {
@@ -73,7 +72,7 @@ impl Actor for Progress {
         // This models a finite-rate transport and makes mailbox conflation
         // observable during the scripted flood.
         tokio::time::sleep(Duration::from_millis(1)).await;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -125,7 +124,7 @@ impl Inbound {
                     .await?;
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn bridge_message(&self, message: InboundMsg) -> ActorResult {
@@ -154,19 +153,19 @@ impl RawActor for Inbound {
                 biased;
                 message = ctx.recv() => match message {
                     Some(message) => {
-                        let _ = self.bridge_message(message).await?;
+                        self.bridge_message(message).await?;
                     }
                     None => {
                         self.chat.release_session();
-                        return Ok(Continue);
+                        return Ok(());
                     }
                 },
                 event = session.recv() => match event {
                     Some(ChatEvent::Delivery(delivery)) => {
-                        let _ = self.bridge_message(InboundMsg::Delivery(delivery)).await?;
+                        self.bridge_message(InboundMsg::Delivery(delivery)).await?;
                     }
                     Some(ChatEvent::Disconnected) | None => {
-                        let _ = self.bridge_message(InboundMsg::Disconnected).await?;
+                        self.bridge_message(InboundMsg::Disconnected).await?;
                     }
                 }
             }

@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use tokio_otp::{
     Actor, ActorRef, ActorResult, AmbientContext, CancellationHandle, CancellationToken,
     DrainPolicy, DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext,
-    TimerKey, prelude::Continue, timers,
+    TimerKey, timers,
 };
 
 use crate::{
@@ -74,7 +74,7 @@ impl Session {
                 reply,
             })
             .await?;
-        Ok(Continue)
+        Ok(())
     }
 
     fn arm_idle(&mut self, ctx: &mut impl LiveContext<SessionMsg>) {
@@ -149,7 +149,7 @@ impl Session {
             .run_started
             .entry(self.chat)
             .or_default() += 1;
-        Ok(Continue)
+        Ok(())
     }
 
     async fn start_input(
@@ -171,12 +171,11 @@ impl Session {
             "task {task} complete (approved={approved}, prior-context={})",
             self.transcript_len.saturating_sub(1)
         );
-        let _ = self
-            .append(JournalEntry::Reply {
-                task,
-                text: text.clone(),
-            })
-            .await?;
+        self.append(JournalEntry::Reply {
+            task,
+            text: text.clone(),
+        })
+        .await?;
         self.outbound
             .send(OutboundMsg::Reply {
                 chat: self.chat,
@@ -193,7 +192,7 @@ impl Session {
             .insert(self.chat, Instant::now());
         self.active = None;
         self.arm_idle(ctx);
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -206,7 +205,7 @@ impl Actor for Session {
         proof.session_generations.insert(self.chat, self.generation);
         drop(proof);
         ctx.continue_with(SessionMsg::Rehydrate);
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {
@@ -256,7 +255,7 @@ impl Actor for Session {
                             text,
                         })
                         .await?;
-                    return Ok(Continue);
+                    return Ok(());
                 }
                 self.transcript_len += 1;
                 ctx.clear_timeout(IDLE_SWEEP_TIMER);
@@ -272,35 +271,35 @@ impl Actor for Session {
                             .await?;
                     }
                 } else {
-                    let _ = self.start_input(input, ctx).await?;
+                    self.start_input(input, ctx).await?;
                 }
             }
             SessionMsg::RunFinished { task, role, output } => {
                 let Some(active) = self.active.as_mut() else {
-                    return Ok(Continue);
+                    return Ok(());
                 };
                 if active.task != task || active.role != role {
-                    return Ok(Continue);
+                    return Ok(());
                 }
                 match output {
                     RunOutput::Planned(plan) => {
                         tracing::debug!(chat = self.chat, task, %plan, "planner completed");
                         let input = active.input.clone();
                         self.active = None;
-                        let _ = self.start_run(task, Role::Engineer, 0, input, ctx).await?;
+                        self.start_run(task, Role::Engineer, 0, input, ctx).await?;
                     }
                     RunOutput::Engineered(output) => {
                         tracing::debug!(chat = self.chat, task, %output, "engineer completed");
                         let input = active.input.clone();
                         self.active = None;
-                        let _ = self.start_run(task, Role::Reviewer, 0, input, ctx).await?;
+                        self.start_run(task, Role::Reviewer, 0, input, ctx).await?;
                     }
                     RunOutput::Reviewed(approved) => {
-                        let _ = self.complete_task(task, approved, ctx).await?;
+                        self.complete_task(task, approved, ctx).await?;
                         if self.gate.load(Ordering::Acquire)
                             && let Some(input) = self.pending.pop_front()
                         {
-                            let _ = self.start_input(input, ctx).await?;
+                            self.start_input(input, ctx).await?;
                         }
                     }
                     RunOutput::RetryableFailure => {
@@ -361,15 +360,14 @@ impl Actor for Session {
                     if active.task != task || active.role != role {
                         self.active = Some(active);
                     } else if active.retry_after_termination && self.gate.load(Ordering::Acquire) {
-                        let _ = self
-                            .start_run(
-                                active.task,
-                                active.role,
-                                active.attempt + 1,
-                                active.input,
-                                ctx,
-                            )
-                            .await?;
+                        self.start_run(
+                            active.task,
+                            active.role,
+                            active.attempt + 1,
+                            active.input,
+                            ctx,
+                        )
+                        .await?;
                     } else if active.retry_after_termination {
                         self.pending.push_front(active.input);
                         if let Some(timer) = self.heartbeat.take() {
@@ -393,14 +391,13 @@ impl Actor for Session {
                 } else if self.active.is_none()
                     && let Some(input) = self.pending.pop_front()
                 {
-                    let _ = self.start_input(input, ctx).await?;
+                    self.start_input(input, ctx).await?;
                 }
             }
             SessionMsg::Stop => {
                 if let Some(active) = &self.active {
                     active.cancel.cancel();
-                    let _ = self
-                        .append(JournalEntry::TaskCancelled { task: active.task })
+                    self.append(JournalEntry::TaskCancelled { task: active.task })
                         .await?;
                 }
             }
@@ -420,13 +417,12 @@ impl Actor for Session {
                     self.arm_idle(ctx);
                 } else if self.active.is_none() {
                     let task = self.task_sequence.load(Ordering::Relaxed);
-                    let _ = self
-                        .append(JournalEntry::Checkpoint {
-                            task,
-                            state: format!("{} transcript item(s)", self.transcript_len),
-                        })
-                        .await?;
-                    let _ = self.append(JournalEntry::Evicted).await?;
+                    self.append(JournalEntry::Checkpoint {
+                        task,
+                        state: format!("{} transcript item(s)", self.transcript_len),
+                    })
+                    .await?;
+                    self.append(JournalEntry::Evicted).await?;
                     self.router
                         .send(RouterMsg::Evict {
                             chat: self.chat,
@@ -438,6 +434,6 @@ impl Actor for Session {
                 }
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }

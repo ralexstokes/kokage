@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, Runtime, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, Runtime};
 
 #[derive(Clone)]
 struct Frontend {
@@ -31,7 +31,7 @@ impl Actor for Frontend {
                     .await?;
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -45,7 +45,7 @@ impl Actor for RushPress {
 
     async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.observed.send(order).expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 }
 

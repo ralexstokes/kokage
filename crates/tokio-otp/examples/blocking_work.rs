@@ -1,9 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{
-    Actor, ActorResult, AmbientContext, GraphBuilder, MessageContext, prelude::Continue,
-};
+use tokio_otp::{Actor, ActorResult, AmbientContext, GraphBuilder, MessageContext};
 
 mod support;
 
@@ -43,7 +41,7 @@ impl Actor for Worker {
                 self.observed.send(output).expect("receiver alive");
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 

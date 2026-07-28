@@ -19,7 +19,7 @@ use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
     DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, LiveContext,
     MessageContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
-    StopContext, TryRecvError, prelude::Continue,
+    StopContext, TryRecvError,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -51,7 +51,7 @@ impl<M: Send + 'static> RawActor for Drain<M> {
 
     async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -131,7 +131,7 @@ impl RawActor for Frontend {
         while let Some(Request(payload)) = ctx.recv().await {
             self.worker.send(Job { payload }).await?;
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -147,7 +147,7 @@ impl RawActor for Worker {
         while let Some(job) = ctx.recv().await {
             self.seen.send(job).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -189,7 +189,7 @@ impl RawActor for Echo {
         while let Some(n) = ctx.recv().await {
             self.seen.send(n).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -262,7 +262,7 @@ impl RawActor for Counter {
                 CounterMsg::Total(reply) => reply.send(total),
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -310,7 +310,7 @@ impl Actor for HandlerCounter {
             HandlerCounterMsg::Add(n) => self.total += n,
             HandlerCounterMsg::Total(reply) => reply.send(self.total),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -361,14 +361,14 @@ impl Actor for LifecycleHandler {
         self.events
             .send(LifecycleEvent::Started)
             .expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Handled)
             .expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -427,7 +427,7 @@ impl Actor for FailingStartHandler {
         self.events
             .send(LifecycleEvent::Handled)
             .expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -509,6 +509,88 @@ async fn handler_error_fails_the_actor_run() {
     ));
 }
 
+#[derive(Clone)]
+struct ContextStop {
+    stopped: mpsc::UnboundedSender<()>,
+}
+
+impl Actor for ContextStop {
+    type Msg = ();
+
+    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+        assert!(!ctx.is_stopping());
+        ctx.stop();
+        assert!(ctx.is_stopping());
+        ctx.stop();
+        Ok(())
+    }
+
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
+        self.stopped.send(()).expect("receiver alive");
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn message_context_stop_is_idempotent_and_exits_normally() {
+    let (stopped_tx, mut stopped_rx) = mpsc::unbounded_channel();
+    let mut builder = GraphBuilder::new();
+    let (actor_slot, actor) = builder.slot("worker");
+    builder.define(actor_slot, move || ContextStop {
+        stopped: stopped_tx.clone(),
+    });
+    let graph = builder.build().expect("valid graph");
+    let worker = runnable(&graph, "worker");
+    let task = tokio::spawn(async move {
+        worker
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
+            .await
+    });
+
+    actor.send(()).await.expect("stop message sent");
+    recv(&mut stopped_rx, "on_stop ran").await;
+    assert!(task.await.expect("actor task joined").is_ok());
+}
+
+struct ContextStopThenFail;
+
+impl Actor for ContextStopThenFail {
+    type Msg = ();
+
+    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+        ctx.stop();
+        Err("failure wins over stop".into())
+    }
+}
+
+#[tokio::test]
+async fn message_context_error_takes_precedence_over_a_stop_request() {
+    let mut builder = GraphBuilder::new();
+    let (actor_slot, actor) = builder.slot("worker");
+    builder.define(actor_slot, || ContextStopThenFail);
+    let graph = builder.build().expect("valid graph");
+    let worker = runnable(&graph, "worker");
+    let task = tokio::spawn(async move {
+        worker
+            .run_until(
+                pending::<()>(),
+                RestartPolicy::Never,
+                DEFAULT_SHUTDOWN_BOUND,
+            )
+            .await
+    });
+
+    actor.send(()).await.expect("message sent");
+    assert!(matches!(
+        task.await.expect("actor task joined"),
+        Err(ActorRunError::Failed { actor_id, .. }) if actor_id == "worker"
+    ));
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum GateEvent {
     Handled(u32),
@@ -548,7 +630,8 @@ impl Actor for GateHandler {
                 self.started.send(()).expect("receiver alive");
                 ctx.continue_with(GateMsg::Add(99));
                 self.release.notified().await;
-                return Ok(tokio_otp::prelude::Stop);
+                ctx.stop();
+                return Ok(());
             }
             GateMsg::Add(n) => {
                 self.total += n;
@@ -558,7 +641,7 @@ impl Actor for GateHandler {
             }
             GateMsg::Total(reply) => reply.send(self.total),
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -832,7 +915,7 @@ impl RawActor for TryDrainActor {
             }
         }
 
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -909,7 +992,7 @@ impl RawActor for Paddle {
                     .await?;
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1116,7 +1199,7 @@ impl RawActor for Quit {
     type Msg = ();
 
     async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1161,7 +1244,7 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
             let _guard = LiveGuard(self.live.clone());
             self.started.notify_one();
             pending::<()>().await;
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1255,7 +1338,7 @@ mod runnable_actor {
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
         GraphBuilder, MessageContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
-        SendError, ShutdownMode, StartContext, SupervisionTree, prelude::Continue,
+        SendError, ShutdownMode, StartContext, SupervisionTree,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1278,7 +1361,7 @@ mod runnable_actor {
 
         async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
             while ctx.recv().await.is_some() {}
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1293,7 +1376,7 @@ mod runnable_actor {
         async fn run(&mut self, mut ctx: ActorContext<()>) -> ActorResult {
             self.started.send(()).expect("start receiver alive");
             while ctx.recv().await.is_some() {}
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1316,7 +1399,7 @@ mod runnable_actor {
 
         async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
             ctx.shutdown_token().cancelled().await;
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1352,7 +1435,7 @@ mod runnable_actor {
             while let Some(_message) = ctx.recv().await {
                 self.received.send(()).expect("receiver alive");
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1387,7 +1470,7 @@ mod runnable_actor {
             while let Some(_message) = ctx.recv().await {
                 self.received.send(()).expect("receiver alive");
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1628,13 +1711,13 @@ mod runnable_actor {
                 drop(ctx);
                 self.entered_stale_window.send(()).expect("receiver alive");
                 self.release_first_run.notified().await;
-                return Ok(Continue);
+                return Ok(());
             }
 
             while let Some(message) = ctx.recv().await {
                 self.observed.send(message).expect("receiver alive");
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1883,7 +1966,7 @@ mod runnable_actor {
                 let worker = self.worker.clone();
                 worker.send(work).await?;
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1904,7 +1987,7 @@ mod runnable_actor {
                     return Err::<_, BoxError>(std::io::Error::other("boom").into());
                 }
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -1997,7 +2080,7 @@ mod runnable_actor {
                 }
                 self.out.send(message).expect("receiver alive");
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -2082,7 +2165,7 @@ mod runnable_actor {
                     .send((incarnation, message))
                     .expect("receiver alive");
             }
-            Ok(Continue)
+            Ok(())
         }
     }
 
@@ -2175,7 +2258,7 @@ mod runnable_actor {
         async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;
-            Ok(Continue)
+            Ok(())
         }
 
         async fn handle(
@@ -2187,7 +2270,7 @@ mod runnable_actor {
             // A drain must treat its SendError as skippable, not fatal.
             let outcome = self.sink.send(message).await;
             self.outcomes.send(outcome).expect("receiver alive");
-            Ok(Continue)
+            Ok(())
         }
 
         fn drain_policy(&self) -> DrainPolicy {
@@ -2266,7 +2349,7 @@ mod runnable_actor {
         async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;
-            Ok(Continue)
+            Ok(())
         }
 
         async fn handle(
@@ -2275,7 +2358,7 @@ mod runnable_actor {
             _ctx: &mut MessageContext<'_, Self>,
         ) -> ActorResult {
             self.sink.send(message).await?;
-            Ok(Continue)
+            Ok(())
         }
     }
 

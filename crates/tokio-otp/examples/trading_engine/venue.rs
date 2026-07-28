@@ -179,7 +179,7 @@ impl Actor for VenueFeed {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.exchange.open_feed_session(self.venue);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -204,7 +204,7 @@ impl Actor for VenueFeed {
             FeedMsg::Crash => panic!("scripted venue failure: {}", self.venue),
         }
         self.latency.record("handler.feed", started.elapsed());
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -238,7 +238,7 @@ impl Actor for VenueGateway {
             .expect("stalled reply lock poisoned")
             .clear();
         self.exchange.open_gateway_session(self.venue);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -260,13 +260,13 @@ impl Actor for VenueGateway {
                 // must be able to reach the exchange.
                 if symbol == "STALL-NOACCEPT" && attempt == 1 {
                     self.stall(reply);
-                    return Ok(Continue);
+                    return Ok(());
                 }
 
                 let inserted = self.exchange.accept(&key, qty);
                 if symbol == "ACCEPT-NOACK" && attempt == 1 {
                     self.stall(reply);
-                    return Ok(Continue);
+                    return Ok(());
                 }
 
                 reply.send(PlaceOutcome::Accepted { key: key.clone() });
@@ -333,7 +333,7 @@ impl Actor for VenueGateway {
             }
         }
         self.latency.record("handler.gateway", started.elapsed());
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {

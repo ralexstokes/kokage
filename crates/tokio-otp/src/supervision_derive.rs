@@ -78,7 +78,7 @@ pub trait SupervisionFactories<T: Supervision> {
 /// ```
 /// # use tokio_otp::{
 /// #     Actor, ActorResult, DynamicScope, MessageContext, RestartPolicy, Runtime,
-/// #     RuntimeHandle, SupervisionBuildError, prelude::Continue,
+/// #     RuntimeHandle, SupervisionBuildError,
 /// # };
 /// # struct Manager {
 /// #     sessions: RuntimeHandle,
@@ -87,7 +87,7 @@ pub trait SupervisionFactories<T: Supervision> {
 /// #     type Msg = ();
 /// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         let _ = &self.sessions;
-/// #         Ok(Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 /// #[derive(tokio_otp::Supervision)]

@@ -16,7 +16,6 @@ use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
     DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleWatch, MessageContext,
     RawActor, Reply, Runtime, RuntimeHandle, SendError, StartContext, SupervisionTree,
-    prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity,
@@ -42,7 +41,7 @@ impl<M: Send + 'static> RawActor for Drain<M> {
 
     async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -58,7 +57,7 @@ impl RawActor for Observe {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -73,7 +72,7 @@ impl RawActor for ObserveOnce {
     async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
         let message = ctx.recv().await.expect("message received before shutdown");
         self.observed.send(message).expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -794,7 +793,7 @@ impl RawActor for FailAfterObserve {
                 self.observed.send(message).expect("receiver alive");
                 Err("deliberate failure".into())
             }
-            None => Ok(Continue),
+            None => Ok(()),
         }
     }
 }
@@ -1072,7 +1071,7 @@ impl RawActor for FailOnMessage {
             return Err::<_, BoxError>(Box::new(io::Error::other("boom")));
         }
 
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1164,7 +1163,7 @@ impl Actor for ResettingCounter {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.on_starts.fetch_add(1, Ordering::SeqCst);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -1175,11 +1174,11 @@ impl Actor for ResettingCounter {
         match message {
             CounterMsg::Add(n) => {
                 self.total += n;
-                Ok(Continue)
+                Ok(())
             }
             CounterMsg::Total(reply) => {
                 reply.send(self.total);
-                Ok(Continue)
+                Ok(())
             }
             CounterMsg::Crash => Err("deliberate crash".into()),
         }
@@ -1297,7 +1296,7 @@ impl Actor for StuckDrainActor {
             }
             StuckDrainMsg::Stuck => std::future::pending::<()>().await,
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {

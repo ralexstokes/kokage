@@ -21,7 +21,7 @@ impl Actor for Probe {
         if self.name == "first" {
             ctx.continue_with("continue");
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -30,7 +30,7 @@ impl Actor for Probe {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.order.lock().await.push(message);
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -66,11 +66,11 @@ impl Actor for AddsChildOnStart {
                 }
             }))
             .await?;
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -174,7 +174,7 @@ impl Actor for FailsOnStart {
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -229,7 +229,7 @@ impl Actor for DrainContinuation {
         if message == "trigger" {
             ctx.continue_with("continued");
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {
@@ -333,14 +333,15 @@ impl Actor for DrainPhaseProbe {
                 while !ctx.shutdown_token().is_cancelled() {
                     tokio::task::yield_now().await;
                 }
-                Ok(Continue)
+                Ok(())
             }
             "stop" => {
                 self.started.notify_one();
                 self.release.notified().await;
-                Ok(Stop)
+                ctx.stop();
+                Ok(())
             }
-            _ => Ok(Continue),
+            _ => Ok(()),
         }
     }
 
@@ -444,7 +445,8 @@ impl Actor for StopsOnStart {
         ctx.continue_with("continuation");
         self.started.notify_one();
         self.release.notified().await;
-        Ok(Stop)
+        ctx.stop();
+        Ok(())
     }
 
     async fn handle(
@@ -453,7 +455,7 @@ impl Actor for StopsOnStart {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.events.lock().await.push(message);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -467,7 +469,7 @@ impl Actor for StopsOnStart {
 }
 
 #[tokio::test]
-async fn stop_from_on_start_drops_mailbox_and_continuations_then_runs_on_stop() {
+async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -511,7 +513,7 @@ async fn stop_from_on_start_drops_mailbox_and_continuations_then_runs_on_stop() 
 }
 
 #[tokio::test]
-async fn stop_from_on_start_with_drain_handles_the_queued_mailbox_only() {
+async fn start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -561,7 +563,7 @@ impl RawActor for PromptRaw {
     type Msg = ();
 
     async fn run(&mut self, _ctx: ActorContext<Self::Msg>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -611,7 +613,7 @@ impl Actor for DefaultPolicy {
                 tokio::task::yield_now().await;
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 

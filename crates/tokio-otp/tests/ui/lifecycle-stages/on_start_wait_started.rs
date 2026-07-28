@@ -1,6 +1,6 @@
 //! `on_start` cannot await the enclosing scope's readiness: the actor is not
 //! ready until this hook returns, so the wait depends on itself.
-use tokio_otp::{Actor, ActorResult, MessageContext, StartContext, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, MessageContext, StartContext};
 
 struct Leader;
 
@@ -9,11 +9,11 @@ impl Actor for Leader {
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.supervisor().wait_started().await?;
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 

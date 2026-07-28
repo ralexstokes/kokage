@@ -3,24 +3,14 @@ use std::future::Future;
 use crate::actor::context::ActorContext;
 pub(crate) use tokio_supervisor::BoxError;
 
-/// Controls whether a handler actor continues receiving messages or stops
-/// cleanly.
-#[must_use = "a Stop flow must be propagated or discarded explicitly"]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Flow {
-    /// Continue receiving messages.
-    Continue,
-    /// Stop the actor cleanly.
-    Stop,
-}
-
 /// The result type returned by actor run, startup, and message functions.
 ///
-/// Handler-style actors use [`Flow`] to continue or request a clean stop. A
-/// custom [`RawActor`] owns its receive loop, so its final flow value is not
-/// interpreted by the runtime; both variants are clean exits.
-pub type ActorResult = Result<Flow, BoxError>;
+/// `Ok(())` keeps a handler-style actor running after startup or one handled
+/// message. Call [`LiveContext::stop`](crate::LiveContext::stop) before
+/// returning successfully to request a clean self-stop. A custom [`RawActor`]
+/// owns its receive loop, so returning `Ok(())` simply completes that actor
+/// cleanly.
+pub type ActorResult = Result<(), BoxError>;
 
 /// Async actor interface with a typed mailbox.
 ///

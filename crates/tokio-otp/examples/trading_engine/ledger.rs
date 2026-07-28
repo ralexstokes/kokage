@@ -53,7 +53,7 @@ impl Actor for Ledger {
             }
             LedgerMsg::Report { reply } => reply.send(self.report.clone()),
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {

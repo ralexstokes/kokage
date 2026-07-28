@@ -10,7 +10,6 @@ zero-argument constructor paths implement `ActorFactory` automatically; named
 spec structs are useful when durable configuration deserves its own type.
 
 ```rust,no_run
-use tokio_otp::prelude::Continue;
 use tokio_otp::{
     Actor, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime,
 };
@@ -42,7 +41,7 @@ impl Actor for FrontDesk {
                     .await?;
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -53,7 +52,7 @@ impl Actor for RushPress {
 
     async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         println!("RUSH printed {order}");
-        Ok(Continue)
+        Ok(())
     }
 }
 

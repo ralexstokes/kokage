@@ -9,7 +9,7 @@ impl RawActor for Worker {
     type Msg = Message;
 
     async fn run(&mut self, _: ActorContext<Message>) -> ActorResult {
-        Ok(tokio_otp::prelude::Continue)
+        Ok(())
     }
 }
 

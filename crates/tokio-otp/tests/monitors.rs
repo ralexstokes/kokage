@@ -7,7 +7,7 @@ use tokio::{
 use tokio_otp::{
     ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
     Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent, RawActor, RestartPolicy,
-    RunnableActor, Runtime, prelude::Continue,
+    RunnableActor, Runtime,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -29,7 +29,7 @@ impl RawActor for Peer {
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
         self.started.send(()).expect("start receiver alive");
         match ctx.recv().await {
-            Some(PeerMessage::Stop) | None => Ok(Continue),
+            Some(PeerMessage::Stop) | None => Ok(()),
             Some(PeerMessage::Panic) => panic!("deliberate peer panic"),
         }
     }
@@ -70,7 +70,7 @@ impl RawActor for Observer {
                 }
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -467,7 +467,7 @@ impl RawActor for TaggedObserver {
                 }
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -622,7 +622,7 @@ impl RawActor for AliasedObserver {
                 }
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -729,7 +729,7 @@ impl RawActor for ManagedObserver {
                 ManagedObserverMessage::Stop => break,
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1209,7 +1209,7 @@ impl RawActor for GatedObserver {
                 break;
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1314,7 +1314,7 @@ impl RawActor for UnitObserver {
         while let Some(event) = ctx.recv().await {
             self.observed.send(event).expect("observer receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1393,7 +1393,7 @@ impl RawActor for PanickingMapper {
         });
         self.started.send(()).expect("start receiver alive");
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use tokio::sync::Notify;
-use tokio_otp::{ActorContext, ActorResult, GraphBuilder, RawActor, SendError, prelude::Continue};
+use tokio_otp::{ActorContext, ActorResult, GraphBuilder, RawActor, SendError};
 
 mod support;
 
@@ -20,7 +20,7 @@ impl RawActor for ParkBeforeRecv {
         while let Some(message) = ctx.recv().await {
             println!("worker received `{message}`");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 

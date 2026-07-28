@@ -3,7 +3,7 @@ use std::{error::Error, future::pending, marker::PhantomData};
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, MessageContext,
-    RestartPolicy, prelude::Continue,
+    RestartPolicy,
 };
 
 enum Command<M> {
@@ -45,7 +45,7 @@ impl<M: Send + 'static> Actor for Observe<M> {
         match message {
             Command::Observe(message) => {
                 self.observed.send(message).expect("receiver alive");
-                Ok(Continue)
+                Ok(())
             }
             Command::Fail => Err(std::io::Error::other("restart requested").into()),
         }

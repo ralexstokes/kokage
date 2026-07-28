@@ -421,7 +421,7 @@ impl GraphBuilder {
 #[cfg(test)]
 mod tests {
     use super::{ActorOptions, GraphBuilder, MailboxMode};
-    use crate::{Actor, ActorResult, GraphBuildError, MessageContext, prelude::Continue};
+    use crate::{Actor, ActorResult, GraphBuildError, MessageContext};
 
     struct OpaqueMessage;
 
@@ -435,7 +435,7 @@ mod tests {
             _: OpaqueMessage,
             _: &mut MessageContext<'_, Self>,
         ) -> ActorResult {
-            Ok(Continue)
+            Ok(())
         }
     }
 

@@ -7,7 +7,7 @@ impl Actor for Worker {
     type Msg = ();
 
     async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(tokio_otp::prelude::Continue)
+        Ok(())
     }
 }
 

@@ -1,8 +1,6 @@
 use std::marker::PhantomData;
 
-use tokio_otp::{
-    ActorContext, ActorResult, GraphBuildError, GraphBuilder, RawActor, prelude::Continue,
-};
+use tokio_otp::{ActorContext, ActorResult, GraphBuildError, GraphBuilder, RawActor};
 
 struct Idle<M>(PhantomData<fn(M)>);
 
@@ -17,7 +15,7 @@ impl<M: Send + 'static> RawActor for Idle<M> {
 
     async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 

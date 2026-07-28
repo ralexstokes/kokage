@@ -6,7 +6,6 @@ identity an `ActorRef` points at — and turns each lifecycle transition into an
 ordinary typed message in the observer's mailbox:
 
 ```rust
-use tokio_otp::prelude::Continue;
 use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, MessageContext, MonitorEvent};
 
 enum CoordinatorMsg {
@@ -23,7 +22,7 @@ impl Actor for Coordinator {
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.watch(&self.worker, CoordinatorMsg::Worker);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -50,7 +49,7 @@ impl Actor for Coordinator {
             }
             _ => {}
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 ```

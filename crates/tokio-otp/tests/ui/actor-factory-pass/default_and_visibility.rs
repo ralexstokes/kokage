@@ -17,7 +17,7 @@ mod actor {
 
         async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
             let _ = (&self.durable, &self.local);
-            Ok(Continue)
+            Ok(())
         }
     }
 }

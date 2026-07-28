@@ -392,10 +392,7 @@ impl Runtime {
     /// raw adoption path requires a direct `tokio-supervisor` dependency.
     ///
     /// ```no_run
-    /// use tokio_otp::{
-    ///     Actor, MessageContext, ActorResult, DynamicActorOptions, Runtime,
-    ///     prelude::Continue,
-    /// };
+    /// use tokio_otp::{Actor, ActorResult, DynamicActorOptions, MessageContext, Runtime};
     /// use tokio_supervisor::DynamicSupervisorBuilder;
     ///
     /// struct Worker;
@@ -404,7 +401,7 @@ impl Runtime {
     ///     type Msg = ();
     ///
     ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-    ///         Ok(Continue)
+    ///         Ok(())
     ///     }
     /// }
     ///
@@ -455,7 +452,6 @@ impl Runtime {
     ///
     /// ```no_run
     /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, Runtime};
-    /// use tokio_otp::prelude::Continue;
     /// use tokio_supervisor::{SupervisorBuilder, SupervisorSpec};
     ///
     /// struct Worker;
@@ -464,7 +460,7 @@ impl Runtime {
     ///     type Msg = ();
     ///
     ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-    ///         Ok(Continue)
+    ///         Ok(())
     ///     }
     /// }
     ///

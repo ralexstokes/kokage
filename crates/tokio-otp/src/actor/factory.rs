@@ -30,7 +30,7 @@ use crate::actor::raw::RawActor;
 /// # #[cfg(feature = "derive")]
 /// # fn main() {
 /// # use std::sync::{Arc, atomic::AtomicU64};
-/// # use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, prelude::Continue};
+/// # use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder};
 /// #[derive(tokio_otp::ActorFactory)]
 /// struct Worker {
 ///     // This allocator lives in WorkerFactory, so its value survives restarts.
@@ -43,7 +43,7 @@ use crate::actor::raw::RawActor;
 /// #     type Msg = ();
 /// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         let _ = (&self.ids, &self.pending);
-/// #         Ok(Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 ///

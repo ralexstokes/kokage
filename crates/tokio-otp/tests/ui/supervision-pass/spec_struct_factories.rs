@@ -10,7 +10,7 @@ impl Actor for SpecActor {
     type Msg = ();
 
     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(tokio_otp::prelude::Continue)
+        Ok(())
     }
 }
 
@@ -34,7 +34,7 @@ impl Actor for ClosureActor {
     type Msg = ();
 
     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(tokio_otp::prelude::Continue)
+        Ok(())
     }
 }
 

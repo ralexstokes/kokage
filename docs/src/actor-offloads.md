@@ -144,7 +144,7 @@ impl Actor for Router {
                 reply.send(accepted);
             }
         }
-        Ok(tokio_otp::prelude::Continue)
+        Ok(())
     }
 }
 ```

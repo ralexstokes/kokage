@@ -18,7 +18,7 @@ impl Actor for Worker {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         reply.send(7);
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -290,7 +290,7 @@ impl Actor for Mounter {
             .await
             .expect("dynamic scope accepts the actor");
         reply.send(worker.call(CALL_TIMEOUT, |reply| reply).await?);
-        Ok(Continue)
+        Ok(())
     }
 }
 

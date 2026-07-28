@@ -24,7 +24,7 @@ impl RawActor for FailsOnce {
             return Err(io::Error::other("boom").into());
         }
         ctx.shutdown_token().cancelled().await;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -39,7 +39,7 @@ impl RawActor for Healthy {
     async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
         self.runs.fetch_add(1, Ordering::SeqCst);
         ctx.shutdown_token().cancelled().await;
-        Ok(Continue)
+        Ok(())
     }
 }
 

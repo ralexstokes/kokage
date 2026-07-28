@@ -9,9 +9,8 @@ use std::{
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
     Actor, ActorResult, AddSubtreeError, AmbientContext, BoxError, ControlError, GraphBuilder,
-    MessageContext, ReservedSupervisionTree, RestartIntensity, Runtime, RuntimeHandle, ScopeKind,
-    StartContext, StopContext, Strategy, SupervisionTree,
-    prelude::{Continue, Stop},
+    LiveContext, MessageContext, ReservedSupervisionTree, RestartIntensity, Runtime, RuntimeHandle,
+    ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
 };
 use tokio_supervisor::ChildSpec;
 
@@ -23,7 +22,7 @@ impl Actor for Idle {
     type Msg = ();
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -57,7 +56,7 @@ impl Actor for ScopeProbe {
                 .send("ordered-supervisor")
                 .expect("test receiver open");
             self.reports.send("none").expect("test receiver open");
-            return Ok(Continue);
+            return Ok(());
         };
         self.reports.send("some").expect("test receiver open");
         // Task insertion schedules startup rather than awaiting readiness, so
@@ -71,7 +70,7 @@ impl Actor for ScopeProbe {
             .expect("test receiver open");
 
         if !self.mutate_children_on_start {
-            return Ok(Continue);
+            return Ok(());
         }
 
         // The factory signature remains `|| ScopeProbe { .. }`: the runtime
@@ -93,7 +92,7 @@ impl Actor for ScopeProbe {
             .await;
             let _ = myself.send(LeaderMsg::OnStartAdded(result.is_ok())).await;
         });
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -117,7 +116,7 @@ impl Actor for ScopeProbe {
             LeaderMsg::OnStartAdded(false) => return Err("on-start child add failed".into()),
             LeaderMsg::Crash => panic!("scripted leader crash"),
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -137,7 +136,7 @@ impl Actor for StopProbe {
     type Msg = ();
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -157,11 +156,11 @@ impl Actor for BuilderHandleOwner {
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.mount.add_actor("owned", || Idle).await?;
         self.report.send("mounted").expect("test receiver open");
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -181,7 +180,7 @@ impl Actor for RestrictedTaskAdder {
             }))
             .await?;
         self.lineage.send(lineage).expect("test receiver open");
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -584,18 +583,19 @@ impl Actor for RestartProbe {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         if matches!(message, LeaderMsg::Crash) {
             panic!("scripted crash");
         }
-        Ok(Stop)
+        ctx.stop();
+        Ok(())
     }
 }
 

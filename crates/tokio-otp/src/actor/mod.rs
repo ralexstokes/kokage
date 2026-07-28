@@ -35,4 +35,4 @@ pub(crate) use graph::RunnableActorBuilder;
 pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor};
 pub use handler::{Actor, DrainPolicy};
 pub use monitor::{Down, DownReason, MonitorEvent};
-pub use raw::{ActorResult, Flow, RawActor};
+pub use raw::{ActorResult, RawActor};

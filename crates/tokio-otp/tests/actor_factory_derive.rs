@@ -9,7 +9,7 @@ use std::{
 
 use tokio_otp::{
     Actor, ActorFactory, ActorResult, GraphBuilder, LifecycleWatch, MessageContext, Reply,
-    RestartPolicy, Runtime, RuntimeHandle, StartContext, prelude::Continue,
+    RestartPolicy, Runtime, RuntimeHandle, StartContext,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -50,7 +50,7 @@ impl Actor for DerivedActor {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.incarnation = self.starts.fetch_add(1, Ordering::SeqCst);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -62,7 +62,7 @@ impl Actor for DerivedActor {
             ProbeMsg::Increment(reply) => {
                 self.local += 1;
                 reply.send((self.incarnation, self.local));
-                Ok(Continue)
+                Ok(())
             }
             ProbeMsg::Crash => Err(io::Error::other("restart probe").into()),
         }

@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{Actor, ActorRef, ActorResult, LiveContext, MessageContext, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, LiveContext, MessageContext};
 
 use crate::{
     messages::{
@@ -53,7 +53,7 @@ impl Guard {
         ctx: &mut impl LiveContext<GuardMsg>,
     ) -> ActorResult {
         if self.report.paused == paused {
-            return Ok(Continue);
+            return Ok(());
         }
         self.report.paused = paused;
         self.gate.store(!paused, Ordering::Release);
@@ -62,7 +62,7 @@ impl Guard {
             self.backoff_multiplier = 1;
             ctx.send_after(GuardMsg::Probe, PROBE_BACKOFF_BASE);
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -89,11 +89,11 @@ impl Actor for Guard {
                     self.failures.pop_front();
                 }
                 if self.failures.len() >= GUARD_THRESHOLD {
-                    let _ = self.set_paused(true, ctx).await?;
+                    self.set_paused(true, ctx).await?;
                 }
             }
             GuardMsg::BudgetExceeded => {
-                let _ = self.set_paused(true, ctx).await?;
+                self.set_paused(true, ctx).await?;
             }
             GuardMsg::BridgeRestarts { total } => {
                 if let Some(total) = total {
@@ -109,7 +109,7 @@ impl Actor for Guard {
                     .unwrap_or(false);
                 if self.model.probe() && under_cap {
                     self.failures.clear();
-                    let _ = self.set_paused(false, ctx).await?;
+                    self.set_paused(false, ctx).await?;
                 } else {
                     self.report.failed_probes += 1;
                     self.backoff_multiplier = self.backoff_multiplier.saturating_mul(2).min(8);
@@ -122,6 +122,6 @@ impl Actor for Guard {
             GuardMsg::Paused { reply } => reply.send(self.report.paused),
             GuardMsg::Report { reply } => reply.send(self.report.clone()),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
