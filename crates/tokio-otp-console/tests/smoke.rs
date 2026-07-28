@@ -12,7 +12,7 @@ use tokio::{
     sync::watch,
     time::{sleep, timeout},
 };
-use tokio_otp::{Actor, ActorResult, MessageContext, Runtime, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, MessageContext, Runtime};
 use tokio_otp_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use tokio_supervisor::{
     ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder, Strategy, SupervisorHandle,
@@ -36,7 +36,7 @@ impl Actor for IdleActor {
     type Msg = ();
 
     async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 

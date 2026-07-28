@@ -15,7 +15,7 @@ mod application {
             _: Message,
             _: &mut MessageContext<'_, Self>,
         ) -> ActorResult {
-            Ok(tokio_otp::prelude::Continue)
+            Ok(())
         }
     }
 

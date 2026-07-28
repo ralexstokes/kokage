@@ -10,13 +10,14 @@ desk sends orders to the press, the front desk owns an `ActorRef<Order>`.
 Actor names exist too, but only as *labels* for tracing, stats, and
 supervisor child ids — addressing is always a typed ref.
 
-Handler methods return `Ok(Continue)` to receive another message or `Ok(Stop)`
-to finish cleanly. A clean stop follows the same drain policy and `on_stop`
-hook as an external stop: `Discard` drops the queued mailbox, `Drain` handles
-it, and queued `continue_with` continuations are dropped in either case — the
-loop logs a `WARN` naming the actor and the count when that happens. It is
-a normal exit to watches and supervision. `RestartPolicy::Always` restarts it;
-`OnFailure` and `Never` do not.
+Handler methods return `Ok(())` to receive another message. Calling
+`ctx.stop()` before returning successfully requests a clean self-stop. A clean
+stop follows the same drain policy and `on_stop` hook as an external stop:
+`Discard` drops the queued mailbox, `Drain` handles it, and queued
+`continue_with` continuations are dropped in either case — the loop logs a
+`WARN` naming the actor and the count when that happens. It is a normal exit to
+watches and supervision. `RestartPolicy::Always` restarts it; `OnFailure` and
+`Never` do not.
 
 The usual static graph is a struct whose fields are the actors. Deriving
 `Supervision` gives that struct a `graph` method; its wiring closure receives a
@@ -25,7 +26,6 @@ forward references do not require string lookup. The method returns that same
 refs bundle alongside the graph, for use as application entry points:
 
 ```rust,no_run
-use tokio_otp::prelude::Continue;
 use std::time::Duration;
 use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Runtime, Supervision};
 
@@ -46,7 +46,7 @@ impl Actor for FrontDesk {
 
     async fn handle(&mut self, order: Order, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.press.send(order).await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -61,7 +61,7 @@ impl Actor for Press {
         self.shipping
             .send(ShippingMsg::Ship(Parcel(format!("printed[{order}]"))))
             .await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -85,7 +85,7 @@ impl Actor for Shipping {
             }
             ShippingMsg::Total(reply) => reply.send(self.shipped),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -347,7 +347,7 @@ behaves differently on the way out has to ask: `ctx.is_draining()` is `true`
 for exactly the calls the drain makes. Reach for it when the handler would
 otherwise queue work that nothing will run — a `continue_with`, a fresh timer,
 a follow-up offload. It is not `ctx.is_shutting_down()`: a drain also follows
-the actor's own `Ok(Stop)`, where the graph is not shutting down and
+the actor's own `ctx.stop()` request, where the graph is not shutting down and
 `is_shutting_down()` stays `false` the whole time.
 
 Hand-written `RawActor::run` loops are

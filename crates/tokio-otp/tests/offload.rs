@@ -76,7 +76,7 @@ impl Actor for Outcomes {
             7,
             OutcomeMsg::OrFallback,
         );
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -85,7 +85,7 @@ impl Actor for Outcomes {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).unwrap();
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -214,7 +214,7 @@ impl Actor for StaleActor {
                 let _ = reply.send(());
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -306,7 +306,7 @@ impl Actor for AbortActor {
                 self.done.fetch_add(1, Ordering::Relaxed);
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -379,7 +379,7 @@ impl Actor for ReadyAbortActor {
             }
             ReadyAbortMsg::Done => self.observed.send(()).unwrap(),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -458,7 +458,7 @@ impl Actor for DrainAbortActor {
             }
             DrainAbortMsg::Done => panic!("aborted offload completion was delivered"),
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {
@@ -542,7 +542,7 @@ impl Actor for ShutdownActor {
             DrainMsg::Nested => self.observed.send("nested").unwrap(),
             DrainMsg::Done => self.observed.send("done").unwrap(),
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {
@@ -644,7 +644,7 @@ impl Actor for BackpressureActor {
             BackpressureMsg::Fill => self.observed.send("fill").unwrap(),
             BackpressureMsg::Done => self.observed.send("done").unwrap(),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -779,7 +779,7 @@ impl Actor for DeadlineDrainActor {
             }
             DeadlineDrainMsg::Done(outcome) => self.observed.send(outcome).unwrap(),
         }
-        Ok(Continue)
+        Ok(())
     }
 
     fn drain_policy(&self) -> DrainPolicy {
@@ -833,7 +833,7 @@ impl RawActor for RawCompletion {
         let message = ctx.recv().await.expect("offload completion");
         self.observed.send(message).unwrap();
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -876,7 +876,7 @@ impl Actor for PanicActor {
             async { panic!("offload panic") },
             |_| PanicMsg::Start,
         );
-        Ok(Continue)
+        Ok(())
     }
 }
 

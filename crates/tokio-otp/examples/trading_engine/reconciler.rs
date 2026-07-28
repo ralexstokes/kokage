@@ -104,7 +104,7 @@ impl Actor for Reconciler {
         for venue in self.feeds.keys().copied() {
             self.watch(venue, ctx);
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -186,6 +186,6 @@ impl Actor for Reconciler {
                 });
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }

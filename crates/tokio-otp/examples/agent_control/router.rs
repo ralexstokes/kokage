@@ -11,7 +11,7 @@ use std::{
 use tokio_otp::{
     Actor, ActorRef, ActorResult, AmbientContext, ChildMembershipView, ControlError, GraphBuilder,
     LifecycleEvent, LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle, StartContext,
-    Strategy, SupervisionTree, SupervisorSnapshot, prelude::Continue,
+    Strategy, SupervisionTree, SupervisorSnapshot,
 };
 
 use crate::{
@@ -290,7 +290,7 @@ impl Actor for Router {
                 .watch_lifecycle_to(&ctx.myself(), RouterMsg::MountLifecycle),
         );
         self.reconcile_mount_snapshot(ctx);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -381,7 +381,7 @@ impl Actor for Router {
                 else {
                     // Single-writer discipline makes this unreachable; stay
                     // inert rather than guess at membership.
-                    return Ok(Continue);
+                    return Ok(());
                 };
                 if evict {
                     // Retirement was requested while the mount was in
@@ -439,7 +439,7 @@ impl Actor for Router {
                 }
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 

@@ -2,7 +2,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError,
     DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageContext,
-    MessageSize, RawActor, RestartPolicy, SendError, Supervision, prelude::Continue,
+    MessageSize, RawActor, RestartPolicy, SendError, Supervision,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -69,7 +69,7 @@ impl Actor for Frontend {
             FrontendMsg::Feed(line) => self.parser.send(ParserMsg(line)).await?,
             FrontendMsg::Ack => self.acks.send(()).expect("test receiver alive"),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -89,7 +89,7 @@ impl Actor for Parser {
     ) -> ActorResult {
         self.sink.send(SinkMsg(message.0.to_uppercase())).await?;
         self.frontend.send(FrontendMsg::Ack).await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -107,7 +107,7 @@ impl Actor for Sink {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.out.send(message.0).expect("test receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -216,7 +216,7 @@ impl RawActor for Park {
 
     async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
         ctx.shutdown_token().cancelled().await;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -241,7 +241,7 @@ impl RawActor for OptionsActor {
 
     async fn run(&mut self, ctx: ActorContext<SizedMessage>) -> ActorResult {
         ctx.shutdown_token().cancelled().await;
-        Ok(Continue)
+        Ok(())
     }
 }
 

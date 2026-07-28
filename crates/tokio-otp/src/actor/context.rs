@@ -664,6 +664,7 @@ pub struct ActorContext<M> {
     pub(crate) monitors: Arc<ActorMonitors>,
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
+    pub(crate) stop_requested: bool,
     pub(crate) offloads: JoinSet<OffloadCompletion<M>>,
     pub(crate) supervisor: RuntimeHandle,
     pub(crate) children: Option<RuntimeHandle>,
@@ -688,6 +689,14 @@ impl<M: Send + 'static> ActorContext<M> {
 
     pub(crate) fn push_continuation(&mut self, message: M) {
         self.continuations.push_back(message);
+    }
+
+    pub(crate) fn request_stop(&mut self) {
+        self.stop_requested = true;
+    }
+
+    pub(crate) fn is_stop_requested(&self) -> bool {
+        self.stop_requested
     }
 
     pub(crate) fn next_timer_wake(&mut self) -> Option<TimerWake> {
@@ -1158,8 +1167,8 @@ pub trait AmbientContext<M: Send + 'static>: sealed::Sealed<M> {
 
     /// Returns `true` if graph shutdown has been requested.
     ///
-    /// This remains `false` when an actor stops itself with
-    /// [`Flow::Stop`](crate::Flow) while the graph stays live.
+    /// This remains `false` when an actor stops itself through
+    /// [`LiveContext::stop`] while the graph stays live.
     fn is_shutting_down(&self) -> bool {
         self.cx().is_shutting_down()
     }
@@ -1212,6 +1221,34 @@ pub trait LiveContext<M: Send + 'static>: AmbientContext<M> {
         self.cx().lifetime()
     }
 
+    /// Requests a clean stop of this actor incarnation.
+    ///
+    /// The request takes effect after the current `on_start` or `handle` call
+    /// returns successfully. The provided receive loop then applies the
+    /// actor's [`DrainPolicy`](crate::DrainPolicy), runs
+    /// [`on_stop`](crate::Actor::on_stop), and reports a normal exit to
+    /// monitoring and supervision. Returning an error from the same callback
+    /// still fails the actor; the error takes precedence over this request.
+    ///
+    /// A startup request skips the ordinary receive loop but still reports
+    /// readiness before clean shutdown, preserving the lifecycle boundary for
+    /// ordered supervision. A handler invoked while draining is already on
+    /// the stop path, so another request there has no additional effect; use
+    /// [`MessageContext::is_draining`] to distinguish that phase. Repeated
+    /// calls are harmless.
+    fn stop(&mut self) {
+        self.cx_mut().request_stop();
+    }
+
+    /// Returns whether this actor has requested a clean local stop.
+    ///
+    /// This is distinct from [`AmbientContext::is_shutting_down`], which
+    /// observes graph-wide shutdown. It lets helpers that call [`stop`](Self::stop)
+    /// communicate that decision through the shared context.
+    fn is_stopping(&self) -> bool {
+        self.cx().is_stop_requested()
+    }
+
     /// Queues follow-up work as the actor's next message.
     ///
     /// Continuations are taken ahead of the mailbox on every iteration of the
@@ -1229,11 +1266,11 @@ pub trait LiveContext<M: Send + 'static>: AmbientContext<M> {
     ///
     /// Two stopping paths still reach this method, because they run in a
     /// context that can queue work at other times: a handler called on the
-    /// drain path, and an [`on_start`](crate::Actor::on_start) that returns
-    /// [`Flow::Stop`](crate::Flow). Continuations queued there are dropped
-    /// with the incarnation. The provided receive loop cannot refuse them at
-    /// compile time, so it emits a `WARN` naming the actor and the number
-    /// dropped before `on_stop` runs.
+    /// drain path, and an [`on_start`](crate::Actor::on_start) that also calls
+    /// [`stop`](Self::stop). Continuations queued there are dropped with the
+    /// incarnation. The provided receive loop cannot refuse them at compile
+    /// time, so it emits a `WARN` naming the actor and the number dropped
+    /// before `on_stop` runs.
     ///
     /// A handler that wants to avoid queueing work the drain will throw away
     /// can ask [`MessageContext::is_draining`] first — the drain path is the
@@ -1549,10 +1586,10 @@ impl RestrictedScope {
 
 /// Context handed to [`Actor::on_start`](crate::Actor::on_start).
 ///
-/// Adds [`continue_with`](LiveContext::continue_with) to the ambient
-/// capabilities and exposes scope handles as [`RestrictedScope`], which
-/// withholds the lifecycle waits that would deadlock an actor that has not
-/// reported ready.
+/// Adds [`continue_with`](LiveContext::continue_with) and
+/// [`stop`](LiveContext::stop) to the ambient capabilities and exposes scope
+/// handles as [`RestrictedScope`], which withholds the lifecycle waits that
+/// would deadlock an actor that has not reported ready.
 ///
 /// The mailbox is deliberately absent: the provided receive loop owns it, and
 /// readiness is reported by the framework once this hook returns.
@@ -1567,10 +1604,10 @@ pub struct StartContext<'a, A: Actor + ?Sized> {
 /// Context handed to [`Actor::handle`](crate::Actor::handle) — the context in
 /// which one message is handled.
 ///
-/// The ambient capabilities plus [`continue_with`](LiveContext::continue_with)
-/// and restricted scope handles. The mailbox is absent because the provided receive
-/// loop owns it; a handler that reads it directly would bypass drain accounting
-/// and the continuation queue.
+/// The ambient capabilities plus [`continue_with`](LiveContext::continue_with),
+/// [`stop`](LiveContext::stop), and restricted scope handles. The mailbox is
+/// absent because the provided receive loop owns it; a handler that reads it
+/// directly would bypass drain accounting and the continuation queue.
 ///
 /// This is the only hook the provided loop calls from two different phases, so
 /// it is also the only one that has to say which: see
@@ -1671,7 +1708,7 @@ impl<'a, A: Actor + ?Sized> MessageContext<'a, A> {
     ///
     /// This is not [`is_shutting_down`](AmbientContext::is_shutting_down), and
     /// the difference is the reason it exists. A drain also follows the
-    /// actor's own [`Flow::Stop`](crate::Flow), where the graph is not
+    /// actor's own [`stop`](LiveContext::stop) request, where the graph is not
     /// shutting down at all and `is_shutting_down` is `false` throughout.
     /// Conversely a handler can observe `is_shutting_down` as `true` while
     /// still on the ordinary path, when shutdown is requested during an

@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, Supervision, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, Supervision};
 
 mod support;
 
@@ -31,7 +31,7 @@ impl Actor for Frontend {
             FrontendMsg::Feed(line) => self.parser.send(ParserMsg(line)).await?,
             FrontendMsg::Ack => self.acked.send(()).expect("receiver alive"),
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -51,7 +51,7 @@ impl Actor for Parser {
     ) -> ActorResult {
         self.sink.send(SinkMsg(message.0.to_uppercase())).await?;
         self.frontend.send(FrontendMsg::Ack).await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -69,7 +69,7 @@ impl Actor for Sink {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.out.send(message.0).expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 }
 

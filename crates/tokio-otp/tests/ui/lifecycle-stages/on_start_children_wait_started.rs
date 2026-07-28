@@ -1,6 +1,6 @@
 //! A leader's declared child scope starts only after `on_start` returns, so
 //! awaiting its readiness inline can never succeed.
-use tokio_otp::{Actor, ActorResult, MessageContext, StartContext, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, MessageContext, StartContext};
 
 struct Leader;
 
@@ -11,11 +11,11 @@ impl Actor for Leader {
         if let Some(children) = ctx.children() {
             children.wait_started().await?;
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 

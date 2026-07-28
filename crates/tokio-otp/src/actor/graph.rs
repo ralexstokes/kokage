@@ -94,6 +94,7 @@ where
                 monitors,
                 ready: Some(start.ready),
                 continuations: Default::default(),
+                stop_requested: false,
                 offloads: Default::default(),
                 supervisor: start.supervisor,
                 children: start.children,
@@ -115,7 +116,7 @@ where
                 DownReason::Failure
             };
             monitor_exit.report(reason);
-            result.map(|_| ())
+            result
         })
     }
 }

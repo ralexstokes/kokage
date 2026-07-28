@@ -1,6 +1,6 @@
 //! A handler must not read its own mailbox: the provided receive loop owns it,
 //! and a direct read bypasses drain accounting and the continuation queue.
-use tokio_otp::{Actor, ActorResult, MessageContext, prelude::Continue};
+use tokio_otp::{Actor, ActorResult, MessageContext};
 
 struct Worker;
 
@@ -9,7 +9,7 @@ impl Actor for Worker {
 
     async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         let _ = ctx.recv().await;
-        Ok(Continue)
+        Ok(())
     }
 }
 

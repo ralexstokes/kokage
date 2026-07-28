@@ -23,7 +23,7 @@ impl Actor for Worker {
     ) -> ActorResult {
         println!("processing `{message}`");
         self.completed.send(()).expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 }
 

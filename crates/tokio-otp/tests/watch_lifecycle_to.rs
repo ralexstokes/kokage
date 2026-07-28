@@ -14,7 +14,7 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorResult, AmbientContext, DynamicActorOptions, GraphBuilder, LifecycleEvent,
     LifecycleWatchGuard, MessageContext, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
-    StartContext, prelude::Continue,
+    StartContext,
 };
 
 enum SinkMsg {
@@ -46,7 +46,7 @@ impl Actor for Sink {
                 let _ = reply.send(());
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -77,7 +77,7 @@ impl Actor for RestrictedSink {
             ctx.supervisor()
                 .watch_lifecycle_to(&ctx.myself(), RestrictedSinkMsg::Lifecycle),
         );
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -89,7 +89,7 @@ impl Actor for RestrictedSink {
         self.observed
             .send(event)
             .expect("restricted-scope observer remains live");
-        Ok(Continue)
+        Ok(())
     }
 }
 

@@ -101,7 +101,7 @@
 //!     ─▶ model turn in a context-owned offload (cancel token + deadline) ─▶ ModelResult
 //!     ─▶ tool loop: journal ToolIntent ─▶ Execute (bounded) ─▶ ToolResult,
 //!         reconciling an unknown outcome through an idempotency-key Query
-//!     ─▶ RunFinished{output} to the session + Ok(Stop); terminal exit auto-removes
+//!     ─▶ RunFinished{output} to the session + ctx.stop(); terminal exit auto-removes
 //!     ─▶ on panic: Down(Failure) then Terminated to the session's watch;
 //!         the session reports the failure and spawns a fresh attempt
 //! ```

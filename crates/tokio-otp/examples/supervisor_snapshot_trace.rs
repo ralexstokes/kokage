@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, StartContext,
-    SupervisionTree, prelude::Continue,
+    SupervisionTree,
 };
 use tokio_supervisor::{RestartIntensity, Strategy};
 
@@ -30,7 +30,7 @@ impl Actor for Frontend {
     ) -> ActorResult {
         let worker = self.worker.clone();
         worker.send(message).await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -46,7 +46,7 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.run = self.runs.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(
@@ -59,7 +59,7 @@ impl Actor for Worker {
             return Err::<_, BoxError>(Box::new(io::Error::other("simulated failure")));
         }
         let _ = self.processed.send(message);
-        Ok(Continue)
+        Ok(())
     }
 }
 

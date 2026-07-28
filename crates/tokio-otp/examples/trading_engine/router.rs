@@ -91,7 +91,7 @@ impl Actor for OrderRouter {
             } => {
                 if !self.intake_gate.load(Ordering::Acquire) {
                     reply.send(SubmitResult::IntakeClosed);
-                    return Ok(Continue);
+                    return Ok(());
                 }
                 let key = format!("ord-{}", self.sequence.fetch_add(1, Ordering::Relaxed) + 1);
                 self.intents.insert(
@@ -169,7 +169,7 @@ impl Actor for OrderRouter {
             RouterMsg::Cancel { key, reply } => {
                 let Some(intent) = self.intents.get(&key) else {
                     reply.send(CancelOutcome::NotFound);
-                    return Ok(Continue);
+                    return Ok(());
                 };
                 // The exchange needs no router state after the venue lookup,
                 // so the whole call pipelines off the handle loop.
@@ -255,6 +255,6 @@ impl Actor for OrderRouter {
                     .count(),
             ),
         }
-        Ok(Continue)
+        Ok(())
     }
 }

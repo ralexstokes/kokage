@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
-    Runtime, SendError, SupervisionTree, prelude::Continue,
+    Runtime, SendError, SupervisionTree,
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy, Strategy,
@@ -44,7 +44,7 @@ impl RawActor for Frontend {
             let worker = self.worker.clone();
             worker.send(message).await?;
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -67,7 +67,7 @@ impl RawActor for Worker {
                 return Err::<_, BoxError>(Box::new(io::Error::other("boom")));
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -157,13 +157,13 @@ impl RawActor for CleanThenReceive {
         let run = self.runs.fetch_add(1, Ordering::SeqCst);
         if run == 0 {
             send_once(&self.first_exited, ());
-            return Ok(Continue);
+            return Ok(());
         }
 
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -239,7 +239,7 @@ impl RawActor for NotifyCleanExit {
 
     async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
         send_once(&self.exited, ());
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -327,7 +327,7 @@ impl RawActor for RestartingRpc {
                 RpcMsg::Get(reply) => reply.send("ok".to_owned()),
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 

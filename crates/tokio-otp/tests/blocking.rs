@@ -15,7 +15,7 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorResult, ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuilder,
-    RawActor, RestartPolicy, prelude::Continue,
+    RawActor, RestartPolicy,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -70,7 +70,7 @@ impl RawActor for ReturnsResult {
         let result = ctx.run_blocking(|_token| Ok::<_, &'static str>(42)).await;
         send_once(&self.observed, result);
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -111,7 +111,7 @@ impl RawActor for WaitsForShutdown {
         })
         .await
         .expect("blocking task completes");
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -174,7 +174,7 @@ impl RawActor for DropsFuture {
         }
 
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -230,7 +230,7 @@ impl RawActor for IgnoresCancellation {
         })
         .await
         .expect("blocking task completes");
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -295,7 +295,7 @@ impl RawActor for Panics {
         ctx.run_blocking(|_token| -> () { panic!("blocking panic") })
             .await
             .expect("blocking task should panic before returning");
-        Ok(Continue)
+        Ok(())
     }
 }
 

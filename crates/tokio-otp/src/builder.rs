@@ -26,7 +26,7 @@ use crate::{Graph, ReservedSupervisionTree, Runtime, RuntimeHandle, SupervisionT
 ///
 ///     async fn handle(&mut self, message: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
 ///         println!("{message}");
-///         Ok(Continue)
+///         Ok(())
 ///     }
 /// }
 ///

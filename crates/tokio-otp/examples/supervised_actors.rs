@@ -21,7 +21,7 @@ impl Actor for Frontend {
     async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         let worker = self.worker.clone();
         worker.send(order).await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -37,7 +37,7 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.run = self.runs.fetch_add(1, Ordering::SeqCst);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
@@ -45,7 +45,7 @@ impl Actor for Worker {
             return Err::<_, BoxError>(Box::new(io::Error::other("press jam")));
         }
         self.delivered.send(order).expect("receiver alive");
-        Ok(Continue)
+        Ok(())
     }
 }
 

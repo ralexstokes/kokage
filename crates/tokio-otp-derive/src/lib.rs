@@ -21,7 +21,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 ///
 /// ```
 /// # use std::collections::VecDeque;
-/// # use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, prelude::Continue};
+/// # use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder};
 /// # struct Job;
 /// # struct Client;
 /// # impl Clone for Client { fn clone(&self) -> Self { Self } }
@@ -35,7 +35,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// #     type Msg = ();
 /// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         let _ = (&self.client, &self.pending);
-/// #         Ok(Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 ///
@@ -239,7 +239,7 @@ fn parse_factory_attributes(
 /// #         _: FrontendMsg,
 /// #         _: &mut MessageContext<'_, Self>,
 /// #     ) -> ActorResult {
-/// #         Ok(tokio_otp::prelude::Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 /// #
@@ -250,7 +250,7 @@ fn parse_factory_attributes(
 /// # impl Actor for Parser {
 /// #     type Msg = ParserMsg;
 /// #     async fn handle(&mut self, _: ParserMsg, _: &mut MessageContext<'_, Self>) -> ActorResult {
-/// #         Ok(tokio_otp::prelude::Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 /// #
@@ -258,7 +258,7 @@ fn parse_factory_attributes(
 /// # impl Actor for Sink {
 /// #     type Msg = SinkMsg;
 /// #     async fn handle(&mut self, _: SinkMsg, _: &mut MessageContext<'_, Self>) -> ActorResult {
-/// #         Ok(tokio_otp::prelude::Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 /// #
@@ -385,7 +385,7 @@ fn parse_factory_attributes(
 /// # impl RawActor for SnapshotActor {
 /// #     type Msg = Snapshot;
 /// #     async fn run(&mut self, _: ActorContext<Snapshot>) -> ActorResult {
-/// #         Ok(tokio_otp::prelude::Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 /// #[derive(tokio_otp::Supervision)]
@@ -407,13 +407,13 @@ fn parse_factory_attributes(
 /// ```
 /// # use tokio_otp::{
 /// #     Actor, ActorResult, DynamicScope, MessageContext, RestartPolicy, Runtime, Strategy,
-/// #     SupervisionBuildError, prelude::Continue,
+/// #     SupervisionBuildError,
 /// # };
 /// # struct Worker;
 /// # impl Actor for Worker {
 /// #     type Msg = ();
 /// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
-/// #         Ok(Continue)
+/// #         Ok(())
 /// #     }
 /// # }
 /// #[derive(tokio_otp::Supervision)]

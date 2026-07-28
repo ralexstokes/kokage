@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, RawActor, RestartPolicy,
-    SendError, prelude::Continue,
+    SendError,
 };
 
 #[derive(Clone)]
@@ -24,7 +24,7 @@ impl RawActor for OneMessageSink {
         if let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 

@@ -17,10 +17,9 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
     ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
-    DynamicActorOptions, GraphBuilder, MailboxMode, MessageContext, MessageSize, MonitorEvent,
-    RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownMode,
-    ShutdownPolicy, StartContext, StopContext, SupervisionTree,
-    prelude::{Continue, Stop},
+    DynamicActorOptions, GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize,
+    MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError,
+    ShutdownMode, ShutdownPolicy, StartContext, StopContext, SupervisionTree,
 };
 use tokio_supervisor::{DynamicSupervisorBuilder, SupervisorBuilder};
 
@@ -43,7 +42,7 @@ impl<M: Send + 'static> RawActor for Drain<M> {
 
     async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -61,7 +60,7 @@ impl RawActor for GatedExit {
         if self.fail {
             Err(io::Error::other("dynamic actor failed").into())
         } else {
-            Ok(Continue)
+            Ok(())
         }
     }
 }
@@ -76,11 +75,12 @@ impl Actor for CleanStop {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
-        Ok(Continue)
+        Ok(())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Stop)
+    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+        ctx.stop();
+        Ok(())
     }
 }
 
@@ -97,7 +97,7 @@ impl RawActor for RestartOnce {
             Err(io::Error::other("restart me").into())
         } else {
             ctx.shutdown_token().cancelled().await;
-            Ok(Continue)
+            Ok(())
         }
     }
 }
@@ -130,7 +130,7 @@ impl RawActor for Watcher {
             }
         }
         drop(watch);
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -247,7 +247,7 @@ impl RawActor for ObserveOrder {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -258,7 +258,7 @@ impl RawActor for Observe {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -287,7 +287,7 @@ impl RawActor for Forwarder {
                 }
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -478,7 +478,7 @@ impl Actor for RemovalProbe {
                     .expect("receiver alive");
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 
     async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
@@ -771,7 +771,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
 }
 
 #[tokio::test]
-async fn clean_stop_applies_restart_policy_before_default_removal() {
+async fn message_context_stop_applies_restart_policy_before_default_removal() {
     let handle = Runtime::dynamic()
         .build()
         .expect("graphless runtime builds")
@@ -1140,7 +1140,7 @@ impl RawActor for GatedDrain {
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
         self.release.notified().await;
         while ctx.recv().await.is_some() {}
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1278,7 +1278,7 @@ impl RawActor for ForwardTo {
         while let Some(message) = ctx.recv().await {
             self.target.send(message).await?;
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -1331,7 +1331,7 @@ impl RawActor for PendingActor {
 
     async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
         pending::<()>().await;
-        Ok(Continue)
+        Ok(())
     }
 }
 

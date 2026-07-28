@@ -1,6 +1,6 @@
 //! Token-spend metering with a global cap and guard notification.
 
-use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, prelude::Continue};
+use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext};
 
 use crate::messages::{BudgetMsg, BudgetReport, GuardMsg};
 
@@ -41,6 +41,6 @@ impl Actor for Budget {
             BudgetMsg::UnderCap { reply } => reply.send(self.report.total <= self.report.cap),
             BudgetMsg::Report { reply } => reply.send(self.report.clone()),
         }
-        Ok(Continue)
+        Ok(())
     }
 }

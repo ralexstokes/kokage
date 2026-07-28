@@ -30,7 +30,7 @@ impl Actor for Worker {
                 self.handled.send(job).expect("receiver alive");
             }
         }
-        Ok(Continue)
+        Ok(())
     }
 
     // Drain is the default; spelled out here because it is what this example

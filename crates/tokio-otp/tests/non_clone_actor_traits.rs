@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorResult, AmbientContext, DEFAULT_SHUTDOWN_BOUND,
     GraphBuilder, LifecycleWatch, LiveContext, MessageContext, RawActor, Reply, RestartPolicy,
-    Runtime, RuntimeHandle, prelude::Continue,
+    Runtime, RuntimeHandle,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -45,7 +45,7 @@ impl Actor for HandlerWithNonCloneState {
     type Msg = ();
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -61,7 +61,7 @@ impl Actor for HandlerWithSendOnlyMessage {
     ) -> ActorResult {
         let value = ctx.run_blocking(move |_| message.get()).await?;
         ctx.continue_with(Cell::new(value));
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -73,7 +73,7 @@ impl RawActor for RawWithNonCloneState {
     type Msg = ();
 
     async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -115,7 +115,7 @@ impl Actor for NonCloneHandler {
             ProbeMsg::Increment(reply) => {
                 self.local += 1;
                 reply.send((self.incarnation, self.local));
-                Ok(Continue)
+                Ok(())
             }
             ProbeMsg::Crash => Err(io::Error::other("restart probe").into()),
         }
@@ -206,7 +206,7 @@ impl RawActor for NonCloneRaw {
                 .send((self.incarnation, local))
                 .expect("observer alive");
         }
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -289,7 +289,7 @@ impl Actor for DefaultActor {
     type Msg = ();
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        Ok(Continue)
+        Ok(())
     }
 }
 

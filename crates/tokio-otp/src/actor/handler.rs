@@ -2,7 +2,7 @@ use std::future::Future;
 
 use crate::actor::{
     context::{ActorContext, MessageContext, StartContext, StopContext, TimerWake},
-    raw::{ActorResult, BoxError, Flow, RawActor},
+    raw::{ActorResult, BoxError, RawActor},
 };
 
 enum LoopEvent<M> {
@@ -131,7 +131,8 @@ pub enum DrainPolicy {
 /// loop-owned timers and continuations that a custom raw loop must express
 /// directly. Watches and offloads remain available on [`ActorContext`].
 ///
-/// A [`Flow::Stop`] exit is normal for monitoring and supervision. An
+/// A [`LiveContext::stop`](crate::LiveContext::stop) exit is normal for
+/// monitoring and supervision. An
 /// [`Always`](tokio_supervisor::RestartPolicy::Always) child restarts after it;
 /// [`OnFailure`](tokio_supervisor::RestartPolicy::OnFailure) and
 /// [`Never`](tokio_supervisor::RestartPolicy::Never) children do not.
@@ -151,11 +152,11 @@ pub trait Actor: Send + 'static {
 
     /// Handles one received message.
     ///
-    /// Returning [`Flow::Continue`] receives the next message. Returning
-    /// [`Flow::Stop`] requests a clean stop; the actor's [`DrainPolicy`] is
-    /// applied to the queued mailbox before [`on_stop`](Self::on_stop) runs.
-    /// Returning `Err` fails the actor exactly like [`RawActor::run`] returning
-    /// `Err`.
+    /// Returning `Ok(())` receives the next message unless
+    /// [`ctx.stop()`](crate::LiveContext::stop) was called. A stop request is
+    /// clean: the actor's [`DrainPolicy`] is applied to the queued mailbox
+    /// before [`on_stop`](Self::on_stop) runs. Returning `Err` fails the actor
+    /// exactly like [`RawActor::run`] returning `Err`.
     fn handle(
         &mut self,
         message: Self::Msg,
@@ -164,8 +165,9 @@ pub trait Actor: Send + 'static {
 
     /// Runs once before the first message of each actor run.
     ///
-    /// This is the place to acquire per-incarnation resources. Returning
-    /// [`Flow::Stop`] requests a clean stop before the ordinary receive loop.
+    /// This is the place to acquire per-incarnation resources. Calling
+    /// [`ctx.stop()`](crate::LiveContext::stop) requests a clean stop before
+    /// the ordinary receive loop.
     /// [`DrainPolicy::Discard`] drops messages queued during startup, while
     /// [`DrainPolicy::Drain`] handles the externally accepted mailbox queue;
     /// actor-local continuations are dropped under either policy, and their
@@ -176,12 +178,12 @@ pub trait Actor: Send + 'static {
         &mut self,
         _ctx: &mut StartContext<'_, Self>,
     ) -> impl Future<Output = ActorResult> + Send {
-        async { Ok(Flow::Continue) }
+        async { Ok(()) }
     }
 
     /// Runs once after the receive loop exits cleanly.
     ///
-    /// This hook also runs after a drain and cannot change the flow decision.
+    /// This hook also runs after a drain and cannot change the stop decision.
     /// During cooperative supervisor removal, the supervisor waits for the
     /// hook before detaching the child and completing
     /// [`RuntimeHandle::remove_child`](crate::RuntimeHandle::remove_child).
@@ -242,10 +244,10 @@ impl<H: Actor> RawActor for H {
     }
 
     async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        let start_flow = self.on_start(&mut StartContext::new(&mut ctx)).await?;
+        self.on_start(&mut StartContext::new(&mut ctx)).await?;
         ctx.mark_ready();
 
-        let mut stopping = start_flow == Flow::Stop;
+        let mut stopping = ctx.is_stop_requested();
         'receive: while !stopping {
             // External shutdown has priority over actor-local continuations.
             // In particular, a continuation queued by an in-flight handler
@@ -279,10 +281,9 @@ impl<H: Actor> RawActor for H {
             match event {
                 LoopEvent::Message(Some(message)) => {
                     ctx.record_received();
-                    stopping = self
-                        .handle(message, &mut MessageContext::new(&mut ctx))
-                        .await?
-                        == Flow::Stop;
+                    self.handle(message, &mut MessageContext::new(&mut ctx))
+                        .await?;
+                    stopping = ctx.is_stop_requested();
                 }
                 LoopEvent::Message(None) => break,
                 LoopEvent::Timer(timer) => {
@@ -305,21 +306,18 @@ impl<H: Actor> RawActor for H {
                         };
                         let Some(message) = message else { break };
                         ctx.record_received();
-                        if self
-                            .handle(message, &mut MessageContext::new(&mut ctx))
-                            .await?
-                            == Flow::Stop
-                        {
+                        self.handle(message, &mut MessageContext::new(&mut ctx))
+                            .await?;
+                        if ctx.is_stop_requested() {
                             stopping = true;
                             break;
                         }
                     }
                     if !stopping && let Some(message) = ctx.take_fired_timer(timer) {
                         ctx.record_received();
-                        stopping = self
-                            .handle(message, &mut MessageContext::new(&mut ctx))
-                            .await?
-                            == Flow::Stop;
+                        self.handle(message, &mut MessageContext::new(&mut ctx))
+                            .await?;
+                        stopping = ctx.is_stop_requested();
                     }
                 }
             }
@@ -332,12 +330,11 @@ impl<H: Actor> RawActor for H {
             // closed external mailbox has no accepted message left.
             while let Some(message) = ctx.next_drain_delivery().await {
                 ctx.record_received();
-                // Once stopping begins, flow values do not change the drain
-                // decision. Continuations queued by drain handlers are left
-                // for the context to drop with the incarnation, and reported
-                // below. A handler that cares can ask `is_draining`.
-                let _ = self
-                    .handle(message, &mut MessageContext::draining(&mut ctx))
+                // Once stopping begins, later stop requests do not change the
+                // drain decision. Continuations queued by drain handlers are
+                // left for the context to drop with the incarnation, and
+                // reported below. A handler that cares can ask `is_draining`.
+                self.handle(message, &mut MessageContext::draining(&mut ctx))
                     .await?;
             }
         } else {
@@ -346,16 +343,16 @@ impl<H: Actor> RawActor for H {
 
         // Only the receive loop above takes continuations, so anything still
         // queued here is dropped with the incarnation: pushed by a drain
-        // handler, or by an `on_start` that then returned `Flow::Stop`. Both
-        // reach `continue_with` through a context type that is legitimately
-        // able to queue work at other times, so neither is expressible as a
-        // compile error the way `on_stop` and `RawActor` are. Report it.
+        // handler, or by an `on_start` that also requested a stop. Both reach
+        // `continue_with` through a context type that is legitimately able to
+        // queue work at other times, so neither is expressible as a compile
+        // error the way `on_stop` and `RawActor` are. Report it.
         if !ctx.continuations.is_empty() {
             ctx.observability
                 .emit_continuations_dropped(&ctx.id, ctx.continuations.len());
         }
 
         self.on_stop(&mut StopContext::new(&mut ctx)).await?;
-        Ok(Flow::Stop)
+        Ok(())
     }
 }

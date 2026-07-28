@@ -26,7 +26,7 @@ impl Actor for FrontDesk {
 
     async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.press.send(order).await?;
-        Ok(Continue)
+        Ok(())
     }
 }
 
@@ -40,7 +40,7 @@ impl Actor for Press {
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.run = self.runs.fetch_add(1, Ordering::SeqCst);
-        Ok(Continue)
+        Ok(())
     }
 
     async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
@@ -48,7 +48,7 @@ impl Actor for Press {
             return Err::<_, BoxError>(Box::new(io::Error::other("paper jam")));
         }
         println!("printed {order}");
-        Ok(Continue)
+        Ok(())
     }
 }
 
