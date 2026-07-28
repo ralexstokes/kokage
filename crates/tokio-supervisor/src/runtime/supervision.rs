@@ -23,8 +23,8 @@ use crate::{
         StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
     },
     lifecycle::{
-        LifecycleEventDraft, LifecycleEventKind, LifecycleHub, LifecyclePathSegment,
-        LifecycleTreeSink, RecursiveLifecycleEventKind,
+        ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft, LifecycleHub,
+        LifecyclePathSegment, LifecycleTreeSink,
     },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
@@ -391,7 +391,11 @@ impl SupervisorRuntime {
                 LifecycleTreeSink::nested(
                     Arc::clone(&lifecycle),
                     link.lifecycle_tree.clone(),
-                    LifecyclePathSegment::new(link.id.clone(), link.lineage, link.generation),
+                    LifecyclePathSegment {
+                        id: link.id.clone(),
+                        lineage: link.lineage,
+                        generation: link.generation,
+                    },
                 )
             },
         );
@@ -539,7 +543,7 @@ impl SupervisorRuntime {
         self.send_event(RuntimeEvent::SupervisorStarted);
         let initial_children = self.child_order.clone();
         for &key in &initial_children {
-            self.send_lifecycle(key, LifecycleEventKind::Added);
+            self.send_lifecycle(key, ChildLifecycleEvent::Added);
         }
         let initial_lineages: Vec<_> = initial_children
             .iter()
@@ -866,7 +870,7 @@ impl SupervisorRuntime {
         let id = entry.id.clone();
         self.send_lifecycle(
             ready.key,
-            LifecycleEventKind::Started {
+            ChildLifecycleEvent::Started {
                 generation: ready.generation,
             },
         );
@@ -989,7 +993,7 @@ impl SupervisorRuntime {
         ));
         self.children_by_id.insert(id.clone(), key);
         self.child_order.push(key);
-        self.send_lifecycle(key, LifecycleEventKind::Added);
+        self.send_lifecycle(key, ChildLifecycleEvent::Added);
 
         self.schedule_start_sequence(vec![key], false)?;
 
@@ -1045,7 +1049,7 @@ impl SupervisorRuntime {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id.clone(), stable);
-        self.send_lifecycle(key, LifecycleEventKind::Added);
+        self.send_lifecycle(key, ChildLifecycleEvent::Added);
 
         self.schedule_start_sequence(vec![key], false)?;
 
@@ -1233,7 +1237,7 @@ impl SupervisorRuntime {
             return;
         }
 
-        let lifecycle = self.lifecycle_draft(key, LifecycleEventKind::Removed);
+        let lifecycle = self.lifecycle_draft(key, ChildLifecycleEvent::Removed);
         let had_live_task = self.children[key].runtime.abort_handle.is_some();
         let mut entry = self.children.remove(key);
         let pending_removal = entry.pending_removal.take();
@@ -1529,7 +1533,7 @@ impl SupervisorRuntime {
         };
         self.send_lifecycle(
             key,
-            LifecycleEventKind::Exited {
+            ChildLifecycleEvent::Exited {
                 generation,
                 reason: status.view(),
                 cancelled,
@@ -1814,7 +1818,7 @@ impl SupervisorRuntime {
         });
     }
 
-    pub(crate) fn send_lifecycle(&self, key: ChildKey, kind: LifecycleEventKind) {
+    pub(crate) fn send_lifecycle(&self, key: ChildKey, kind: ChildLifecycleEvent) {
         if let Some(draft) = self.lifecycle_draft(key, kind) {
             self.send_lifecycle_draft(draft);
         }
@@ -1823,7 +1827,7 @@ impl SupervisorRuntime {
     fn lifecycle_draft(
         &self,
         key: ChildKey,
-        kind: LifecycleEventKind,
+        kind: ChildLifecycleEvent,
     ) -> Option<LifecycleEventDraft> {
         let entry = self.children.get(key)?;
         Some(LifecycleEventDraft {
@@ -1838,8 +1842,7 @@ impl SupervisorRuntime {
     fn send_lifecycle_draft(&self, draft: LifecycleEventDraft) {
         let lifecycle = Arc::clone(&self.lifecycle);
         let event = lifecycle.emit(draft, || self.publish_snapshot());
-        self.lifecycle_tree
-            .emit(RecursiveLifecycleEventKind::Child(event));
+        self.lifecycle_tree.forward_child(event);
     }
 
     pub(crate) fn send_event(&self, event: RuntimeEvent) {
@@ -1852,12 +1855,16 @@ impl SupervisorRuntime {
         self.meta
             .observability
             .emit_event(&event, self.running_child_count(), child_path);
-        let recursive = match &event {
-            RuntimeEvent::SupervisorStarted => Some(RecursiveLifecycleEventKind::SupervisorStarted),
-            RuntimeEvent::SupervisorStopping => {
-                Some(RecursiveLifecycleEventKind::SupervisorStopping)
-            }
-            RuntimeEvent::SupervisorStopped => Some(RecursiveLifecycleEventKind::SupervisorStopped),
+        let lifecycle = match &event {
+            RuntimeEvent::SupervisorStarted => Some(LifecycleEvent::SupervisorStarted {
+                supervisor_path: Vec::new(),
+            }),
+            RuntimeEvent::SupervisorStopping => Some(LifecycleEvent::SupervisorStopping {
+                supervisor_path: Vec::new(),
+            }),
+            RuntimeEvent::SupervisorStopped => Some(LifecycleEvent::SupervisorStopped {
+                supervisor_path: Vec::new(),
+            }),
             RuntimeEvent::ChildRestartScheduled {
                 id,
                 lineage,
@@ -1865,7 +1872,8 @@ impl SupervisorRuntime {
                 delay,
                 total_restarts,
                 child_restart_count,
-            } => Some(RecursiveLifecycleEventKind::RestartScheduled {
+            } => Some(LifecycleEvent::RestartScheduled {
+                supervisor_path: Vec::new(),
                 child_id: id.clone(),
                 lineage: *lineage,
                 generation: *generation,
@@ -1874,7 +1882,8 @@ impl SupervisorRuntime {
                 child_restart_count: *child_restart_count,
             }),
             RuntimeEvent::RestartIntensityExceeded => {
-                Some(RecursiveLifecycleEventKind::RestartIntensityExceeded {
+                Some(LifecycleEvent::RestartIntensityExceeded {
+                    supervisor_path: Vec::new(),
                     total_restarts: self.total_restarts,
                 })
             }
@@ -1883,8 +1892,8 @@ impl SupervisorRuntime {
             | RuntimeEvent::ChildExited { .. }
             | RuntimeEvent::ChildRestarted { .. } => None,
         };
-        if let Some(recursive) = recursive {
-            self.lifecycle_tree.emit(recursive);
+        if let Some(lifecycle) = lifecycle {
+            self.lifecycle_tree.emit(lifecycle);
         }
     }
 
@@ -2441,8 +2450,8 @@ mod tests {
             .expect("started event arrives")
             .expect("lifecycle remains open");
         assert!(matches!(
-            started.kind,
-            LifecycleEventKind::Started { generation: 2 }
+            started,
+            LifecycleEvent::Started { generation: 2, .. }
         ));
     }
 

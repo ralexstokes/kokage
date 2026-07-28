@@ -8,9 +8,8 @@
 pub use crate::{
     BackoffPolicy, BoxError, ChildContext, ChildMembershipView, ChildResult, ChildSnapshot,
     ChildSpec, ChildStateView, CompletionOutcome, ControlError, DynamicSupervisorBuilder,
-    ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
-    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
-    RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
+    ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity,
+    RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
     SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot,
     SupervisorSpec, SupervisorStateView,
 };

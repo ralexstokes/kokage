@@ -188,7 +188,7 @@ pub struct GuardReport {
 pub enum GuardMsg {
     RunFailureObserved { chat: ChatId, task: TaskId },
     BudgetExceeded,
-    BridgeRestarts { total: u64 },
+    BridgeRestarts { total: Option<u64> },
     Probe,
     Paused { reply: Reply<bool> },
     Report { reply: Reply<GuardReport> },

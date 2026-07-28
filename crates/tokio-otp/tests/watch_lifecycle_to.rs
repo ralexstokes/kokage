@@ -12,8 +12,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorResult, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleEventKind,
-    MessageContext, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, prelude::Continue,
+    Actor, ActorResult, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleWatchGuard,
+    LiveContext, MessageContext, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
+    StartContext, prelude::Continue,
 };
 
 enum SinkMsg {
@@ -56,6 +57,39 @@ impl Actor for Crasher {
 
     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Err(io::Error::other("crash requested").into())
+    }
+}
+
+enum RestrictedSinkMsg {
+    Lifecycle(LifecycleEvent),
+}
+
+struct RestrictedSink {
+    observed: mpsc::UnboundedSender<LifecycleEvent>,
+    watch: Option<LifecycleWatchGuard>,
+}
+
+impl Actor for RestrictedSink {
+    type Msg = RestrictedSinkMsg;
+
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+        self.watch = Some(
+            ctx.supervisor()
+                .watch_lifecycle_to(&ctx.myself(), RestrictedSinkMsg::Lifecycle),
+        );
+        Ok(Continue)
+    }
+
+    async fn handle(
+        &mut self,
+        message: Self::Msg,
+        _ctx: &mut MessageContext<'_, Self>,
+    ) -> ActorResult {
+        let RestrictedSinkMsg::Lifecycle(event) = message;
+        self.observed
+            .send(event)
+            .expect("restricted-scope observer remains live");
+        Ok(Continue)
     }
 }
 
@@ -140,12 +174,16 @@ async fn shutdown_runtime(handle: &RuntimeHandle, phase: &str) {
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn crash_and_receive_pair(
+async fn crash_and_receive_events(
     crasher: &tokio_otp::ActorRef<()>,
     observed: &mut mpsc::UnboundedReceiver<(u64, LifecycleEvent)>,
-) -> [(u64, LifecycleEvent); 2] {
+) -> [(u64, LifecycleEvent); 3] {
     crasher.send(()).await.expect("crash request delivered");
-    [recv_event(observed).await, recv_event(observed).await]
+    [
+        recv_event(observed).await,
+        recv_event(observed).await,
+        recv_event(observed).await,
+    ]
 }
 
 async fn assert_no_buffered_lifecycle(
@@ -183,29 +221,35 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
 
-    let first = crash_and_receive_pair(&crasher, &mut observed).await;
+    let first = crash_and_receive_events(&crasher, &mut observed).await;
     assert!(matches!(
-        first[0].1.kind,
-        LifecycleEventKind::Exited { generation: 0, .. }
+        first[0].1,
+        LifecycleEvent::Exited { generation: 0, .. }
     ));
     assert!(matches!(
-        first[1].1.kind,
-        LifecycleEventKind::Started { generation: 1 }
+        first[1].1,
+        LifecycleEvent::RestartScheduled { generation: 0, .. }
     ));
-    assert_eq!(first[1].1.seq, first[0].1.seq + 1);
+    assert!(matches!(
+        first[2].1,
+        LifecycleEvent::Started { generation: 1, .. }
+    ));
+    assert_eq!(first[2].1.seq(), first[0].1.seq().map(|seq| seq + 1));
     assert_eq!(first[0].0, 0);
     assert_eq!(first[1].0, 0);
+    assert_eq!(first[2].0, 0);
 
     sink.send(SinkMsg::Crash)
         .await
         .expect("sink crash request delivered");
     wait_for_generation(&handle, "sink", 1).await;
 
-    let second = crash_and_receive_pair(&crasher, &mut observed).await;
+    let second = crash_and_receive_events(&crasher, &mut observed).await;
     assert_eq!(second[0].0, 1);
     assert_eq!(second[1].0, 1);
-    assert_eq!(second[0].1.seq, first[1].1.seq + 1);
-    assert_eq!(second[1].1.seq, second[0].1.seq + 1);
+    assert_eq!(second[2].0, 1);
+    assert_eq!(second[0].1.seq(), first[2].1.seq().map(|seq| seq + 1));
+    assert_eq!(second[2].1.seq(), second[0].1.seq().map(|seq| seq + 1));
     assert!(!guard.is_cancelled());
     assert_no_buffered_lifecycle(
         &sink,
@@ -236,14 +280,14 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     wait_for_generation(&watched, "crasher", 2).await;
 
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
-    let later = crash_and_receive_pair(&crasher, &mut observed).await;
+    let later = crash_and_receive_events(&crasher, &mut observed).await;
     assert!(matches!(
-        later[0].1.kind,
-        LifecycleEventKind::Exited { generation: 2, .. }
+        later[0].1,
+        LifecycleEvent::Exited { generation: 2, .. }
     ));
     assert!(matches!(
-        later[1].1.kind,
-        LifecycleEventKind::Started { generation: 3 }
+        later[2].1,
+        LifecycleEvent::Started { generation: 3, .. }
     ));
     assert_no_buffered_lifecycle(
         &sink,
@@ -266,8 +310,8 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .expect("watched subtree removed");
     let (_, final_event) = recv_event(&mut observed).await;
     assert!(matches!(
-        final_event.kind,
-        LifecycleEventKind::Exited { generation: 0, .. }
+        final_event,
+        LifecycleEvent::Exited { generation: 0, .. }
     ));
     timeout(Duration::from_secs(2), async {
         while !guard.is_cancelled() {
@@ -292,4 +336,45 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     .expect("pump stops with target identity");
 
     shutdown_runtime(&handle, "lifecycle terminality test shutdown").await;
+}
+
+#[tokio::test]
+async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
+    let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    handle
+        .add_actor(
+            "sink",
+            move || RestrictedSink {
+                observed: observed_tx.clone(),
+                watch: None,
+            },
+            DynamicActorOptions::new(),
+        )
+        .await
+        .expect("restricted sink added");
+    let crasher = handle
+        .add_actor(
+            "crasher",
+            || Crasher,
+            DynamicActorOptions::new().restart(RestartPolicy::OnFailure),
+        )
+        .await
+        .expect("crasher added");
+    handle.wait_started().await.expect("runtime starts");
+
+    crasher.send(()).await.expect("crash delivered");
+    let scheduled = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = observed_rx.recv().await.expect("observer remains live");
+            if matches!(event, LifecycleEvent::RestartScheduled { .. }) {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("restricted-scope lifecycle event arrives");
+    assert_eq!(scheduled.child_id(), Some("crasher"));
+
+    shutdown_runtime(&handle, "restricted-scope lifecycle pump shutdown").await;
 }

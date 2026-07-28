@@ -67,8 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        match event.kind {
-            RecursiveLifecycleEventKind::RestartScheduled {
+        match event {
+            LifecycleEvent::RestartScheduled {
                 child_id,
                 generation,
                 delay,
@@ -79,14 +79,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     generation
                 );
             }
-            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+            LifecycleEvent::Started {
                 child_id,
-                kind: LifecycleEventKind::Started { generation: 1 },
+                generation: 1,
                 ..
-            }) if child_id == "warm-cache" => {
+            } if child_id == "warm-cache" => {
                 break;
             }
-            RecursiveLifecycleEventKind::RestartIntensityExceeded { .. } => {
+            LifecycleEvent::RestartIntensityExceeded { .. } => {
                 return Err(std::io::Error::other(
                     "unexpected restart intensity failure in example",
                 )

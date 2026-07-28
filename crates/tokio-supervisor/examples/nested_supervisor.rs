@@ -62,8 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .ok_or_else(|| std::io::Error::other("nested lifecycle stream closed"))?;
         println!("nested event: {event:?}");
-        if event.child_id == "nested-worker"
-            && matches!(event.kind, LifecycleEventKind::Started { generation: 1 })
+        if event.child_id() == Some("nested-worker")
+            && matches!(event, LifecycleEvent::Started { generation: 1, .. })
         {
             break;
         }

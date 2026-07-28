@@ -44,16 +44,22 @@ the returned value rather than performing a later id-based snapshot lookup.
 ## Lifecycle Streams: Ordered Transitions
 
 `watch_lifecycle()` observes `Added`, `Started`, `Exited`, and `Removed`
-transitions among the watched supervisor's direct children. Readiness-gated
-children emit `Started` only after `on_start` succeeds. A restart is the
-ordered pair `Exited` then `Started` for the same membership; count restarts
-from the event envelope's cumulative counters, not by inferring event pairs.
+transitions among the watched supervisor's direct children. It also reports
+`RestartScheduled` and `RestartIntensityExceeded`. A `OneForOne` restart of
+the child that failed is visible as the ordered sequence `Exited`,
+`RestartScheduled`, then `Started`; group strategies can restart siblings
+without a per-sibling schedule event, and an intensity failure has no later
+`Started`. Count restarts from the cumulative counters carried by events,
+not by inferring event pairs. Readiness-gated children emit `Started` only
+after `on_start` succeeds.
 
-Each event carries a monotonic `seq`, child id and lineage,
-`total_restarts`, and the child's `child_restart_count`. A nested supervisor's
-sequence and total counter continue across its own incarnations, including
-recreation by an ancestor. `next()` returns `None` only after staged events
-are drained and the stable supervisor identity can never run again.
+Child transition variants carry a monotonic `seq`, child id and lineage,
+`total_restarts`, and the child's `child_restart_count`. Restart decision
+variants carry the counters relevant to that decision but no child-transition
+sequence. A nested supervisor's sequence and total counter continue across its
+own incarnations, including recreation by an ancestor. `next()` returns `None`
+only after staged events are drained and the stable supervisor identity can
+never run again.
 
 ### Gap-free snapshot alignment
 
@@ -65,7 +71,7 @@ let mut lifecycle = handle.watch_lifecycle();
 let snapshot = handle.snapshot();
 
 while let Some(event) = lifecycle.next().await {
-    if event.seq <= snapshot.lifecycle_seq {
+    if event.seq().is_some_and(|seq| seq <= snapshot.lifecycle_seq) {
         continue;
     }
     apply(event);
@@ -76,6 +82,10 @@ The supervisor assigns the event sequence, publishes the aligned snapshot,
 and stages the event as one ordered transition. The recipe therefore misses
 no transition with `seq > snapshot.lifecycle_seq` and does not reapply an
 event with `seq <= snapshot.lifecycle_seq`.
+
+Restart-decision variants and `Lagged` do not carry a lifecycle sequence, so
+they cannot be classified against `snapshot.lifecycle_seq`; consumers must
+handle them explicitly, usually by updating counters or resnapshotting.
 
 A stable nested handle can be watched before that scope first spawns. Its
 initial snapshot already projects statically configured children as `Starting`,
@@ -90,25 +100,21 @@ child identities.
 Every watch has a bounded 128-event buffer. Sustained overload drops the
 oldest details and collapses the loss into one `Lagged { dropped }` marker at
 the front. Consumers that derive state from edges must fetch a fresh snapshot
-and realign. The marker carries the newest dropped transition's sequence and
-cumulative counters, so filtering it against a snapshot is sound and restart
-counts resynchronize at the marker. Stream closure is terminality, not an
-event, and is never dropped.
-
-Note that a marker's `child_id` and `lineage` describe the newest
-discarded transition, so a marker can be stamped with one child while standing
-for another child's loss. Filter on `seq`, not on the marker's identity fields.
+and realign. The marker applies to the watch's whole filtered stream and
+deliberately has no child, path, sequence, or counter envelope. Stream closure
+is terminality, not an event, and is never dropped.
 
 ### Waiting for one restart
 
-`LifecycleWatch::started_after(id, after_generation)` collapses the common
-one-shot wait into a single call, returning the generation that started:
+`LifecycleWatch::started_after(supervisor_path, id, after_generation)`
+collapses the common one-shot wait into a single call, returning the generation
+that started. Pass an empty path for a direct child:
 
 ```rust,ignore
 let mut lifecycle = handle.watch_lifecycle();
 let baseline = handle.snapshot().child("press").unwrap().generation;
 
-lifecycle.started_after("press", baseline).await;
+lifecycle.started_after(&[], "press", baseline).await;
 ```
 
 It returns `None` once that start can no longer be observed on this watch —
@@ -153,37 +159,34 @@ to the watched handle. Every path segment includes the nested supervisor's id,
 lineage, and generation, so consumers can distinguish both a restarted
 incarnation and a removed-then-reinserted subtree.
 
-The recursive event kind includes supervisor `Started`, `Stopping`, and
-`Stopped` transitions, direct-child lifecycle events, restart scheduling with
-its backoff delay, and restart-intensity failure. Direct-child events retain
-their emitting scope's sequence and cumulative restart counters. A nested
-scope's stable identity is reattached automatically when an ancestor recreates
-it; the path then reflects the new ancestor generation.
+The same flattened `LifecycleEvent` enum represents supervisor `Started`,
+`Stopping`, and `Stopped` transitions, child lifecycle events, restart
+scheduling with its backoff delay, and restart-intensity failure. Every
+non-lag variant carries its emitting supervisor path. Child events retain the
+emitting scope's sequence and cumulative restart counters. A nested scope's
+stable identity is reattached automatically when an ancestor recreates it; the
+path then reflects the new ancestor generation.
 
 ```rust,ignore
 let mut tree = handle.watch_lifecycle_recursive();
 
 while let Some(event) = tree.next().await {
-    render(event.supervisor_path, event.kind);
+    render(event);
 }
 ```
 
 Each recursive watch has one bounded buffer for the whole watched tree. On
 overflow, the oldest details collapse into an in-band, tree-wide
-`Lagged { dropped, newest_dropped }` marker. The surrounding event retains the
-newest discarded transition's supervisor path, while `newest_dropped` retains
-its kind and therefore any per-scope sequence and cumulative counters. This
-can cheaply re-anchor those counters, but consumers maintaining derived tree
-state must still read a fresh recursive snapshot and realign the whole tree.
+`Lagged { dropped }` marker. Consumers maintaining derived tree state must read
+a fresh recursive snapshot and realign the whole tree.
 Stream closure means that the watched stable identity is terminal, after all
 staged events have drained.
 
 Use a direct watch when per-scope sequence alignment is the goal. Use a
 recursive watch for diagnostics, dashboards, and any observer that needs a
-single tree feed. Both watch types provide a `started_after` helper; the
-recursive form additionally takes the exact supervisor path. The
-`trading_engine` example's breaker consumes
-direct `event.total_restarts`; that counter records scheduled restarts — the
+single tree feed. Both methods return `LifecycleWatch`, and `started_after`
+always takes the exact supervisor path. The `trading_engine` example's breaker
+consumes the event's `total_restarts`; that counter records scheduled restarts — the
 same occurrences as the restart-intensity window, including clean exits
 restarted under `RestartPolicy::Always`. Group-strategy sibling respawns do not
 increment it.

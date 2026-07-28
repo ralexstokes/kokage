@@ -9,8 +9,7 @@ use std::{
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ChildStateView, CompletionGuard, DynamicSupervisorBuilder,
-    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, RecursiveLifecycleEvent,
-    RecursiveLifecycleEventKind, RecursiveLifecycleWatch, RestartIntensity, RestartPolicy,
+    LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
     ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorSpec,
 };
 
@@ -28,17 +27,17 @@ async fn next_event(watch: &mut tokio_supervisor::LifecycleWatch) -> LifecycleEv
 async fn next_for(
     watch: &mut tokio_supervisor::LifecycleWatch,
     id: &str,
-    predicate: impl Fn(&LifecycleEventKind) -> bool,
+    predicate: impl Fn(&LifecycleEvent) -> bool,
 ) -> LifecycleEvent {
     loop {
         let event = next_event(watch).await;
-        if event.child_id == id && predicate(&event.kind) {
+        if event.child_id() == Some(id) && predicate(&event) {
             return event;
         }
     }
 }
 
-async fn next_recursive(watch: &mut RecursiveLifecycleWatch) -> RecursiveLifecycleEvent {
+async fn next_recursive(watch: &mut LifecycleWatch) -> LifecycleEvent {
     timeout(common::EVENT_TIMEOUT, watch.next())
         .await
         .expect("timed out waiting for recursive lifecycle event")
@@ -46,15 +45,39 @@ async fn next_recursive(watch: &mut RecursiveLifecycleWatch) -> RecursiveLifecyc
 }
 
 async fn next_recursive_for(
-    watch: &mut RecursiveLifecycleWatch,
-    predicate: impl Fn(&RecursiveLifecycleEvent) -> bool,
-) -> RecursiveLifecycleEvent {
+    watch: &mut LifecycleWatch,
+    predicate: impl Fn(&LifecycleEvent) -> bool,
+) -> LifecycleEvent {
     loop {
         let event = next_recursive(watch).await;
         if predicate(&event) {
             return event;
         }
     }
+}
+
+fn path(event: &LifecycleEvent) -> &[LifecyclePathSegment] {
+    event.supervisor_path().unwrap_or_default()
+}
+
+fn seq(event: &LifecycleEvent) -> u64 {
+    event.seq().expect("child transition has a sequence")
+}
+
+fn lineage(event: &LifecycleEvent) -> u64 {
+    event.lineage().expect("child transition has a lineage")
+}
+
+fn total_restarts(event: &LifecycleEvent) -> u64 {
+    event
+        .total_restarts()
+        .expect("child or restart event has a restart count")
+}
+
+fn child_restart_count(event: &LifecycleEvent) -> u64 {
+    event
+        .child_restart_count()
+        .expect("child or restart event has a child restart count")
 }
 
 #[tokio::test]
@@ -82,72 +105,77 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
         );
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
+    let mut direct = retained.watch_lifecycle();
     let handle = builder.build().expect("valid supervisor").spawn();
 
     let started = next_recursive_for(&mut tree, |event| {
-        event.supervisor_path.is_empty()
-            && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+        matches!(
+            event,
+            LifecycleEvent::SupervisorStarted { supervisor_path }
+                if supervisor_path.is_empty()
+        )
     })
     .await;
-    assert!(started.supervisor_path.is_empty());
+    assert!(path(&started).is_empty());
     handle.wait_started().await.expect("startup succeeds");
+    for _ in 0..2 {
+        assert!(!matches!(
+            next_event(&mut direct).await,
+            LifecycleEvent::SupervisorStarted { .. }
+                | LifecycleEvent::SupervisorStopping { .. }
+                | LifecycleEvent::SupervisorStopped { .. }
+        ));
+    }
 
     crash.notify_one();
     let exited = next_recursive_for(&mut tree, |event| {
         matches!(
-            &event.kind,
-            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+            event,
+            LifecycleEvent::Exited {
+                supervisor_path,
                 child_id,
-                kind: LifecycleEventKind::Exited { generation: 0, .. },
+                generation: 0,
                 ..
-            }) if child_id == "worker"
+            } if supervisor_path.is_empty() && child_id == "worker"
         )
     })
     .await;
-    assert!(exited.supervisor_path.is_empty());
+    assert!(path(&exited).is_empty());
     let scheduled = next_recursive(&mut tree).await;
-    assert!(scheduled.supervisor_path.is_empty());
+    assert!(path(&scheduled).is_empty());
     assert!(matches!(
-        scheduled.kind,
-        RecursiveLifecycleEventKind::RestartScheduled {
+        scheduled,
+        LifecycleEvent::RestartScheduled {
             ref child_id,
             lineage: 0,
             generation: 0,
             delay,
             total_restarts: 1,
             child_restart_count: 1,
+            ..
         } if child_id == "worker" && delay == Duration::from_millis(40)
     ));
     assert_eq!(tree.started_after(&[], "worker", 0).await, Some(1));
 
     handle.shutdown();
     next_recursive_for(&mut tree, |event| {
-        event.supervisor_path.is_empty()
-            && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStopping)
+        matches!(
+            event,
+            LifecycleEvent::SupervisorStopping { supervisor_path }
+                if supervisor_path.is_empty()
+        )
     })
     .await;
     next_recursive_for(&mut tree, |event| {
-        event.supervisor_path.is_empty()
-            && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStopped)
+        matches!(
+            event,
+            LifecycleEvent::SupervisorStopped { supervisor_path }
+                if supervisor_path.is_empty()
+        )
     })
     .await;
     handle.wait().await.expect("shutdown succeeds");
     assert_eq!(tree.next().await, None);
-}
-
-#[test]
-fn recursive_lifecycle_values_have_public_test_constructors() {
-    let segment = LifecyclePathSegment::new("nested", 3, 5);
-    let event = RecursiveLifecycleEvent::new(
-        vec![segment.clone()],
-        RecursiveLifecycleEventKind::SupervisorStarted,
-    );
-
-    assert_eq!(event.supervisor_path, vec![segment]);
-    assert!(matches!(
-        event.kind,
-        RecursiveLifecycleEventKind::SupervisorStarted
-    ));
 }
 
 #[tokio::test]
@@ -166,43 +194,84 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
 
     let initial = next_recursive_for(&mut tree, |event| {
         matches!(
-            &event.kind,
-            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+            event,
+            LifecycleEvent::Started {
                 child_id,
-                kind: LifecycleEventKind::Started { generation: 0 },
+                generation: 0,
                 ..
-            }) if child_id == "worker"
+            } if child_id == "worker"
         )
     })
     .await;
-    assert_eq!(initial.supervisor_path.len(), 2);
-    assert_eq!(initial.supervisor_path[0].id, "middle");
-    assert_eq!(initial.supervisor_path[0].lineage, 0);
-    assert_eq!(initial.supervisor_path[0].generation, 0);
-    assert_eq!(initial.supervisor_path[1].id, "leaf");
-    assert_eq!(initial.supervisor_path[1].generation, 0);
+    assert_eq!(path(&initial).len(), 2);
+    assert_eq!(path(&initial)[0].id, "middle");
+    assert_eq!(path(&initial)[0].lineage, 0);
+    assert_eq!(path(&initial)[0].generation, 0);
+    assert_eq!(path(&initial)[1].id, "leaf");
+    assert_eq!(path(&initial)[1].generation, 0);
 
     crash_middle.notify_one();
     let recreated = next_recursive_for(&mut tree, |event| {
         event
-            .supervisor_path
+            .supervisor_path()
+            .unwrap_or_default()
             .first()
             .is_some_and(|segment| segment.id == "middle" && segment.generation == 1)
             && matches!(
-                &event.kind,
-                RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                event,
+                LifecycleEvent::Started {
                     child_id,
-                    kind: LifecycleEventKind::Started { generation: 0 },
+                    generation: 0,
                     ..
-                }) if child_id == "worker"
+                } if child_id == "worker"
             )
     })
     .await;
-    assert_eq!(recreated.supervisor_path.len(), 2);
-    assert_eq!(recreated.supervisor_path[0].lineage, 0);
-    assert_eq!(recreated.supervisor_path[0].generation, 1);
-    assert_eq!(recreated.supervisor_path[1].id, "leaf");
-    assert!(recreated.supervisor_path[1].lineage > initial.supervisor_path[1].lineage);
+    assert_eq!(path(&recreated).len(), 2);
+    assert_eq!(path(&recreated)[0].lineage, 0);
+    assert_eq!(path(&recreated)[0].generation, 1);
+    assert_eq!(path(&recreated)[1].id, "leaf");
+    assert!(path(&recreated)[1].lineage > path(&initial)[1].lineage);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn started_after_matches_a_constructed_nested_path() {
+    let crash = Arc::new(Notify::new());
+    let child_crash = Arc::clone(&crash);
+    let nested = SupervisorBuilder::new()
+        .child(
+            ChildSpec::new("worker", move |ctx| {
+                let crash = Arc::clone(&child_crash);
+                async move {
+                    if ctx.generation() == 0 {
+                        crash.notified().await;
+                        return Err(common::test_error("boom"));
+                    }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("valid nested supervisor");
+    let handle = SupervisorBuilder::new()
+        .supervisor(SupervisorSpec::new("nested", nested))
+        .build()
+        .expect("valid root supervisor")
+        .spawn();
+    handle.wait_started().await.expect("startup succeeds");
+    let mut lifecycle = handle.watch_lifecycle_recursive();
+
+    crash.notify_one();
+    let nested_path = [LifecyclePathSegment::new("nested", 0, 0)];
+    assert_eq!(
+        lifecycle.started_after(&nested_path, "worker", 0).await,
+        Some(1)
+    );
 
     shutdown(handle).await;
 }
@@ -221,16 +290,17 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
         .await
         .expect("first nested supervisor added");
     let first = next_recursive_for(&mut tree, |event| {
-        matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+        matches!(event, LifecycleEvent::SupervisorStarted { .. })
             && event
-                .supervisor_path
+                .supervisor_path()
+                .unwrap_or_default()
                 .first()
                 .is_some_and(|segment| segment.id == "nested")
     })
     .await;
-    assert_eq!(first.supervisor_path.len(), 1);
-    assert_eq!(first.supervisor_path[0].lineage, first_lineage);
-    assert_eq!(first.supervisor_path[0].generation, 0);
+    assert_eq!(path(&first).len(), 1);
+    assert_eq!(path(&first)[0].lineage, first_lineage);
+    assert_eq!(path(&first)[0].generation, 0);
 
     handle
         .remove_child("nested")
@@ -241,16 +311,17 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
         .await
         .expect("replacement nested supervisor added");
     let second = next_recursive_for(&mut tree, |event| {
-        matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+        matches!(event, LifecycleEvent::SupervisorStarted { .. })
             && event
-                .supervisor_path
+                .supervisor_path()
+                .unwrap_or_default()
                 .first()
                 .is_some_and(|segment| segment.id == "nested" && segment.lineage == second_lineage)
     })
     .await;
     assert!(second_lineage > first_lineage);
-    assert_eq!(second.supervisor_path.len(), 1);
-    assert_eq!(second.supervisor_path[0].generation, 0);
+    assert_eq!(path(&second).len(), 1);
+    assert_eq!(path(&second)[0].generation, 0);
 
     shutdown(handle).await;
 }
@@ -287,41 +358,25 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
     .await;
 
     let lagged = next_recursive(&mut tree).await;
-    assert!(lagged.supervisor_path.is_empty());
-    assert!(matches!(
-        lagged.kind,
-        RecursiveLifecycleEventKind::Lagged {
-            dropped: 116,
-            newest_dropped,
-        } if matches!(
-            *newest_dropped,
-            RecursiveLifecycleEventKind::RestartScheduled {
-                ref child_id,
-                generation: 37,
-                total_restarts: 38,
-                child_restart_count: 38,
-                ..
-            } if child_id == "storm"
-        )
-    ));
+    assert!(matches!(lagged, LifecycleEvent::Lagged { dropped: 116 }));
     let last_start = next_recursive_for(&mut tree, |event| {
         matches!(
-            &event.kind,
-            RecursiveLifecycleEventKind::Child(LifecycleEvent {
+            event,
+            LifecycleEvent::Started {
                 child_id,
-                kind: LifecycleEventKind::Started { generation },
+                generation,
                 ..
-            }) if child_id == "storm" && *generation == RESTARTS as u64
+            } if child_id == "storm" && *generation == RESTARTS as u64
         )
     })
     .await;
-    assert!(last_start.supervisor_path.is_empty());
+    assert!(path(&last_start).is_empty());
 
     shutdown(handle).await;
 }
 
 #[tokio::test]
-async fn restart_is_an_ordered_exit_started_pair() {
+async fn restart_is_an_ordered_exit_schedule_started_sequence() {
     let crash = Arc::new(Notify::new());
     let child_crash = Arc::clone(&crash);
     let child = ChildSpec::new("worker", move |ctx| {
@@ -348,20 +403,65 @@ async fn restart_is_an_ordered_exit_started_pair() {
     crash.notify_one();
 
     let exited = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+        matches!(kind, LifecycleEvent::Exited { generation: 0, .. })
     })
     .await;
+    let scheduled = next_event(&mut lifecycle).await;
+    assert!(matches!(
+        scheduled,
+        LifecycleEvent::RestartScheduled {
+            ref child_id,
+            generation: 0,
+            total_restarts: 1,
+            child_restart_count: 1,
+            ..
+        } if child_id == "worker"
+    ));
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 1 })
+        matches!(kind, LifecycleEvent::Started { generation: 1, .. })
     })
     .await;
-    assert_eq!(exited.seq, baseline.lifecycle_seq + 1);
-    assert_eq!(started.seq, exited.seq + 1);
-    assert_eq!(exited.total_restarts, 0);
-    assert_eq!(started.total_restarts, 1);
-    assert_eq!(started.child_restart_count, 1);
+    assert_eq!(seq(&exited), baseline.lifecycle_seq + 1);
+    assert_eq!(seq(&started), seq(&exited) + 1);
+    assert_eq!(total_restarts(&exited), 0);
+    assert_eq!(total_restarts(&started), 1);
+    assert_eq!(child_restart_count(&started), 1);
 
     shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn direct_watch_reports_restart_intensity_failure() {
+    let crash = Arc::new(Notify::new());
+    let child_crash = Arc::clone(&crash);
+    let handle = SupervisorBuilder::new()
+        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+        .child(
+            ChildSpec::new("worker", move |_ctx| {
+                let crash = Arc::clone(&child_crash);
+                async move {
+                    crash.notified().await;
+                    Err(common::test_error("boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle.wait_started().await.expect("startup succeeds");
+    let mut lifecycle = handle.watch_lifecycle();
+
+    crash.notify_one();
+    next_for(&mut lifecycle, "worker", |event| {
+        matches!(event, LifecycleEvent::Exited { generation: 0, .. })
+    })
+    .await;
+    assert!(matches!(
+        next_event(&mut lifecycle).await,
+        LifecycleEvent::RestartIntensityExceeded { .. }
+    ));
+    assert!(handle.wait().await.is_err());
 }
 
 #[tokio::test]
@@ -389,7 +489,7 @@ async fn started_after_reports_membership_removal() {
         .remove_child("worker")
         .await
         .expect("worker removal succeeds");
-    assert_eq!(lifecycle.started_after("worker", baseline).await, None);
+    assert_eq!(lifecycle.started_after(&[], "worker", baseline).await, None);
 
     shutdown(handle).await;
 }
@@ -418,19 +518,19 @@ async fn readiness_gated_started_is_emitted_only_after_ready() {
     timeout(
         common::QUIET_TIMEOUT,
         next_for(&mut lifecycle, "worker", |kind| {
-            matches!(kind, LifecycleEventKind::Started { .. })
+            matches!(kind, LifecycleEvent::Started { .. })
         }),
     )
     .await
     .expect_err("no post-baseline Started event is emitted before readiness");
     release.notify_one();
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+        matches!(kind, LifecycleEvent::Started { generation: 0, .. })
     })
     .await;
     assert!(matches!(
-        started.kind,
-        LifecycleEventKind::Started { generation: 0 }
+        started,
+        LifecycleEvent::Started { generation: 0, .. }
     ));
 
     shutdown(handle).await;
@@ -459,14 +559,14 @@ async fn remove_on_exit_emits_exited_before_removed() {
 
     finish.notify_one();
     let exited = next_for(&mut lifecycle, "ephemeral", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+        matches!(kind, LifecycleEvent::Exited { generation: 0, .. })
     })
     .await;
     let removed = next_for(&mut lifecycle, "ephemeral", |kind| {
-        matches!(kind, LifecycleEventKind::Removed)
+        matches!(kind, LifecycleEvent::Removed { .. })
     })
     .await;
-    assert_eq!(removed.seq, exited.seq + 1);
+    assert_eq!(seq(&removed), seq(&exited) + 1);
     assert!(handle.snapshot().child("ephemeral").is_none());
 
     shutdown(handle).await;
@@ -493,7 +593,7 @@ async fn cooperative_remove_publishes_removed_before_reply() {
     let removal = tokio::spawn(async move { remover.remove_child("worker").await });
 
     let removed = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Removed)
+        matches!(kind, LifecycleEvent::Removed { .. })
     })
     .await;
     timeout(common::EVENT_TIMEOUT, removal)
@@ -501,7 +601,7 @@ async fn cooperative_remove_publishes_removed_before_reply() {
         .expect("remove command resolves")
         .expect("remove task joins")
         .expect("remove succeeds");
-    assert!(handle.snapshot().lifecycle_seq >= removed.seq);
+    assert!(handle.snapshot().lifecycle_seq >= seq(&removed));
     assert!(handle.snapshot().child("worker").is_none());
 
     shutdown(handle).await;
@@ -524,11 +624,11 @@ async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
     handle.wait_started().await.expect("dynamic child starts");
 
     let added = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Added)
+        matches!(kind, LifecycleEvent::Added { .. })
     })
     .await;
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+        matches!(kind, LifecycleEvent::Started { generation: 0, .. })
     })
     .await;
     handle
@@ -536,18 +636,18 @@ async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
         .await
         .expect("dynamic child removed");
     let exited = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+        matches!(kind, LifecycleEvent::Exited { generation: 0, .. })
     })
     .await;
     let removed = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Removed)
+        matches!(kind, LifecycleEvent::Removed { .. })
     })
     .await;
 
-    assert_eq!(started.seq, added.seq + 1);
-    assert_eq!(exited.seq, started.seq + 1);
-    assert_eq!(removed.seq, exited.seq + 1);
-    assert_eq!(removed.lineage, added.lineage);
+    assert_eq!(seq(&started), seq(&added) + 1);
+    assert_eq!(seq(&exited), seq(&started) + 1);
+    assert_eq!(seq(&removed), seq(&exited) + 1);
+    assert_eq!(lineage(&removed), lineage(&added));
 
     shutdown(handle).await;
 }
@@ -584,25 +684,24 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     .await;
 
     let lagged = next_event(&mut lifecycle).await;
-    assert_eq!(lagged.seq, 35);
-    assert!(matches!(
-        lagged.kind,
-        LifecycleEventKind::Lagged { dropped: 35 }
-    ));
-    assert_eq!(lagged.total_restarts, 16);
-    assert_eq!(lagged.child_restart_count, 16);
-    let first_retained = next_event(&mut lifecycle).await;
-    assert_eq!(first_retained.seq, 36);
-    assert_eq!(first_retained.total_restarts, 17);
-
-    let mut last = first_retained;
-    while last.seq < 162 {
+    assert!(matches!(lagged, LifecycleEvent::Lagged { dropped: 115 }));
+    let mut last_seq = None;
+    loop {
         let event = next_event(&mut lifecycle).await;
-        assert_eq!(event.seq, last.seq + 1);
-        last = event;
+        if let Some(event_seq) = event.seq() {
+            if let Some(last_seq) = last_seq {
+                assert_eq!(event_seq, last_seq + 1);
+            }
+            last_seq = Some(event_seq);
+        }
+        if matches!(event, LifecycleEvent::Started { generation, .. } if generation == RESTARTS as u64)
+        {
+            assert_eq!(event.seq(), Some(162));
+            assert_eq!(event.total_restarts(), Some(RESTARTS as u64));
+            assert_eq!(event.child_restart_count(), Some(RESTARTS as u64));
+            break;
+        }
     }
-    assert_eq!(last.total_restarts, RESTARTS as u64);
-    assert_eq!(last.child_restart_count, RESTARTS as u64);
 
     shutdown(handle).await;
 }
@@ -635,10 +734,10 @@ async fn watch_snapshot_filter_is_gap_free_under_concurrent_churn() {
     let mut observed = Vec::new();
     while observed.last().copied().unwrap_or(baseline.lifecycle_seq) < final_seq {
         let event = next_event(&mut lifecycle).await;
-        if event.seq <= baseline.lifecycle_seq {
+        if seq(&event) <= baseline.lifecycle_seq {
             continue;
         }
-        observed.push(event.seq);
+        observed.push(seq(&event));
     }
     assert!(final_seq > baseline.lifecycle_seq);
     assert_eq!(observed.first().copied(), Some(baseline.lifecycle_seq + 1));
@@ -703,29 +802,29 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
 
     crash_worker.notify_one();
     let restarted = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 1 })
+        matches!(kind, LifecycleEvent::Started { generation: 1, .. })
     })
     .await;
-    assert_eq!(restarted.total_restarts, 1);
+    assert_eq!(total_restarts(&restarted), 1);
     crash_fatal.notify_one();
     let fatal_exit = next_for(&mut lifecycle, "fatal", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { generation: 0, .. })
+        matches!(kind, LifecycleEvent::Exited { generation: 0, .. })
     })
     .await;
     let added = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Added)
+        matches!(kind, LifecycleEvent::Added { .. })
     })
     .await;
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+        matches!(kind, LifecycleEvent::Started { generation: 0, .. })
     })
     .await;
-    assert_eq!(added.seq, fatal_exit.seq + 1);
-    assert!(started.seq > added.seq);
-    assert!(added.lineage > initial_worker_lineage);
-    assert_eq!(started.lineage, added.lineage);
-    assert_eq!(added.total_restarts, 2);
-    assert_eq!(started.total_restarts, 2);
+    assert_eq!(seq(&added), seq(&fatal_exit) + 1);
+    assert!(seq(&started) > seq(&added));
+    assert!(lineage(&added) > initial_worker_lineage);
+    assert_eq!(lineage(&started), lineage(&added));
+    assert_eq!(total_restarts(&added), 2);
+    assert_eq!(total_restarts(&started), 2);
 
     shutdown(handle).await;
 }
@@ -771,17 +870,17 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
 
     release.notify_one();
     let added = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Added)
+        matches!(kind, LifecycleEvent::Added { .. })
     })
     .await;
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+        matches!(kind, LifecycleEvent::Started { generation: 0, .. })
     })
     .await;
-    assert_eq!(added.seq, baseline.lifecycle_seq + 1);
-    assert_eq!(added.lineage, declared.lineage);
-    assert_eq!(started.seq, added.seq + 1);
-    assert_eq!(started.lineage, declared.lineage);
+    assert_eq!(seq(&added), baseline.lifecycle_seq + 1);
+    assert_eq!(lineage(&added), declared.lineage);
+    assert_eq!(seq(&started), seq(&added) + 1);
+    assert_eq!(lineage(&started), declared.lineage);
 
     shutdown(handle).await;
 }
@@ -805,10 +904,10 @@ async fn closure_drains_staged_events_and_closed_does_not_consume() {
         .await
         .expect("closed resolves at root terminality");
     let exited = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    assert!(matches!(exited.kind, LifecycleEventKind::Exited { .. }));
+    assert!(matches!(exited, LifecycleEvent::Exited { .. }));
     assert_eq!(
         timeout(common::EVENT_TIMEOUT, lifecycle.next())
             .await
@@ -892,7 +991,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
 
     complete_leaf.notify_one();
     next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
     timeout(common::QUIET_TIMEOUT, lifecycle.closed())
@@ -901,14 +1000,14 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
 
     crash_sibling.notify_one();
     let added = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Added)
+        matches!(kind, LifecycleEvent::Added { .. })
     })
     .await;
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+        matches!(kind, LifecycleEvent::Started { generation: 0, .. })
     })
     .await;
-    assert_eq!(started.seq, added.seq + 1);
+    assert_eq!(seq(&started), seq(&added) + 1);
 
     shutdown(handle).await;
     timeout(common::EVENT_TIMEOUT, lifecycle.closed())
@@ -945,7 +1044,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
 
     crash.notify_one();
     next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
     timeout(common::EVENT_TIMEOUT, lifecycle.closed())
@@ -993,7 +1092,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_leaf.notify_one();
     let first_exit = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
     timeout(common::QUIET_TIMEOUT, lifecycle.closed())
@@ -1002,23 +1101,23 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_middle.notify_one();
     let added = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Added)
+        matches!(kind, LifecycleEvent::Added { .. })
     })
     .await;
     let started = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Started { generation: 0 })
+        matches!(kind, LifecycleEvent::Started { generation: 0, .. })
     })
     .await;
-    assert!(added.seq > first_exit.seq);
-    assert_eq!(started.seq, added.seq + 1);
+    assert!(seq(&added) > seq(&first_exit));
+    assert_eq!(seq(&started), seq(&added) + 1);
 
     crash_leaf.notify_one();
     let second_exit = next_for(&mut lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    assert!(second_exit.seq > started.seq);
-    assert_eq!(second_exit.total_restarts, 1);
+    assert!(seq(&second_exit) > seq(&started));
+    assert_eq!(total_restarts(&second_exit), 1);
 
     shutdown(handle).await;
     timeout(common::EVENT_TIMEOUT, lifecycle.closed())
@@ -1100,7 +1199,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
 
     complete_head.notify_one();
     next_for(&mut head_lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
     timeout(common::EVENT_TIMEOUT, head_lifecycle.closed())
@@ -1113,7 +1212,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
 
     complete_tail.notify_one();
     next_for(&mut tail_lifecycle, "worker", |kind| {
-        matches!(kind, LifecycleEventKind::Exited { .. })
+        matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
     timeout(common::QUIET_TIMEOUT, tail_lifecycle.closed())
@@ -1250,9 +1349,12 @@ async fn started_after_reports_a_start_lost_to_overflow() {
 
     // The storm has evicted every "quiet" transition, so the marker that now
     // fronts the buffer is stamped with a "storm" envelope.
-    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.started_after("quiet", 0))
-        .await
-        .expect("started_after must not outlive the transitions it awaits");
+    let waited = timeout(
+        common::EVENT_TIMEOUT,
+        lifecycle.started_after(&[], "quiet", 0),
+    )
+    .await
+    .expect("started_after must not outlive the transitions it awaits");
     assert_eq!(waited, None);
 
     shutdown(handle).await;

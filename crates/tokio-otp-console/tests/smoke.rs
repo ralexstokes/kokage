@@ -471,12 +471,9 @@ async fn ws_streams_events() {
     let _added = read_non_stats_json(&mut socket).await;
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
-    assert_eq!(frame["data"]["supervisor_path"], json!([]));
-    assert_eq!(frame["data"]["kind"]["Child"]["child_id"], "worker");
-    assert_eq!(
-        frame["data"]["kind"]["Child"]["kind"]["Started"]["generation"],
-        0
-    );
+    assert_eq!(frame["data"]["Started"]["supervisor_path"], json!([]));
+    assert_eq!(frame["data"]["Started"]["child_id"], "worker");
+    assert_eq!(frame["data"]["Started"]["generation"], 0);
 }
 
 #[tokio::test]

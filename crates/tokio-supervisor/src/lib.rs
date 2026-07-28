@@ -127,7 +127,8 @@
 //!
 //! - **[`SupervisorSnapshot`] state** — current state and cumulative counters,
 //!   read directly or through [`SupervisorHandle::subscribe_snapshots`].
-//! - **Lifecycle streams** — ordered direct-child [`LifecycleEvent`]s from
+//! - **Lifecycle streams** — ordered direct-child and restart-decision
+//!   [`LifecycleEvent`]s from
 //!   [`SupervisorHandle::watch_lifecycle`], or the whole tree (including
 //!   supervisor transitions and scheduled restarts) from
 //!   [`SupervisorHandle::watch_lifecycle_recursive`]. Both report overflow
@@ -146,10 +147,10 @@
 //! ## Snapshot/lifecycle alignment
 //!
 //! Create a lifecycle watch first, then read a snapshot, then discard watched
-//! events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
+//! child transition events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
 //! state-plus-stream view without replay. Direct lifecycle overflow is
-//! explicit as [`LifecycleEventKind::Lagged`]; recursive stream overflow is a
-//! tree-wide [`RecursiveLifecycleEventKind::Lagged`] marker.
+//! explicit as [`LifecycleEvent::Lagged`]; recursive stream overflow uses the
+//! same tree-wide marker shape.
 //!
 //! # Deliberate dependency coupling
 //!
@@ -244,10 +245,7 @@ pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::ExitStatusView;
 pub use handle::SupervisorHandle;
-pub use lifecycle::{
-    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
-    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
-};
+pub use lifecycle::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch};
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
 pub use scope::{ControlOperation, ScopeKind};
 pub use shutdown::{ShutdownMode, ShutdownPolicy};

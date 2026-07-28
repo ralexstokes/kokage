@@ -103,19 +103,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn wait_for_child_started(
-    events: &mut RecursiveLifecycleWatch,
+    events: &mut LifecycleWatch,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
-        event.supervisor_path.is_empty()
-            && matches!(
-                &event.kind,
-                RecursiveLifecycleEventKind::Child(LifecycleEvent {
-                    child_id: id,
-                    kind: LifecycleEventKind::Started { .. },
-                    ..
-                }) if id == child_id
-            )
+        matches!(
+            event,
+            LifecycleEvent::Started { supervisor_path, child_id: id, .. }
+                if supervisor_path.is_empty() && id == child_id
+        )
     })
     .await?;
     println!("event: {event:?}");
@@ -123,19 +119,15 @@ async fn wait_for_child_started(
 }
 
 async fn wait_for_child_removed(
-    events: &mut RecursiveLifecycleWatch,
+    events: &mut LifecycleWatch,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
-        event.supervisor_path.is_empty()
-            && matches!(
-                &event.kind,
-                RecursiveLifecycleEventKind::Child(LifecycleEvent {
-                    child_id: id,
-                    kind: LifecycleEventKind::Removed,
-                    ..
-                }) if id == child_id
-            )
+        matches!(
+            event,
+            LifecycleEvent::Removed { supervisor_path, child_id: id, .. }
+                if supervisor_path.is_empty() && id == child_id
+        )
     })
     .await?;
     println!("event: {event:?}");
@@ -143,14 +135,14 @@ async fn wait_for_child_removed(
 }
 
 async fn wait_for_nested_supervisor_started(
-    events: &mut RecursiveLifecycleWatch,
+    events: &mut LifecycleWatch,
     nested_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event.supervisor_path.as_slice(),
+            event.supervisor_path().unwrap_or_default(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
-        ) && matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStarted)
+        ) && matches!(event, LifecycleEvent::SupervisorStarted { .. })
     })
     .await?;
     println!("event: {event:?}");
@@ -158,21 +150,17 @@ async fn wait_for_nested_supervisor_started(
 }
 
 async fn wait_for_nested_child_started(
-    events: &mut RecursiveLifecycleWatch,
+    events: &mut LifecycleWatch,
     nested_id: &str,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event.supervisor_path.as_slice(),
+            event.supervisor_path().unwrap_or_default(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
         ) && matches!(
-            &event.kind,
-            RecursiveLifecycleEventKind::Child(LifecycleEvent {
-                child_id: id,
-                kind: LifecycleEventKind::Started { generation: 0 },
-                ..
-            }) if id == child_id
+            event,
+            LifecycleEvent::Started { child_id: id, generation: 0, .. } if id == child_id
         )
     })
     .await?;
@@ -181,21 +169,17 @@ async fn wait_for_nested_child_started(
 }
 
 async fn wait_for_nested_child_removed(
-    events: &mut RecursiveLifecycleWatch,
+    events: &mut LifecycleWatch,
     nested_id: &str,
     child_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event.supervisor_path.as_slice(),
+            event.supervisor_path().unwrap_or_default(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
         ) && matches!(
-            &event.kind,
-            RecursiveLifecycleEventKind::Child(LifecycleEvent {
-                child_id: id,
-                kind: LifecycleEventKind::Removed,
-                ..
-            }) if id == child_id
+            event,
+            LifecycleEvent::Removed { child_id: id, .. } if id == child_id
         )
     })
     .await?;
@@ -204,9 +188,9 @@ async fn wait_for_nested_child_removed(
 }
 
 async fn wait_for_event(
-    events: &mut RecursiveLifecycleWatch,
-    mut predicate: impl FnMut(&RecursiveLifecycleEvent) -> bool,
-) -> Result<RecursiveLifecycleEvent, Box<dyn std::error::Error>> {
+    events: &mut LifecycleWatch,
+    mut predicate: impl FnMut(&LifecycleEvent) -> bool,
+) -> Result<LifecycleEvent, Box<dyn std::error::Error>> {
     Ok(timeout(Duration::from_secs(2), async {
         loop {
             let event = events

@@ -782,52 +782,46 @@
 
   // --- Rendering: Event Log ---
   function classifyEvent(ev) {
-    const lifecycle = ev && ev.kind;
+    const eventName = ev && typeof ev === "object" ? Object.keys(ev)[0] : null;
+    const lifecycle = eventName ? ev[eventName] : null;
     let info;
-    if (typeof lifecycle === "string") {
-      switch (lifecycle) {
-        case "SupervisorStarted":  info = { kind: "started", cls: "kind-good", msg: "Supervisor started" }; break;
-        case "SupervisorStopping": info = { kind: "stopping", cls: "kind-warn", msg: "Supervisor stopping" }; break;
-        case "SupervisorStopped":  info = { kind: "stopped", cls: "kind-muted", msg: "Supervisor stopped" }; break;
-        default: info = { kind: "event", cls: "kind-muted", msg: lifecycle };
-      }
-    } else if (lifecycle && lifecycle.Child) {
-      const child = lifecycle.Child;
-      const transition = child.kind;
-      if (transition === "Added") {
-        info = { kind: "added", cls: "kind-accent", msg: "Child '" + child.child_id + "' added" };
-      } else if (transition.Started) {
-        info = {
-          kind: transition.Started.generation > 0 ? "restarted" : "started",
-          cls: transition.Started.generation > 0 ? "kind-warn" : "kind-good",
-          msg: "Child '" + child.child_id + "' started (gen " + transition.Started.generation + ")",
-        };
-      } else if (transition.Exited) {
-        const st = formatExit(transition.Exited.reason) || "unknown";
-        const failed = isFailureExit(st);
-        info = {
-          kind: failed ? "failed" : "exited",
-          cls: failed ? "kind-critical" : "kind-muted",
-          msg: "Child '" + child.child_id + "' exited: " + st + " (gen " + transition.Exited.generation + ")",
-        };
-      } else if (transition === "Removed") {
-        info = { kind: "removed", cls: "kind-muted", msg: "Child '" + child.child_id + "' removed" };
-      } else if (transition.Lagged) {
-        info = { kind: "lagged", cls: "kind-critical", msg: "Direct lifecycle stream dropped " + transition.Lagged.dropped + " events" };
-      }
-    } else if (lifecycle && lifecycle.RestartScheduled) {
+    if (eventName === "SupervisorStarted") {
+      info = { kind: "started", cls: "kind-good", msg: "Supervisor started" };
+    } else if (eventName === "SupervisorStopping") {
+      info = { kind: "stopping", cls: "kind-warn", msg: "Supervisor stopping" };
+    } else if (eventName === "SupervisorStopped") {
+      info = { kind: "stopped", cls: "kind-muted", msg: "Supervisor stopped" };
+    } else if (eventName === "Added") {
+      info = { kind: "added", cls: "kind-accent", msg: "Child '" + lifecycle.child_id + "' added" };
+    } else if (eventName === "Started") {
+      info = {
+        kind: lifecycle.generation > 0 ? "restarted" : "started",
+        cls: lifecycle.generation > 0 ? "kind-warn" : "kind-good",
+        msg: "Child '" + lifecycle.child_id + "' started (gen " + lifecycle.generation + ")",
+      };
+    } else if (eventName === "Exited") {
+      const st = formatExit(lifecycle.reason) || "unknown";
+      const failed = isFailureExit(st);
+      info = {
+        kind: failed ? "failed" : "exited",
+        cls: failed ? "kind-critical" : "kind-muted",
+        msg: "Child '" + lifecycle.child_id + "' exited: " + st + " (gen " + lifecycle.generation + ")",
+      };
+    } else if (eventName === "Removed") {
+      info = { kind: "removed", cls: "kind-muted", msg: "Child '" + lifecycle.child_id + "' removed" };
+    } else if (eventName === "RestartScheduled") {
       info = {
         kind: "scheduled", cls: "kind-accent",
-        msg: "Restart scheduled for '" + lifecycle.RestartScheduled.child_id + "' in " +
-          formatDuration(lifecycle.RestartScheduled.delay),
+        msg: "Restart scheduled for '" + lifecycle.child_id + "' in " +
+          formatDuration(lifecycle.delay),
       };
-    } else if (lifecycle && lifecycle.RestartIntensityExceeded) {
+    } else if (eventName === "RestartIntensityExceeded") {
       info = { kind: "intensity", cls: "kind-critical", msg: "Restart intensity exceeded" };
-    } else if (lifecycle && lifecycle.Lagged) {
-      info = { kind: "lagged", cls: "kind-critical", msg: "Lifecycle stream dropped " + lifecycle.Lagged.dropped + " tree events; resynchronize from the latest snapshot" };
+    } else if (eventName === "Lagged") {
+      info = { kind: "lagged", cls: "kind-critical", msg: "Lifecycle stream dropped " + lifecycle.dropped + " tree events; resynchronize from the latest snapshot" };
     }
-    info = info || { kind: "event", cls: "kind-muted", msg: JSON.stringify(lifecycle) || "Unknown lifecycle event" };
-    const supervisorPath = ev && Array.isArray(ev.supervisor_path) ? ev.supervisor_path : [];
+    info = info || { kind: "event", cls: "kind-muted", msg: JSON.stringify(ev) || "Unknown lifecycle event" };
+    const supervisorPath = lifecycle && Array.isArray(lifecycle.supervisor_path) ? lifecycle.supervisor_path : [];
     if (supervisorPath.length > 0) {
       const prefix = supervisorPath.map(function (segment) {
         return "[" + segment.id + " lineage:" + segment.lineage + " gen:" + segment.generation + "]";

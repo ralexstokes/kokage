@@ -262,7 +262,7 @@ of its own accord and no restart is pending for it. Three consequences follow:
   new generation.
 - A child cancelled by shutdown, removal, or a group restart can still return
   `Ok(())`. That is not finished work, and it does not count.
-  [`LifecycleEventKind::Exited`] reports it as `cancelled`.
+  [`LifecycleEvent::Exited`] reports it as `cancelled`.
 
 Nested supervisors need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
@@ -328,5 +328,5 @@ actors](dynamic-actors.md) chapter.
 [`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ShutdownPolicy.html
 [`shutdown_on_completion`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
 [`wait_completed`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.wait_completed
-[`LifecycleEventKind::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.LifecycleEventKind.html#variant.Exited
+[`LifecycleEvent::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.LifecycleEvent.html#variant.Exited
 [`agent_control` example]: https://github.com/ralexstokes/tokio-otp/tree/main/crates/tokio-otp/examples/agent_control

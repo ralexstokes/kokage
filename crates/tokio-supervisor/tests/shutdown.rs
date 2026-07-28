@@ -9,8 +9,8 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
-    LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity, RestartPolicy,
-    ShutdownMode, ShutdownPolicy, SupervisorBuilder, SupervisorError,
+    LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
+    SupervisorBuilder, SupervisorError,
 };
 
 mod common;
@@ -401,7 +401,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     );
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "wrapper timeout exit").await {
-        if let LifecycleEventKind::Exited { reason, .. } = event.kind {
+        if let LifecycleEvent::Exited { reason, .. } = event {
             assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
             return;
         }
@@ -470,8 +470,8 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "dynamic child timeout exit").await
     {
-        if event.child_id == "short"
-            && let LifecycleEventKind::Exited { reason, .. } = event.kind
+        if event.child_id() == Some("short")
+            && let LifecycleEvent::Exited { reason, .. } = event
         {
             assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
             return;
@@ -533,8 +533,8 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         let event = next_lifecycle_event(&mut lifecycle, "drop-triggered child exit")
             .await
             .expect("keeper keeps scope live");
-        if event.child_id == "stubborn"
-            && let LifecycleEventKind::Exited { reason, .. } = event.kind
+        if event.child_id() == Some("stubborn")
+            && let LifecycleEvent::Exited { reason, .. } = event
         {
             assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
             break;
@@ -775,8 +775,8 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
             .next()
             .await
             .expect("staged lifecycle exits remain available");
-        if matches!(event.kind, LifecycleEventKind::Exited { .. }) {
-            exited.push(event.child_id);
+        if let LifecycleEvent::Exited { child_id, .. } = event {
+            exited.push(child_id);
         }
     }
     assert_eq!(exited, ["third", "second", "first"]);

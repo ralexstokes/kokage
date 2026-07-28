@@ -92,7 +92,7 @@ pub struct ChildSnapshot {
     /// Whether [`last_exit`](Self::last_exit) was the supervisor stopping the
     /// child rather than the child reaching its own conclusion.
     ///
-    /// See [`LifecycleEventKind::Exited`](crate::LifecycleEventKind::Exited)
+    /// See [`LifecycleEvent::Exited`](crate::LifecycleEvent::Exited)
     /// for why a cancelled child can still report
     /// [`ExitStatusView::Completed`].
     #[cfg_attr(feature = "serde", serde(default))]

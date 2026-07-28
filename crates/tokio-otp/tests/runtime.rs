@@ -14,9 +14,9 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEventKind, LifecycleWatch,
-    MessageContext, RawActor, Reply, Runtime, RuntimeHandle, SendError, StartContext,
-    SupervisionTree, prelude::Continue,
+    DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleWatch, MessageContext,
+    RawActor, Reply, Runtime, RuntimeHandle, SendError, StartContext, SupervisionTree,
+    prelude::Continue,
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
@@ -108,7 +108,7 @@ fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) -> u64 {
     lifecycle
-        .started_after(id, baseline)
+        .started_after(&[], id, baseline)
         .await
         .expect("runtime remains live")
 }
@@ -1377,7 +1377,7 @@ async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
         Some(ExitStatusView::ShutdownTimedOut)
     );
     while let Some(event) = lifecycle.next().await {
-        if let LifecycleEventKind::Exited { reason, .. } = event.kind {
+        if let LifecycleEvent::Exited { reason, .. } = event {
             assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
             return;
         }
@@ -1423,7 +1423,7 @@ async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
         Some(ExitStatusView::ShutdownTimedOut)
     );
     while let Some(event) = lifecycle.next().await {
-        if let LifecycleEventKind::Exited { reason, .. } = event.kind {
+        if let LifecycleEvent::Exited { reason, .. } = event {
             assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
             return;
         }

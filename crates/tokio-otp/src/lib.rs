@@ -290,10 +290,9 @@ pub mod prelude {
     };
     pub use tokio_supervisor::{
         BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
-        CompletionOutcome, ExitStatusView, LifecycleEvent, LifecycleEventKind,
-        LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
-        RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
-        ShutdownPolicy, Strategy, SupervisorSnapshot, SupervisorStateView,
+        CompletionOutcome, ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
+        RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy,
+        SupervisorSnapshot, SupervisorStateView,
     };
 }
 
@@ -326,10 +325,9 @@ pub use tokio_supervisor::{AttachedChild, AttachedChildIdentity};
 pub use tokio_supervisor::{
     BackoffPolicy, BoxError, ChildContext, ChildMembershipView, ChildResult, ChildSnapshot,
     ChildSpec, ChildStateView, CompletionGuard, CompletionOutcome, ControlError, ControlOperation,
-    DynamicSupervisorBuilder, ExitStatusView, LifecycleEvent, LifecycleEventKind,
-    LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
-    RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
-    ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorBuilder, SupervisorError,
-    SupervisorHandle, SupervisorSnapshot, SupervisorSpec, SupervisorStateView,
+    DynamicSupervisorBuilder, ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
+    RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
+    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSpec, SupervisorStateView,
 };
 pub use tokio_util::sync::CancellationToken;

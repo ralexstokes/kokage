@@ -7,7 +7,7 @@ use tokio::{
     sync::watch,
     time::{self, Duration},
 };
-use tokio_supervisor::{RecursiveLifecycleEvent, SupervisorSnapshot};
+use tokio_supervisor::{LifecycleEvent, SupervisorSnapshot};
 
 use crate::{ActorStatsView, server::AppState};
 
@@ -56,7 +56,7 @@ fn snapshot_message(snapshot: SupervisorSnapshot) -> Message {
     )
 }
 
-fn event_message(event: RecursiveLifecycleEvent) -> Message {
+fn event_message(event: LifecycleEvent) -> Message {
     Message::Text(
         serde_json::json!({ "type": "event", "data": event })
             .to_string()
@@ -80,7 +80,7 @@ async fn send_snapshot(
     socket.send(snapshot_message(snapshot)).await.is_ok()
 }
 
-async fn send_event(socket: &mut WebSocket, event: RecursiveLifecycleEvent) -> bool {
+async fn send_event(socket: &mut WebSocket, event: LifecycleEvent) -> bool {
     socket.send(event_message(event)).await.is_ok()
 }
 

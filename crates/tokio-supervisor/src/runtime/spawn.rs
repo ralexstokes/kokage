@@ -232,7 +232,10 @@ impl SupervisorRuntime {
             },
         );
         if self.children[key].runtime.state == RuntimeChildState::Running {
-            self.send_lifecycle(key, crate::LifecycleEventKind::Started { generation });
+            self.send_lifecycle(
+                key,
+                crate::lifecycle::ChildLifecycleEvent::Started { generation },
+            );
             self.send_event(RuntimeEvent::ChildStarted {
                 id: child_id,
                 generation,

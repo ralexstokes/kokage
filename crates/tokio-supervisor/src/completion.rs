@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     ExitStatusView,
     handle::SupervisorHandle,
-    lifecycle::{LifecycleEvent, LifecycleEventKind},
+    lifecycle::LifecycleEvent,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
 
@@ -93,7 +93,7 @@ impl SupervisorHandle {
     /// The wait is gap-free from the moment it is called: it aligns a
     /// lifecycle watch against a snapshot, so children that completed earlier
     /// are still counted, and it realigns from a fresh snapshot if the watch
-    /// reports [`LifecycleEventKind::Lagged`]. Calling it on a pre-spawn
+    /// reports [`LifecycleEvent::Lagged`]. Calling it on a pre-spawn
     /// handle is well defined — statically configured children are projected
     /// before the scope starts.
     ///
@@ -184,14 +184,11 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
         let Some(event) = watch.next().await else {
             return CompletionOutcome::Closed;
         };
-        if event.seq <= baseline {
-            continue;
-        }
-        if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
+        if matches!(event, LifecycleEvent::Lagged { .. }) {
             // A dropped prefix may have contained transitions for awaited
             // children, so edge-derived state has to be rebuilt from state.
             baseline = set.realign(&handle.snapshot());
-        } else {
+        } else if direct_child_seq(&event).is_some_and(|seq| seq > baseline) {
             set.apply(&event);
         }
     }
@@ -241,41 +238,65 @@ impl CompletionSet {
     }
 
     fn apply(&mut self, event: &LifecycleEvent) {
-        if !self.awaits(&event.child_id) {
+        let (child_id, lineage, transition) = match event {
+            LifecycleEvent::Added {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Running),
+            LifecycleEvent::Started {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Running),
+            LifecycleEvent::Exited {
+                child_id,
+                lineage,
+                reason,
+                cancelled,
+                ..
+            } => (
+                child_id,
+                *lineage,
+                CompletionTransition::Exited {
+                    reason,
+                    cancelled: *cancelled,
+                },
+            ),
+            LifecycleEvent::Removed {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Removed),
+            _ => return,
+        };
+        if !self.awaits(child_id) {
             return;
         }
         let latest_lineage = self
             .latest_lineages
-            .entry(event.child_id.clone())
-            .or_insert(event.lineage);
-        if event.lineage < *latest_lineage {
+            .entry(child_id.clone())
+            .or_insert(lineage);
+        if lineage < *latest_lineage {
             return;
         }
-        *latest_lineage = event.lineage;
-        self.seen.insert(event.child_id.clone());
+        *latest_lineage = lineage;
+        self.seen.insert(child_id.clone());
 
-        match &event.kind {
+        match transition {
             // A child that is starting again has work in flight, whatever an
             // earlier generation did.
-            LifecycleEventKind::Added | LifecycleEventKind::Started { .. } => {
-                self.satisfied.remove(&event.child_id);
+            CompletionTransition::Running => {
+                self.satisfied.remove(child_id);
             }
             // A cancellation-driven `Ok(())` — shutdown, removal, or a
             // sibling-driven group restart — is not finished work.
-            LifecycleEventKind::Exited {
+            CompletionTransition::Exited {
                 reason, cancelled, ..
             } => {
                 if matches!(reason, ExitStatusView::Completed) && !cancelled {
-                    self.satisfied.insert(event.child_id.clone());
+                    self.satisfied.insert(child_id.clone());
                 } else {
-                    self.satisfied.remove(&event.child_id);
+                    self.satisfied.remove(child_id);
                 }
             }
-            LifecycleEventKind::Removed => {
-                self.satisfied.insert(event.child_id.clone());
+            CompletionTransition::Removed => {
+                self.satisfied.insert(child_id.clone());
             }
-            // Handled by the caller, which realigns from a snapshot instead.
-            LifecycleEventKind::Lagged { .. } => {}
         }
     }
 
@@ -309,6 +330,41 @@ impl CompletionSet {
     }
 }
 
+enum CompletionTransition<'a> {
+    Running,
+    Exited {
+        reason: &'a ExitStatusView,
+        cancelled: bool,
+    },
+    Removed,
+}
+
+fn direct_child_seq(event: &LifecycleEvent) -> Option<u64> {
+    match event {
+        LifecycleEvent::Added {
+            supervisor_path,
+            seq,
+            ..
+        }
+        | LifecycleEvent::Started {
+            supervisor_path,
+            seq,
+            ..
+        }
+        | LifecycleEvent::Exited {
+            supervisor_path,
+            seq,
+            ..
+        }
+        | LifecycleEvent::Removed {
+            supervisor_path,
+            seq,
+            ..
+        } if supervisor_path.is_empty() => Some(*seq),
+        _ => None,
+    }
+}
+
 fn is_completed(child: &ChildSnapshot) -> bool {
     if child.membership == ChildMembershipView::Removing {
         return true;
@@ -323,7 +379,20 @@ mod tests {
     use super::*;
     use crate::{Strategy, snapshot::SupervisorStateView};
 
-    fn event(seq: u64, child_id: &str, kind: LifecycleEventKind) -> LifecycleEvent {
+    enum TestLifecycleKind {
+        Added,
+        Started {
+            generation: u64,
+        },
+        Exited {
+            generation: u64,
+            reason: ExitStatusView,
+            cancelled: bool,
+        },
+        Removed,
+    }
+
+    fn event(seq: u64, child_id: &str, kind: TestLifecycleKind) -> LifecycleEvent {
         event_with_lineage(seq, child_id, 0, kind)
     }
 
@@ -331,15 +400,49 @@ mod tests {
         seq: u64,
         child_id: &str,
         lineage: u64,
-        kind: LifecycleEventKind,
+        kind: TestLifecycleKind,
     ) -> LifecycleEvent {
-        LifecycleEvent {
-            seq,
-            child_id: child_id.to_owned(),
-            lineage,
-            total_restarts: 0,
-            child_restart_count: 0,
-            kind,
+        match kind {
+            TestLifecycleKind::Added => LifecycleEvent::Added {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+            },
+            TestLifecycleKind::Started { generation } => LifecycleEvent::Started {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+            },
+            TestLifecycleKind::Exited {
+                generation,
+                reason,
+                cancelled,
+            } => LifecycleEvent::Exited {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+                reason,
+                cancelled,
+            },
+            TestLifecycleKind::Removed => LifecycleEvent::Removed {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+            },
         }
     }
 
@@ -347,7 +450,7 @@ mod tests {
         event(
             seq,
             child_id,
-            LifecycleEventKind::Exited {
+            TestLifecycleKind::Exited {
                 generation: 0,
                 reason: ExitStatusView::Completed,
                 cancelled: false,
@@ -386,7 +489,7 @@ mod tests {
         set.apply(&event(
             1,
             "source",
-            LifecycleEventKind::Exited {
+            TestLifecycleKind::Exited {
                 generation: 0,
                 reason: ExitStatusView::Failed("boom".to_owned()),
                 cancelled: false,
@@ -402,7 +505,7 @@ mod tests {
         set.apply(&event(
             2,
             "source",
-            LifecycleEventKind::Started { generation: 1 },
+            TestLifecycleKind::Started { generation: 1 },
         ));
         set.apply(&completed(3, "indexer"));
         assert!(
@@ -417,7 +520,7 @@ mod tests {
     fn a_removed_child_leaves_the_set() {
         let mut set = CompletionSet::new(["source", "indexer"]);
         set.apply(&completed(1, "source"));
-        set.apply(&event(2, "indexer", LifecycleEventKind::Removed));
+        set.apply(&event(2, "indexer", TestLifecycleKind::Removed));
         assert!(set.is_complete());
     }
 
@@ -464,7 +567,7 @@ mod tests {
             1,
             "source",
             1,
-            LifecycleEventKind::Removed,
+            TestLifecycleKind::Removed,
         ));
         assert!(
             !set.is_complete(),
@@ -475,7 +578,7 @@ mod tests {
             2,
             "source",
             2,
-            LifecycleEventKind::Exited {
+            TestLifecycleKind::Exited {
                 generation: 0,
                 reason: ExitStatusView::Completed,
                 cancelled: false,
@@ -487,7 +590,7 @@ mod tests {
             3,
             "source",
             1,
-            LifecycleEventKind::Exited {
+            TestLifecycleKind::Exited {
                 generation: 0,
                 reason: ExitStatusView::Completed,
                 cancelled: true,
@@ -502,7 +605,7 @@ mod tests {
     #[test]
     fn realigning_treats_a_previously_seen_absence_as_removal() {
         let mut set = CompletionSet::new(["source"]);
-        set.apply(&event(1, "source", LifecycleEventKind::Added));
+        set.apply(&event(1, "source", TestLifecycleKind::Added));
         set.realign(&snapshot(Vec::new()));
         assert!(set.is_complete());
     }

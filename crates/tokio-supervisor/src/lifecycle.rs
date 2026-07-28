@@ -16,82 +16,7 @@ const LIFECYCLE_BUFFER_CAPACITY: usize = 128;
 
 const _: () = assert!(LIFECYCLE_BUFFER_CAPACITY >= 2);
 
-/// One ordered transition among a supervisor's direct child memberships.
-///
-/// Events are scoped to the stable identity represented by the handle that
-/// created the watch. The sequence is continuous across incarnations of a
-/// nested supervisor, including recreations caused by an ancestor restart.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub struct LifecycleEvent {
-    /// Monotonic causal sequence for this stable supervisor identity.
-    pub seq: u64,
-    /// Direct child membership that transitioned.
-    pub child_id: String,
-    /// Identity of this child membership within its stable supervisor scope.
-    pub lineage: u64,
-    /// Stable-scope cumulative restart count at emission.
-    pub total_restarts: u64,
-    /// Subject child's cumulative restart count at emission.
-    pub child_restart_count: u64,
-    /// The transition that occurred.
-    pub kind: LifecycleEventKind,
-}
-
-/// A transition in one direct child membership.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum LifecycleEventKind {
-    /// The runtime installed the membership for this supervisor incarnation.
-    ///
-    /// A pre-spawn snapshot can already project a statically configured child
-    /// as `Starting` before this transition is emitted. Consumers combining a
-    /// snapshot and stream should therefore apply `Added` as an idempotent
-    /// upsert keyed by `(child_id, lineage)`, not as an unchecked row
-    /// insertion.
-    Added,
-    /// The child became running. For readiness-gated children this is emitted
-    /// only after readiness is reported.
-    Started {
-        /// Generation that became running.
-        generation: u64,
-    },
-    /// A child generation exited.
-    Exited {
-        /// Generation that exited.
-        generation: u64,
-        /// Public classification of the exit.
-        reason: ExitStatusView,
-        /// Whether the supervisor stopped this generation rather than letting
-        /// it reach its own conclusion.
-        ///
-        /// A child cancelled by shutdown, removal, or a sibling-driven group
-        /// restart can still return `Ok(())` and so be classified as
-        /// [`ExitStatusView::Completed`]. Such an exit is not finished work,
-        /// and consumers deciding whether finite work is done — as
-        /// [`wait_completed`](crate::SupervisorHandle::wait_completed) does —
-        /// must exclude it. A child that failed or panicked on its own is not
-        /// cancelled.
-        cancelled: bool,
-    },
-    /// The membership ended.
-    Removed,
-    /// Older transitions were discarded because this watch could not keep up.
-    ///
-    /// Consumers that maintain edge-derived state must resynchronize from a
-    /// snapshot. This marker carries the envelope of the newest discarded
-    /// transition, so its sequence and cumulative counters describe the full
-    /// dropped prefix.
-    Lagged {
-        /// Number of transitions discarded since the preceding delivered
-        /// event.
-        dropped: u64,
-    },
-}
-
-/// One nested-supervisor edge in a recursive lifecycle event's path.
+/// One nested-supervisor edge in a lifecycle event's path.
 ///
 /// The tuple `(id, lineage, generation)` identifies the exact
 /// supervisor incarnation that forwarded the event. In particular,
@@ -111,6 +36,9 @@ pub struct LifecyclePathSegment {
 
 impl LifecyclePathSegment {
     /// Creates one exact nested-supervisor path segment.
+    ///
+    /// This is primarily useful with [`LifecycleWatch::started_after`] when a
+    /// caller already knows the supervisor membership it intends to observe.
     pub fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
         Self {
             id: id.into(),
@@ -120,53 +48,123 @@ impl LifecyclePathSegment {
     }
 }
 
-/// One event in a supervisor tree's recursive lifecycle stream.
+/// One ordered transition in a supervisor lifecycle stream.
 ///
-/// `supervisor_path` is relative to the handle that created the watch. It is
-/// empty for events emitted by that scope, contains one segment for a direct
-/// nested supervisor, and so on.
+/// Every non-lag event carries a supervisor path relative to the handle that
+/// created the watch. An empty path identifies the watched scope itself;
+/// child variants at that path describe its direct children. One segment
+/// identifies a direct nested supervisor, and so on.
+///
+/// Child lifecycle sequences are scoped to a stable supervisor identity and
+/// continue across its incarnations, including recreation caused by an
+/// ancestor restart.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub struct RecursiveLifecycleEvent {
-    /// Nested-supervisor path from the watched scope to the emitting scope.
-    pub supervisor_path: Vec<LifecyclePathSegment>,
-    /// Transition that occurred in the emitting scope.
-    pub kind: RecursiveLifecycleEventKind,
-}
-
-impl RecursiveLifecycleEvent {
-    /// Creates a recursive event at `supervisor_path`.
-    pub fn new(
-        supervisor_path: Vec<LifecyclePathSegment>,
-        kind: RecursiveLifecycleEventKind,
-    ) -> Self {
-        Self {
-            supervisor_path,
-            kind,
-        }
-    }
-
-    fn local(kind: RecursiveLifecycleEventKind) -> Self {
-        Self::new(Vec::new(), kind)
-    }
-}
-
-/// A transition visible in a recursive supervisor lifecycle stream.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum RecursiveLifecycleEventKind {
+pub enum LifecycleEvent {
     /// The emitting supervisor incarnation started.
-    SupervisorStarted,
+    SupervisorStarted {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+    },
     /// The emitting supervisor entered its shutdown sequence.
-    SupervisorStopping,
+    SupervisorStopping {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+    },
     /// The emitting supervisor fully stopped.
-    SupervisorStopped,
-    /// A direct-child lifecycle transition in the emitting scope.
-    Child(LifecycleEvent),
+    SupervisorStopped {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+    },
+    /// The runtime installed a child membership for this supervisor incarnation.
+    ///
+    /// A pre-spawn snapshot can already project a statically configured child
+    /// as `Starting` before this transition is emitted. Consumers combining a
+    /// snapshot and stream should therefore apply `Added` as an idempotent
+    /// upsert keyed by `(child_id, lineage)`, not as an unchecked row
+    /// insertion.
+    Added {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+        /// Monotonic causal sequence for the emitting supervisor identity.
+        seq: u64,
+        /// Direct child membership that transitioned.
+        child_id: String,
+        /// Identity of this child membership within its stable supervisor scope.
+        lineage: u64,
+        /// Stable-scope cumulative restart count at emission.
+        total_restarts: u64,
+        /// Subject child's cumulative restart count at emission.
+        child_restart_count: u64,
+    },
+    /// A child became running. For readiness-gated children this is emitted
+    /// only after readiness is reported.
+    Started {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+        /// Monotonic causal sequence for the emitting supervisor identity.
+        seq: u64,
+        /// Direct child membership that transitioned.
+        child_id: String,
+        /// Identity of this child membership within its stable supervisor scope.
+        lineage: u64,
+        /// Stable-scope cumulative restart count at emission.
+        total_restarts: u64,
+        /// Subject child's cumulative restart count at emission.
+        child_restart_count: u64,
+        /// Generation that became running.
+        generation: u64,
+    },
+    /// A child generation exited.
+    Exited {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+        /// Monotonic causal sequence for the emitting supervisor identity.
+        seq: u64,
+        /// Direct child membership that transitioned.
+        child_id: String,
+        /// Identity of this child membership within its stable supervisor scope.
+        lineage: u64,
+        /// Stable-scope cumulative restart count at emission.
+        total_restarts: u64,
+        /// Subject child's cumulative restart count at emission.
+        child_restart_count: u64,
+        /// Generation that exited.
+        generation: u64,
+        /// Public classification of the exit.
+        reason: ExitStatusView,
+        /// Whether the supervisor stopped this generation rather than letting
+        /// it reach its own conclusion.
+        ///
+        /// A child cancelled by shutdown, removal, or a sibling-driven group
+        /// restart can still return `Ok(())` and so be classified as
+        /// [`ExitStatusView::Completed`]. Such an exit is not finished work,
+        /// and consumers deciding whether finite work is done — as
+        /// [`wait_completed`](crate::SupervisorHandle::wait_completed) does —
+        /// must exclude it. A child that failed or panicked on its own is not
+        /// cancelled.
+        cancelled: bool,
+    },
+    /// A child membership ended.
+    Removed {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
+        /// Monotonic causal sequence for the emitting supervisor identity.
+        seq: u64,
+        /// Direct child membership that transitioned.
+        child_id: String,
+        /// Identity of this child membership within its stable supervisor scope.
+        lineage: u64,
+        /// Stable-scope cumulative restart count at emission.
+        total_restarts: u64,
+        /// Subject child's cumulative restart count at emission.
+        child_restart_count: u64,
+    },
     /// A restart was scheduled after a backoff delay.
     RestartScheduled {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
         /// Child identifier.
         child_id: String,
         /// Identity of the child membership in the emitting scope.
@@ -182,65 +180,159 @@ pub enum RecursiveLifecycleEventKind {
     },
     /// The emitting scope exceeded its restart intensity and will stop.
     RestartIntensityExceeded {
+        /// Path from the watched scope to the emitting scope.
+        supervisor_path: Vec<LifecyclePathSegment>,
         /// Stable-scope cumulative restart count at emission.
         total_restarts: u64,
     },
-    /// Older tree transitions were discarded because this watch fell behind.
+    /// Older transitions were discarded because this watch fell behind.
     ///
-    /// A recursive watch owns one buffer for the whole watched tree. This
-    /// marker therefore invalidates edge-derived state for the whole tree;
-    /// resynchronize from the recursive [`SupervisorSnapshot`](crate::SupervisorSnapshot).
-    /// The marker event's `supervisor_path` and `newest_dropped` kind preserve
-    /// the complete envelope of the newest discarded transition. Consumers
-    /// can therefore recover its per-scope sequence and cumulative counters
-    /// when it was a child or restart event, even though the gap still
-    /// invalidates derived state for the whole tree.
+    /// A watch owns one buffer for its complete filtered stream. This marker
+    /// therefore invalidates edge-derived state for that stream; resynchronize
+    /// from [`SupervisorSnapshot`](crate::SupervisorSnapshot).
     Lagged {
-        /// Number of tree transitions discarded since the preceding delivered
+        /// Number of transitions discarded since the preceding delivered
         /// event.
         dropped: u64,
-        /// Kind of the newest discarded transition. Its supervisor path is
-        /// carried by the surrounding [`RecursiveLifecycleEvent`].
-        newest_dropped: Box<RecursiveLifecycleEventKind>,
     },
+}
+
+impl LifecycleEvent {
+    /// Returns the path from the watched scope to the emitting scope.
+    ///
+    /// A lag marker covers the watch's whole filtered stream and therefore
+    /// has no single emitting path.
+    pub fn supervisor_path(&self) -> Option<&[LifecyclePathSegment]> {
+        match self {
+            Self::SupervisorStarted { supervisor_path }
+            | Self::SupervisorStopping { supervisor_path }
+            | Self::SupervisorStopped { supervisor_path }
+            | Self::Added {
+                supervisor_path, ..
+            }
+            | Self::Started {
+                supervisor_path, ..
+            }
+            | Self::Exited {
+                supervisor_path, ..
+            }
+            | Self::Removed {
+                supervisor_path, ..
+            }
+            | Self::RestartScheduled {
+                supervisor_path, ..
+            }
+            | Self::RestartIntensityExceeded {
+                supervisor_path, ..
+            } => Some(supervisor_path),
+            Self::Lagged { .. } => None,
+        }
+    }
+
+    /// Returns the per-scope sequence of a child membership transition.
+    pub fn seq(&self) -> Option<u64> {
+        match self {
+            Self::Added { seq, .. }
+            | Self::Started { seq, .. }
+            | Self::Exited { seq, .. }
+            | Self::Removed { seq, .. } => Some(*seq),
+            _ => None,
+        }
+    }
+
+    /// Returns the child id for a child membership or scheduled-restart event.
+    pub fn child_id(&self) -> Option<&str> {
+        match self {
+            Self::Added { child_id, .. }
+            | Self::Started { child_id, .. }
+            | Self::Exited { child_id, .. }
+            | Self::Removed { child_id, .. }
+            | Self::RestartScheduled { child_id, .. } => Some(child_id),
+            _ => None,
+        }
+    }
+
+    /// Returns the child membership lineage when the event identifies one.
+    pub fn lineage(&self) -> Option<u64> {
+        match self {
+            Self::Added { lineage, .. }
+            | Self::Started { lineage, .. }
+            | Self::Exited { lineage, .. }
+            | Self::Removed { lineage, .. }
+            | Self::RestartScheduled { lineage, .. } => Some(*lineage),
+            _ => None,
+        }
+    }
+
+    /// Returns the emitting scope's cumulative restart count when present.
+    pub fn total_restarts(&self) -> Option<u64> {
+        match self {
+            Self::Added { total_restarts, .. }
+            | Self::Started { total_restarts, .. }
+            | Self::Exited { total_restarts, .. }
+            | Self::Removed { total_restarts, .. }
+            | Self::RestartScheduled { total_restarts, .. }
+            | Self::RestartIntensityExceeded { total_restarts, .. } => Some(*total_restarts),
+            _ => None,
+        }
+    }
+
+    /// Returns the subject child's cumulative restart count when present.
+    pub fn child_restart_count(&self) -> Option<u64> {
+        match self {
+            Self::Added {
+                child_restart_count,
+                ..
+            }
+            | Self::Started {
+                child_restart_count,
+                ..
+            }
+            | Self::Exited {
+                child_restart_count,
+                ..
+            }
+            | Self::Removed {
+                child_restart_count,
+                ..
+            }
+            | Self::RestartScheduled {
+                child_restart_count,
+                ..
+            } => Some(*child_restart_count),
+            _ => None,
+        }
+    }
 }
 
 /// Ordered, reliable lifecycle stream created by
 /// [`SupervisorHandle::watch_lifecycle`](crate::SupervisorHandle::watch_lifecycle).
 ///
+/// Both direct and recursive watches use this type. A direct watch includes
+/// child transitions and restart decisions emitted by the watched scope, with
+/// an empty supervisor path. Supervisor incarnation markers and descendant
+/// events are topology observations available only from a recursive watch.
 /// Each watch has its own bounded buffer. Sustained overflow drops the oldest
-/// transitions and replaces them with one accumulated
-/// [`LifecycleEventKind::Lagged`] marker; loss is never silent.
-pub struct LifecycleWatch {
-    queue: Arc<DirectLifecycleQueue>,
-}
-
-/// Ordered recursive lifecycle stream created by
-/// [`SupervisorHandle::watch_lifecycle_recursive`](crate::SupervisorHandle::watch_lifecycle_recursive).
-///
-/// Each watch has one bounded buffer for the entire watched tree. Events from
-/// every scope retain their per-scope [`LifecycleEvent::seq`] inside
-/// [`RecursiveLifecycleEventKind::Child`]. Sustained overflow replaces the
-/// oldest events with one tree-wide [`RecursiveLifecycleEventKind::Lagged`]
+/// transitions and replaces them with one accumulated [`LifecycleEvent::Lagged`]
 /// marker; loss is never silent.
-pub struct RecursiveLifecycleWatch {
-    queue: Arc<RecursiveLifecycleQueue>,
+pub struct LifecycleWatch {
+    queue: Arc<LifecycleEventQueue>,
     watcher_count: Option<Arc<AtomicUsize>>,
 }
 
-impl RecursiveLifecycleWatch {
-    fn new(queue: Arc<RecursiveLifecycleQueue>, watcher_count: Option<Arc<AtomicUsize>>) -> Self {
+impl LifecycleWatch {
+    fn new(queue: Arc<LifecycleEventQueue>, watcher_count: Option<Arc<AtomicUsize>>) -> Self {
         Self {
             queue,
             watcher_count,
         }
     }
 
-    /// Returns the next staged tree event.
+    /// Returns the next staged lifecycle event.
     ///
     /// Returns `None` after all staged events have been delivered and the
     /// watched stable supervisor identity can never run again.
-    pub async fn next(&mut self) -> Option<RecursiveLifecycleEvent> {
+    pub async fn next(&mut self) -> Option<LifecycleEvent> {
         loop {
             let notified = self.queue.waiter();
             if let Some(event) = self.queue.pop() {
@@ -258,10 +350,10 @@ impl RecursiveLifecycleWatch {
     ///
     /// The path identifies one exact supervisor incarnation. Returns `None`
     /// when the requested start can no longer be observed: that membership or
-    /// supervisor incarnation ended, the watched tree became terminal, or a
-    /// tree-wide [`RecursiveLifecycleEventKind::Lagged`] marker discarded a
-    /// prefix that may have contained it. Pass an empty path to wait in the
-    /// watched scope itself.
+    /// supervisor incarnation ended, the watched identity became terminal, or
+    /// a stream-wide [`LifecycleEvent::Lagged`] marker discarded a prefix that
+    /// may have contained it. Pass an empty path to wait in the watched scope
+    /// itself.
     pub async fn started_after(
         &mut self,
         supervisor_path: &[LifecyclePathSegment],
@@ -270,25 +362,27 @@ impl RecursiveLifecycleWatch {
     ) -> Option<u64> {
         loop {
             let event = self.next().await?;
-            if matches!(&event.kind, RecursiveLifecycleEventKind::Lagged { .. }) {
-                return None;
-            }
-            if event.supervisor_path != supervisor_path {
-                continue;
-            }
-            match event.kind {
-                RecursiveLifecycleEventKind::Child(event) if event.child_id == child_id => {
-                    match event.kind {
-                        LifecycleEventKind::Started { generation }
-                            if generation > after_generation =>
-                        {
-                            return Some(generation);
-                        }
-                        LifecycleEventKind::Removed => return None,
-                        _ => {}
-                    }
+            match event {
+                LifecycleEvent::Lagged { .. } => return None,
+                LifecycleEvent::Started {
+                    supervisor_path: event_path,
+                    child_id: event_child_id,
+                    generation,
+                    ..
+                } if event_path == supervisor_path
+                    && event_child_id == child_id
+                    && generation > after_generation =>
+                {
+                    return Some(generation);
                 }
-                RecursiveLifecycleEventKind::SupervisorStopped => return None,
+                LifecycleEvent::Removed {
+                    supervisor_path: event_path,
+                    child_id: event_child_id,
+                    ..
+                } if event_path == supervisor_path && event_child_id == child_id => return None,
+                LifecycleEvent::SupervisorStopped {
+                    supervisor_path: event_path,
+                } if event_path == supervisor_path => return None,
                 _ => {}
             }
         }
@@ -307,86 +401,11 @@ impl RecursiveLifecycleWatch {
     }
 }
 
-impl Drop for RecursiveLifecycleWatch {
+impl Drop for LifecycleWatch {
     fn drop(&mut self) {
         if let Some(watcher_count) = self.watcher_count.take() {
             let previous = watcher_count.fetch_sub(1, Ordering::AcqRel);
             debug_assert!(previous > 0, "recursive lifecycle watcher count underflow");
-        }
-    }
-}
-
-impl fmt::Debug for RecursiveLifecycleWatch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RecursiveLifecycleWatch")
-            .field("terminal", &self.queue.is_terminal())
-            .finish_non_exhaustive()
-    }
-}
-
-impl LifecycleWatch {
-    fn new(queue: Arc<DirectLifecycleQueue>) -> Self {
-        Self { queue }
-    }
-
-    /// Returns the next staged event.
-    ///
-    /// Returns `None` after all staged events have been delivered and the
-    /// watched stable supervisor identity can never run again.
-    pub async fn next(&mut self) -> Option<LifecycleEvent> {
-        loop {
-            let notified = self.queue.waiter();
-            if let Some(event) = self.queue.pop() {
-                return Some(event);
-            }
-            if self.queue.is_terminal() {
-                return None;
-            }
-            notified.await;
-        }
-    }
-
-    /// Waits for `child_id` to start at a generation above `after_generation`.
-    ///
-    /// Returns `None` once that start can no longer be observed on this watch:
-    /// the membership was removed, the watched supervisor identity became
-    /// terminal, or a [`LifecycleEventKind::Lagged`] marker discarded a prefix
-    /// that may have contained it. This is a convenience for one-shot restart
-    /// waits — it reports that waiting longer is futile, not which of those
-    /// happened. Callers that must distinguish them, or that need to resume
-    /// waiting after lag, should realign from
-    /// [`snapshot`](crate::SupervisorHandle::snapshot).
-    pub async fn started_after(&mut self, child_id: &str, after_generation: u64) -> Option<u64> {
-        loop {
-            let event = self.next().await?;
-            // Checked before the child filter: a marker's envelope describes
-            // the newest discarded transition, which need not belong to
-            // `child_id` even when the dropped prefix contained its `Started`.
-            if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
-                return None;
-            }
-            if event.child_id != child_id {
-                continue;
-            }
-            match event.kind {
-                LifecycleEventKind::Started { generation } if generation > after_generation => {
-                    return Some(generation);
-                }
-                LifecycleEventKind::Removed => return None,
-                _ => {}
-            }
-        }
-    }
-
-    /// Waits until the watched stable supervisor identity becomes terminal
-    /// without consuming staged events.
-    pub async fn closed(&self) {
-        loop {
-            let notified = self.queue.waiter();
-            if self.queue.is_terminal() {
-                return;
-            }
-            notified.await;
         }
     }
 }
@@ -404,66 +423,30 @@ pub(crate) struct LifecycleEventDraft {
     pub(crate) lineage: u64,
     pub(crate) total_restarts: u64,
     pub(crate) child_restart_count: u64,
-    pub(crate) kind: LifecycleEventKind,
+    pub(crate) kind: ChildLifecycleEvent,
 }
 
-type DirectLifecycleQueue = LifecycleQueue<LifecycleEvent>;
-type RecursiveLifecycleQueue = LifecycleQueue<RecursiveLifecycleEvent>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ChildLifecycleEvent {
+    Added,
+    Started {
+        generation: u64,
+    },
+    Exited {
+        generation: u64,
+        reason: ExitStatusView,
+        cancelled: bool,
+    },
+    Removed,
+}
 
-struct LifecycleQueue<T> {
-    events: Mutex<VecDeque<T>>,
+struct LifecycleEventQueue {
+    events: Mutex<VecDeque<LifecycleEvent>>,
     notify: Notify,
     terminal: AtomicBool,
 }
 
-trait Laggable: Sized {
-    fn is_lagged(&self) -> bool;
-    fn into_lagged(self, dropped: u64) -> Self;
-    fn accumulate_lagged(&mut self, newest_dropped: Self);
-}
-
-impl Laggable for LifecycleEvent {
-    fn is_lagged(&self) -> bool {
-        matches!(self.kind, LifecycleEventKind::Lagged { .. })
-    }
-
-    fn into_lagged(mut self, dropped: u64) -> Self {
-        self.kind = LifecycleEventKind::Lagged { dropped };
-        self
-    }
-
-    fn accumulate_lagged(&mut self, newest_dropped: Self) {
-        let LifecycleEventKind::Lagged { dropped } = &self.kind else {
-            return;
-        };
-        *self = newest_dropped.into_lagged(dropped.saturating_add(1));
-    }
-}
-
-impl Laggable for RecursiveLifecycleEvent {
-    fn is_lagged(&self) -> bool {
-        matches!(self.kind, RecursiveLifecycleEventKind::Lagged { .. })
-    }
-
-    fn into_lagged(self, dropped: u64) -> Self {
-        Self {
-            supervisor_path: self.supervisor_path,
-            kind: RecursiveLifecycleEventKind::Lagged {
-                dropped,
-                newest_dropped: Box::new(self.kind),
-            },
-        }
-    }
-
-    fn accumulate_lagged(&mut self, newest_dropped: Self) {
-        let RecursiveLifecycleEventKind::Lagged { dropped, .. } = &self.kind else {
-            return;
-        };
-        *self = newest_dropped.into_lagged(dropped.saturating_add(1));
-    }
-}
-
-impl<T: Laggable> LifecycleQueue<T> {
+impl LifecycleEventQueue {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             events: Mutex::new(VecDeque::new()),
@@ -472,11 +455,11 @@ impl<T: Laggable> LifecycleQueue<T> {
         })
     }
 
-    fn events(&self) -> MutexGuard<'_, VecDeque<T>> {
+    fn events(&self) -> MutexGuard<'_, VecDeque<LifecycleEvent>> {
         self.events.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn push(&self, event: T) {
+    fn push(&self, event: LifecycleEvent) {
         {
             let mut events = self.events();
             while events.len() >= LIFECYCLE_BUFFER_CAPACITY {
@@ -487,19 +470,19 @@ impl<T: Laggable> LifecycleQueue<T> {
         self.notify.notify_one();
     }
 
-    fn record_drop(events: &mut VecDeque<T>) {
-        if events.front().is_some_and(Laggable::is_lagged) {
-            if let Some(newest_dropped) = events.remove(1)
-                && let Some(marker) = events.front_mut()
+    fn record_drop(events: &mut VecDeque<LifecycleEvent>) {
+        if matches!(events.front(), Some(LifecycleEvent::Lagged { .. })) {
+            if events.remove(1).is_some()
+                && let Some(LifecycleEvent::Lagged { dropped }) = events.front_mut()
             {
-                marker.accumulate_lagged(newest_dropped);
+                *dropped = dropped.saturating_add(1);
             }
-        } else if let Some(dropped_event) = events.pop_front() {
-            events.push_front(dropped_event.into_lagged(1));
+        } else if events.pop_front().is_some() {
+            events.push_front(LifecycleEvent::Lagged { dropped: 1 });
         }
     }
 
-    fn pop(&self) -> Option<T> {
+    fn pop(&self) -> Option<LifecycleEvent> {
         self.events().pop_front()
     }
 
@@ -528,8 +511,8 @@ pub(crate) struct LifecycleHub {
 
 struct LifecycleHubState {
     terminal: bool,
-    watchers: Vec<Weak<DirectLifecycleQueue>>,
-    recursive_watchers: Vec<Weak<RecursiveLifecycleQueue>>,
+    watchers: Vec<Weak<LifecycleEventQueue>>,
+    recursive_watchers: Vec<Weak<LifecycleEventQueue>>,
 }
 
 impl LifecycleHub {
@@ -578,7 +561,7 @@ impl LifecycleHub {
     }
 
     pub(crate) fn watch(&self) -> LifecycleWatch {
-        let queue = LifecycleQueue::new();
+        let queue = LifecycleEventQueue::new();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.watchers.retain(|watcher| watcher.strong_count() > 0);
         if state.terminal {
@@ -586,11 +569,11 @@ impl LifecycleHub {
         } else {
             state.watchers.push(Arc::downgrade(&queue));
         }
-        LifecycleWatch::new(queue)
+        LifecycleWatch::new(queue, None)
     }
 
-    pub(crate) fn watch_recursive(&self) -> RecursiveLifecycleWatch {
-        let queue = RecursiveLifecycleQueue::new();
+    pub(crate) fn watch_recursive(&self) -> LifecycleWatch {
+        let queue = LifecycleEventQueue::new();
         self.recursive_watcher_count.fetch_add(1, Ordering::AcqRel);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
@@ -599,10 +582,10 @@ impl LifecycleHub {
         if state.terminal {
             self.recursive_watcher_count.fetch_sub(1, Ordering::AcqRel);
             queue.mark_terminal();
-            RecursiveLifecycleWatch::new(queue, None)
+            LifecycleWatch::new(queue, None)
         } else {
             state.recursive_watchers.push(Arc::downgrade(&queue));
-            RecursiveLifecycleWatch::new(queue, Some(Arc::clone(&self.recursive_watcher_count)))
+            LifecycleWatch::new(queue, Some(Arc::clone(&self.recursive_watcher_count)))
         }
     }
 
@@ -621,13 +604,54 @@ impl LifecycleHub {
             })
             .unwrap_or_else(|current| current)
             .saturating_add(1);
-        let event = LifecycleEvent {
-            seq,
-            child_id: draft.child_id,
-            lineage: draft.lineage,
-            total_restarts: draft.total_restarts,
-            child_restart_count: draft.child_restart_count,
-            kind: draft.kind,
+        let LifecycleEventDraft {
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            kind,
+        } = draft;
+        let event = match kind {
+            ChildLifecycleEvent::Added => LifecycleEvent::Added {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id,
+                lineage,
+                total_restarts,
+                child_restart_count,
+            },
+            ChildLifecycleEvent::Started { generation } => LifecycleEvent::Started {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id,
+                lineage,
+                total_restarts,
+                child_restart_count,
+                generation,
+            },
+            ChildLifecycleEvent::Exited {
+                generation,
+                reason,
+                cancelled,
+            } => LifecycleEvent::Exited {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id,
+                lineage,
+                total_restarts,
+                child_restart_count,
+                generation,
+                reason,
+                cancelled,
+            },
+            ChildLifecycleEvent::Removed => LifecycleEvent::Removed {
+                supervisor_path: Vec::new(),
+                seq,
+                child_id,
+                lineage,
+                total_restarts,
+                child_restart_count,
+            },
         };
         if state.terminal {
             return event;
@@ -643,7 +667,32 @@ impl LifecycleHub {
         event
     }
 
-    fn emit_recursive(&self, event: &RecursiveLifecycleEvent) {
+    fn emit_direct(&self, event: &LifecycleEvent) {
+        // `watch_lifecycle` remains a direct-child stream. The unified event
+        // type adds the two child-restart decisions that previously existed
+        // only on the recursive stream; supervisor incarnation markers remain
+        // recursive-only.
+        if !matches!(
+            event,
+            LifecycleEvent::RestartScheduled { .. }
+                | LifecycleEvent::RestartIntensityExceeded { .. }
+        ) {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.terminal {
+            return;
+        }
+        state.watchers.retain(|watcher| {
+            let Some(queue) = watcher.upgrade() else {
+                return false;
+            };
+            queue.push(event.clone());
+            true
+        });
+    }
+
+    fn emit_recursive(&self, event: &LifecycleEvent) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if state.terminal {
             return;
@@ -705,11 +754,16 @@ impl LifecycleTreeSink {
         }))
     }
 
-    pub(crate) fn emit(&self, kind: RecursiveLifecycleEventKind) {
-        if !self.has_recursive_watchers_in_chain() {
-            return;
-        }
-        self.forward(RecursiveLifecycleEvent::local(kind));
+    /// Emits an event produced outside the sequenced direct-child path.
+    pub(crate) fn emit(&self, event: LifecycleEvent) {
+        self.0.hub.emit_direct(&event);
+        self.forward_recursive(event);
+    }
+
+    /// Forwards a child event already staged for direct watchers by
+    /// [`LifecycleHub::emit`].
+    pub(crate) fn forward_child(&self, event: LifecycleEvent) {
+        self.forward_recursive(event);
     }
 
     fn has_recursive_watchers_in_chain(&self) -> bool {
@@ -721,17 +775,52 @@ impl LifecycleTreeSink {
                 .is_some_and(|(parent, _)| parent.has_recursive_watchers_in_chain())
     }
 
-    fn forward(&self, mut event: RecursiveLifecycleEvent) {
+    fn forward_recursive(&self, event: LifecycleEvent) {
+        if !self.has_recursive_watchers_in_chain() {
+            return;
+        }
+        self.forward(event);
+    }
+
+    fn forward(&self, mut event: LifecycleEvent) {
         if self.0.hub.has_recursive_watchers() {
             self.0.hub.emit_recursive(&event);
         }
         if let Some((parent, segment)) = &self.0.parent
             && parent.has_recursive_watchers_in_chain()
         {
-            event.supervisor_path.insert(0, segment.clone());
+            prepend_path(&mut event, segment.clone());
             parent.forward(event);
         }
     }
+}
+
+fn prepend_path(event: &mut LifecycleEvent, segment: LifecyclePathSegment) {
+    let supervisor_path = match event {
+        LifecycleEvent::SupervisorStarted { supervisor_path }
+        | LifecycleEvent::SupervisorStopping { supervisor_path }
+        | LifecycleEvent::SupervisorStopped { supervisor_path }
+        | LifecycleEvent::Added {
+            supervisor_path, ..
+        }
+        | LifecycleEvent::Started {
+            supervisor_path, ..
+        }
+        | LifecycleEvent::Exited {
+            supervisor_path, ..
+        }
+        | LifecycleEvent::Removed {
+            supervisor_path, ..
+        }
+        | LifecycleEvent::RestartScheduled {
+            supervisor_path, ..
+        }
+        | LifecycleEvent::RestartIntensityExceeded {
+            supervisor_path, ..
+        } => supervisor_path,
+        LifecycleEvent::Lagged { .. } => return,
+    };
+    supervisor_path.insert(0, segment);
 }
 
 #[cfg(test)]
@@ -739,8 +828,8 @@ mod tests {
     use std::sync::{Arc, PoisonError};
 
     use super::{
-        LifecycleEventDraft, LifecycleEventKind, LifecycleHub, LifecyclePathSegment,
-        LifecycleTreeSink, RecursiveLifecycleEventKind,
+        ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft, LifecycleHub,
+        LifecyclePathSegment, LifecycleTreeSink,
     };
 
     /// `emit` sweeps dropped watchers, but an identity that never emits would
@@ -785,7 +874,11 @@ mod tests {
         let parent_hub = LifecycleHub::new();
         let child_hub = LifecycleHub::new();
         let parent_sink = LifecycleTreeSink::root(Arc::clone(&parent_hub));
-        let path = LifecyclePathSegment::new("nested", 3, 5);
+        let path = LifecyclePathSegment {
+            id: "nested".to_owned(),
+            lineage: 3,
+            generation: 5,
+        };
         let child_sink =
             LifecycleTreeSink::nested(Arc::clone(&child_hub), parent_sink, path.clone());
         let parent_watch = parent_hub.watch_recursive();
@@ -797,25 +890,27 @@ mod tests {
                 lineage: 8,
                 total_restarts: 13,
                 child_restart_count: 2,
-                kind: LifecycleEventKind::Started { generation: 1 },
+                kind: ChildLifecycleEvent::Started { generation: 1 },
             },
             || panic!("terminal hubs must not publish another local snapshot"),
         );
-        child_sink.emit(RecursiveLifecycleEventKind::Child(event));
+        child_sink.forward_child(event);
 
         let forwarded = parent_watch
             .queue
             .pop()
             .expect("ancestor receives the trailing child event");
-        assert_eq!(forwarded.supervisor_path, vec![path]);
         assert!(matches!(
-            forwarded.kind,
-            RecursiveLifecycleEventKind::Child(event)
-                if event.child_id == "worker"
-                    && event.lineage == 8
-                    && event.total_restarts == 13
-                    && event.child_restart_count == 2
-                    && event.kind == LifecycleEventKind::Started { generation: 1 }
+            forwarded,
+            LifecycleEvent::Started {
+                supervisor_path,
+                child_id,
+                lineage: 8,
+                total_restarts: 13,
+                child_restart_count: 2,
+                generation: 1,
+                ..
+            } if supervisor_path == vec![path] && child_id == "worker"
         ));
     }
 }
