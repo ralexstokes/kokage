@@ -1,5 +1,5 @@
 //! The raw supervisor handle carries the same lifecycle waits, so `on_start`
-//! cannot reach it directly; `after_start()` is the way through.
+//! cannot reach it directly; `release()` is the way through.
 use tokio_otp::{Actor, ActorResult, MessageContext, StartContext, prelude::Continue};
 
 struct Leader;

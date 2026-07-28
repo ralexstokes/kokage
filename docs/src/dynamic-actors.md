@@ -242,19 +242,19 @@ drain needs this actor to keep consuming its own mailbox. Pipeline that removal
 with `ctx.offload`.
 
 Startup is different, and the type system says so. `StartContext::supervisor()`
-returns a `StartingScope` rather than a `RuntimeHandle`: an actor cannot report
+returns a `RestrictedScope` rather than a `RuntimeHandle`: an actor cannot report
 ready until `on_start` returns, so awaiting `wait_started()`, `wait()`, or
 `shutdown_and_wait()` there waits on the current actor's
 own readiness and deadlocks. Those methods are simply absent from
-`StartingScope`, as is `supervisor_handle()`, which would hand the same waits
+`RestrictedScope`, as is `supervisor_handle()`, which would hand the same waits
 back one call later. Insertion (`add_actor`, `add_subtree`) schedules startup
 rather than waiting for it, so it stays available, and `subtree()` returns
-another `StartingScope` so navigating to a nested scope does not widen the
-surface. When a wait must happen, call `StartingScope::after_start()` for the
-full handle and move it into the pipelined work:
+another `RestrictedScope` so navigating to a nested scope does not widen the
+surface. When a wait must happen, call `RestrictedScope::release()` for the full
+handle and move it into the pipelined work:
 
 ```rust,ignore
-let children = ctx.children().expect("leader has a child scope").after_start();
+let children = ctx.children().expect("leader has a child scope").release();
 let myself = ctx.myself();
 tokio::spawn(async move {
     children.wait_started().await?;
@@ -264,15 +264,15 @@ tokio::spawn(async move {
 ```
 
 Shutdown has the mirror-image restriction, so `StopContext::supervisor()` and
-`StopContext::children()` return a `StoppingScope`. A stopping child is still
-attached: cooperative removal waits for `on_stop` to return before detaching
-it. Awaiting `wait()`, `shutdown_and_wait()`, or `remove_child()` on its own id
-from `on_stop` therefore waits on a detach that
+`StopContext::children()` return the same `RestrictedScope`. A stopping child
+is still attached: cooperative removal waits for `on_stop` to return before
+detaching it. Awaiting `wait()`, `shutdown_and_wait()`, or
+`remove_child()` on its own id from `on_stop` therefore waits on a detach that
 is waiting on `on_stop`, and the cycle breaks only when the shutdown grace
 period expires and aborts the actor — a clean stop reported as a timed-out
 one. Fire-and-forget `shutdown()`, observation, and insertion remain. Teardown
 that really must observe another child belongs in work that outlives the
-incarnation: take `StoppingScope::after_stop()` and move it into a spawned
+incarnation: take `RestrictedScope::release()` and move it into a spawned
 future rather than awaiting it inline.
 
 For the common leader-and-workers shape, declare an actor-owned scope:
@@ -291,7 +291,7 @@ pre-spawn handle without changing the actor factory signature. The inner scope
 starts after the leader reports ready and stops before the leader is cancelled.
 Consequently, work launched during `on_start` must be pipelined: let `on_start`
 return, wait for `children.wait_started()` in the pipelined work, then add
-members — which is why `StartContext::children()` yields a `StartingScope`. A
+members — which is why `StartContext::children()` yields a `RestrictedScope`. A
 normal handler gets a full `RuntimeHandle` and can await
 `children.add_actor(...)` directly once the node is ready.
 

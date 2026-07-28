@@ -166,7 +166,7 @@ must recycle both.
 
 Inside the leader, `MessageContext::children()` returns the child scope's
 pre-spawn `RuntimeHandle`; `StartContext::children()` returns the narrower
-`StartingScope` and `StopContext::children()` the narrower `StoppingScope`.
+`RestrictedScope`, as does `StopContext::children()`.
 See [Scope handles inside actors] for the startup ordering and
 reconciliation rules of dynamic membership.
 

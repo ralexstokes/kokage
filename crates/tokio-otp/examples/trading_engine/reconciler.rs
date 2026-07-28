@@ -10,6 +10,7 @@ use crate::{
 };
 
 pub const STALE_AFTER: Duration = Duration::from_millis(250);
+const STALE_SWEEP_TIMER: TimerKey = TimerKey::new("stale-sweep");
 
 #[derive(Clone, Debug)]
 struct VenueState {
@@ -76,11 +77,12 @@ impl Reconciler {
             .min();
         if let Some(deadline) = earliest {
             ctx.set_timeout(
+                STALE_SWEEP_TIMER,
                 ReconcilerMsg::StaleSweep,
                 deadline.saturating_duration_since(now),
             );
         } else {
-            ctx.clear_timeout();
+            ctx.clear_timeout(STALE_SWEEP_TIMER);
         }
     }
 }
