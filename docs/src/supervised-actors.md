@@ -67,8 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     builder.define(press_slot, move || Press { runs: runs.clone(), run: 0 });
     let graph = builder.build()?;
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60)))
@@ -90,11 +89,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`SupervisionTree` is the composition front door. `Runtime::builder()` is thin
-sugar for the common flat case above: it turns every actor in one graph into a
-direct child of one ordered scope. Its `default_restart` and
-`default_shutdown` methods configure what those graph actors inherit, and
-`into_tree()` exposes its `ReservedSupervisionTree` declaration.
+`SupervisionTree` is the composition front door. `SupervisionTree::graph`
+handles the common flat case above by turning every actor in one graph into a
+direct child of one ordered scope. `Runtime::builder()` remains thin sugar for
+that same shape; its `into_tree()` method exposes the pre-reserved declaration
+when a root handle is needed before build.
 
 For nested scopes, build each graph independently so typed refs can cross graph
 boundaries, then compose them directly as a tree:

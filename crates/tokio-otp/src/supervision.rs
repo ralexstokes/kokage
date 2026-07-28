@@ -440,8 +440,7 @@ impl SupervisionTree {
 
     /// Appends a named nested ordered or dynamic scope.
     #[must_use]
-    pub fn subtree(mut self, id: impl Into<String>, tree: impl Into<SupervisionTree>) -> Self {
-        let mut tree = tree.into();
+    pub fn subtree(mut self, id: impl Into<String>, mut tree: SupervisionTree) -> Self {
         let Some(nested_scope) = tree.scope_mut() else {
             if let Some(scope) = self.scope_mut() {
                 scope
@@ -476,13 +475,13 @@ impl SupervisionTree {
         self,
         id: impl Into<String>,
         actor: impl Into<ActorSpec>,
-        children: impl Into<SupervisionTree>,
+        children: SupervisionTree,
         strategy: Strategy,
     ) -> Self {
         self.child(Self::ActorWithScope {
             id: id.into(),
             actor: actor.into(),
-            children: Box::new(children.into()),
+            children: Box::new(children),
             strategy,
         })
     }
@@ -982,7 +981,11 @@ impl ReservedSupervisionTree {
             mut reservations,
         } = self;
         let (supervisor, actors) = tree.lower_scope(&mut reservations)?;
-        debug_assert!(reservations.is_empty());
+        if !reservations.is_empty() {
+            return Err(SupervisorBuildError::InvalidConfig(
+                "a reserved scope identity is not attached to its declaration",
+            ));
+        }
         Ok(Runtime::with_actor_tree(supervisor, actors))
     }
 

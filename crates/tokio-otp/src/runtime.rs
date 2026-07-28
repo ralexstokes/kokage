@@ -576,8 +576,9 @@ impl RuntimeHandle {
     /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) for a
     /// plain declaration; [`RuntimeBuilder`](crate::RuntimeBuilder) and
     /// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) convert into
-    /// that form directly. This preserves any pre-spawn root or nested handles
-    /// through insertion.
+    /// that form directly. Reservation is explicit because it can fail, and
+    /// because accepting a fresh plain declaration here could not preserve any
+    /// pre-spawn root or nested handles through insertion.
     ///
     /// If the subtree itself restarts, its statically declared graph actors
     /// is recreated, while children added later through the returned handle

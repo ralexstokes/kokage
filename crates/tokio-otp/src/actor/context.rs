@@ -1413,6 +1413,11 @@ impl RestrictedScope {
 
     /// Inserts a subtree into this scope.
     ///
+    /// The subtree must already be reserved because reservation is fallible
+    /// and carries any handles taken before insertion. Call
+    /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) explicitly
+    /// for a plain declaration.
+    ///
     /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
     /// See [`RuntimeHandle::add_subtree`].
     pub async fn add_subtree(
