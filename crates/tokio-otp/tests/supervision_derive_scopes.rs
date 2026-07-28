@@ -258,7 +258,8 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
     builder.build().expect("the declared graph still builds");
 
     let mut foreign = GraphBuilder::new();
-    foreign.actor("unrelated", || Worker);
+    let (actor_slot, _) = foreign.slot("unrelated", tokio_otp::ActorOptions::new());
+    foreign.define(actor_slot, || Worker);
     let foreign = foreign.build().expect("foreign graph builds");
 
     let tree = <Flat as Supervision>::node(&foreign, scopes, "flat", "");

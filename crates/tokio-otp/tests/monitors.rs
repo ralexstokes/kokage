@@ -5,9 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
-    Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent, RawActor, RestartPolicy,
-    RunnableActor, Runtime, prelude::Continue,
+    ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, CancellationHandle,
+    DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent,
+    RawActor, RestartPolicy, RunnableActor, Runtime, prelude::Continue,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -92,7 +92,8 @@ where
     F: ActorFactory,
 {
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor(label, factory);
+    let (slot, actor_ref) = builder.slot(label, ActorOptions::new());
+    builder.define(slot, factory);
     let graph = builder.build().expect("test graph builds");
     let actor = graph
         .actor(label)

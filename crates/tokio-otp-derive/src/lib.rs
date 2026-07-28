@@ -40,7 +40,8 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// # }
 ///
 /// let mut graph = GraphBuilder::new();
-/// graph.actor("worker", WorkerFactory { client: Client });
+/// let (worker_slot, _worker_ref) = graph.slot("worker", tokio_otp::ActorOptions::new());
+/// graph.define(worker_slot, WorkerFactory { client: Client });
 /// ```
 ///
 /// The generated factory and its configuration fields inherit the actor's
@@ -366,7 +367,7 @@ fn parse_factory_attributes(
 /// # Per-actor options
 ///
 /// Add `#[supervision(options = expression)]` to a field to pass an
-/// `ActorOptions` expression to `GraphBuilder::slot_with_options`. Fields
+/// `ActorOptions` expression to `GraphBuilder::slot`. Fields
 /// without this attribute continue to use the default options:
 ///
 /// ```
@@ -806,7 +807,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 factory_bounds.push(quote! { #param: ::tokio_otp::ActorFactory<Actor = #ty> });
                 bound_idents.push(ident);
                 open_stmts.push(quote_spanned! {ty.span()=>
-                    let (#slot_ident, #ident) = builder.slot_with_options::
+                    let (#slot_ident, #ident) = builder.slot::
                         <<#ty as ::tokio_otp::RawActor>::Msg>(
                             &::tokio_otp::qualified_label(prefix, #name),
                             #options,

@@ -207,7 +207,8 @@ let sessions_builder = Runtime::dynamic();
 let sessions = sessions_builder.handle();
 
 let mut graph = GraphBuilder::new();
-graph.actor("router", move || Router::new(sessions.clone()));
+let (actor_slot, _) = graph.slot("router", tokio_otp::ActorOptions::new());
+graph.define(actor_slot, move || Router::new(sessions.clone()));
 
 let app = Runtime::builder()
     // Subtrees precede graph actors, so `sessions` is ready before Router::on_start.

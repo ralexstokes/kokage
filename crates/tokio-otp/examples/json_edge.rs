@@ -33,7 +33,8 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let printer = graph.add(|| Printer);
+    let (printer_slot, printer) = graph.slot("Printer", tokio_otp::ActorOptions::new());
+    graph.define(printer_slot, || Printer);
     let handle = Runtime::builder().graph(graph.build()?).build()?.spawn();
 
     // A socket or file framing layer can supply the same byte slices.

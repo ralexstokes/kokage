@@ -62,7 +62,8 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut graph = GraphBuilder::new();
-    let directory = graph.actor("directory", || Directory::<String> {
+    let (directory_slot, directory) = graph.slot("directory", tokio_otp::ActorOptions::new());
+    graph.define(directory_slot, || Directory::<String> {
         entries: HashMap::new(),
     });
     let handle = Runtime::builder()

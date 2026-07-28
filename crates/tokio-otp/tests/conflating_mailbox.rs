@@ -52,18 +52,16 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor_with_options(
-        "ticks",
-        {
-            let release = release.clone();
-            move || GatedCollector {
-                started: started_tx.clone(),
-                release: release.clone(),
-                received: received_tx.clone(),
-            }
-        },
-        ActorOptions::new().mailbox(MailboxMode::Conflate),
-    );
+    let (actor_ref_slot, actor_ref) =
+        builder.slot("ticks", ActorOptions::new().mailbox(MailboxMode::Conflate));
+    builder.define(actor_ref_slot, {
+        let release = release.clone();
+        move || GatedCollector {
+            started: started_tx.clone(),
+            release: release.clone(),
+            received: received_tx.clone(),
+        }
+    });
     let graph = builder.build().expect("valid graph");
     let actor = graph.actors()[0].clone();
     let stop = CancellationToken::new();
@@ -114,18 +112,16 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
     let (received_tx, _received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor_with_options(
-        "ticks",
-        {
-            let release = release.clone();
-            move || GatedCollector {
-                started: started_tx.clone(),
-                release: release.clone(),
-                received: received_tx.clone(),
-            }
-        },
-        ActorOptions::new().mailbox(MailboxMode::Conflate),
-    );
+    let (actor_ref_slot, actor_ref) =
+        builder.slot("ticks", ActorOptions::new().mailbox(MailboxMode::Conflate));
+    builder.define(actor_ref_slot, {
+        let release = release.clone();
+        move || GatedCollector {
+            started: started_tx.clone(),
+            release: release.clone(),
+            received: received_tx.clone(),
+        }
+    });
     let graph = builder.build().expect("valid graph");
     let actor = graph.actors()[0].clone();
     let stop = CancellationToken::new();
@@ -182,20 +178,20 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor_with_options(
+    let (actor_ref_slot, actor_ref) = builder.slot(
         "snapshots",
-        {
-            let release = release.clone();
-            move || GatedCollector {
-                started: started_tx.clone(),
-                release: release.clone(),
-                received: received_tx.clone(),
-            }
-        },
         ActorOptions::new()
             .mailbox(MailboxMode::Conflate)
             .message_size(),
     );
+    builder.define(actor_ref_slot, {
+        let release = release.clone();
+        move || GatedCollector {
+            started: started_tx.clone(),
+            release: release.clone(),
+            received: received_tx.clone(),
+        }
+    });
     let graph = builder.build().expect("valid graph");
     let actor = graph.actors()[0].clone();
     let stop = CancellationToken::new();
@@ -247,7 +243,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
     builder.mailbox_capacity(2);
-    let (slot, actor_ref) = builder.slot_with_options(
+    let (slot, actor_ref) = builder.slot(
         "market-data",
         ActorOptions::new().mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol)),
     );
@@ -339,18 +335,18 @@ async fn replaced_call_reports_reply_dropped() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor_with_options(
+    let (actor_ref_slot, actor_ref) = builder.slot(
         "requests",
-        {
-            let release = release.clone();
-            move || GatedCollector {
-                started: started_tx.clone(),
-                release: release.clone(),
-                received: received_tx.clone(),
-            }
-        },
         ActorOptions::new().mailbox(MailboxMode::Conflate),
     );
+    builder.define(actor_ref_slot, {
+        let release = release.clone();
+        move || GatedCollector {
+            started: started_tx.clone(),
+            release: release.clone(),
+            received: received_tx.clone(),
+        }
+    });
     let graph = builder.build().expect("valid graph");
     let actor = graph.actors()[0].clone();
     let stop = CancellationToken::new();
@@ -437,18 +433,16 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor_with_options(
-        "drain",
-        {
-            let release = release.clone();
-            move || GatedDrainActor {
-                started: started_tx.clone(),
-                release: release.clone(),
-                received: received_tx.clone(),
-            }
-        },
-        ActorOptions::new().mailbox(MailboxMode::Conflate),
-    );
+    let (actor_ref_slot, actor_ref) =
+        builder.slot("drain", ActorOptions::new().mailbox(MailboxMode::Conflate));
+    builder.define(actor_ref_slot, {
+        let release = release.clone();
+        move || GatedDrainActor {
+            started: started_tx.clone(),
+            release: release.clone(),
+            received: received_tx.clone(),
+        }
+    });
     let graph = builder.build().expect("valid graph");
     let actor = graph.actors()[0].clone();
     let stop = CancellationToken::new();
@@ -484,16 +478,8 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
     let release = Arc::new(Notify::new());
     let panic_once = Arc::new(AtomicBool::new(true));
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor_with_options(
+    let (actor_ref_slot, actor_ref) = builder.slot(
         "poison-recovery",
-        {
-            let release = release.clone();
-            move || GatedCollector {
-                started: started_tx.clone(),
-                release: release.clone(),
-                received: received_tx.clone(),
-            }
-        },
         ActorOptions::new().mailbox(MailboxMode::conflate_by_key({
             let panic_once = Arc::clone(&panic_once);
             move |value: &u64| {
@@ -505,6 +491,14 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
             }
         })),
     );
+    builder.define(actor_ref_slot, {
+        let release = release.clone();
+        move || GatedCollector {
+            started: started_tx.clone(),
+            release: release.clone(),
+            received: received_tx.clone(),
+        }
+    });
     let graph = builder.build().expect("valid graph");
     let actor = graph.actors()[0].clone();
     let stop = CancellationToken::new();

@@ -58,9 +58,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn run() -> Result<(), Box<dyn Error>> {
     let (delivered_tx, mut delivered_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
+    let (worker_slot, worker_ref) =
+        builder.slot::<String>("worker", tokio_otp::ActorOptions::new());
     let frontend_worker = worker_ref.clone();
-    let orders = builder.actor("front-desk", move || Frontend {
+    let (orders_slot, orders) = builder.slot("front-desk", tokio_otp::ActorOptions::new());
+    builder.define(orders_slot, move || Frontend {
         worker: frontend_worker.clone(),
     });
     let worker_runs = Arc::new(AtomicUsize::new(0));

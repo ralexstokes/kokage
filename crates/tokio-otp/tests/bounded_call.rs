@@ -74,7 +74,8 @@ impl RawActor for ReplyImmediately {
 #[tokio::test(start_paused = true)]
 async fn timeout_before_mailbox_binding_drops_the_request() {
     let mut builder = GraphBuilder::new();
-    let rpc = builder.actor("rpc", || ReplyImmediately);
+    let (rpc_slot, rpc) = builder.slot("rpc", tokio_otp::ActorOptions::new());
+    builder.define(rpc_slot, || ReplyImmediately);
     let graph = builder.build().expect("valid graph");
 
     assert!(matches!(
@@ -134,7 +135,8 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
     builder.mailbox_capacity(1);
-    let rpc = builder.actor("rpc", {
+    let (rpc_slot, rpc) = builder.slot("rpc", tokio_otp::ActorOptions::new());
+    builder.define(rpc_slot, {
         let release = release.clone();
         move || GatedMailbox {
             started: started_tx.clone(),
@@ -199,7 +201,8 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
     let release = Arc::new(Notify::new());
     let effects = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let rpc = builder.actor("rpc", {
+    let (rpc_slot, rpc) = builder.slot("rpc", tokio_otp::ActorOptions::new());
+    builder.define(rpc_slot, {
         let release = release.clone();
         let effects = effects.clone();
         move || DelayedReply {
@@ -256,7 +259,8 @@ async fn accepted_unread_request_lost_with_incarnation_reports_reply_dropped() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let exit = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let rpc = builder.actor("rpc", {
+    let (rpc_slot, rpc) = builder.slot("rpc", tokio_otp::ActorOptions::new());
+    builder.define(rpc_slot, {
         let exit = exit.clone();
         move || ExitWithoutReceiving {
             started: started_tx.clone(),

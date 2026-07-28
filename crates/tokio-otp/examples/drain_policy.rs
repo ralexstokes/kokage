@@ -54,7 +54,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let mut builder = GraphBuilder::new();
     let actor_release = release.clone();
-    let worker = builder.add(move || Worker {
+    let (worker_slot, worker) = builder.slot("Worker", tokio_otp::ActorOptions::new());
+    builder.define(worker_slot, move || Worker {
         started: started_tx.clone(),
         release: actor_release.clone(),
         handled: handled_tx.clone(),

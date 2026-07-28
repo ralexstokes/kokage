@@ -55,8 +55,9 @@ impl Actor for Press {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = GraphBuilder::new();
-    let (press_slot, press_ref) = builder.slot::<String>("press");
-    let orders = builder.actor("front-desk", {
+    let (press_slot, press_ref) = builder.slot::<String>("press", tokio_otp::ActorOptions::new());
+    let (orders_slot, orders) = builder.slot("front-desk", tokio_otp::ActorOptions::new());
+    builder.define(orders_slot, {
         let press_ref = press_ref.clone();
         move || FrontDesk { press: press_ref.clone() }
     });

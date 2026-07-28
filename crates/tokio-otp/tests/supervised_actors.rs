@@ -79,8 +79,11 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     let (failed_tx, failed_rx) = oneshot::channel();
 
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
-    let frontend_ref = builder.actor("frontend", {
+    let (worker_slot, worker_ref) =
+        builder.slot::<String>("worker", tokio_otp::ActorOptions::new());
+    let (frontend_ref_slot, frontend_ref) =
+        builder.slot("frontend", tokio_otp::ActorOptions::new());
+    builder.define(frontend_ref_slot, {
         let worker_ref = worker_ref.clone();
         let frontend_starts = frontend_starts.clone();
         move || Frontend {
@@ -174,7 +177,8 @@ async fn send_waits_during_permanent_restart_window() {
     let first_exited = oneshot_slot(first_exited_tx);
 
     let mut builder = GraphBuilder::new();
-    let worker_ref = builder.actor("worker", move || CleanThenReceive {
+    let (worker_ref_slot, worker_ref) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    builder.define(worker_ref_slot, move || CleanThenReceive {
         runs: runs.clone(),
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
@@ -246,7 +250,8 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     let exited = oneshot_slot(exited_tx);
 
     let mut builder = GraphBuilder::new();
-    let worker_ref = builder.actor("worker", move || NotifyCleanExit {
+    let (worker_ref_slot, worker_ref) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    builder.define(worker_ref_slot, move || NotifyCleanExit {
         exited: exited.clone(),
     });
     let graph = builder.build().expect("valid graph");
@@ -334,7 +339,8 @@ async fn call_succeeds_across_restart_window() {
     let failed = oneshot_slot(failed_tx);
 
     let mut builder = GraphBuilder::new();
-    let rpc_ref = builder.actor("rpc", move || RestartingRpc {
+    let (rpc_ref_slot, rpc_ref) = builder.slot("rpc", tokio_otp::ActorOptions::new());
+    builder.define(rpc_ref_slot, move || RestartingRpc {
         runs: runs.clone(),
         failed: failed.clone(),
     });

@@ -21,8 +21,10 @@ impl Actor for Worker {
 
 fn two_actor_graph() -> (Graph, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
     let mut builder = GraphBuilder::new();
-    let ingest = builder.actor("ingest", || Worker);
-    let parse = builder.actor("parse", || Worker);
+    let (ingest_slot, ingest) = builder.slot("ingest", tokio_otp::ActorOptions::new());
+    builder.define(ingest_slot, || Worker);
+    let (parse_slot, parse) = builder.slot("parse", tokio_otp::ActorOptions::new());
+    builder.define(parse_slot, || Worker);
     (builder.build().expect("graph builds"), ingest, parse)
 }
 

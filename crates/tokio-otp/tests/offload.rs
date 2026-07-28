@@ -93,7 +93,8 @@ impl Actor for Outcomes {
 async fn offload_and_offload_or_deliver_total_and_fallback_outcomes() {
     let (observed, mut outcomes) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    graph.add(move || Outcomes {
+    let (actor_slot, _) = graph.slot("Outcomes", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || Outcomes {
         observed: observed.clone(),
     });
     let runtime = Runtime::builder()
@@ -226,7 +227,8 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     let _release_on_drop = ReleaseOnDrop(release_drop.clone());
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("StaleActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let constructed = constructed.clone();
         let drop_started = drop_started.clone();
         let drop_finished = drop_finished.clone();
@@ -313,7 +315,8 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
     let handle_slot = Arc::new(Mutex::new(None));
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("AbortActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let handle_slot = handle_slot.clone();
         let done = done.clone();
         move || AbortActor {
@@ -386,7 +389,8 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     let (observed, mut observed_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("ReadyAbortActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let release = release.clone();
         move || ReadyAbortActor {
             handle: handle_tx.clone(),
@@ -467,7 +471,8 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
     let (handle_tx, mut handle_rx) = mpsc::unbounded_channel();
     let shutdown_seen = Arc::new(Notify::new());
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("DrainAbortActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let shutdown_seen = shutdown_seen.clone();
         move || DrainAbortActor {
             handle: handle_tx.clone(),
@@ -551,7 +556,8 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("ShutdownActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let release = release.clone();
         let entered = entered.clone();
         move || ShutdownActor {
@@ -650,7 +656,8 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("BackpressureActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let handler_release = handler_release.clone();
         let offload_release = offload_release.clone();
         let offload_registered = offload_registered.clone();
@@ -695,21 +702,21 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let actor = graph.actor_with_options(
+    let (actor_slot, actor) = graph.slot(
         "conflating-offload",
-        {
-            let handler_release = handler_release.clone();
-            let offload_release = offload_release.clone();
-            let offload_registered = offload_registered.clone();
-            move || BackpressureActor {
-                handler_release: handler_release.clone(),
-                offload_release: offload_release.clone(),
-                offload_registered: offload_registered.clone(),
-                observed: observed.clone(),
-            }
-        },
         ActorOptions::new().mailbox(MailboxMode::Conflate),
     );
+    graph.define(actor_slot, {
+        let handler_release = handler_release.clone();
+        let offload_release = offload_release.clone();
+        let offload_registered = offload_registered.clone();
+        move || BackpressureActor {
+            handler_release: handler_release.clone(),
+            offload_release: offload_release.clone(),
+            offload_registered: offload_registered.clone(),
+            observed: observed.clone(),
+        }
+    });
     let runtime = Runtime::builder()
         .graph(graph.build().unwrap())
         .build()
@@ -785,7 +792,8 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
     let registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("DeadlineDrainActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let registered = registered.clone();
         move || DeadlineDrainActor {
             registered: registered.clone(),
@@ -833,7 +841,8 @@ impl RawActor for RawCompletion {
 async fn raw_actor_recv_reaps_offload_completions() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    graph.add(move || RawCompletion {
+    let (actor_slot, _) = graph.slot("RawCompletion", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || RawCompletion {
         observed: observed.clone(),
     });
     let runtime = Runtime::builder()
@@ -875,7 +884,8 @@ impl Actor for PanicActor {
 async fn offload_panic_fails_the_actor_and_is_supervised() {
     let constructed = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("PanicActor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let constructed = constructed.clone();
         move || {
             constructed.fetch_add(1, Ordering::Relaxed);

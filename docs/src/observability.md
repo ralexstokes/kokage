@@ -217,16 +217,14 @@ impl MessageSize for Upload {
     }
 }
 
-let uploads = graph.actor_with_options(
-    "uploads",
-    UploadActor::new,
-    ActorOptions::new().message_size(),
-);
+let (uploads_slot, uploads) =
+    graph.slot("uploads", ActorOptions::new().message_size());
+graph.define(uploads_slot, UploadActor::new);
 ```
 
-The same `ActorOptions` value works with `GraphBuilder::slot_with_options` and
-`GraphBuilder::add_with_options`. Dynamic registration exposes the same
-settings directly on `DynamicActorOptions`, so mailbox and size settings can be combined with
+The same `ActorOptions` value works with `GraphBuilder::slot`. Dynamic
+registration exposes the same settings directly on `DynamicActorOptions`, so
+mailbox and size settings can be combined with
 `DynamicActorOptions::new().mailbox(MailboxMode::Conflate).message_size()`
 and passed to `RuntimeHandle::add_actor`.
 
