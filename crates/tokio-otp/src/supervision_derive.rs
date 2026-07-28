@@ -7,7 +7,7 @@
 
 use tokio_supervisor::SupervisorBuildError;
 
-use crate::{Graph, GraphBuildError, GraphBuilder, SupervisionTree};
+use crate::{Graph, GraphBuildError, GraphBuilder, ReservedSupervisionTree};
 
 /// A derived group of actors together with the supervision scope running them.
 ///
@@ -44,10 +44,11 @@ pub trait Supervision: Sized {
     /// the same value passed to it, so that the node resolves the actors it was
     /// built with. A node handed some other graph cannot find them; it records
     /// the mismatch on the scope rather than failing here, so
-    /// [`SupervisionTree::build`] and [`outline`](SupervisionTree::outline)
-    /// report it as
+    /// [`ReservedSupervisionTree::build`] and
+    /// [`outline`](ReservedSupervisionTree::outline) report it as
     /// [`InvalidConfig`](tokio_supervisor::SupervisorBuildError::InvalidConfig).
-    fn node(graph: &Graph, scopes: Self::Scopes, id: &str, prefix: &str) -> SupervisionTree;
+    fn node(graph: &Graph, scopes: Self::Scopes, id: &str, prefix: &str)
+    -> ReservedSupervisionTree;
 }
 
 /// A bundle of factories filling every slot a supervision struct declares.
@@ -66,7 +67,8 @@ pub trait SupervisionFactories<T: Supervision> {
 /// Marker field type declaring an empty dynamic scope in a derived struct.
 ///
 /// A field of this type carries no actor and is never constructed; it declares
-/// a [`SupervisionTree::dynamic`] scope whose membership is written at runtime.
+/// a [`SupervisionTree::dynamic`](crate::SupervisionTree::dynamic) scope whose
+/// membership is written at runtime.
 /// The field must be marked `#[supervision(dynamic)]`, and its wiring entry is a
 /// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) rather than an actor
 /// factory — which is what makes
@@ -96,7 +98,7 @@ pub trait SupervisionFactories<T: Supervision> {
 /// }
 ///
 /// # fn main() -> Result<(), SupervisionBuildError> {
-/// let sessions = Runtime::dynamic().restart(RestartPolicy::Never);
+/// let sessions = Runtime::dynamic().default_restart(RestartPolicy::Never);
 /// // Reserved before wiring, so the manager can hold it across restarts.
 /// let mount = sessions.handle();
 ///
@@ -111,8 +113,9 @@ pub trait SupervisionFactories<T: Supervision> {
 /// # }
 /// ```
 ///
-/// Policy for the scope comes from the builder — `Runtime::dynamic().restart(..)`
-/// and friends — rather than from attributes on the field.
+/// Policy for the scope comes from the builder —
+/// `Runtime::dynamic().default_restart(..)` and friends — rather than from
+/// attributes on the field.
 pub enum DynamicScope {}
 
 /// Errors returned when building a runtime from a derived supervision struct.

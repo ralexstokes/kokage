@@ -186,7 +186,7 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
     graph.define(actor_slot, || FailsOnStart);
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::Never)
+        .default_restart(RestartPolicy::Never)
         .build()
         .unwrap()
         .spawn();
@@ -402,7 +402,7 @@ async fn is_draining_is_true_after_a_self_stop_that_never_shuts_the_graph_down()
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::Never)
+        .default_restart(RestartPolicy::Never)
         .build()
         .unwrap()
         .spawn();
@@ -487,7 +487,7 @@ async fn stop_from_on_start_drops_mailbox_and_continuations_then_runs_on_stop() 
     });
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::Never)
+        .default_restart(RestartPolicy::Never)
         .build()
         .unwrap()
         .spawn();
@@ -531,7 +531,7 @@ async fn stop_from_on_start_with_drain_handles_the_queued_mailbox_only() {
     });
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::Never)
+        .default_restart(RestartPolicy::Never)
         .build()
         .unwrap()
         .spawn();
@@ -573,7 +573,7 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
     graph.define(actor_slot, || PromptRaw);
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::Never)
+        .default_restart(RestartPolicy::Never)
         .build()
         .unwrap()
         .spawn();

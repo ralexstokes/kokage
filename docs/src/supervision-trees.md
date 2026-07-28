@@ -1,27 +1,32 @@
 # Inspectable supervision trees
 
-`Runtime::builder()` is concise when every actor in a graph belongs at one
-scope level. The builder is still describing a tree, though: nested scopes
-live in `subtree` calls, actor policy lives in overrides, and child order is
-spread across method calls. [`RuntimeBuilder::into_tree`] exposes the same
-configuration as a [`SupervisionTree`] before anything runs.
+[`SupervisionTree`] is the primary composition API. It is the recursive model
+for ordered scopes, dynamic scopes, actors, arbitrary supervised tasks, and
+actor-owned scopes. Build a tree directly whenever the application has more
+than one scope or needs per-child policy.
+
+`RuntimeBuilder` and `DynamicRuntimeBuilder` are intentionally thin
+conveniences over that model. `Runtime::builder()` places one graph in one
+ordered scope; `Runtime::dynamic()` creates one empty dynamic scope. Their
+policy methods use the same `default_restart` and `default_shutdown`
+vocabulary as the tree, and `into_tree()` exposes the reserved declaration
+they own.
 
 ```rust,ignore
 let tree = Runtime::builder()
     .graph(graph)
     .strategy(Strategy::RestForOne)
-    .restart(RestartPolicy::OnFailure)
-    .subtree("storage", storage_runtime)
+    .default_restart(RestartPolicy::OnFailure)
     .into_tree();
 
 println!("{:#?}", tree.outline()?);
 let runtime = tree.build()?;
 ```
 
-`RuntimeBuilder::build()` is itself `into_tree().build()`, so inspection and
-execution cannot drift onto separate lowering paths. The same conversion is
-available on `DynamicRuntimeBuilder`, where it produces an empty dynamic
-scope.
+`RuntimeBuilder::build()` is exactly the convenience's tree build path, so
+inspection and execution cannot drift. The builders do not provide separate
+APIs for subtrees, task children, or per-actor policy: use `SupervisionTree`
+and `ActorSpec` for those shapes.
 
 ## The recursive shape
 
@@ -34,17 +39,20 @@ A tree has two scope nodes and three child-node shapes:
 - `SupervisionTree::Actor` carries an actor declaration and its policy
   overrides.
 - `SupervisionTree::Child` carries an arbitrary non-actor `ChildSpec`.
-- `SupervisionTree::ActorWithScope` carries an actor leader and the scope it
-  owns.
+- `SupervisionTree::ActorWithScope` carries an actor leader, the scope it owns,
+  and their restart strategy.
 
-The root passed to `build` must be a scope. The fluent `actor`, `task`,
-`subtree`, and `actor_with_scope` methods append child nodes beneath it.
+The root passed to `build` must be a scope. Use the constructors and fluent
+`actor`, `task`, `subtree`, and `actor_with_scope` methods to assemble it.
+`SupervisionScope`, the payload behind the scope variants, is deliberately
+opaque; applications do not construct or mutate its fields. This keeps scope
+invariants and reservation identity inside the composition API.
 
-Child order is behavior for an ordered scope. It determines
-readiness-gated startup order, reverse-order shutdown, and the suffix restarted
-by `Strategy::RestForOne`. A dynamic scope has no declared children; attempts
-to give it a group strategy or append children are rejected when the tree is
-built. Its outline is still useful because it records the policies future
+Child order is behavior for an ordered scope. It determines readiness-gated
+startup order, reverse-order shutdown, and the suffix restarted by
+`Strategy::RestForOne`. A dynamic scope has no declared children; attempts to
+give it a group strategy or append children are rejected when the tree is
+built. Its outline is still useful because it records the defaults future
 members inherit.
 
 ## Place actors instead of whole graphs
@@ -54,7 +62,7 @@ actors to be siblings. A hand-built tree can place individual runnable actors
 at different levels:
 
 ```rust,no_run
-use tokio_otp::{ActorSpec, SupervisionTree, prelude::*};
+use tokio_otp::{ActorOptions, ActorSpec, SupervisionTree, prelude::*};
 
 struct Worker;
 
@@ -68,22 +76,23 @@ impl Actor for Worker {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let (_ingest_slot, _ingest) = graph.slot("ingest", tokio_otp::ActorOptions::new());
-    graph.define(_ingest_slot, || Worker);
-    let (_parse_slot, _parse) = graph.slot("parse", tokio_otp::ActorOptions::new());
-    graph.define(_parse_slot, || Worker);
+    let (ingest_slot, _ingest) = graph.slot("ingest", ActorOptions::new());
+    let (parse_slot, _parse) = graph.slot("parse", ActorOptions::new());
+    graph.define(ingest_slot, || Worker);
+    graph.define(parse_slot, || Worker);
     let graph = graph.build()?;
 
     let tree = SupervisionTree::new()
+        .default_restart(RestartPolicy::OnFailure)
         .actor(
-            ActorSpec::new(graph.actors()[0].clone())
+            ActorSpec::new(graph.actor("ingest").unwrap().clone())
                 .restart(RestartPolicy::Never),
         )
         .subtree(
             "workers",
             SupervisionTree::new()
                 .strategy(Strategy::OneForAll)
-                .actor(graph.actors()[1].clone()),
+                .actor(graph.actor("parse").unwrap().clone()),
         );
 
     let runtime = tree.build()?;
@@ -92,21 +101,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The actor refs minted while building the graph continue to follow those
-actors across their respective restarts. `RuntimeHandle::actor_stats()` also
-recurses through the tree, and the same local actor label may be reused in a
-different scope because child ids are sibling-scoped.
+The actor refs minted by `GraphBuilder::slot` continue to follow those actors
+across their respective restarts. `RuntimeHandle::actor_stats()` also recurses
+through the tree, and the same local child id may be reused in a different
+scope.
 
-An [`ActorSpec`] is a complete actor child declaration: its runnable payload
-provides the id, and optional `restart`, `shutdown`, and `restart_intensity`
-values override the enclosing scope's defaults. `child_id` overrides the id
-itself, for a nested scope whose actor labels are already qualified by the
-scope path. Bare runnable actors convert to `ActorSpec`, so `.actor(runnable)`
-remains the concise spelling when no override is needed.
+An [`ActorSpec`] is a complete actor child declaration. Its runnable payload
+provides the id, while optional `restart`, `shutdown`, and `restart_intensity`
+values override the enclosing scope's defaults. `child_id` overrides the
+local supervisor id when an actor label is already qualified by its scope
+path. Bare runnable actors convert to `ActorSpec`, so `.actor(runnable)` is the
+concise spelling when no override is needed.
 
-When a hand-built dynamic scope will receive actors at runtime, call
-`dynamic_defaults(&graph)` on that scope to adopt the graph's actor execution
-settings. Ordered scopes have fixed membership and reject those additions.
+For the flat case, `SupervisionTree::graph(&graph)` creates an ordered scope
+containing every graph actor. For a runtime-written leaf, configure
+`SupervisionTree::dynamic()` with `default_restart`, `default_shutdown`, and
+`restart_intensity`; runtime-added actors can still override those inherited
+policies with `DynamicActorOptions`. There is no separate graph-derived
+defaults path for dynamic composition.
+
+## Reserve a pre-spawn identity
+
+A plain `SupervisionTree` is cloneable declaration data. Call `reserve()` when
+code needs the scope's stable `RuntimeHandle` before build or spawn:
+
+```rust,ignore
+let sessions_tree = SupervisionTree::dynamic()
+    .default_restart(RestartPolicy::OnFailure)
+    .reserve()?;
+let sessions = sessions_tree.handle();
+
+let mut graph = GraphBuilder::new();
+let (router_slot, _) = graph.slot("router", ActorOptions::new());
+graph.define(router_slot, move || Router::new(sessions.clone()));
+let graph = graph.build()?;
+
+let app_tree = SupervisionTree::new()
+    .reserve()?
+    // This transfers the nested reservation into the root declaration.
+    .reserved_subtree("sessions", sessions_tree)
+    .actor(graph.actor("router").unwrap().clone());
+let app_handle = app_tree.handle();
+let runtime = app_tree.build()?;
+# drop((app_handle, runtime));
+```
+
+`reserve()` consumes the cloneable tree and returns a
+[`ReservedSupervisionTree`], which intentionally does not implement `Clone`.
+One reserved identity can therefore bind to exactly one eventual runtime.
+The reserved form retains the fluent configuration and composition methods;
+`reserved_subtree` and `actor_with_reserved_scope` transfer nested
+reservations into their eventual parent.
+
+Before binding, control operations report `ControlError::Unavailable`, while
+the handle's projected snapshot and subscriptions are already usable.
+`build()` consumes the reserved declaration and preserves that exact identity
+in the returned runtime. Dropping the declaration, failing its build, or
+dropping the built runtime before spawn makes retained handles terminal.
+
+`RuntimeBuilder` and `DynamicRuntimeBuilder` reserve their one root scope when
+created, which is why their `handle()` methods remain useful in the flat
+convenience cases. Converting either builder with `into_tree()` returns its
+non-cloneable `ReservedSupervisionTree` rather than reintroducing a second
+composition model.
 
 ## Inspect the declaration
 
@@ -119,23 +176,25 @@ An outline retains:
 - each scope's immutable [`ScopeKind`], strategy, inherited actor policies,
   and restart-intensity default;
 - children in semantic order;
-- resolved actor policies, regardless of whether they came from the actor or
+- resolved actor policies, regardless of whether they came from an actor or
   its enclosing scope;
 - nested scopes and actor-owned scopes recursively.
 
-That makes outlines useful for snapshots in tests, configuration export, and
+That makes outlines useful for assertions, configuration export, and
 rendering a declared topology before spawn. A [`SupervisorSnapshot`] is the
 runtime companion: it reports current memberships, generations, states, and
 exits. They answer different questions, so compare them by path and policy
-rather than expecting the two structures to be identical.
+rather than expecting the structures to be identical.
 
 ```rust,ignore
-let outline = Runtime::builder()
-    .graph(graph)
-    .restart(RestartPolicy::Always)
-    .actor_restart(&ingest_ref, RestartPolicy::Never)
-    .into_tree()
-    .outline()?;
+let tree = SupervisionTree::new()
+    .default_restart(RestartPolicy::Always)
+    .actor(
+        ActorSpec::new(graph.actor("ingest").unwrap().clone())
+            .restart(RestartPolicy::Never),
+    )
+    .actor(graph.actor("parse").unwrap().clone());
+let outline = tree.outline()?;
 
 assert_eq!(outline.child_ids(), ["ingest", "parse"]);
 let ChildOutline::Actor { restart, .. } = outline.child("ingest").unwrap()
@@ -146,34 +205,37 @@ assert_eq!(*restart, RestartPolicy::Never);
 ```
 
 Because `Debug` for an executable tree delegates to its outline, logging the
-tree never tries to print actor factories.
+tree never tries to print actor factories. The reserved form has the same
+outline and debug projection.
 
 ## Actor-owned scopes
 
-Use `actor_with_scope` when one actor owns a set of workers:
+Use `actor_with_scope` when one actor owns a set of workers. The restart
+relationship is explicit at the call site:
 
 ```rust,ignore
 let sessions = SupervisionTree::new().actor_with_scope(
     "session-runtime",
     session_actor,
     SupervisionTree::dynamic(),
+    Strategy::RestForOne,
 );
 ```
 
-The node lowers to an ordered `[leader, children]` pair. Its default
-`RestForOne` relationship means a leader failure recycles the owned scope,
-while a failure inside that scope leaves the leader running. Use
-`actor_with_scope_strategy(..., Strategy::OneForAll)` when either side failing
-must recycle both.
+The node lowers to an ordered `[leader, children]` pair. With `RestForOne`, a
+leader failure recycles the owned scope, while a failure inside that scope
+leaves the leader running. Use `Strategy::OneForAll` when either side failing
+must recycle both, or `Strategy::OneForOne` when they should restart
+independently.
 
 Inside the leader, `MessageContext::children()` returns the child scope's
-pre-spawn `RuntimeHandle`; `StartContext::children()` returns the narrower
-`RestrictedScope`, as does `StopContext::children()`.
-See [Scope handles inside actors] for the startup ordering and
-reconciliation rules of dynamic membership.
+pre-spawn `RuntimeHandle`; startup and shutdown contexts return the narrower
+`RestrictedScope`. See [Scope handles inside actors] for startup ordering and
+dynamic-membership reconciliation.
 
 [`RuntimeBuilder::into_tree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.RuntimeBuilder.html#method.into_tree
 [`SupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/enum.SupervisionTree.html
+[`ReservedSupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ReservedSupervisionTree.html
 [`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
 [`SupervisionOutline`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.SupervisionOutline.html
 [`ScopeKind`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ScopeKind.html

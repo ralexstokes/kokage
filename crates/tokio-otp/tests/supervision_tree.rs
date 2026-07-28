@@ -29,19 +29,21 @@ fn two_actor_graph() -> (Graph, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
 }
 
 #[test]
-fn a_runtime_builder_projects_to_an_equivalent_ordered_tree() {
-    let (graph, ingest, _parse) = two_actor_graph();
-    let outline = Runtime::builder()
-        .graph(graph)
+fn a_tree_expresses_recursive_composition_and_actor_overrides() {
+    let (graph, _ingest, _parse) = two_actor_graph();
+    let outline = SupervisionTree::new()
         .strategy(Strategy::RestForOne)
-        .restart(RestartPolicy::Always)
-        .actor_restart(&ingest, RestartPolicy::Never)
-        .child(ChildSpec::new("clock", |ctx| async move {
+        .default_restart(RestartPolicy::Always)
+        .subtree(
+            "workers",
+            SupervisionTree::new().strategy(Strategy::OneForAll),
+        )
+        .task(ChildSpec::new("clock", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .subtree("workers", Runtime::builder().strategy(Strategy::OneForAll))
-        .into_tree()
+        .actor(ActorSpec::new(graph.actors()[0].clone()).restart(RestartPolicy::Never))
+        .actor(graph.actors()[1].clone())
         .outline()
         .expect("valid tree has an outline");
 
@@ -78,7 +80,7 @@ fn a_hand_built_tree_and_the_equivalent_builder_outline_identically() {
     let from_builder = Runtime::builder()
         .graph(graph.clone())
         .strategy(Strategy::OneForAll)
-        .restart(RestartPolicy::Never)
+        .default_restart(RestartPolicy::Never)
         .into_tree()
         .outline()
         .expect("valid builder tree has an outline");
@@ -95,7 +97,6 @@ async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
     let (graph, ingest, parse) = two_actor_graph();
     let (ingest_actor, parse_actor) = (graph.actors()[0].clone(), graph.actors()[1].clone());
     let runtime = SupervisionTree::new()
-        .dynamic_defaults(&graph)
         .actor(ActorSpec::new(ingest_actor).restart(RestartPolicy::Never))
         .subtree(
             "workers",
@@ -164,7 +165,6 @@ fn child_nodes_report_invalid_root_configuration_without_panicking() {
     );
 
     let build_error = leaf
-        .dynamic_defaults(&graph)
         .strategy(Strategy::OneForAll)
         .restart_intensity(RestartIntensity::default())
         .default_restart(RestartPolicy::Never)
@@ -173,7 +173,12 @@ fn child_nodes_report_invalid_root_configuration_without_panicking() {
         .task(ChildSpec::new("ignored", |_| async { Ok(()) }))
         .child(SupervisionTree::Actor(actor.clone()))
         .subtree("ignored-scope", SupervisionTree::new())
-        .actor_with_scope("ignored-owned", actor, SupervisionTree::new())
+        .actor_with_scope(
+            "ignored-owned",
+            actor,
+            SupervisionTree::new(),
+            Strategy::RestForOne,
+        )
         .build()
         .expect_err("a child node cannot be built as a root");
     assert!(
@@ -202,6 +207,7 @@ fn invalid_nested_scopes_are_deferred_to_outline_and_build() {
         "owned",
         actor.clone(),
         SupervisionTree::Actor(actor),
+        Strategy::RestForOne,
     );
     let debug = format!("{invalid_owned_scope:?}");
     assert!(debug.contains("InvalidSupervisionTree"), "{debug}");
@@ -234,7 +240,7 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
 #[tokio::test]
 async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let tree = SupervisionTree::new().actor_with_scope_strategy(
+    let tree = SupervisionTree::new().actor_with_scope(
         "owned",
         graph.actors()[0].clone(),
         SupervisionTree::dynamic(),

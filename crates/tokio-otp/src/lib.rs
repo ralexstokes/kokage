@@ -4,7 +4,8 @@
 //! actor graphs with one integrated [`Runtime`].
 //!
 //! For the common setup — every actor of a graph running as its own
-//! supervised child — you need one import and one builder:
+//! supervised child — build a graph, place it in a [`SupervisionTree`], and
+//! spawn the resulting runtime:
 //!
 //! ```no_run
 //! use tokio_otp::prelude::*;
@@ -26,8 +27,8 @@
 //! let (echo_slot, echo) = graph.slot("Echo", tokio_otp::ActorOptions::new());
 //! graph.define(echo_slot, || Echo);
 //!
-//! let runtime = Runtime::builder()
-//!     .graph(graph.build()?)
+//! let graph = graph.build()?;
+//! let runtime = SupervisionTree::graph(&graph)
 //!     .strategy(Strategy::OneForOne)
 //!     .build()?;
 //! let handle = runtime.spawn();
@@ -38,15 +39,18 @@
 //! # }
 //! ```
 //!
-//! See [`RuntimeBuilder`] for a complete example. The [`prelude`] re-exports
-//! this crate's whole surface plus the common types of `tokio-supervisor`,
-//! which remains independently usable for supervision without actors.
+//! See [`SupervisionTree`] for recursive composition and per-actor policy
+//! examples. [`RuntimeBuilder`] remains thin graph-in-one-scope sugar. The
+//! [`prelude`] re-exports the common composition and actor surface plus the
+//! usual `tokio-supervisor` types; that crate remains independently usable for
+//! supervision without actors.
 //!
 //! # Core types
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`Runtime`] / [`RuntimeBuilder`] | Owns a supervisor and actor factory — the common composition. |
+//! | [`SupervisionTree`] / [`ReservedSupervisionTree`] | Primary recursive declaration; reserve the non-cloneable form when a scope handle is needed before build. |
+//! | [`Runtime`] / [`RuntimeBuilder`] | Configured executable runtime, plus thin graph-in-one-scope sugar. |
 //! | [`RuntimeHandle`] | Control surface for shutdown and observability; dynamic-scope handles also mutate membership. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
@@ -61,12 +65,12 @@
 //!
 //! # Composition modes
 //!
-//! - **Ordered actor trees** via [`Runtime::builder`]: per-actor supervision
-//!   with per-actor policy overrides, recursive actor-aware subtrees, and
-//!   arbitrary statically declared non-actor children. Add nested scopes with
-//!   [`RuntimeBuilder::subtree`].
-//! - **Dynamic actor membership** via [`Runtime::dynamic`]: an initially empty
-//!   `OneForOne` scope that accepts actors and subtrees at runtime.
+//! - **Ordered actor trees** via [`SupervisionTree::new`] or
+//!   [`SupervisionTree::graph`]: per-actor supervision, recursive actor-aware
+//!   subtrees, arbitrary task children, and actor-owned scopes.
+//! - **Dynamic actor membership** via [`SupervisionTree::dynamic`]: an
+//!   initially empty `OneForOne` scope that accepts actors and subtrees at
+//!   runtime. [`Runtime::dynamic`] is its pre-reserved convenience builder.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.
@@ -256,32 +260,32 @@ pub mod timers;
 
 /// Common imports for `tokio-otp` consumers.
 ///
-/// This prelude is intentionally limited to the traits, builders, policies,
-/// and observation types used by the primary [`Runtime::builder`] composition
-/// path. Common send/call errors are included; other error types and advanced
-/// composition surfaces remain available at the crate root without being
-/// injected by a glob import.
+/// This prelude is intentionally limited to the traits, declarations,
+/// builders, policies, and observation types used by the primary
+/// [`SupervisionTree`] composition path. Common send/call errors are included;
+/// other error types and advanced surfaces remain available at the crate root
+/// without being injected by a glob import.
 pub mod prelude {
     // Resolves the `Supervision` trait, and additionally the derive macro of
     // the same name when the `derive` feature is on.
     pub use crate::{
-        Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, AddSubtreeError,
-        BlockingCancelled, BoxError, CallError, CancellationHandle, CancellationToken,
-        DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope,
-        Flow,
+        Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
+        AddSubtreeError, BlockingCancelled, BoxError, CallError, CancellationHandle,
+        CancellationToken, ChildOutline, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy,
+        DynamicRuntimeBuilder, DynamicScope, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode,
         MessageContext, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply,
-        RestrictedScope, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StartContext,
-        StopContext, Supervision, SupervisionBuildError, SupervisionFactories, SupervisionTree,
-        TimerKey,
+        ReservedSupervisionTree, RestrictedScope, Runtime, RuntimeBuilder, RuntimeHandle,
+        SendError, StartContext, StopContext, Supervision, SupervisionBuildError,
+        SupervisionFactories, SupervisionOutline, SupervisionTree, TimerKey,
     };
     pub use tokio_supervisor::{
-        BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionOutcome,
-        ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
-        RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
-        RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy,
-        SupervisorSnapshot, SupervisorStateView,
+        BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
+        CompletionOutcome, ExitStatusView, LifecycleEvent, LifecycleEventKind,
+        LifecyclePathSegment, LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
+        RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
+        ShutdownPolicy, Strategy, SupervisorSnapshot, SupervisorStateView,
     };
 }
 
@@ -301,7 +305,8 @@ pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
 };
 pub use supervision::{
-    ActorSpec, ChildOutline, SupervisionOutline, SupervisionScope, SupervisionTree,
+    ActorSpec, ChildOutline, ReservedSupervisionTree, SupervisionOutline, SupervisionScope,
+    SupervisionTree,
 };
 #[doc(hidden)]
 pub use supervision_derive::qualified_label;

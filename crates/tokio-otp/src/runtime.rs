@@ -366,11 +366,11 @@ pub struct Runtime {
 impl Runtime {
     /// Starts building a supervised actor runtime.
     ///
-    /// Provide a graph to run every graph actor as its own supervised child,
-    /// compose nested graphs with
-    /// [`RuntimeBuilder::subtree`](crate::RuntimeBuilder::subtree), or build an
-    /// empty ordered scope for static composition. Use [`Runtime::dynamic`]
-    /// when actors or subtrees will be added at runtime.
+    /// Provide a graph to run every graph actor as its own supervised child in
+    /// one ordered scope. Use [`SupervisionTree`](crate::SupervisionTree) for
+    /// recursive composition, arbitrary task children, actor-owned scopes, or
+    /// per-actor policy overrides. Use [`Runtime::dynamic`] when actors or
+    /// subtrees will be added at runtime.
     ///
     /// See [`RuntimeBuilder`](crate::RuntimeBuilder) for an example.
     pub fn builder() -> crate::RuntimeBuilder {
@@ -572,7 +572,14 @@ impl RuntimeHandle {
     /// retained subtree handles then fail control operations with
     /// [`ControlError::Unavailable`].
     ///
-    /// If the subtree itself restarts, the static graph supplied by `builder`
+    /// The subtree must be in its non-cloneable reserved form. Call
+    /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) for a
+    /// plain declaration; [`RuntimeBuilder`](crate::RuntimeBuilder) and
+    /// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) convert into
+    /// that form directly. This preserves any pre-spawn root or nested handles
+    /// through insertion.
+    ///
+    /// If the subtree itself restarts, its statically declared graph actors
     /// is recreated, while children added later through the returned handle
     /// are lost and must be replayed by the application. If this handle's
     /// supervisor restarts, the dynamically added subtree is not recreated.
@@ -587,10 +594,10 @@ impl RuntimeHandle {
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        builder: impl Into<crate::SupervisionTree>,
+        tree: impl Into<crate::ReservedSupervisionTree>,
     ) -> Result<RuntimeHandle, AddSubtreeError> {
         let id = id.into();
-        let (nested_supervisor, nested_actors) = builder.into().build()?.into_parts();
+        let (nested_supervisor, nested_actors) = tree.into().build()?.into_parts();
         let lineage = self
             .supervisor
             .add_supervisor(
@@ -846,13 +853,6 @@ impl Drop for TerminateBindingOnDrop {
     fn drop(&mut self) {
         self.actor.terminate_binding();
     }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ActorOverrides {
-    pub(crate) restart: Option<RestartPolicy>,
-    pub(crate) restart_intensity: Option<RestartIntensity>,
-    pub(crate) shutdown: Option<ShutdownPolicy>,
 }
 
 /// How one actor is supervised as a child of its enclosing scope.

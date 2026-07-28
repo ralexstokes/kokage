@@ -9,8 +9,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, BoxError, GraphBuilder, MessageContext, Runtime, StartContext,
-    prelude::Continue,
+    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, StartContext,
+    SupervisionTree, prelude::Continue,
 };
 use tokio_supervisor::{RestartIntensity, RestartPolicy, Strategy};
 
@@ -73,14 +73,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         run: 0,
     });
     let graph = builder.build()?;
+    let frontend_actor = graph.actor("frontend").expect("frontend actor").clone();
+    let worker_actor = graph.actor("worker").expect("worker actor").clone();
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::new()
         .strategy(Strategy::OneForOne)
-        .actor_restart(&worker_ref, RestartPolicy::OnFailure)
-        .actor_restart_intensity(
-            &worker_ref,
-            RestartIntensity::new(5, std::time::Duration::from_secs(5)),
+        .actor(frontend_actor)
+        .actor(
+            ActorSpec::new(worker_actor)
+                .restart(RestartPolicy::OnFailure)
+                .restart_intensity(RestartIntensity::new(5, std::time::Duration::from_secs(5))),
         )
         .build()?;
     let handle = runtime.spawn();

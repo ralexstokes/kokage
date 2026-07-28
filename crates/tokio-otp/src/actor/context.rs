@@ -1418,9 +1418,9 @@ impl RestrictedScope {
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        builder: impl Into<crate::SupervisionTree>,
+        tree: impl Into<crate::ReservedSupervisionTree>,
     ) -> Result<RuntimeHandle, crate::AddSubtreeError> {
-        self.handle.add_subtree(id, builder).await
+        self.handle.add_subtree(id, tree).await
     }
 
     /// Observes lifecycle transitions of this scope's direct children.
