@@ -19,7 +19,8 @@ use tokio_otp::{
     ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
     DynamicActorOptions, DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageContext,
     MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind,
-    SendError, ShutdownMode, ShutdownPolicy, StartContext, StopContext, SupervisorBuilder,
+    SendError, ShutdownMode, ShutdownPolicy, StartContext, StopContext, SupervisionTree,
+    SupervisorBuilder,
     prelude::{Continue, Stop},
 };
 
@@ -711,9 +712,9 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
-    let handle = Runtime::builder()
-        .graph(graph.build().expect("valid graph"))
-        .subtree("dynamic", Runtime::dynamic())
+    let graph = graph.build().expect("valid graph");
+    let handle = SupervisionTree::graph(&graph)
+        .subtree("dynamic", SupervisionTree::dynamic())
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
@@ -833,8 +834,8 @@ async fn clean_stop_applies_restart_policy_before_default_removal() {
 #[tokio::test]
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     let handle = Runtime::dynamic()
-        .restart(RestartPolicy::Always)
-        .shutdown(ShutdownPolicy::abort())
+        .default_restart(RestartPolicy::Always)
+        .default_shutdown(ShutdownPolicy::abort())
         .build()
         .expect("dynamic runtime builds")
         .spawn();
@@ -1228,9 +1229,9 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let mut builder = GraphBuilder::new();
     let (forwarder_slot, forwarder) = builder.slot("forwarder", tokio_otp::ActorOptions::new());
     builder.define(forwarder_slot, || Forwarder);
-    let handle = Runtime::builder()
-        .graph(builder.build().expect("valid graph"))
-        .subtree("dynamic", Runtime::dynamic())
+    let graph = builder.build().expect("valid graph");
+    let handle = SupervisionTree::graph(&graph)
+        .subtree("dynamic", SupervisionTree::dynamic())
         .build()
         .expect("mixed scope runtime builds")
         .spawn();
@@ -1289,9 +1290,9 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });
-    let handle = Runtime::builder()
-        .graph(builder.build().expect("valid graph"))
-        .subtree("dynamic", Runtime::dynamic())
+    let graph = builder.build().expect("valid graph");
+    let handle = SupervisionTree::graph(&graph)
+        .subtree("dynamic", SupervisionTree::dynamic())
         .build()
         .expect("mixed scope runtime builds")
         .spawn();

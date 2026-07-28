@@ -10,9 +10,11 @@ a *supervisor* restart the ones that fail.
 ## The crates
 
 `tokio-otp` is the product: depend on it alone, import everything through
-`tokio_otp::prelude`, and build the common setup with `Runtime::builder()`.
-It contains both the typed actor layer and the runtime that supervises it,
-built on one deliberately independent crate:
+`tokio_otp::prelude`, wire actors in a `Graph`, and compose them with a
+`SupervisionTree`. `Runtime::builder()` is the concise convenience when one
+graph occupies one ordered scope. The crate contains both the typed actor
+layer and the runtime that supervises it, built on one deliberately
+independent crate:
 
 | Crate | Role |
 |-------|------|
@@ -32,7 +34,7 @@ If you have used Erlang/OTP or Elixir, the mapping is direct:
 
 | OTP concept | tokio-otp equivalent |
 |-------------|----------------------|
-| Supervisor + child specs | [`SupervisorBuilder`] + [`ChildSpec`] |
+| Supervisor + child specs | [`SupervisionTree`] + [`ActorSpec`] / [`ChildSpec`] |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
 | `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
 | Restart intensity (`MaxR`/`MaxT`) | `RestartIntensity::new(max_restarts, within)` |
@@ -69,6 +71,7 @@ binary crate and run it, or explore the closely related examples that ship in
 each crate's `examples/` directory (listed in [Where to go
 next](next-steps.md)).
 
-[`SupervisorBuilder`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorBuilder.html
+[`SupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/enum.SupervisionTree.html
+[`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
 [`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
 [`ActorContext`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorContext.html

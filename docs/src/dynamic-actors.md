@@ -11,7 +11,9 @@ spec structs are useful when durable configuration deserves its own type.
 
 ```rust,no_run
 use tokio_otp::prelude::Continue;
-use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime};
+use tokio_otp::{
+    Actor, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime,
+};
 
 struct FrontDesk {
     rush: Option<ActorRef<String>>,
@@ -64,7 +66,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_actor("front-desk", || FrontDesk { rush: None }, DynamicActorOptions::default())
         .await?;
     let rush = handle
-        .add_actor("rush-press", || RushPress, DynamicActorOptions::default())
+        .add_actor(
+            "rush-press",
+            || RushPress,
+            DynamicActorOptions::default()
+                .options(ActorOptions::new().mailbox_capacity(32)),
+        )
         .await?;
 
     // Distribute the ref by message — the mailbox is the discovery channel.
@@ -109,9 +116,9 @@ completes, only a new `add_actor` call can create another membership with that
 child id.
 
 These defaults apply only to actors added with `add_actor`. Actors declared in
-the static graph remain registered after terminal exit, even when
-`RuntimeBuilder::actor_restart` gives them `RestartPolicy::Never`; static
-membership can be recreated from the graph when its supervisor restarts.
+the static tree remain registered after terminal exit, even when an
+`ActorSpec` gives them `RestartPolicy::Never`; declared membership can be
+recreated when its supervisor restarts.
 
 `add_actor` returns an actor ref matching the factory's actor message type, and
 the same ref keeps working across restarts of that actor. Its stability ends at
@@ -146,7 +153,7 @@ A runtime can be reduced back to zero actors and keeps running until
 ## Adding to a nested supervisor
 
 `RuntimeHandle::add_actor` targets the handle's own supervisor. For subtrees
-configured with `RuntimeBuilder::subtree`, obtain the actor-aware nested handle
+declared with `SupervisionTree::subtree`, obtain the actor-aware nested handle
 and add the actor normally:
 
 ```rust,ignore
@@ -166,17 +173,17 @@ supervisor, so remove it through the same handle with
 normally, and appear in both `venue.actor_stats()` and the parent handle's
 recursive `actor_stats()` result.
 
-Subtrees can also be added dynamically. `add_subtree` takes the same
-`RuntimeBuilder` used for static composition and returns an actor-aware handle:
+Subtrees can also be added dynamically. `add_subtree` takes a
+`ReservedSupervisionTree` declaration and returns its actor-aware handle:
 
 ```rust,ignore
 let sessions = handle
-    .add_subtree("sessions", Runtime::dynamic())
+    .add_subtree("sessions", SupervisionTree::dynamic().reserve()?)
     .await?;
 let session = sessions
     .add_subtree(
         session_id,
-        Runtime::builder().graph(session_graph),
+        SupervisionTree::graph(&session_graph).reserve()?,
     )
     .await?;
 session
@@ -195,8 +202,8 @@ registry node, and retained handles fail control operations with
 immediate startup are scheduled. These operations require a dynamic parent;
 an ordered parent returns `ControlError::UnsupportedByScopeKind`.
 
-Restart recovery follows the builder boundary. If a dynamic subtree itself
-restarts, actors and nested subtrees declared in the builder are recreated;
+Restart recovery follows the declaration boundary. If a dynamic subtree itself
+restarts, actors and nested subtrees in its reserved tree are recreated;
 children added later through its handle are not and must be replayed by the
 application. If the parent supervisor that received `add_subtree` restarts,
 the dynamic subtree itself is not recreated. Restart intensity remains per
@@ -206,33 +213,46 @@ that child's tidy-abort accounting beat.
 
 ## Reserve the handle before the scope exists
 
-Every runtime builder owns its stable scope identity from the moment the
-builder is created. Call `handle()` before `build()` when an actor factory must
-capture the scope it will later own or reconcile:
+A plain `SupervisionTree` is cloneable declaration data. Move it through
+`reserve()` when an actor factory must capture the scope it will later own or
+reconcile:
 
 ```rust,ignore
-let sessions_builder = Runtime::dynamic();
-let sessions = sessions_builder.handle();
+let sessions_tree = SupervisionTree::dynamic()
+    .default_restart(RestartPolicy::OnFailure)
+    .reserve()?;
+let sessions = sessions_tree.handle();
 
 let mut graph = GraphBuilder::new();
-let (actor_slot, _) = graph.slot("router", tokio_otp::ActorOptions::new());
-graph.define(actor_slot, move || Router::new(sessions.clone()));
+let (router_slot, _) = graph.slot("router", ActorOptions::new());
+graph.define(router_slot, move || Router::new(sessions.clone()));
+let graph = graph.build()?;
 
-let app = Runtime::builder()
-    // Subtrees precede graph actors, so `sessions` is ready before Router::on_start.
-    .subtree("sessions", sessions_builder)
-    .graph(graph.build()?)
-    .build()?;
+let app_tree = SupervisionTree::new()
+    .reserve()?
+    // Declaration order makes sessions ready before Router::on_start.
+    .reserved_subtree("sessions", sessions_tree)
+    .actor(graph.actor("router").unwrap().clone());
+let app_handle = app_tree.handle();
+let app = app_tree.build()?;
+# drop((app_handle, app));
 ```
 
-The builder, built `Runtime`, and spawned runtime all carry that exact identity;
-no `OnceLock` or post-spawn handle injection is needed. Before binding, control
-operations return `ControlError::Unavailable`, while `snapshot()` exposes the
-declared children as starting and lifecycle/snapshot subscriptions are already
-valid. `wait_started()` waits for a real bound incarnation, including for an
-empty dynamic scope. Dropping an unbuilt builder, failing `build()`, dropping a
-built scope before it is spawned or inserted, or having an insertion rejected
-makes the identity terminal and closes retained streams.
+`reserve()` returns a `ReservedSupervisionTree`, which deliberately is not
+`Clone`: one identity can bind to one eventual runtime. The reserved
+declaration, built `Runtime`, and spawned runtime carry that exact identity, so
+no `OnceLock` or post-spawn handle injection is needed. `reserved_subtree` and
+`actor_with_reserved_scope` transfer nested reservations into the declaration
+that will build them.
+
+Before binding, control operations return `ControlError::Unavailable`, while
+`snapshot()` exposes declared children as starting and lifecycle/snapshot
+subscriptions are already valid. `wait_started()` waits for a real bound
+incarnation, including an empty dynamic scope. Dropping a reserved declaration,
+failing `build()`, dropping a built scope before it is spawned or inserted, or
+having an insertion rejected makes the identity terminal and closes retained
+streams. `RuntimeBuilder` and `DynamicRuntimeBuilder` perform this reservation
+automatically for their one-scope convenience cases.
 
 The same rule applies to `SupervisorBuilder` and
 `DynamicSupervisorBuilder`, whose `handle()` returns a raw
@@ -253,8 +273,8 @@ with `ctx.offload`.
 Startup is different, and the type system says so. `StartContext::supervisor()`
 returns a `RestrictedScope` rather than a `RuntimeHandle`: an actor cannot report
 ready until `on_start` returns, so awaiting `wait_started()`, `wait()`, or
-`shutdown_and_wait()` there waits on the current actor's
-own readiness and deadlocks. Those methods are simply absent from
+`shutdown_and_wait()` there waits on the current actor's own readiness and
+deadlocks. Those methods are simply absent from
 `RestrictedScope`, as is `supervisor_handle()`, which would hand the same waits
 back one call later. Insertion (`add_actor`, `add_subtree`) schedules startup
 rather than waiting for it, so it stays available, and `subtree()` returns
@@ -291,6 +311,7 @@ let sessions = SupervisionTree::new().actor_with_scope(
     "session-runtime",
     session_actor,
     SupervisionTree::dynamic(),
+    Strategy::RestForOne,
 );
 ```
 
@@ -304,10 +325,10 @@ members — which is why `StartContext::children()` yields a `RestrictedScope`. 
 normal handler gets a full `RuntimeHandle` and can await
 `children.add_actor(...)` directly once the node is ready.
 
-`actor_with_scope` defaults to `RestForOne`: leader failure recycles the leader
-and owned scope, while a worker failure stays inside the owned scope. Use
-`actor_with_scope_strategy(..., Strategy::OneForAll)` when either side failing
-must recycle both. Snapshot paths are
+`actor_with_scope` takes the restart relationship explicitly. `RestForOne`
+means leader failure recycles the leader and owned scope, while a worker
+failure stays inside the owned scope. Pass `Strategy::OneForAll` when either
+side failing must recycle both. Snapshot paths are
 `root.<node>.<leader-label>` and `root.<node>.children.<worker>`.
 
 ## Keep dynamic membership single-writer and reconcile it
@@ -324,7 +345,7 @@ intent with the truthful supervisor view in this order:
 5. On `Lagged`, fetch and reconcile a fresh snapshot and replace the sequence
    baseline with its `lifecycle_seq` before consuming more events.
 
-Because a builder handle can start the watch before spawn, the same recipe is
+Because a reserved handle can start the watch before spawn, the same recipe is
 gap-free for the first incarnation as well as restarts. A pre-spawn snapshot
 already projects declared membership, while the first actual `Added` events
 arrive only after bind. Dynamically added children are not replayed by the

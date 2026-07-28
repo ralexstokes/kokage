@@ -1563,7 +1563,9 @@ mod runnable_actor {
         builder.define(actor_slot, Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
         let handle = SupervisionTree::dynamic()
-            .dynamic_defaults(&graph)
+            .reserve()
+            .expect("dynamic identity reserves")
+            .derived_defaults(&graph)
             .build()
             .expect("dynamic runtime builds")
             .spawn();

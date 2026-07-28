@@ -147,7 +147,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     );
     let handle = Runtime::builder()
         .graph(builder.build().expect("graph builds"))
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds")
         .spawn();
@@ -222,7 +222,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     });
     let handle = Runtime::builder()
         .graph(builder.build().expect("graph builds"))
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds")
         .spawn();

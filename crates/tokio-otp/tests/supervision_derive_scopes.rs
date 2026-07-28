@@ -171,7 +171,7 @@ struct WithDynamic {
 fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
     let (tree, _refs) = WithDynamic::tree(|_refs| WithDynamicFactories {
         manager: || Worker,
-        sessions: Runtime::dynamic().restart(RestartPolicy::Never),
+        sessions: Runtime::dynamic().default_restart(RestartPolicy::Never),
     })
     .expect("tree builds");
     let outline = tree.outline().expect("valid tree has an outline");

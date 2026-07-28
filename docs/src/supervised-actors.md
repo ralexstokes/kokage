@@ -55,8 +55,10 @@ impl Actor for Press {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = GraphBuilder::new();
-    let (press_slot, press_ref) = builder.slot::<String>("press", ActorOptions::new());
-    let (orders_slot, orders) = builder.slot("front-desk", ActorOptions::new());
+    let (press_slot, press_ref) =
+        builder.slot::<String>("press", ActorOptions::new());
+    let (orders_slot, orders) =
+        builder.slot("front-desk", ActorOptions::new());
     builder.define(orders_slot, {
         let press_ref = press_ref.clone();
         move || FrontDesk { press: press_ref.clone() }
@@ -65,10 +67,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     builder.define(press_slot, move || Press { runs: runs.clone(), run: 0 });
     let graph = builder.build()?;
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60)))
         .build()?;
     let handle = runtime.spawn();
@@ -88,35 +89,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Runtime::builder()` is the front door for the common case: it turns every
-graph actor into its own supervised child and packages
-the result into a `Runtime` with a supervisor and dynamic actor support.
-The builder lowers through an inspectable `SupervisionTree`; the next chapter
-shows when and how to work with that declaration directly.
+`SupervisionTree` is the composition front door. `SupervisionTree::graph`
+handles the common flat case above by turning every actor in one graph into a
+direct child of one ordered scope. `Runtime::builder()` remains thin sugar for
+that same shape; its `into_tree()` method exposes the pre-reserved declaration
+when a root handle is needed before build.
 
-Nested actor graphs stay on that path too. Build each graph independently so
-typed refs can cross graph boundaries, then attach a configured nested runtime
-builder with `subtree`:
+For nested scopes, build each graph independently so typed refs can cross graph
+boundaries, then compose them directly as a tree:
 
 ```rust,ignore
-let runtime = Runtime::builder()
-    .graph(core_graph)
+let tree = SupervisionTree::graph(&core_graph)
     .strategy(Strategy::OneForOne)
     .subtree(
         "venues",
-        Runtime::builder()
-            .graph(venue_graph)
+        SupervisionTree::graph(&venue_graph)
             .strategy(Strategy::OneForOne),
-    )
-    .build()?;
+    );
+let runtime = tree.build()?;
 ```
 
-Subtrees are added before the containing graph's actors, so sequential startup
-waits for nested readiness first. `RuntimeHandle::actor_stats()` recursively
-includes both graphs. `handle.subtree("venues")` returns a scoped runtime handle
-that retains the venue graph's dynamic actor factory, stats, and actor-aware
-control methods. Its `supervisor_handle()` exposes lower-level supervisor
-control when needed.
+The tree's declaration order is its startup order and reverses for shutdown.
+`RuntimeHandle::actor_stats()` recursively includes both graphs.
+`handle.subtree("venues")` returns a scoped actor-aware runtime handle; its
+`supervisor_handle()` exposes lower-level supervisor control when needed.
 
 Actor children use `on_start` as their readiness boundary. Ordered runtimes do
 not spawn the next declared actor until that boundary is crossed; snapshots
@@ -132,22 +128,26 @@ actor is unbound, but it cannot recover messages already accepted by the
 failed run. Waiting for `Started` with a generation above the captured
 baseline gives a one-shot recovery boundary without a separate monitor type.
 
-Per-actor policies — say a tighter restart budget for the press alone — stay
-on the same builder. Overrides are keyed by the actor's typed ref, so a typo'd
-name is unrepresentable:
+Per-actor policies — say a tighter restart budget for the press alone — belong
+on that actor's `ActorSpec`. Scope methods set inherited defaults, while an
+`ActorSpec` is the explicit override:
 
 ```rust,ignore
-let runtime = Runtime::builder()
-    .graph(graph)
+let tree = SupervisionTree::new()
     .strategy(Strategy::OneForOne)
-    .restart(RestartPolicy::OnFailure)
-    .actor_restart_intensity(&press_ref, RestartIntensity::new(5, Duration::from_secs(60)))
-    .build()?;
+    .default_restart(RestartPolicy::OnFailure)
+    .actor(graph.actor("front-desk").unwrap().clone())
+    .actor(
+        ActorSpec::new(graph.actor("press").unwrap().clone())
+            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+    );
+let runtime = tree.build()?;
 ```
 
-Use `RuntimeBuilder::child` to mix arbitrary non-actor `ChildSpec`s into the
-same supervisor. Use `RuntimeBuilder::subtree` for nested actor-aware or
-graph-less runtime builders.
+Use `SupervisionTree::task` to mix an arbitrary non-actor `ChildSpec` into an
+ordered scope, and `SupervisionTree::subtree` for recursive actor-aware or
+graph-less scopes. The flat runtime builders intentionally have no parallel
+child, subtree, or per-actor APIs.
 
 There are no string lookups anywhere on this path: every ref you need is
 minted at wiring time (or returned by `add_actor` for runtime-added actors)
@@ -158,9 +158,8 @@ or configure them as a runtime subtree for a scoped restart boundary.
 
 ## Declaring a Tree with the Derive
 
-`Runtime::builder` reconciles a flat graph with a hierarchical tree by hand.
-When the shape is static, `#[derive(Supervision)]` can declare both at once:
-struct nesting is scope nesting.
+When the shape is static, `#[derive(Supervision)]` can declare the graph and
+its `SupervisionTree` at once: struct nesting is scope nesting.
 
 ```rust,ignore
 use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Supervision};
@@ -227,13 +226,15 @@ Two field attributes select what a field is:
   builder is what makes the scope's mount handle available *before* wiring, so
   an actor can hold it as a durable factory field instead of looking the scope
   up after spawn. Policy comes from the builder
-  (`Runtime::dynamic().restart(..)`), not from attributes.
+  (`Runtime::dynamic().default_restart(..)`), not from attributes.
 
 Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
 field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
-the `SupervisionTree` declaration — paired, like every generated constructor,
-with the refs bundle — without building it, which is useful for asserting shape
-in tests through `outline()`.
+the non-`Clone` `ReservedSupervisionTree` declaration — paired, like every
+generated constructor, with the refs bundle — without building it. The
+reservation carries the pre-spawn identities for dynamic fields, so the mount
+handles supplied during wiring bind to the runtime eventually built from that
+exact declaration. It is also useful for asserting shape through `outline()`.
 
 Each of `graph`, `tree`, and `runtime` has a `_with` form taking a
 `GraphBuilder`. That builder is for graph-wide configuration — name and mailbox
@@ -243,5 +244,8 @@ tree, so
 a pre-registered actor joins the graph but is never started. Use `graph_with`
 when composing a graph by hand and hosting it yourself.
 
-Reach for `Runtime::builder` instead when the shape is not static — actors
-created in a loop, ids chosen at runtime, or subtrees assembled conditionally.
+Use `GraphBuilder::slot(id, ActorOptions)` plus `define` when graph actors are
+created in a loop or need hand-written wiring. Compose the resulting graph
+with `SupervisionTree`; reserve the tree first when wiring needs its pre-spawn
+handle. Reach for `Runtime::builder()` only when the final shape really is one
+graph in one ordered scope.

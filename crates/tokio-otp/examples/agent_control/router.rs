@@ -167,12 +167,15 @@ impl Router {
                 let subtree = mount
                     .add_subtree(
                         offload_id,
-                        SupervisionTree::new().actor_with_scope_strategy(
-                            "session-runtime",
-                            session_actor,
-                            SupervisionTree::dynamic(),
-                            Strategy::OneForAll,
-                        ),
+                        SupervisionTree::new()
+                            .actor_with_scope(
+                                "session-runtime",
+                                session_actor,
+                                SupervisionTree::dynamic(),
+                                Strategy::OneForAll,
+                            )
+                            .reserve()
+                            .expect("session subtree identity reserves"),
                     )
                     .await;
                 subtree.is_ok()

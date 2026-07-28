@@ -86,7 +86,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     );
     let handle = Runtime::builder()
         .graph(builder.build().expect("graph builds"))
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds")
         .spawn();

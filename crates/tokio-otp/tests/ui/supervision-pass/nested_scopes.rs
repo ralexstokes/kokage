@@ -51,7 +51,7 @@ fn main() -> Result<(), SupervisionBuildError> {
         },
         pool: PoolFactories {
             manager: || Worker,
-            sessions: Runtime::dynamic().restart(RestartPolicy::Never),
+            sessions: Runtime::dynamic().default_restart(RestartPolicy::Never),
         },
     })?;
 

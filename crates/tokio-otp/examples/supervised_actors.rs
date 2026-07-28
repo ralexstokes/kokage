@@ -76,7 +76,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let runtime = Runtime::builder()
         .graph(graph)
         .strategy(Strategy::OneForOne)
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()?;
     let handle = runtime.spawn();
 

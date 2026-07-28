@@ -9,7 +9,7 @@ use std::{
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
     Actor, ActorResult, AddSubtreeError, BoxError, ControlError, DynamicActorOptions, GraphBuilder,
-    LiveContext, MessageContext, RestartIntensity, Runtime, RuntimeBuilder, RuntimeHandle,
+    LiveContext, MessageContext, ReservedSupervisionTree, RestartIntensity, Runtime, RuntimeHandle,
     ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
     prelude::{Continue, Stop},
 };
@@ -175,7 +175,7 @@ impl Actor for BuilderHandleOwner {
     }
 }
 
-fn builder_owned_mount(report: mpsc::UnboundedSender<&'static str>) -> RuntimeBuilder {
+fn builder_owned_mount(report: mpsc::UnboundedSender<&'static str>) -> ReservedSupervisionTree {
     let mount_builder = Runtime::dynamic();
     let mount = mount_builder.handle();
     let mut graph = GraphBuilder::new();
@@ -184,9 +184,12 @@ fn builder_owned_mount(report: mpsc::UnboundedSender<&'static str>) -> RuntimeBu
         mount: mount.clone(),
         report: report.clone(),
     });
-    Runtime::builder()
-        .subtree("mount", mount_builder)
-        .graph(graph.build().expect("owner graph builds"))
+    let graph = graph.build().expect("owner graph builds");
+    SupervisionTree::new()
+        .reserve()
+        .expect("root identity reserves")
+        .reserved_subtree("mount", mount_builder.into_tree())
+        .actor(graph.actors()[0].clone())
 }
 
 async fn next_report(reports: &mut mpsc::UnboundedReceiver<&'static str>) -> &'static str {
@@ -204,6 +207,30 @@ async fn assert_snapshot_stream_closes(handle: &RuntimeHandle) {
     )
     .await
     .expect("snapshot stream closes");
+}
+
+#[tokio::test]
+async fn reserved_tree_handle_binds_to_the_built_runtime() {
+    let tree = SupervisionTree::dynamic()
+        .reserve()
+        .expect("dynamic identity reserves");
+    let reserved = tree.handle();
+    let spawned = tree.build().expect("reserved tree builds").spawn();
+
+    reserved
+        .wait_started()
+        .await
+        .expect("reserved scope starts");
+    reserved
+        .add_actor("worker", || Idle, DynamicActorOptions::new())
+        .await
+        .expect("reserved handle controls the built scope");
+    assert!(spawned.snapshot().child("worker").is_some());
+
+    reserved
+        .shutdown_and_wait()
+        .await
+        .expect("reserved handle stops the built scope");
 }
 
 #[tokio::test]
@@ -234,6 +261,15 @@ async fn runtime_builders_reserve_handles_and_terminalize_when_dropped() {
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
     drop(builder);
     assert_snapshot_stream_closes(&handle).await;
+
+    let child = Runtime::dynamic();
+    let child_handle = child.handle();
+    let parent = SupervisionTree::new()
+        .reserve()
+        .expect("parent identity reserves")
+        .reserved_subtree("child", child.into_tree());
+    drop(parent);
+    assert_snapshot_stream_closes(&child_handle).await;
 }
 
 #[test]
@@ -241,10 +277,13 @@ fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
     let mut graph = GraphBuilder::new();
     let (actor_slot, _) = graph.slot("actor", tokio_otp::ActorOptions::new());
     graph.define(actor_slot, || Idle);
-    let builder = Runtime::builder()
-        .child(ChildSpec::new("task", |_| async { Ok(()) }))
-        .graph(graph.build().expect("graph builds"));
-    let handle = builder.handle();
+    let graph = graph.build().expect("graph builds");
+    let tree = SupervisionTree::new()
+        .task(ChildSpec::new("task", |_| async { Ok(()) }))
+        .actor(graph.actors()[0].clone())
+        .reserve()
+        .expect("tree identity reserves");
+    let handle = tree.handle();
     let declared_before = handle
         .snapshot()
         .children
@@ -252,7 +291,7 @@ fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
         .map(|child| child.id)
         .collect::<Vec<_>>();
 
-    let builder = builder.strategy(Strategy::RestForOne);
+    let tree = tree.strategy(Strategy::RestForOne);
     let after = handle.snapshot();
 
     assert_eq!(after.strategy, Strategy::RestForOne);
@@ -265,16 +304,18 @@ fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
         declared_before
     );
     assert_eq!(declared_before, ["task", "actor"]);
-    drop(builder);
+    drop(tree);
 }
 
 #[tokio::test]
 async fn runtime_build_errors_and_rejected_subtrees_terminalize_reserved_handles() {
-    let builder = Runtime::builder()
-        .child(ChildSpec::new("duplicate", |_| async { Ok(()) }))
-        .child(ChildSpec::new("duplicate", |_| async { Ok(()) }));
-    let failed_ordered = builder.handle();
-    assert!(builder.build().is_err());
+    let tree = SupervisionTree::new()
+        .task(ChildSpec::new("duplicate", |_| async { Ok(()) }))
+        .task(ChildSpec::new("duplicate", |_| async { Ok(()) }))
+        .reserve()
+        .expect("tree identity reserves");
+    let failed_ordered = tree.handle();
+    assert!(tree.build().is_err());
     assert_snapshot_stream_closes(&failed_ordered).await;
 
     let builder = Runtime::dynamic().restart_intensity(RestartIntensity::new(1, Duration::ZERO));
@@ -380,6 +421,7 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
             "owned",
             graph.actors()[0].clone(),
             SupervisionTree::dynamic(),
+            Strategy::RestForOne,
         )
         .build()
         .expect("ActorWithScope builds");
@@ -454,6 +496,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
             "owned",
             leaders.actors()[0].clone(),
             SupervisionTree::graph(&workers),
+            Strategy::RestForOne,
         )
         .build()
         .expect("ordered ActorWithScope builds");
@@ -516,7 +559,7 @@ async fn wait_count(counter: &AtomicUsize, expected: usize) {
 }
 
 #[tokio::test]
-async fn actor_with_scope_defaults_to_rest_for_one() {
+async fn actor_with_scope_uses_explicit_rest_for_one() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let mut leaders = GraphBuilder::new();
@@ -541,6 +584,7 @@ async fn actor_with_scope_defaults_to_rest_for_one() {
         "owned",
         leaders.actors()[0].clone(),
         SupervisionTree::graph(&workers),
+        Strategy::RestForOne,
     );
     let outline = tree.outline().expect("valid tree has an outline");
     assert!(matches!(
@@ -588,7 +632,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     let inner = SupervisionTree::graph(&workers)
         .restart_intensity(RestartIntensity::new(1, Duration::from_secs(30)));
     let handle = SupervisionTree::new()
-        .actor_with_scope_strategy(
+        .actor_with_scope(
             "owned",
             leaders.actors()[0].clone(),
             inner,
@@ -608,21 +652,20 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 }
 
 #[tokio::test]
-async fn cloning_a_declaration_reserves_a_fresh_identity_for_the_copy() {
-    let builder = Runtime::builder().child(ChildSpec::new("task", |ctx| async move {
+async fn cloning_a_plain_tree_reserves_a_fresh_identity_for_each_copy() {
+    let tree = SupervisionTree::new().task(ChildSpec::new("task", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
-    let reserved = builder.handle();
-    let tree = builder.into_tree();
-
-    // The clone carries the declaration but not the reservation, so building
-    // and spawning it must not bind the handle taken from the original.
-    let spawned = tree
+    let reserved_tree = tree
         .clone()
-        .build()
-        .expect("cloned declaration builds")
-        .spawn();
+        .reserve()
+        .expect("copied tree identity reserves");
+    let reserved = reserved_tree.handle();
+
+    // A plain tree carries only the declaration, so building it must not bind
+    // the identity reserved independently from its clone.
+    let spawned = tree.build().expect("plain declaration builds").spawn();
     spawned.wait_started().await.expect("the clone starts");
     assert!(matches!(
         reserved
@@ -632,8 +675,8 @@ async fn cloning_a_declaration_reserves_a_fresh_identity_for_the_copy() {
         Err(ControlError::Unavailable)
     ));
 
-    // Dropping the original declaration abandons the reserved identity.
-    drop(tree);
+    // Dropping the reserved form abandons exactly its non-cloneable identity.
+    drop(reserved_tree);
     assert_snapshot_stream_closes(&reserved).await;
 
     spawned.shutdown();

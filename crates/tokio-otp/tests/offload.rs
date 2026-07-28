@@ -244,7 +244,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     });
     let runtime = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .unwrap()
         .spawn();
@@ -894,7 +894,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
     });
     let runtime = Runtime::builder()
         .graph(graph.build().unwrap())
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .unwrap()
         .spawn();

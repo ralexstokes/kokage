@@ -12,8 +12,8 @@ use tokio::{
     time::{advance, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, BoxError, GraphBuilder, RawActor, Reply, Runtime,
-    SendError, prelude::Continue,
+    ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
+    Runtime, SendError, SupervisionTree, prelude::Continue,
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy, Strategy,
@@ -105,7 +105,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     let runtime = Runtime::builder()
         .graph(graph)
         .strategy(Strategy::OneForOne)
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds");
 
@@ -185,14 +185,15 @@ async fn send_waits_during_permanent_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::new()
         .strategy(Strategy::OneForOne)
-        .actor_restart(&worker_ref, RestartPolicy::Always)
-        .actor_restart_intensity(
-            &worker_ref,
-            RestartIntensity::new(10, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
+        .actor(
+            ActorSpec::new(graph.actors()[0].clone())
+                .restart(RestartPolicy::Always)
+                .restart_intensity(
+                    RestartIntensity::new(10, Duration::from_secs(1))
+                        .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
+                ),
         )
         .build()
         .expect("runtime builds");
@@ -259,7 +260,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     let runtime = Runtime::builder()
         .graph(graph)
         .strategy(Strategy::OneForOne)
-        .restart(RestartPolicy::OnFailure)
+        .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
@@ -346,14 +347,15 @@ async fn call_succeeds_across_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::new()
         .strategy(Strategy::OneForOne)
-        .actor_restart(&rpc_ref, RestartPolicy::OnFailure)
-        .actor_restart_intensity(
-            &rpc_ref,
-            RestartIntensity::new(10, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
+        .actor(
+            ActorSpec::new(graph.actors()[0].clone())
+                .restart(RestartPolicy::OnFailure)
+                .restart_intensity(
+                    RestartIntensity::new(10, Duration::from_secs(1))
+                        .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
+                ),
         )
         .build()
         .expect("runtime builds");

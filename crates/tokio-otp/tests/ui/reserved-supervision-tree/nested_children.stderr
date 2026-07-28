@@ -1,0 +1,11 @@
+error[E0599]: no method named `children` found for struct `ReservedSupervisionTree` in the current scope
+  --> tests/ui/reserved-supervision-tree/nested_children.rs:10:29
+   |
+10 |     let _nested_copy = tree.children()[0].clone();
+   |                             ^^^^^^^^
+   |
+help: there is a method `child` with a similar name, but with different arguments
+  --> src/supervision.rs
+   |
+   |     pub fn child(self, child: SupervisionTree) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

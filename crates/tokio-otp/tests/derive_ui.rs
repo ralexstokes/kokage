@@ -19,6 +19,15 @@ fn lifecycle_stage_ui() {
     t.compile_fail("tests/ui/lifecycle-stages/*.rs");
 }
 
+/// A reserved tree owns live pre-spawn identities. The type system prevents
+/// both cloning that ownership and reaching through it to clone nested scope
+/// declarations that carry reservation markers.
+#[test]
+fn reserved_supervision_tree_ui() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/ui/reserved-supervision-tree/*.rs");
+}
+
 #[test]
 fn supervision_derive_ui() {
     let t = trybuild::TestCases::new();

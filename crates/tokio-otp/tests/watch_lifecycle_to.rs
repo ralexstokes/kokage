@@ -91,7 +91,7 @@ async fn runtime_with_watched_subtree() -> (
             "watched",
             Runtime::builder()
                 .graph(graph.build().expect("nested graph builds"))
-                .restart(RestartPolicy::OnFailure)
+                .default_restart(RestartPolicy::OnFailure)
                 .restart_intensity(RestartIntensity::new(8, Duration::from_secs(1))),
         )
         .await
