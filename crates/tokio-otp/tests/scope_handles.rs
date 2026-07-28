@@ -62,13 +62,9 @@ impl Actor for ScopeProbe {
             return Ok(Continue);
         };
         self.reports.send("some").expect("test receiver open");
-        // The raw supervisor handle is reachable only past `release`,
-        // since its own waits are the ones `RestrictedScope` withholds.
-        // Adding a child through it does not wait, so it is safe here.
+        // Task insertion schedules startup rather than awaiting readiness, so
+        // it remains available on the restricted startup-stage handle.
         let before_ready = children
-            .clone()
-            .release()
-            .supervisor_handle()
             .add_child(ChildSpec::new("too-early", |_| async { Ok(()) }))
             .await;
         assert!(matches!(before_ready, Err(ControlError::Unavailable)));
@@ -175,6 +171,26 @@ impl Actor for BuilderHandleOwner {
     }
 }
 
+struct RestrictedTaskAdder {
+    lineage: mpsc::UnboundedSender<u64>,
+}
+
+impl Actor for RestrictedTaskAdder {
+    type Msg = ();
+
+    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+        let children = ctx.children().expect("actor owns a dynamic scope");
+        let lineage = children
+            .add_child(ChildSpec::new("task", |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }))
+            .await?;
+        self.lineage.send(lineage).expect("test receiver open");
+        Ok(Continue)
+    }
+}
+
 fn builder_owned_mount(report: mpsc::UnboundedSender<&'static str>) -> ReservedSupervisionTree {
     let mount_builder = Runtime::dynamic();
     let mount = mount_builder.handle();
@@ -240,7 +256,6 @@ async fn runtime_builders_reserve_handles_and_terminalize_when_dropped() {
     assert_eq!(handle.snapshot().kind, ScopeKind::Ordered);
     assert!(matches!(
         handle
-            .supervisor_handle()
             .add_child(ChildSpec::new("early", |_| async { Ok(()) }))
             .await,
         Err(ControlError::Unavailable)
@@ -467,6 +482,48 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
 }
 
 #[tokio::test]
+async fn restricted_scope_add_child_returns_the_inserted_lineage() {
+    let (lineage_tx, mut lineage_rx) = mpsc::unbounded_channel();
+    let mut graph = GraphBuilder::new();
+    let (adder_slot, adder) = graph.slot("adder", tokio_otp::ActorOptions::new());
+    graph.define(adder_slot, move || RestrictedTaskAdder {
+        lineage: lineage_tx.clone(),
+    });
+    let graph = graph.build().expect("adder graph builds");
+    let handle = SupervisionTree::new()
+        .actor_with_scope(
+            "owned",
+            graph.actors()[0].clone(),
+            SupervisionTree::dynamic(),
+            Strategy::OneForOne,
+        )
+        .build()
+        .expect("tree builds")
+        .spawn();
+    handle.wait_started().await.expect("tree starts");
+
+    adder.send(()).await.expect("adder receives command");
+    let lineage = timeout(WAIT, lineage_rx.recv())
+        .await
+        .expect("timed out waiting for lineage")
+        .expect("lineage channel remains open");
+    let children = handle
+        .subtree("owned")
+        .and_then(|owned| owned.subtree("children"))
+        .expect("owned dynamic scope is registered");
+    assert_eq!(
+        children
+            .snapshot()
+            .child("task")
+            .expect("task is inserted")
+            .lineage,
+        lineage
+    );
+
+    handle.shutdown_and_wait().await.expect("tree stops");
+}
+
+#[tokio::test]
 async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let starts = Arc::new(AtomicUsize::new(0));
@@ -669,7 +726,6 @@ async fn cloning_a_plain_tree_reserves_a_fresh_identity_for_each_copy() {
     spawned.wait_started().await.expect("the clone starts");
     assert!(matches!(
         reserved
-            .supervisor_handle()
             .add_child(ChildSpec::new("late", |_| async { Ok(()) }))
             .await,
         Err(ControlError::Unavailable)

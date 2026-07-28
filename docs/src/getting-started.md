@@ -2,21 +2,21 @@
 
 ## Dependencies
 
-The crates are not yet published to crates.io, so use a git dependency (or a
-path dependency if you are working inside this repository). One dependency is
-enough for the whole tutorial:
+The crates are not yet published to crates.io, so use git dependencies (or
+path dependencies if you are working inside this repository). `tokio-otp` is
+the one dependency needed for the actor product. The opening chapters also
+construct raw task supervisors, so they name `tokio-supervisor` directly:
 
 ```toml
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-otp = { git = "https://github.com/ralexstokes/tokio-otp" }
+tokio-supervisor = { git = "https://github.com/ralexstokes/tokio-otp" }
 ```
 
-`tokio-otp` exports its whole surface (plus the common `tokio-supervisor`
-types) through `tokio_otp::prelude`, so a single `use tokio_otp::prelude::*;`
-covers every example in this book. The early chapters only exercise the
-supervision layer, so if that is all you need, you can depend on
-`tokio-supervisor` directly — it is independent of the actor layer.
+`tokio_otp::prelude` covers the common actor product surface, including
+policies and `ChildSpec`. Raw supervisor construction and control types stay in
+`tokio-supervisor`; if tasks are all you need, depend on that crate alone.
 
 ## Your first supervised task
 
@@ -29,7 +29,7 @@ shutdown policies.
 ```rust,no_run
 use std::time::Duration;
 
-use tokio_otp::prelude::*;
+use tokio_supervisor::{ChildSpec, SupervisorBuilder};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

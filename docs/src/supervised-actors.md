@@ -111,8 +111,8 @@ let runtime = tree.build()?;
 
 The tree's declaration order is its startup order and reverses for shutdown.
 `RuntimeHandle::actor_stats()` recursively includes both graphs.
-`handle.subtree("venues")` returns a scoped actor-aware runtime handle; its
-`supervisor_handle()` exposes lower-level supervisor control when needed.
+`handle.subtree("venues")` returns a scoped actor-aware runtime handle with
+the same observation, completion, shutdown, and dynamic-insertion operations.
 
 Actor children use `on_start` as their readiness boundary. Ordered runtimes do
 not spawn the next declared actor until that boundary is crossed; snapshots
@@ -120,6 +120,12 @@ remain `Starting`, and `ChildStarted` events and lifecycle `Started`
 transitions are delayed until `on_start` succeeds. Code outside the tree can
 await `RuntimeHandle::wait_started`; readiness is latched for a completed
 generation and resets on restart.
+
+Finite actor work stays on that same handle. `wait_completed(["importer"])`
+waits until the named child has exited successfully without a pending restart.
+`shutdown_on_completion(["importer"])` arms a background reduction that shuts
+the scope down at the same boundary; take the runtime's handle before spawning
+to avoid racing a fast child, and retain the returned guard.
 
 The lifecycle watch before sending `origami cranes x1000` is deliberate.
 A worker gets a fresh mailbox on restart; anything queued behind the crashing
@@ -146,7 +152,9 @@ let runtime = tree.build()?;
 
 Use `SupervisionTree::task` to mix an arbitrary non-actor `ChildSpec` into an
 ordered scope, and `SupervisionTree::subtree` for recursive actor-aware or
-graph-less scopes. The flat runtime builders intentionally have no parallel
+graph-less scopes. A dynamic `RuntimeHandle::add_child` adds the same task
+shape at runtime; task children appear in snapshots and lifecycle watches but
+not actor stats. The flat runtime builders intentionally have no parallel
 child, subtree, or per-actor APIs.
 
 There are no string lookups anywhere on this path: every ref you need is

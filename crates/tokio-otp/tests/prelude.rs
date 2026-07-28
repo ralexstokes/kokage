@@ -29,9 +29,12 @@ mod coverage_probe {
 
     mod advanced_root {
         use tokio_otp::{
-            ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, LiveContext, Supervisor, SupervisorBuildError,
-            SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec,
+            ChildSpec, ControlError, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
+            LiveContext, SupervisorBuildError, SupervisorError,
+        };
+        use tokio_supervisor::{
+            ChildContext, ChildResult, DynamicSupervisorBuilder, Supervisor, SupervisorBuilder,
+            SupervisorHandle, SupervisorSpec,
         };
     }
 }

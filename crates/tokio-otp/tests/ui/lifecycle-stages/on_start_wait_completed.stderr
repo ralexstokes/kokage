@@ -1,0 +1,5 @@
+error[E0599]: no method named `wait_completed` found for struct `RestrictedScope` in the current scope
+  --> tests/ui/lifecycle-stages/on_start_wait_completed.rs:12:34
+   |
+12 |         let _ = ctx.supervisor().wait_completed(["worker"]).await;
+   |                                  ^^^^^^^^^^^^^^ method not found in `RestrictedScope`

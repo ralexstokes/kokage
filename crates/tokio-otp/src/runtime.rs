@@ -10,9 +10,9 @@ use crate::{
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
-    AttachedChildIdentity, ChildSpec, ControlError, LifecycleEvent, LifecycleWatch,
-    RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSpec,
+    AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
+    LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
+    SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -388,6 +388,8 @@ impl Runtime {
     /// no actor metadata. Actors added through [`RuntimeHandle::add_actor`] are
     /// tracked normally when it is a dynamic supervisor; an ordered supervisor
     /// remains observation-only through this actor-aware wrapper.
+    /// `Supervisor` is intentionally not re-exported by `tokio-otp`, so this
+    /// raw adoption path requires a direct `tokio-supervisor` dependency.
     ///
     /// ```no_run
     /// use tokio_otp::{
@@ -448,6 +450,8 @@ impl Runtime {
     /// [`RuntimeHandle::add_actor`] and recursive actor stats are not available
     /// after converting to a raw supervisor. Keep the full runtime and use
     /// [`spawn`](Self::spawn) if you need actor-aware runtime behavior.
+    /// `Supervisor` is intentionally not re-exported by `tokio-otp`, so using
+    /// this raw escape hatch requires a direct `tokio-supervisor` dependency.
     ///
     /// ```no_run
     /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, Runtime};
@@ -544,16 +548,6 @@ impl RuntimeHandle {
             .clone()
     }
 
-    /// Returns a clone of the underlying supervisor handle.
-    ///
-    /// This is the explicit low-level escape hatch for raw supervisor
-    /// operations. Children and supervisors added through it do not carry this
-    /// runtime's private actor attachment and do not appear in
-    /// [`actor_stats`](Self::actor_stats).
-    pub fn supervisor_handle(&self) -> SupervisorHandle {
-        self.supervisor.clone()
-    }
-
     /// Requests a graceful shutdown of the supervisor.
     pub fn shutdown(&self) {
         self.supervisor.shutdown();
@@ -590,8 +584,8 @@ impl RuntimeHandle {
     /// scope; ordered scopes return
     /// [`ControlError::UnsupportedByScopeKind`]. Dynamic additions start
     /// immediately and dynamic siblings stop concurrently under one shared
-    /// maximum-grace deadline. Use [`SupervisorHandle::wait_started`] through
-    /// [`supervisor_handle`](Self::supervisor_handle) when readiness is needed.
+    /// maximum-grace deadline. Use [`wait_started`](Self::wait_started) when
+    /// readiness is needed.
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
@@ -614,8 +608,6 @@ impl RuntimeHandle {
     /// Returns the actor-aware handle for a direct runtime subtree.
     ///
     /// `None` means that this runtime has no registered subtree with `id`.
-    /// A raw supervisor added through [`supervisor_handle`](Self::supervisor_handle)
-    /// is intentionally outside this name-based runtime view.
     pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
         self.subtree_membership(id, None)
     }
@@ -644,6 +636,19 @@ impl RuntimeHandle {
             })
     }
 
+    /// Adds an arbitrary supervised task child to this runtime.
+    ///
+    /// This is the task-level counterpart to [`add_actor`](Self::add_actor).
+    /// It is supported only for dynamic scopes; ordered scopes return
+    /// [`ControlError::UnsupportedByScopeKind`]. Success means the membership
+    /// was inserted and startup was scheduled, and returns the lineage
+    /// assigned to that membership. Task children do not appear in
+    /// [`actor_stats`](Self::actor_stats), but remain visible through snapshots
+    /// and lifecycle watches.
+    pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
+        self.supervisor.add_child(child).await
+    }
+
     /// Adds a supervised runtime actor from an incarnation factory and returns
     /// its stable typed ref.
     ///
@@ -653,7 +658,7 @@ impl RuntimeHandle {
     /// is supported only for dynamic scopes; ordered scopes return
     /// [`ControlError::UnsupportedByScopeKind`]. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
-    /// can be used immediately, while [`SupervisorHandle::wait_started`]
+    /// can be used immediately, while [`wait_started`](Self::wait_started)
     /// retains the stronger readiness contract. A zero
     /// [`ActorOptions::mailbox_capacity`] is rejected with
     /// [`ControlError::InvalidConfig`].
@@ -726,6 +731,42 @@ impl RuntimeHandle {
     /// Waits until all current actor children have completed `on_start`.
     pub async fn wait_started(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait_started().await
+    }
+
+    /// Waits until every named child is simultaneously completed.
+    ///
+    /// Children are addressed by their supervisor child id. That id defaults
+    /// to an actor's graph label, but derived and nested scopes use the local
+    /// field or child name. Use a [`subtree`](Self::subtree) handle for nested
+    /// scopes. Awaiting an id that is never a child of this scope does not
+    /// complete. See
+    /// [`CompletionOutcome`] for the distinction between completion and the
+    /// supervisor stopping first.
+    pub async fn wait_completed<I, S>(&self, ids: I) -> CompletionOutcome
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.wait_completed(ids).await
+    }
+
+    /// Shuts this runtime down once every named child has completed.
+    ///
+    /// Child ids follow the same rules as [`wait_completed`](Self::wait_completed).
+    ///
+    /// Arm this from a pre-spawn handle when fast children could complete
+    /// immediately. The returned guard must be retained; dropping it cancels
+    /// the completion watch and leaves the runtime running.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime.
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.shutdown_on_completion(ids)
     }
 
     /// Returns the ordered lifecycle stream for this runtime's direct
