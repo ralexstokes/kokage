@@ -64,7 +64,8 @@ impl Actor for BlockingWorker {
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let worker = graph.actor("worker", move || BlockingWorker {
+    let (worker_slot, worker) = graph.slot("worker", tokio_otp::ActorOptions::new());
+    graph.define(worker_slot, move || BlockingWorker {
         observed: observed_tx.clone(),
     });
 

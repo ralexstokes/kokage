@@ -179,7 +179,8 @@ fn builder_owned_mount(report: mpsc::UnboundedSender<&'static str>) -> RuntimeBu
     let mount_builder = Runtime::dynamic();
     let mount = mount_builder.handle();
     let mut graph = GraphBuilder::new();
-    graph.actor("owner", move || BuilderHandleOwner {
+    let (actor_slot, _) = graph.slot("owner", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || BuilderHandleOwner {
         mount: mount.clone(),
         report: report.clone(),
     });
@@ -238,7 +239,8 @@ async fn runtime_builders_reserve_handles_and_terminalize_when_dropped() {
 #[test]
 fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
     let mut graph = GraphBuilder::new();
-    graph.actor("actor", || Idle);
+    let (actor_slot, _) = graph.slot("actor", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, || Idle);
     let builder = Runtime::builder()
         .child(ChildSpec::new("task", |_| async { Ok(()) }))
         .graph(graph.build().expect("graph builds"));
@@ -339,7 +341,8 @@ async fn builder_owned_mount_handle_supports_awaited_and_pipelined_subtree_adds(
 async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    graph.actor("ordinary", move || ScopeProbe {
+    let (actor_slot, _) = graph.slot("ordinary", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || ScopeProbe {
         reports: reports_tx.clone(),
         starts: Arc::new(AtomicUsize::new(0)),
         child_stopped: None,
@@ -361,7 +364,8 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let starts = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
-    let leader = graph.actor("leader", {
+    let (leader_slot, leader) = graph.slot("leader", tokio_otp::ActorOptions::new());
+    graph.define(leader_slot, {
         let starts = Arc::clone(&starts);
         move || ScopeProbe {
             reports: reports_tx.clone(),
@@ -426,7 +430,8 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     let starts = Arc::new(AtomicUsize::new(0));
     let child_stopped = Arc::new(AtomicBool::new(false));
     let mut leaders = GraphBuilder::new();
-    leaders.actor("leader", {
+    let (actor_slot, _) = leaders.slot("leader", tokio_otp::ActorOptions::new());
+    leaders.define(actor_slot, {
         let starts = Arc::clone(&starts);
         let child_stopped = Arc::clone(&child_stopped);
         move || ScopeProbe {
@@ -438,7 +443,8 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     });
     let leaders = leaders.build().expect("leader graph builds");
     let mut workers = GraphBuilder::new();
-    workers.actor("worker", {
+    let (actor_slot, _) = workers.slot("worker", tokio_otp::ActorOptions::new());
+    workers.define(actor_slot, {
         let child_stopped = Arc::clone(&child_stopped);
         move || StopProbe(Arc::clone(&child_stopped))
     });
@@ -514,7 +520,8 @@ async fn actor_with_scope_defaults_to_rest_for_one() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let mut leaders = GraphBuilder::new();
-    let leader = leaders.actor("leader", {
+    let (leader_slot, leader) = leaders.slot("leader", tokio_otp::ActorOptions::new());
+    leaders.define(leader_slot, {
         let starts = Arc::clone(&leader_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
@@ -522,7 +529,8 @@ async fn actor_with_scope_defaults_to_rest_for_one() {
     });
     let leaders = leaders.build().expect("leaders build");
     let mut workers = GraphBuilder::new();
-    let worker = workers.actor("worker", {
+    let (worker_slot, worker) = workers.slot("worker", tokio_otp::ActorOptions::new());
+    workers.define(worker_slot, {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
@@ -560,7 +568,8 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let mut leaders = GraphBuilder::new();
-    leaders.actor("leader", {
+    let (actor_slot, _) = leaders.slot("leader", tokio_otp::ActorOptions::new());
+    leaders.define(actor_slot, {
         let starts = Arc::clone(&leader_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
@@ -568,7 +577,8 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     });
     let leaders = leaders.build().expect("leaders build");
     let mut workers = GraphBuilder::new();
-    let worker = workers.actor("worker", {
+    let (worker_slot, worker) = workers.slot("worker", tokio_otp::ActorOptions::new());
+    workers.define(worker_slot, {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),

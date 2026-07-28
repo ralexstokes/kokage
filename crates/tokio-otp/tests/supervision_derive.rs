@@ -161,32 +161,14 @@ async fn derived_graph_runs_cyclic_pipeline() {
     stop_graph(stop, tasks).await;
 }
 
-#[tokio::test]
-async fn add_names_actor_after_its_type() {
-    let (out_tx, _out_rx) = mpsc::unbounded_channel();
-
-    let mut builder = GraphBuilder::new();
-    let first_out = out_tx.clone();
-    let first = builder.add(move || Sink {
-        out: first_out.clone(),
-    });
-    let second = builder.add(move || Sink {
-        out: out_tx.clone(),
-    });
-
-    assert_eq!(first.id(), "Sink");
-    assert_eq!(second.id(), "Sink-2");
-
-    builder.build().expect("valid graph");
-}
-
 #[test]
 fn unfilled_slot_is_a_build_error() {
     let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
     let mut builder = GraphBuilder::new();
-    let (_slot, _sink_ref) = builder.slot::<SinkMsg>("sink");
-    builder.add(move || Sink {
+    let (_slot, _sink_ref) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
+    let (defined_slot, _) = builder.slot::<SinkMsg>("defined", tokio_otp::ActorOptions::new());
+    builder.define(defined_slot, move || Sink {
         out: out_tx.clone(),
     });
 
@@ -200,8 +182,8 @@ fn unfilled_slot_is_a_build_error() {
 #[test]
 fn duplicate_slot_name_is_a_build_error() {
     let mut builder = GraphBuilder::new();
-    let (_a, _) = builder.slot::<SinkMsg>("sink");
-    let (_b, _) = builder.slot::<SinkMsg>("sink");
+    let (_a, _) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
+    let (_b, _) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
 
     match builder.build() {
         Err(GraphBuildError::DuplicateActorId { actor_id, .. }) => assert_eq!(actor_id, "sink"),
@@ -215,10 +197,10 @@ fn slot_token_from_another_builder_is_a_build_error() {
     let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
     let mut other = GraphBuilder::new();
-    let (foreign_slot, _) = other.slot::<SinkMsg>("sink");
+    let (foreign_slot, _) = other.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
 
     let mut builder = GraphBuilder::new();
-    let (_own_slot, _) = builder.slot::<SinkMsg>("sink");
+    let (_own_slot, _) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
     builder.define(foreign_slot, move || Sink {
         out: out_tx.clone(),
     });
@@ -355,7 +337,8 @@ async fn graph_with_applies_builder_config() {
 #[test]
 fn graph_with_reports_field_name_collision_with_pre_registered_actor() {
     let mut builder = GraphBuilder::new();
-    builder.actor("park", || Park);
+    let (actor_slot, _) = builder.slot("park", tokio_otp::ActorOptions::new());
+    builder.define(actor_slot, || Park);
 
     match ParkGraph::graph_with(builder, |_| ParkGraphFactories { park: || Park }) {
         Err(GraphBuildError::DuplicateActorId { actor_id, .. }) => assert_eq!(actor_id, "park"),
@@ -367,10 +350,11 @@ fn graph_with_reports_field_name_collision_with_pre_registered_actor() {
 #[test]
 fn empty_slot_name_records_invalid_config_and_detaches() {
     let mut builder = GraphBuilder::new();
-    let (slot, actor_ref) = builder.slot::<()>("");
+    let (slot, actor_ref) = builder.slot::<()>("", tokio_otp::ActorOptions::new());
     assert_eq!(actor_ref.id(), "");
     builder.define(slot, || Park);
-    builder.actor("real", || Park);
+    let (actor_slot, _) = builder.slot("real", tokio_otp::ActorOptions::new());
+    builder.define(actor_slot, || Park);
 
     match builder.build() {
         Err(GraphBuildError::InvalidConfig(msg)) => {
@@ -383,8 +367,8 @@ fn empty_slot_name_records_invalid_config_and_detaches() {
 #[test]
 fn define_on_duplicate_detached_token_does_not_corrupt_first_slot() {
     let mut builder = GraphBuilder::new();
-    let (first_slot, _first_ref) = builder.slot::<()>("park");
-    let (dup_slot, _dup_ref) = builder.slot::<()>("park");
+    let (first_slot, _first_ref) = builder.slot::<()>("park", tokio_otp::ActorOptions::new());
+    let (dup_slot, _dup_ref) = builder.slot::<()>("park", tokio_otp::ActorOptions::new());
 
     builder.define(first_slot, || Park);
     builder.define(dup_slot, || Park);
@@ -393,15 +377,4 @@ fn define_on_duplicate_detached_token_does_not_corrupt_first_slot() {
         Err(GraphBuildError::DuplicateActorId { actor_id, .. }) => assert_eq!(actor_id, "park"),
         other => panic!("expected DuplicateActorId, got {other:?}"),
     }
-}
-
-#[test]
-fn add_skips_explicitly_taken_suffix() {
-    let mut builder = GraphBuilder::new();
-    builder.actor("Park-2", || Park);
-    let first = builder.add(|| Park);
-    let second = builder.add(|| Park);
-    assert_eq!(first.id(), "Park");
-    assert_eq!(second.id(), "Park-3");
-    builder.build().expect("valid graph");
 }

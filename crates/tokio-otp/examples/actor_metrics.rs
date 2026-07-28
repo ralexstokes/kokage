@@ -45,7 +45,8 @@ async fn sample(worker: ActorRef<&'static str>, runtime: RuntimeHandle, stop: Ca
 async fn main() -> Result<(), Box<dyn Error>> {
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let worker = graph.add(move || Worker {
+    let (worker_slot, worker) = graph.slot("Worker", tokio_otp::ActorOptions::new());
+    graph.define(worker_slot, move || Worker {
         completed: completed_tx.clone(),
     });
     let runtime = Runtime::builder().graph(graph.build()?).build()?;

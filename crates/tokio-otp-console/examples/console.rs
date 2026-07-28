@@ -151,9 +151,11 @@ fn telemetry_runtime() -> RuntimeBuilder {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
+    let (worker_slot, worker_ref) =
+        builder.slot::<String>("worker", tokio_otp::ActorOptions::new());
     let frontend_worker = worker_ref.clone();
-    let frontend = builder.actor("frontend", move || Frontend {
+    let (frontend_slot, frontend) = builder.slot("frontend", tokio_otp::ActorOptions::new());
+    builder.define(frontend_slot, move || Frontend {
         worker: frontend_worker.clone(),
     });
     builder.define(worker_slot, || Worker);

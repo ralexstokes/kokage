@@ -77,8 +77,9 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
 
     let starts = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let actor_ref = builder.actor(
-        "derived",
+    let (actor_ref_slot, actor_ref) = builder.slot("derived", tokio_otp::ActorOptions::new());
+    builder.define(
+        actor_ref_slot,
         DerivedActorFactory {
             starts: starts.clone(),
         },

@@ -49,7 +49,8 @@ use crate::actor::raw::RawActor;
 ///
 /// let ids = Arc::new(AtomicU64::new(0));
 /// let mut graph = GraphBuilder::new();
-/// graph.actor("worker", WorkerFactory { ids: ids.clone() });
+/// let (actor_slot, _) = graph.slot("worker", tokio_otp::ActorOptions::new());
+/// graph.define(actor_slot, WorkerFactory { ids: ids.clone() });
 /// # }
 /// # #[cfg(not(feature = "derive"))]
 /// # fn main() {}

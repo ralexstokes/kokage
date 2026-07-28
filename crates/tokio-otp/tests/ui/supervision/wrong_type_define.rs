@@ -13,6 +13,6 @@ impl Actor for Worker {
 
 fn main() {
     let mut builder = GraphBuilder::new();
-    let (slot, _worker) = builder.slot::<String>("worker");
+    let (slot, _worker) = builder.slot::<String>("worker", tokio_otp::ActorOptions::new());
     builder.define(slot, || Worker);
 }

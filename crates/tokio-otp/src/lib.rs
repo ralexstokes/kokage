@@ -23,7 +23,8 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut graph = GraphBuilder::new();
-//! let echo = graph.add(|| Echo);
+//! let (echo_slot, echo) = graph.slot("Echo", tokio_otp::ActorOptions::new());
+//! graph.define(echo_slot, || Echo);
 //!
 //! let runtime = Runtime::builder()
 //!     .graph(graph.build()?)
@@ -156,7 +157,8 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut builder = GraphBuilder::new();
 //! builder.name("example");
-//! let counter = builder.add(|| Counter { total: 0 });
+//! let (counter_slot, counter) = builder.slot("Counter", tokio_otp::ActorOptions::new());
+//! builder.define(counter_slot, || Counter { total: 0 });
 //! let graph = builder.build().expect("valid graph");
 //!
 //! let actor = graph.actors()[0].clone();

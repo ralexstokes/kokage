@@ -707,7 +707,8 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let watcher = graph.actor("watcher", move || Watcher {
+    let (watcher_slot, watcher) = graph.slot("watcher", tokio_otp::ActorOptions::new());
+    graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
     let handle = Runtime::builder()
@@ -1177,7 +1178,8 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
 async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let forwarder = builder.actor("forwarder", || Forwarder);
+    let (forwarder_slot, forwarder) = builder.slot("forwarder", tokio_otp::ActorOptions::new());
+    builder.define(forwarder_slot, || Forwarder);
     let handle = Runtime::builder()
         .graph(builder.build().expect("valid graph"))
         .subtree("dynamic", Runtime::dynamic())
@@ -1235,7 +1237,8 @@ impl RawActor for ForwardTo {
 async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let sink = builder.actor("sink", move || Observe {
+    let (sink_slot, sink) = builder.slot("sink", tokio_otp::ActorOptions::new());
+    builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });
     let handle = Runtime::builder()

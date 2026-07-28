@@ -68,8 +68,10 @@ impl Actor for Worker {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let _ingest = graph.actor("ingest", || Worker);
-    let _parse = graph.actor("parse", || Worker);
+    let (_ingest_slot, _ingest) = graph.slot("ingest", tokio_otp::ActorOptions::new());
+    graph.define(_ingest_slot, || Worker);
+    let (_parse_slot, _parse) = graph.slot("parse", tokio_otp::ActorOptions::new());
+    graph.define(_parse_slot, || Worker);
     let graph = graph.build()?;
 
     let tree = SupervisionTree::new()

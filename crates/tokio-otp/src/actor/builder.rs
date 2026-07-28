@@ -1,5 +1,4 @@
 use std::{
-    any::type_name,
     collections::HashMap,
     fmt,
     sync::{
@@ -150,10 +149,10 @@ impl<M> ActorSlot<M> {
 
 /// Builder for constructing a validated actor graph.
 ///
-/// Registration methods mint restart-stable, typed [`ActorRef`]s immediately,
-/// so refs can be captured by other actors' state. Cyclic graphs use
-/// [`slot`](Self::slot) to create refs first and [`define`](Self::define) to
-/// fill the slots once actor factories have been wired.
+/// Registration mints restart-stable, typed [`ActorRef`]s with
+/// [`slot`](Self::slot), then fills each slot with [`define`](Self::define).
+/// Reserving refs before defining factories allows refs to be captured by
+/// other actors' state, including when wiring cyclic graphs.
 ///
 /// # Mailboxes and cycles
 ///
@@ -229,13 +228,9 @@ impl GraphBuilder {
     /// This enables cyclic wiring: create all refs first, hand them to actor
     /// constructors, then consume each [`ActorSlot`] with [`define`](Self::define).
     /// The name is fixed when the slot is opened because it is used as the
-    /// actor label in observability.
-    pub fn slot<M: Send + 'static>(&mut self, actor_id: &str) -> (ActorSlot<M>, ActorRef<M>) {
-        self.slot_with_options(actor_id, ActorOptions::new())
-    }
-
-    /// Opens a named slot with explicit per-actor options.
-    pub fn slot_with_options<M: Send + 'static>(
+    /// actor label in observability. `options` configures this actor's mailbox
+    /// and message-size observation.
+    pub fn slot<M: Send + 'static>(
         &mut self,
         actor_id: &str,
         options: ActorOptions<M>,
@@ -301,69 +296,6 @@ impl GraphBuilder {
             binding: core,
             mailbox_mode,
         }));
-    }
-
-    /// Registers an incarnation factory and returns its typed, restart-stable ref.
-    ///
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub fn actor<F>(&mut self, actor_id: &str, factory: F) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        self.actor_with_options(actor_id, factory, ActorOptions::new())
-    }
-
-    /// Registers an incarnation factory with explicit per-actor options.
-    ///
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub fn actor_with_options<F>(
-        &mut self,
-        actor_id: &str,
-        factory: F,
-        options: ActorOptions<<F::Actor as RawActor>::Msg>,
-    ) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        let (slot, actor_ref) = self.slot_with_options(actor_id, options);
-        self.define(slot, factory);
-        actor_ref
-    }
-
-    /// Registers an incarnation factory under its actor's unqualified type name.
-    ///
-    /// If multiple actors have the same type name, later registrations receive
-    /// `-2`, `-3`, and so on. Renaming the actor type therefore renames tracing
-    /// fields; users who need stable observability names
-    /// should use [`actor`](Self::actor) or `#[derive(Supervision)]` field names.
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub fn add<F>(&mut self, factory: F) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        self.add_with_options(factory, ActorOptions::new())
-    }
-
-    /// Registers an incarnation factory under its actor's unqualified type name
-    /// with explicit per-actor options.
-    ///
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub fn add_with_options<F>(
-        &mut self,
-        factory: F,
-        options: ActorOptions<<F::Actor as RawActor>::Msg>,
-    ) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        let base = short_type_name(type_name::<F::Actor>());
-        let mut actor_id = base.to_owned();
-        let mut suffix = 2;
-        while self.index.contains_key(actor_id.as_str()) {
-            actor_id = format!("{base}-{suffix}");
-            suffix += 1;
-        }
-        self.actor_with_options(&actor_id, factory, options)
     }
 
     /// Validates the graph and returns an immutable [`Graph`].
@@ -461,16 +393,9 @@ impl GraphBuilder {
     }
 }
 
-fn short_type_name(type_name: &str) -> &str {
-    let name = type_name
-        .split_once('<')
-        .map_or(type_name, |(name, _)| name);
-    name.rsplit("::").next().unwrap_or(name)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ActorOptions, MailboxMode, short_type_name};
+    use super::{ActorOptions, MailboxMode};
 
     struct OpaqueMessage;
 
@@ -481,16 +406,5 @@ mod tests {
 
         let cloned = options.clone();
         assert_eq!(format!("{cloned:?}"), format!("{options:?}"));
-    }
-
-    #[test]
-    fn short_type_name_handles_plain_path_qualified_and_generics() {
-        assert_eq!(short_type_name("Sink"), "Sink");
-        assert_eq!(short_type_name("orders::Gateway"), "Gateway");
-        assert_eq!(short_type_name("orders::Gateway<fix::Fix>"), "Gateway");
-        assert_eq!(
-            short_type_name("orders::Gateway<fix::Fix<wire::Header>, sink::Out>"),
-            "Gateway"
-        );
     }
 }

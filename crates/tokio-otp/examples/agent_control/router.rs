@@ -132,8 +132,9 @@ impl Router {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
         let mut graph = GraphBuilder::new();
-        let actor = graph.actor(
-            "session",
+        let (actor_slot, actor) = graph.slot("session", tokio_otp::ActorOptions::new());
+        graph.define(
+            actor_slot,
             SessionFactory {
                 chat,
                 generation,

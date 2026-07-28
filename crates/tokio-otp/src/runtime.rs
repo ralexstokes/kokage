@@ -491,7 +491,8 @@ impl Runtime {
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut graph = GraphBuilder::new();
-    /// graph.actor("worker", || Worker);
+    /// let (actor_slot, _) = graph.slot("worker", tokio_otp::ActorOptions::new());
+    /// graph.define(actor_slot, || Worker);
     /// let actor_subtree = Runtime::builder()
     ///     .graph(graph.build()?)
     ///     .build()?

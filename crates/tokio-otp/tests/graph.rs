@@ -156,8 +156,9 @@ async fn typed_pipeline_end_to_end() {
     let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
 
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker) = builder.slot::<Job>("worker");
-    let frontend = builder.actor("frontend", move || Frontend {
+    let (worker_slot, worker) = builder.slot::<Job>("worker", ActorOptions::new());
+    let (frontend_slot, frontend) = builder.slot("frontend", ActorOptions::new());
+    builder.define(frontend_slot, move || Frontend {
         worker: worker.clone(),
     });
     builder.define(worker_slot, move || Worker {
@@ -197,7 +198,8 @@ async fn send_to_never_started_graph_waits_until_graph_runs() {
     let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
 
     let mut builder = GraphBuilder::new();
-    let echo = builder.actor("echo", move || Echo {
+    let (echo_slot, echo) = builder.slot("echo", ActorOptions::new());
+    builder.define(echo_slot, move || Echo {
         seen: seen_tx.clone(),
     });
     let graph = builder.build().expect("valid graph");
@@ -223,7 +225,8 @@ async fn send_to_never_started_graph_waits_until_graph_runs() {
 #[tokio::test]
 async fn try_send_reports_unbound_and_terminated_states() {
     let mut builder = GraphBuilder::new();
-    let worker = builder.actor("worker", Drain::<()>::new);
+    let (worker_slot, worker) = builder.slot("worker", ActorOptions::new());
+    builder.define(worker_slot, Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
     assert!(matches!(
@@ -266,7 +269,8 @@ impl RawActor for Counter {
 #[tokio::test]
 async fn call_reply_roundtrip() {
     let mut builder = GraphBuilder::new();
-    let counter = builder.actor("counter", || Counter);
+    let (counter_slot, counter) = builder.slot("counter", ActorOptions::new());
+    builder.define(counter_slot, || Counter);
     let graph = builder.build().expect("valid graph");
 
     let (stop, task) = start_graph(&graph);
@@ -313,7 +317,8 @@ impl Actor for HandlerCounter {
 #[tokio::test]
 async fn handler_receives_messages_in_order_and_preserves_state() {
     let mut builder = GraphBuilder::new();
-    let counter = builder.actor("counter", || HandlerCounter { total: 0 });
+    let (counter_slot, counter) = builder.slot("counter", ActorOptions::new());
+    builder.define(counter_slot, || HandlerCounter { total: 0 });
     let graph = builder.build().expect("valid graph");
 
     let (stop, task) = start_graph(&graph);
@@ -378,7 +383,8 @@ impl Actor for LifecycleHandler {
 async fn handler_on_start_runs_before_first_message() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", move || LifecycleHandler {
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, move || LifecycleHandler {
         events: events_tx.clone(),
     });
     let graph = builder.build().expect("valid graph");
@@ -436,7 +442,8 @@ impl Actor for FailingStartHandler {
 async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    builder.actor("worker", move || FailingStartHandler {
+    let (actor_slot, _) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, move || FailingStartHandler {
         events: events_tx.clone(),
     });
     let graph = builder.build().expect("valid graph");
@@ -476,7 +483,8 @@ impl Actor for FailingHandler {
 #[tokio::test]
 async fn handler_error_fails_the_actor_run() {
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", || FailingHandler);
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, || FailingHandler);
     let graph = builder.build().expect("valid graph");
 
     let worker = runnable(&graph, "worker");
@@ -571,7 +579,8 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", {
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, {
         let release = release.clone();
         move || GateHandler {
             total: 0,
@@ -617,7 +626,8 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", {
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, {
         let release = release.clone();
         move || GateHandler {
             total: 0,
@@ -682,7 +692,8 @@ async fn handler_discard_drops_queued_messages_and_call_reply() {
     let release = Arc::new(Notify::new());
 
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", {
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, {
         let release = release.clone();
         move || GateHandler {
             total: 0,
@@ -726,7 +737,8 @@ async fn handler_drain_handles_queued_messages_and_replies_before_stop() {
     let release = Arc::new(Notify::new());
 
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", {
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, {
         let release = release.clone();
         move || GateHandler {
             total: 0,
@@ -831,7 +843,8 @@ async fn try_recv_drains_messages_after_shutdown_recv_returns_none() {
     let release = Arc::new(Notify::new());
 
     let mut builder = GraphBuilder::new();
-    let actor = builder.actor("worker", {
+    let (actor_slot, actor) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, {
         let release = release.clone();
         move || TryDrainActor {
             started: started_tx.clone(),
@@ -905,8 +918,9 @@ async fn cyclic_wiring_via_slot() {
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
 
     let mut builder = GraphBuilder::new();
-    let (pong_slot, pong) = builder.slot::<Ball>("pong");
-    let ping = builder.actor("ping", {
+    let (pong_slot, pong) = builder.slot::<Ball>("pong", ActorOptions::new());
+    let (ping_slot, ping) = builder.slot("ping", ActorOptions::new());
+    builder.define(ping_slot, {
         let done_tx = done_tx.clone();
         move || Paddle {
             other: pong.clone(),
@@ -932,7 +946,8 @@ async fn cyclic_wiring_via_slot() {
 fn graph_preserves_explicit_name() {
     let mut builder = GraphBuilder::new();
     builder.name("orders");
-    builder.actor("worker", Drain::<()>::new);
+    let (actor_slot, _) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
     assert_eq!(graph.name(), "orders");
@@ -941,11 +956,13 @@ fn graph_preserves_explicit_name() {
 #[test]
 fn graph_generates_unique_anonymous_names() {
     let mut first = GraphBuilder::new();
-    first.actor("worker", Drain::<()>::new);
+    let (actor_slot, _) = first.slot("worker", ActorOptions::new());
+    first.define(actor_slot, Drain::<()>::new);
     let first = first.build().expect("valid graph");
 
     let mut second = GraphBuilder::new();
-    second.actor("worker", Drain::<()>::new);
+    let (actor_slot, _) = second.slot("worker", ActorOptions::new());
+    second.define(actor_slot, Drain::<()>::new);
     let second = second.build().expect("valid graph");
 
     assert_ne!(first.name(), second.name());
@@ -956,15 +973,17 @@ fn graph_generates_unique_anonymous_names() {
 #[test]
 fn build_rejects_invalid_graph_definitions() {
     let mut missing = GraphBuilder::new();
-    let (_slot, _ghost) = missing.slot::<u32>("ghost");
+    let (_slot, _ghost) = missing.slot::<u32>("ghost", ActorOptions::new());
     assert!(matches!(
         missing.build(),
         Err(GraphBuildError::MissingActor { actor_id , .. }) if actor_id == "ghost"
     ));
 
     let mut duplicate = GraphBuilder::new();
-    duplicate.actor("worker", Drain::<u32>::new);
-    duplicate.actor("worker", Drain::<u32>::new);
+    let (actor_slot, _) = duplicate.slot("worker", ActorOptions::new());
+    duplicate.define(actor_slot, Drain::<u32>::new);
+    let (actor_slot, _) = duplicate.slot("worker", ActorOptions::new());
+    duplicate.define(actor_slot, Drain::<u32>::new);
     assert!(matches!(
         duplicate.build(),
         Err(GraphBuildError::DuplicateActorId { actor_id , .. }) if actor_id == "worker"
@@ -975,7 +994,8 @@ fn build_rejects_invalid_graph_definitions() {
 
     let mut empty_name = GraphBuilder::new();
     empty_name.name("");
-    empty_name.actor("worker", Drain::<()>::new);
+    let (actor_slot, _) = empty_name.slot("worker", ActorOptions::new());
+    empty_name.define(actor_slot, Drain::<()>::new);
     assert!(matches!(
         empty_name.build(),
         Err(GraphBuildError::InvalidConfig(
@@ -985,7 +1005,8 @@ fn build_rejects_invalid_graph_definitions() {
 
     let mut zero_capacity = GraphBuilder::new();
     zero_capacity.mailbox_capacity(0);
-    zero_capacity.actor("worker", Drain::<()>::new);
+    let (actor_slot, _) = zero_capacity.slot("worker", ActorOptions::new());
+    zero_capacity.define(actor_slot, Drain::<()>::new);
     assert!(matches!(
         zero_capacity.build(),
         Err(GraphBuildError::InvalidConfig(
@@ -994,11 +1015,9 @@ fn build_rejects_invalid_graph_definitions() {
     ));
 
     let mut zero_actor_capacity = GraphBuilder::new();
-    zero_actor_capacity.actor_with_options(
-        "worker",
-        Drain::<()>::new,
-        ActorOptions::new().mailbox_capacity(0),
-    );
+    let (actor_slot, _) =
+        zero_actor_capacity.slot("worker", ActorOptions::new().mailbox_capacity(0));
+    zero_actor_capacity.define(actor_slot, Drain::<()>::new);
     assert!(matches!(
         zero_actor_capacity.build(),
         Err(GraphBuildError::InvalidConfig(
@@ -1011,12 +1030,10 @@ fn build_rejects_invalid_graph_definitions() {
 async fn an_actor_can_depart_from_the_graph_wide_mailbox_capacity() {
     let mut builder = GraphBuilder::new();
     builder.mailbox_capacity(2);
-    let shallow = builder.actor("shallow", Drain::<()>::new);
-    let deep = builder.actor_with_options(
-        "deep",
-        Drain::<()>::new,
-        ActorOptions::new().mailbox_capacity(9),
-    );
+    let (shallow_slot, shallow) = builder.slot("shallow", ActorOptions::new());
+    builder.define(shallow_slot, Drain::<()>::new);
+    let (deep_slot, deep) = builder.slot("deep", ActorOptions::new().mailbox_capacity(9));
+    builder.define(deep_slot, Drain::<()>::new);
     let graph = builder.build().expect("graph builds");
 
     // Capacity is a property of the bound mailbox, so it is observable only
@@ -1071,8 +1088,10 @@ impl RawActor for Fail {
 #[tokio::test]
 async fn actor_error_fails_its_run() {
     let mut builder = GraphBuilder::new();
-    builder.actor("healthy", Drain::<()>::new);
-    builder.actor("bad", || Fail);
+    let (actor_slot, _) = builder.slot("healthy", ActorOptions::new());
+    builder.define(actor_slot, Drain::<()>::new);
+    let (actor_slot, _) = builder.slot("bad", ActorOptions::new());
+    builder.define(actor_slot, || Fail);
     let graph = builder.build().expect("valid graph");
 
     let result = runnable(&graph, "bad")
@@ -1102,7 +1121,8 @@ impl RawActor for Quit {
 #[tokio::test]
 async fn early_clean_exit_is_a_clean_actor_run() {
     let mut builder = GraphBuilder::new();
-    builder.actor("quitter", || Quit);
+    let (actor_slot, _) = builder.slot("quitter", ActorOptions::new());
+    builder.define(actor_slot, || Quit);
     let graph = builder.build().expect("valid graph");
 
     runnable(&graph, "quitter")
@@ -1146,7 +1166,8 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
     let started = Arc::new(Notify::new());
     let live = Arc::new(AtomicBool::new(false));
     let mut builder = GraphBuilder::new();
-    builder.actor("worker", {
+    let (actor_slot, _) = builder.slot("worker", ActorOptions::new());
+    builder.define(actor_slot, {
         let started = started.clone();
         let live = live.clone();
         move || Stubborn {
@@ -1185,9 +1206,11 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
 #[test]
 fn actors_are_exposed_in_declaration_order() {
     let mut builder = GraphBuilder::new();
-    builder.actor("first", Drain::<()>::new);
-    let (slot, _second) = builder.slot::<u32>("second");
-    builder.actor("third", Drain::<()>::new);
+    let (actor_slot, _) = builder.slot("first", ActorOptions::new());
+    builder.define(actor_slot, Drain::<()>::new);
+    let (slot, _second) = builder.slot::<u32>("second", ActorOptions::new());
+    let (actor_slot, _) = builder.slot("third", ActorOptions::new());
+    builder.define(actor_slot, Drain::<()>::new);
     builder.define(slot, Drain::<u32>::new);
     let graph = builder.build().expect("valid graph");
 
@@ -1198,7 +1221,8 @@ fn actors_are_exposed_in_declaration_order() {
 #[tokio::test]
 async fn send_to_dropped_never_started_graph_returns_actor_terminated() {
     let mut builder = GraphBuilder::new();
-    let echo = builder.actor("echo", Drain::<u32>::new);
+    let (echo_slot, echo) = builder.slot("echo", ActorOptions::new());
+    builder.define(echo_slot, Drain::<u32>::new);
     let graph = builder.build().expect("valid graph");
 
     drop(graph);
@@ -1333,24 +1357,17 @@ mod runnable_actor {
     #[test]
     fn failed_sized_registration_returns_a_sized_detached_ref() {
         let mut builder = GraphBuilder::new();
-        builder.actor_with_options(
-            "worker",
-            Drain::<SizedPayload>::new,
-            ActorOptions::new().message_size(),
-        );
-        let detached = builder.actor_with_options(
-            "worker",
-            Drain::<SizedPayload>::new,
-            ActorOptions::new().message_size(),
-        );
+        let (actor_slot, _) = builder.slot("worker", ActorOptions::new().message_size());
+        builder.define(actor_slot, Drain::<SizedPayload>::new);
+        let (detached_slot, detached) = builder.slot("worker", ActorOptions::new().message_size());
+        builder.define(detached_slot, Drain::<SizedPayload>::new);
 
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
 
         let mut slot_builder = GraphBuilder::new();
-        slot_builder
-            .slot_with_options::<SizedPayload>("worker", ActorOptions::new().message_size());
-        let (_detached_slot, detached) = slot_builder
-            .slot_with_options::<SizedPayload>("worker", ActorOptions::new().message_size());
+        slot_builder.slot::<SizedPayload>("worker", ActorOptions::new().message_size());
+        let (_detached_slot, detached) =
+            slot_builder.slot::<SizedPayload>("worker", ActorOptions::new().message_size());
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
         assert!(matches!(
             detached.try_send(SizedPayload(Vec::new())),
@@ -1420,7 +1437,8 @@ mod runnable_actor {
         let release = Arc::new(Notify::new());
         let mut builder = GraphBuilder::new();
         builder.mailbox_capacity(2);
-        let worker_ref = builder.actor("worker", {
+        let (worker_ref_slot, worker_ref) = builder.slot("worker", ActorOptions::new());
+        builder.define(worker_ref_slot, {
             let release = release.clone();
             move || GatedDrain {
                 started: started_tx.clone(),
@@ -1469,18 +1487,16 @@ mod runnable_actor {
         let release = Arc::new(Notify::new());
         let mut builder = GraphBuilder::new();
         builder.mailbox_capacity(1);
-        let worker_ref = builder.actor_with_options(
-            "worker",
-            {
-                let release = release.clone();
-                move || GatedSizedDrain {
-                    started: started_tx.clone(),
-                    release: release.clone(),
-                    received: received_tx.clone(),
-                }
-            },
-            ActorOptions::new().message_size(),
-        );
+        let (worker_ref_slot, worker_ref) =
+            builder.slot("worker", ActorOptions::new().message_size());
+        builder.define(worker_ref_slot, {
+            let release = release.clone();
+            move || GatedSizedDrain {
+                started: started_tx.clone(),
+                release: release.clone(),
+                received: received_tx.clone(),
+            }
+        });
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
         let (stop, task) = start_actor(worker);
@@ -1509,7 +1525,8 @@ mod runnable_actor {
     #[tokio::test(start_paused = true)]
     async fn standalone_shutdown_timeout_is_reported_as_an_error() {
         let mut builder = GraphBuilder::new();
-        builder.actor("worker", || NeverStops);
+        let (actor_slot, _) = builder.slot("worker", ActorOptions::new());
+        builder.define(actor_slot, || NeverStops);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
 
@@ -1528,7 +1545,8 @@ mod runnable_actor {
     #[tokio::test(start_paused = true)]
     async fn standalone_shutdown_bound_leaves_cooperative_actor_clean() {
         let mut builder = GraphBuilder::new();
-        builder.actor("worker", || StopsOnShutdown);
+        let (actor_slot, _) = builder.slot("worker", ActorOptions::new());
+        builder.define(actor_slot, || StopsOnShutdown);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
 
@@ -1541,7 +1559,8 @@ mod runnable_actor {
     #[tokio::test(start_paused = true)]
     async fn dynamic_actor_uses_its_supervisor_child_shutdown_grace() {
         let mut builder = GraphBuilder::new();
-        builder.actor("factory-template", Drain::<()>::new);
+        let (actor_slot, _) = builder.slot("factory-template", ActorOptions::new());
+        builder.define(actor_slot, Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
         let handle = SupervisionTree::dynamic()
             .dynamic_defaults(&graph)
@@ -1623,7 +1642,8 @@ mod runnable_actor {
         let release = Arc::new(Notify::new());
 
         let mut builder = GraphBuilder::new();
-        let actor_ref = builder.actor("worker", {
+        let (actor_ref_slot, actor_ref) = builder.slot("worker", ActorOptions::new());
+        builder.define(actor_ref_slot, {
             let runs = Arc::new(AtomicUsize::new(0));
             let release = release.clone();
             move || RebindActor {
@@ -1687,7 +1707,8 @@ mod runnable_actor {
     async fn runnable_actor_rejects_concurrent_runs() {
         let (started_tx, mut started_rx) = mpsc::unbounded_channel();
         let mut builder = GraphBuilder::new();
-        builder.actor("worker", move || StartSignallingDrain {
+        let (actor_slot, _) = builder.slot("worker", ActorOptions::new());
+        builder.define(actor_slot, move || StartSignallingDrain {
             started: started_tx.clone(),
         });
         let graph = builder.build().expect("valid graph");
@@ -1732,7 +1753,8 @@ mod runnable_actor {
         assert_eq!(RestartPolicy::default(), RestartPolicy::OnFailure);
 
         let mut builder = GraphBuilder::new();
-        let worker_ref = builder.actor("worker", || FailsOnMessage);
+        let (worker_ref_slot, worker_ref) = builder.slot("worker", ActorOptions::new());
+        builder.define(worker_ref_slot, || FailsOnMessage);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
         let task = tokio::spawn(async move {
@@ -1761,7 +1783,8 @@ mod runnable_actor {
             (RestartPolicy::Never, true),
         ] {
             let mut builder = GraphBuilder::new();
-            let worker_ref = builder.actor("worker", Drain::<()>::new);
+            let (worker_ref_slot, worker_ref) = builder.slot("worker", ActorOptions::new());
+            builder.define(worker_ref_slot, Drain::<()>::new);
             let graph = builder.build().expect("valid graph");
             let worker = single_actor(&graph, "worker");
             let task = tokio::spawn(async move {
@@ -1804,7 +1827,8 @@ mod runnable_actor {
     #[tokio::test]
     async fn restart_policy_is_per_run_not_sticky() {
         let mut builder = GraphBuilder::new();
-        let worker_ref = builder.actor("worker", || FailsOnMessage);
+        let (worker_ref_slot, worker_ref) = builder.slot("worker", ActorOptions::new());
+        builder.define(worker_ref_slot, || FailsOnMessage);
         let graph = builder.build().expect("valid graph");
         let worker = single_actor(&graph, "worker");
 
@@ -1886,8 +1910,9 @@ mod runnable_actor {
         let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
         let mut builder = GraphBuilder::new();
-        let (worker_slot, worker_ref) = builder.slot::<Work>("worker");
-        let frontend_ref = builder.actor("frontend", move || Forwarder {
+        let (worker_slot, worker_ref) = builder.slot::<Work>("worker", ActorOptions::new());
+        let (frontend_ref_slot, frontend_ref) = builder.slot("frontend", ActorOptions::new());
+        builder.define(frontend_ref_slot, move || Forwarder {
             worker: worker_ref.clone(),
         });
         let runs = Arc::new(AtomicUsize::new(0));
@@ -1977,7 +2002,8 @@ mod runnable_actor {
     async fn factory_minted_ref_is_live_across_runs_and_dies_with_the_binding() {
         let (out_tx, mut out_rx) = mpsc::unbounded_channel();
         let mut builder = GraphBuilder::new();
-        let worker_ref = builder.actor("worker", move || Forward {
+        let (worker_slot, worker_ref) = builder.slot("worker", ActorOptions::new());
+        builder.define(worker_slot, move || Forward {
             out: out_tx.clone(),
         });
         let graph = builder.build().expect("worker graph builds");
@@ -2068,7 +2094,8 @@ mod runnable_actor {
 
         let mut builder = GraphBuilder::new();
         builder.mailbox_capacity(4);
-        let worker_ref = builder.actor("worker", {
+        let (worker_ref_slot, worker_ref) = builder.slot("worker", ActorOptions::new());
+        builder.define(worker_ref_slot, {
             let release = release.clone();
             let incarnation = Arc::new(AtomicUsize::new(0));
             move || PoisonableWorker {
@@ -2175,8 +2202,9 @@ mod runnable_actor {
         let release = Arc::new(Notify::new());
 
         let mut builder = GraphBuilder::new();
-        let (sink_slot, sink_ref) = builder.slot::<u32>("sink");
-        let forwarder_ref = builder.actor("forwarder", {
+        let (sink_slot, sink_ref) = builder.slot::<u32>("sink", ActorOptions::new());
+        let (forwarder_ref_slot, forwarder_ref) = builder.slot("forwarder", ActorOptions::new());
+        builder.define(forwarder_ref_slot, {
             let release = release.clone();
             move || DrainForwarder {
                 sink: sink_ref.clone(),
@@ -2261,8 +2289,9 @@ mod runnable_actor {
         let release = Arc::new(Notify::new());
 
         let mut builder = GraphBuilder::new();
-        let (sink_slot, sink_ref) = builder.slot::<u32>("sink");
-        let forwarder_ref = builder.actor("forwarder", {
+        let (sink_slot, sink_ref) = builder.slot::<u32>("sink", ActorOptions::new());
+        let (forwarder_ref_slot, forwarder_ref) = builder.slot("forwarder", ActorOptions::new());
+        builder.define(forwarder_ref_slot, {
             let release = release.clone();
             move || StrictDrainForwarder {
                 sink: sink_ref.clone(),

@@ -47,7 +47,8 @@ use crate::runtime::{ActorOverrides, ActorRuntimeState, Runtime};
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut graph = GraphBuilder::new();
-/// let echo = graph.add(|| Echo);
+/// let (echo_slot, echo) = graph.slot("Echo", tokio_otp::ActorOptions::new());
+/// graph.define(echo_slot, || Echo);
 ///
 /// let runtime = Runtime::builder()
 ///     .graph(graph.build()?)

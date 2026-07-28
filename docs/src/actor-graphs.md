@@ -139,19 +139,19 @@ for the common supervised runtime.
 
 ## Incarnation-local state
 
-Every registration method takes an `ActorFactory`. Its `build` method runs
-exactly once for the initial start and once for every supervised restart, so
-ordinary actor fields are fresh incarnation-local state. The actor type does
-not need `Clone`, and a synchronously constructible non-`Clone` guard or
-resource can live directly in the actor. Construction happens inside the
+Every call to `GraphBuilder::define` takes an `ActorFactory`. Its `build`
+method runs exactly once for the initial start and once for every supervised
+restart, so ordinary actor fields are fresh incarnation-local state. The actor
+type does not need `Clone`, and a synchronously constructible non-`Clone` guard
+or resource can live directly in the actor. Construction happens inside the
 supervised actor future, so a `build` panic follows the same supervision path
 as a startup or run panic.
 
 Constructor functions are the common case:
 
 ```rust,ignore
-builder.actor("worker", Worker::new);
-builder.add(Worker::new);
+let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+builder.define(actor_slot, Worker::new);
 ```
 
 Closures automatically implement `ActorFactory`. For a small wired actor,
@@ -160,7 +160,8 @@ constructing each incarnation:
 
 ```rust,ignore
 let ledger = ledger_ref.clone();
-builder.actor("gateway", move || Gateway::new(ledger.clone()));
+let (actor_slot, _) = builder.slot("gateway", tokio_otp::ActorOptions::new());
+builder.define(actor_slot, move || Gateway::new(ledger.clone()));
 ```
 
 Larger wiring can derive a named factory directly from the actor. Unmarked
@@ -177,7 +178,8 @@ struct Gateway {
     pending: Vec<Order>,
 }
 
-builder.actor("gateway", GatewayFactory { ledger, exchange });
+let (actor_slot, _) = builder.slot("gateway", tokio_otp::ActorOptions::new());
+builder.define(actor_slot, GatewayFactory { ledger, exchange });
 ```
 
 Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
@@ -216,7 +218,7 @@ The derive keeps that shape in the type system:
 
 Configure an individual actor's mailbox or message-size observation with a
 normal Rust expression in `#[supervision(options = ...)]`. Annotated fields use
-`GraphBuilder::slot_with_options`; other fields retain the default FIFO
+`GraphBuilder::slot`; other fields retain the default FIFO
 mailbox without message-size observation:
 
 ```rust,ignore
@@ -239,15 +241,10 @@ actor message.
 ## Dynamic and Advanced Builder Wiring
 
 Use `GraphBuilder` directly when actors are dynamic, generated in a loop, or
-need explicit observability names:
-
-- `builder.add(factory)` registers an actor under its unqualified type name,
-  suffixing repeats as `Worker-2`, `Worker-3`, and so on
-- `builder.actor(id, factory)` registers an actor under an explicit id
-- `builder.actor_with_options(id, factory, options)` combines per-actor settings
-  such as mailbox delivery and message-size observation
-- `builder.slot::<M>(id)` plus `builder.define(slot, factory)` opens and fills a
-  token-protected slot for hand-written cyclic wiring
+require hand-written wiring. Registration has one primitive:
+`builder.slot::<M>(id, options)` reserves the typed ref and
+`builder.define(slot, factory)` fills that token-protected slot. Reserve all
+slots before defining actors when wiring cycles.
 
 The direct builder still validates runtime configuration facts:
 
@@ -270,19 +267,19 @@ the producer fall behind. Configure those actors explicitly:
 ```rust,ignore
 use tokio_otp::{ActorOptions, MailboxMode};
 
-let latest = builder.actor_with_options(
+let (latest_slot, latest) = builder.slot(
     "latest-market",
-    MarketActor::new,
     ActorOptions::new().mailbox(MailboxMode::Conflate),
 );
+builder.define(latest_slot, MarketActor::new);
 
-let per_symbol = builder.actor_with_options(
+let (per_symbol_slot, per_symbol) = builder.slot(
     "market-by-symbol",
-    KeyedMarketActor::new,
     ActorOptions::new().mailbox(MailboxMode::conflate_by_key(
         |tick: &Tick| tick.symbol_id,
     )),
 );
+builder.define(per_symbol_slot, KeyedMarketActor::new);
 ```
 
 `Conflate` stores at most one unread message. `ConflateByKey` stores one

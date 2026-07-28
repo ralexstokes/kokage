@@ -114,13 +114,15 @@ async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() 
     let mut graph = GraphBuilder::new();
     let first_order = order.clone();
     let first_release = release.clone();
-    let first = graph.add(move || Probe {
+    let (first_slot, first) = graph.slot("Probe", tokio_otp::ActorOptions::new());
+    graph.define(first_slot, move || Probe {
         name: "first",
         order: first_order.clone(),
         release: Some(first_release.clone()),
     });
     let second_order = order.clone();
-    graph.add(move || Probe {
+    let (actor_slot, _) = graph.slot("Probe-2", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || Probe {
         name: "second",
         order: second_order.clone(),
         release: None,
@@ -180,7 +182,8 @@ impl Actor for FailsOnStart {
 #[tokio::test]
 async fn failed_actor_start_disarms_readiness_without_panicking() {
     let mut graph = GraphBuilder::new();
-    graph.add(|| FailsOnStart);
+    let (actor_slot, _) = graph.slot("FailsOnStart", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, || FailsOnStart);
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
         .restart(RestartPolicy::Never)
@@ -244,7 +247,8 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.add(move || DrainContinuation {
+    let (actor_slot, actor) = graph.slot("DrainContinuation", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || DrainContinuation {
         handled: actor_handled.clone(),
         started: actor_started.clone(),
         release: actor_release.clone(),
@@ -273,7 +277,8 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.add(move || DrainContinuation {
+    let (actor_slot, actor) = graph.slot("DrainContinuation", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || DrainContinuation {
         handled: actor_handled.clone(),
         started: actor_started.clone(),
         release: actor_release.clone(),
@@ -354,7 +359,8 @@ fn drain_phase_probe_graph(
     let observed = observed.clone();
     let started = started.clone();
     let release = release.clone();
-    let actor = graph.add(move || DrainPhaseProbe {
+    let (actor_slot, actor) = graph.slot("DrainPhaseProbe", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || DrainPhaseProbe {
         observed: observed.clone(),
         started: started.clone(),
         release: release.clone(),
@@ -467,7 +473,8 @@ async fn stop_from_on_start_drops_mailbox_and_continuations_then_runs_on_stop() 
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("StopsOnStart", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let started = started.clone();
         let release = release.clone();
         let events = events.clone();
@@ -510,7 +517,8 @@ async fn stop_from_on_start_with_drain_handles_the_queued_mailbox_only() {
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut graph = GraphBuilder::new();
-    let actor = graph.add({
+    let (actor_slot, actor) = graph.slot("StopsOnStart", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, {
         let started = started.clone();
         let release = release.clone();
         let events = events.clone();
@@ -561,7 +569,8 @@ impl RawActor for PromptRaw {
 #[tokio::test]
 async fn prompt_raw_actor_delivers_readiness_before_completion() {
     let mut graph = GraphBuilder::new();
-    graph.add(|| PromptRaw);
+    let (actor_slot, _) = graph.slot("PromptRaw", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, || PromptRaw);
     let handle = Runtime::builder()
         .graph(graph.build().unwrap())
         .restart(RestartPolicy::Never)
@@ -625,7 +634,8 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.add(move || DefaultPolicy {
+    let (actor_slot, actor) = graph.slot("DefaultPolicy", tokio_otp::ActorOptions::new());
+    graph.define(actor_slot, move || DefaultPolicy {
         handled: actor_handled.clone(),
         started: actor_started.clone(),
         release: actor_release.clone(),

@@ -84,7 +84,8 @@ async fn runtime_with_watched_subtree() -> (
         .await
         .expect("sink added");
     let mut graph = GraphBuilder::new();
-    let crasher = graph.actor("crasher", || Crasher);
+    let (crasher_slot, crasher) = graph.slot("crasher", tokio_otp::ActorOptions::new());
+    graph.define(crasher_slot, || Crasher);
     let watched = handle
         .add_subtree(
             "watched",

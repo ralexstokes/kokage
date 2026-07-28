@@ -32,7 +32,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     builder.name("backpressure");
     builder.mailbox_capacity(1);
     let actor_release = release.clone();
-    let worker = builder.add(move || ParkBeforeRecv {
+    let (worker_slot, worker) = builder.slot("ParkBeforeRecv", tokio_otp::ActorOptions::new());
+    builder.define(worker_slot, move || ParkBeforeRecv {
         release: actor_release.clone(),
     });
     let graph = builder.build()?;
