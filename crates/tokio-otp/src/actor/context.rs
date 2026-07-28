@@ -24,7 +24,7 @@ use crate::actor::{
         MessageSizeObserver, SendOutcome,
     },
     cancellation::{CancellationHandle, Lifetime},
-    error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TryRecvError},
+    error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
@@ -138,16 +138,16 @@ impl<M> ActorRef<M> {
         self.stats.snapshot(&self.actor_id, depth, capacity)
     }
 
-    fn current_mailbox(&self) -> Result<MailboxRef<M>, SendError> {
+    fn current_mailbox(&self) -> Result<MailboxRef<M>, TrySendError> {
         match self.binding.borrow().clone() {
             BindingState::Bound(mailbox) => Ok(mailbox),
             BindingState::Unbound if self.binding.has_changed().is_err() => {
-                Err(self.actor_terminated())
+                Err(self.actor_try_send_terminated())
             }
-            BindingState::Unbound => Err(SendError::ActorNotRunning {
+            BindingState::Unbound => Err(TrySendError::NotRunning {
                 actor_id: self.actor_id.to_string(),
             }),
-            BindingState::Terminated => Err(self.actor_terminated()),
+            BindingState::Terminated => Err(self.actor_try_send_terminated()),
         }
     }
 
@@ -228,9 +228,9 @@ impl<M> ActorRef<M> {
 
     /// Attempts to send a message without waiting for mailbox capacity.
     ///
-    /// A full FIFO queue returns [`SendError::MailboxFull`]. A conflating
+    /// A full FIFO queue returns [`TrySendError::Full`]. A conflating
     /// mailbox instead accepts the message and replaces stale unread state.
-    pub fn try_send(&self, message: M) -> Result<(), SendError> {
+    pub fn try_send(&self, message: M) -> Result<(), TrySendError> {
         let message_size = self
             .message_size
             .as_ref()
@@ -241,7 +241,7 @@ impl<M> ActorRef<M> {
         };
         self.observe_send(
             MessageOperation::TrySend,
-            result.as_ref().err().map(send_rejection),
+            result.as_ref().err().map(try_send_rejection),
         );
         self.stats.record_send(result.is_ok());
         match result {
@@ -376,7 +376,13 @@ impl<M> ActorRef<M> {
     }
 
     fn actor_terminated(&self) -> SendError {
-        SendError::ActorTerminated {
+        SendError {
+            actor_id: self.actor_id.to_string(),
+        }
+    }
+
+    fn actor_try_send_terminated(&self) -> TrySendError {
+        TrySendError::Terminated {
             actor_id: self.actor_id.to_string(),
         }
     }
@@ -1056,21 +1062,18 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`recv`](Self::recv) returns `None` because shutdown was requested,
     /// queued messages remain readable here.
     ///
-    /// A returned [`TryRecvError::Empty`] means no message is immediately
-    /// available; it does not prove the mailbox is fully drained while senders
-    /// hold permits. For typical actors, prefer
+    /// A returned `None` means no message is immediately available; it does
+    /// not prove the mailbox is fully drained while senders hold permits. For
+    /// typical actors, prefer
     /// [`Actor`](crate::Actor) with
     /// [`DrainPolicy::Drain`](crate::DrainPolicy) so the framework owns the
     /// drain loop.
     ///
     /// A panic in an [`offload`](Self::offload) future or continuation resumes
     /// here, on the actor task.
-    pub fn try_recv(&mut self) -> Result<M, TryRecvError> {
-        let message = self.try_delivery().map_err(|error| match error {
-            tokio::sync::mpsc::error::TryRecvError::Empty => TryRecvError::Empty,
-            tokio::sync::mpsc::error::TryRecvError::Disconnected => TryRecvError::Disconnected,
-        });
-        if message.is_ok() {
+    pub fn try_recv(&mut self) -> Option<M> {
+        let message = self.try_delivery().ok();
+        if message.is_some() {
             self.myself.record_received();
             self.observability.emit_message_received(&self.id);
         }
@@ -1762,11 +1765,15 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 }
 
-fn send_rejection(error: &SendError) -> SendRejection {
+fn send_rejection(_: &SendError) -> SendRejection {
+    SendRejection::ActorTerminated
+}
+
+fn try_send_rejection(error: &TrySendError) -> SendRejection {
     match error {
-        SendError::ActorNotRunning { .. } => SendRejection::NotRunning,
-        SendError::ActorTerminated { .. } => SendRejection::ActorTerminated,
-        SendError::MailboxFull { .. } => SendRejection::MailboxFull,
-        SendError::MailboxClosed { .. } => SendRejection::MailboxClosed,
+        TrySendError::NotRunning { .. } => SendRejection::NotRunning,
+        TrySendError::Terminated { .. } => SendRejection::ActorTerminated,
+        TrySendError::Full { .. } => SendRejection::MailboxFull,
+        TrySendError::Closed { .. } => SendRejection::MailboxClosed,
     }
 }

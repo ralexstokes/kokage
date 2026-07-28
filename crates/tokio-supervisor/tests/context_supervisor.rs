@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_supervisor::{ChildSpec, ControlError, ControlOperation, ScopeKind, Supervisor};
+use tokio_supervisor::{ChildSpec, ControlError, ScopeKind, Supervisor};
 
 #[tokio::test]
 async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
@@ -31,7 +31,7 @@ async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
     assert!(matches!(
         result,
         Err(ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         })
     ));

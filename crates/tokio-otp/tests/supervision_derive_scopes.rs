@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use tokio_otp::{
-    ChildOutline, DynamicScope, GraphBuildError, ScopeKind, SupervisionFactories, prelude::*,
+    ChildOutline, DynamicScope, GraphLookupError, ScopeKind, SupervisionFactories, prelude::*,
 };
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -258,7 +258,7 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
 
     assert!(matches!(
         <Flat as Supervision>::node(&foreign, &refs, scopes),
-        Err(GraphBuildError::ForeignActorRef { actor_id, .. }) if actor_id == "ingest"
+        Err(GraphLookupError::ForeignActorRef { actor_id, .. }) if actor_id == "ingest"
     ));
 }
 

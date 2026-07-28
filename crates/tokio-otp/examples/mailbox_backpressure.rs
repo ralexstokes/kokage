@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use tokio::sync::Notify;
-use tokio_otp::{ActorContext, ActorResult, GraphBuilder, RawActor, SendError};
+use tokio_otp::{ActorContext, ActorResult, GraphBuilder, RawActor, TrySendError};
 
 mod support;
 
@@ -42,10 +42,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // `send` waits for the worker's mailbox to bind, so the first message
     // deterministically occupies the single mailbox slot; `try_send` before
-    // the binding exists would fail with `ActorNotRunning`.
+    // the binding exists would fail with `TrySendError::NotRunning`.
     worker.send("first").await?;
     match worker.try_send("second") {
-        Err(SendError::MailboxFull { actor_id, .. }) => {
+        Err(TrySendError::Full { actor_id, .. }) => {
             println!("`{actor_id}` mailbox is full");
         }
         Ok(()) => panic!("second send unexpectedly succeeded"),

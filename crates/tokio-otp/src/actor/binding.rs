@@ -11,7 +11,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use tokio_supervisor::RestartPolicy;
 
 use crate::actor::{
-    error::SendError,
+    error::TrySendError,
     monitor::{ActorMonitors, MonitorHub},
     observability::{GraphObservability, MessageSizeMetrics},
 };
@@ -398,14 +398,14 @@ impl<M> MailboxRef<M> {
         }
     }
 
-    pub(crate) fn try_send(&self, message: M) -> Result<u64, SendError> {
+    pub(crate) fn try_send(&self, message: M) -> Result<u64, TrySendError> {
         match &self.sender {
             MailboxSender::Queue {
                 sender,
                 accepting_external,
             } => {
                 if !accepting_external.load(Ordering::Acquire) {
-                    return Err(SendError::MailboxClosed {
+                    return Err(TrySendError::Closed {
                         actor_id: self.actor_id.to_string(),
                     });
                 }
@@ -415,18 +415,18 @@ impl<M> MailboxRef<M> {
                         Ok(0)
                     }
                     Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => {
-                        Err(SendError::MailboxClosed {
+                        Err(TrySendError::Closed {
                             actor_id: self.actor_id.to_string(),
                         })
                     }
-                    Err(mpsc::error::TrySendError::Full(_)) => Err(SendError::MailboxFull {
+                    Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendError::Full {
                         actor_id: self.actor_id.to_string(),
                     }),
                 }
             }
             MailboxSender::Conflating(sender) => match sender.send(message) {
                 SendOutcome::Accepted { conflated } => Ok(conflated),
-                SendOutcome::Closed(_) => Err(SendError::MailboxClosed {
+                SendOutcome::Closed(_) => Err(TrySendError::Closed {
                     actor_id: self.actor_id.to_string(),
                 }),
             },

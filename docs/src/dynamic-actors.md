@@ -141,8 +141,8 @@ detachment. The removal future completes after detachment.
 There is an intentional race boundary: a send can be accepted after removal is
 requested but before the actor observes cancellation. `Drain` then closes
 intake and handles that accepted prefix; `Discard` drops it. After intake closes,
-`try_send` can report `MailboxClosed`; an awaited `send` waits for the final
-disposition and then reports `ActorTerminated`. There is no separate `Draining`
+`try_send` can report `TrySendError::Closed`; an awaited `send` waits for the
+final disposition and then returns `SendError`. There is no separate `Draining`
 error. An application that must not lose accepted work during a membership
 change needs an ownership protocol, described in
 [Ownership during membership transitions](ownership-transitions.md).

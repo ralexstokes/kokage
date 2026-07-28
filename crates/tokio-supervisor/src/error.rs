@@ -11,7 +11,7 @@ pub enum SupervisorBuildError {
     DuplicateChildId(String),
     /// A configuration value (channel capacity, restart intensity, etc.) is
     /// invalid.
-    #[error("invalid supervisor configuration: {0}")]
+    #[error("invalid configuration: {0}")]
     InvalidConfig(&'static str),
 }
 
@@ -45,38 +45,45 @@ pub enum SupervisorError {
 pub enum ControlError {
     /// The operation is incompatible with the supervisor's immutable scope
     /// kind.
-    #[error("{operation} is unsupported by {kind} scopes")]
+    #[error("control operation `{operation}` is unsupported by {kind} scopes")]
     UnsupportedByScopeKind {
-        /// The rejected operation.
-        operation: crate::ControlOperation,
+        /// Name of the attempted operation.
+        operation: &'static str,
         /// The immutable kind of the target scope.
         kind: crate::ScopeKind,
     },
-    /// A child with this id already exists in the supervisor.
-    #[error("duplicate child id: {0}")]
-    DuplicateChildId(String),
     /// No child with this id is known to the supervisor.
     #[error("unknown child id: {0}")]
     UnknownChildId(String),
     /// A removal request for this child is already in progress.
     #[error("child removal already in progress: {0}")]
     ChildRemovalInProgress(String),
-    /// The child spec contains invalid configuration.
-    #[error("invalid child configuration: {0}")]
-    InvalidConfig(&'static str),
+    /// A requested control-plane change was rejected during validation.
+    #[error("control operation rejected: {0}")]
+    Rejected(#[from] SupervisorBuildError),
     /// The supervisor is in the process of shutting down and is no longer
     /// accepting commands.
     #[error("supervisor is stopping")]
     SupervisorStopping,
-    /// A child did not exit within its grace period during removal.
-    #[error("child removal timed out: {0}")]
-    ShutdownTimedOut(String),
+    /// The operation failed because the supervisor encountered a fatal error.
+    #[error("supervisor operation failed: {0}")]
+    Failed(#[from] SupervisorError),
     /// The supervisor task has already exited and the control channel is
     /// closed.
     #[error("supervisor control plane is unavailable")]
     Unavailable,
-    /// An unexpected internal condition. Indicates a bug in the supervisor
-    /// runtime.
-    #[error("internal supervisor control error: {0}")]
-    Internal(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SupervisorBuildError;
+
+    #[test]
+    fn invalid_config_display_is_not_supervisor_specific() {
+        assert_eq!(
+            SupervisorBuildError::InvalidConfig("actor mailbox capacity must be non-zero")
+                .to_string(),
+            "invalid configuration: actor mailbox capacity must be non-zero"
+        );
+    }
 }

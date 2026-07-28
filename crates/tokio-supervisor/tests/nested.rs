@@ -11,9 +11,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ChildStateView, ControlError, ControlOperation, ExitStatusView,
-    RestartIntensity, RestartPolicy, ScopeKind, ShutdownPolicy, Supervisor, SupervisorError,
-    SupervisorStateView,
+    BackoffPolicy, ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity,
+    RestartPolicy, ScopeKind, ShutdownPolicy, Supervisor, SupervisorError, SupervisorStateView,
 };
 
 mod common;
@@ -585,7 +584,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
             .add_child(ChildSpec::task("rebound", |_| async { Ok(()) }))
             .await,
         Err(ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         }),
         "the stable control channel should bind to the replacement incarnation"
@@ -717,7 +716,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
             .add_child(ChildSpec::task("rebound", |_| async { Ok(()) }))
             .await,
         Err(ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         }),
         "the stable control channel should bind to the replacement incarnation"
@@ -814,7 +813,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
             .add_child(ChildSpec::task("rebound", |_| async { Ok(()) }))
             .await,
         Err(ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         }),
         "the grandchild control channel should bind to the replacement incarnation"

@@ -351,6 +351,14 @@ fn parse_factory_attributes(
 /// `ReservedSupervisionTree::build` returns `SupervisorBuildError` for invalid
 /// supervision policy.
 ///
+/// # Panics
+///
+/// The generated constructors panic if a handwritten nested `Supervision`
+/// implementation returns `GraphLookupError::ForeignActorRef` from `node` for
+/// the refs that its own `open` implementation created. That violates the
+/// lower-level `Supervision` contract; correctly derived and handwritten
+/// implementations do not panic.
+///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
 /// If a derived declaration needs the built `Graph` as well as a tree, use
@@ -951,6 +959,11 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
     let root_constructors = quote! {
         impl #declared {
+            #[doc = "Builds this derived supervision declaration with the default graph configuration."]
+            #[doc = ""]
+            #[doc = "# Panics"]
+            #[doc = ""]
+            #[doc = "Panics if a handwritten nested `Supervision` implementation rejects refs created by its own `open` implementation. This indicates that the nested implementation violated the `Supervision::node` contract."]
             #vis fn tree<#(#all_params),*>(
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
@@ -963,6 +976,11 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 Self::tree_with(::tokio_otp::GraphConfig::new(), wire)
             }
 
+            #[doc = "Builds this derived supervision declaration with the supplied graph configuration."]
+            #[doc = ""]
+            #[doc = "# Panics"]
+            #[doc = ""]
+            #[doc = "Panics if a handwritten nested `Supervision` implementation rejects refs created by its own `open` implementation. This indicates that the nested implementation violated the `Supervision::node` contract."]
             #vis fn tree_with<#(#all_params),*>(
                 config: ::tokio_otp::GraphConfig,
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
@@ -975,7 +993,8 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             {
                 let builder: ::tokio_otp::GraphBuilder = config.into();
                 let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
-                let tree = Self::__supervision_scope(&graph, &refs, scopes)?;
+                let tree = Self::__supervision_scope(&graph, &refs, scopes)
+                    .expect("derived refs belong to the graph that opened them");
                 ::core::result::Result::Ok((tree, refs))
             }
         }
@@ -1052,7 +1071,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 scopes: Self::Scopes,
             ) -> ::core::result::Result<
                 ::tokio_otp::ReservedSupervisionTree,
-                ::tokio_otp::GraphBuildError,
+                ::tokio_otp::GraphLookupError,
             > {
                 Self::__supervision_scope(graph, refs, scopes)
             }
@@ -1066,7 +1085,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 scopes: #scopes,
             ) -> ::core::result::Result<
                 ::tokio_otp::ReservedSupervisionTree,
-                ::tokio_otp::GraphBuildError,
+                ::tokio_otp::GraphLookupError,
             > {
                 let tree = #scope_root;
                 #(#scope_stmts)*

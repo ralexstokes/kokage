@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, RawActor, RestartPolicy,
-    SendError,
+    TrySendError,
 };
 
 #[derive(Clone)]
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     first_run.await??;
 
     match sink_ref.try_send("try during restart".to_owned()) {
-        Err(SendError::ActorNotRunning { actor_id, .. }) => {
+        Err(TrySendError::NotRunning { actor_id, .. }) => {
             println!("try_send failed fast while `{actor_id}` was between runs");
         }
         other => println!("unexpected try_send result: {other:?}"),

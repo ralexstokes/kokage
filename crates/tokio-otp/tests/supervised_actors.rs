@@ -270,7 +270,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         .expect("send returned promptly");
     assert!(matches!(
         result,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+        Err(SendError { actor_id , .. }) if actor_id == "worker"
     ));
 
     let mut snapshots = handle.subscribe_snapshots();

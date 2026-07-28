@@ -16,10 +16,10 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
-    ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
-    DynamicActorOptions, GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize,
-    MonitorEvent, RawActor, RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy,
-    StartContext, StopContext, SupervisionTree,
+    ChildMembershipView, ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions,
+    GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor,
+    RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, StartContext, StopContext,
+    SupervisionTree, SupervisorBuildError, SupervisorError, TrySendError,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -340,7 +340,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     handle.remove_child("sink").await.expect("sink removed");
     assert!(matches!(
         sink.send("after-remove".to_owned()).await,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "sink"
+        Err(SendError { actor_id , .. }) if actor_id == "sink"
     ));
 
     let replacement = handle
@@ -356,7 +356,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     assert!(matches!(
         sink.send("stale-ref-must-not-cross-membership".to_owned())
             .await,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "sink"
+        Err(SendError { actor_id , .. }) if actor_id == "sink"
     ));
     replacement
         .send("second".to_owned())
@@ -568,7 +568,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     assert!(snapshots.borrow().child("removable").is_some());
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
-        Err(SendError::MailboxClosed { actor_id , .. }) if actor_id == "removable"
+        Err(TrySendError::Closed { actor_id , .. }) if actor_id == "removable"
     ));
 
     // There is no public Draining state. An awaited send observes the closed
@@ -588,7 +588,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     );
     assert!(matches!(
         during_on_stop.await,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "removable"
+        Err(SendError { actor_id , .. }) if actor_id == "removable"
     ));
     removal
         .await
@@ -606,7 +606,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect("id reused with a fresh membership");
     assert!(matches!(
         actor.send(RemovalMsg::Work(10)).await,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "removable"
+        Err(SendError { actor_id , .. }) if actor_id == "removable"
     ));
     replacement
         .send(RemovalMsg::Work(11))
@@ -679,7 +679,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
-        Err(SendError::MailboxClosed { actor_id , .. }) if actor_id == "discarding"
+        Err(TrySendError::Closed { actor_id , .. }) if actor_id == "discarding"
     ));
     assert!(!removal.is_finished(), "removal waits for on_stop");
     release_on_stop.notify_one();
@@ -759,7 +759,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     wait_for_child(&dynamic, "temporary", false).await;
     assert!(matches!(
         target.send(()).await,
-        Err(SendError::ActorTerminated { actor_id, .. }) if actor_id == "temporary"
+        Err(SendError { actor_id, .. }) if actor_id == "temporary"
     ));
 
     dynamic
@@ -795,7 +795,7 @@ async fn message_context_stop_applies_restart_policy_before_default_removal() {
     assert_eq!(transient_starts.load(Ordering::SeqCst), 1);
     assert!(matches!(
         transient.send(()).await,
-        Err(SendError::ActorTerminated { actor_id, .. }) if actor_id == "transient"
+        Err(SendError { actor_id, .. }) if actor_id == "transient"
     ));
 
     let permanent_starts = Arc::new(AtomicUsize::new(0));
@@ -958,7 +958,7 @@ async fn never_actor_auto_removes_after_failure() {
     wait_for_child(&handle, "temporary", false).await;
     assert!(matches!(
         target.send(()).await,
-        Err(SendError::ActorTerminated { actor_id, .. }) if actor_id == "temporary"
+        Err(SendError { actor_id, .. }) if actor_id == "temporary"
     ));
     shutdown_runtime(&handle, "never-actor removal test shutdown").await;
 }
@@ -1214,9 +1214,9 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
 
     assert!(matches!(
         result,
-        Err(ControlError::InvalidConfig(
+        Err(ControlError::Rejected(SupervisorBuildError::InvalidConfig(
             "actor mailbox capacity must be non-zero"
-        ))
+        )))
     ));
 
     shutdown_runtime(&handle, "zero mailbox capacity test shutdown").await;
@@ -1352,7 +1352,8 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 
     assert!(matches!(
         handle.remove_child("dynamic").await,
-        Err(ControlError::ShutdownTimedOut(actor_id)) if actor_id == "dynamic"
+        Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
+            if actor_id == "dynamic"
     ));
     assert!(
         handle
@@ -1363,7 +1364,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
     );
     assert!(matches!(
         actor_ref.send(()).await,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "dynamic"
+        Err(SendError { actor_id , .. }) if actor_id == "dynamic"
     ));
 
     handle
@@ -1395,7 +1396,7 @@ async fn ordered_tree_rejects_runtime_membership_changes() {
     assert_eq!(
         error,
         ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         }
     );

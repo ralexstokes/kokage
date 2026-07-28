@@ -278,7 +278,7 @@ pub mod prelude {
         AmbientContext, BoxError, CallError, GraphBuilder, GraphConfig, LiveContext,
         MessageContext, RawActor, Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
         SendError, ShutdownPolicy, StartContext, StopContext, Strategy, Supervision,
-        SupervisionTree,
+        SupervisionTree, TrySendError,
     };
 }
 
@@ -289,9 +289,9 @@ pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, AmbientContext, BlockingCancelled, CallError, CancellationHandle,
     DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph, GraphBuildError, GraphBuilder,
-    GraphConfig, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
-    OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor, SendError,
-    StartContext, StopContext, SupervisorPathSegment, TimerKey, TryRecvError,
+    GraphConfig, GraphLookupError, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize,
+    MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor,
+    SendError, StartContext, StopContext, SupervisorPathSegment, TimerKey, TrySendError,
 };
 pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
@@ -306,9 +306,9 @@ pub use supervision_derive::{DynamicScope, Supervision, SupervisionFactories};
 pub use tokio_supervisor::{AttachedChild, AttachedChildIdentity};
 pub use tokio_supervisor::{
     BackoffPolicy, BoxError, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
-    CompletionGuard, CompletionOutcome, ControlError, ControlOperation, ExitStatusView,
-    LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
-    ScopeKind, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorSnapshot,
+    CompletionGuard, CompletionOutcome, ControlError, ExitStatusView, LifecycleEvent,
+    LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind,
+    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorSnapshot,
     SupervisorStateView,
 };
 pub use tokio_util::sync::CancellationToken;

@@ -27,7 +27,8 @@ pub use context::{
     RestrictedScope, StartContext, StopContext, TimerKey,
 };
 pub use error::{
-    BlockingCancelled, CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError,
+    BlockingCancelled, CallError, GraphBuildError, GraphLookupError, OffloadDeadline, SendError,
+    TrySendError,
 };
 pub use factory::ActorFactory;
 pub(crate) use graph::RunnableActorBuilder;

@@ -5,7 +5,7 @@
 //! a supervision struct in another, but application code normally touches only
 //! the generated `tree` and `tree_with` constructors.
 
-use crate::{Graph, GraphBuildError, GraphBuilder, ReservedSupervisionTree};
+use crate::{Graph, GraphBuilder, GraphLookupError, ReservedSupervisionTree};
 
 /// A derived group of actors together with the supervision scope running them.
 ///
@@ -41,12 +41,12 @@ pub trait Supervision: Sized {
     /// `graph` must be the graph [`open`](Self::open) populated, so that the
     /// node resolves the actors it was built with. A node handed some other
     /// graph cannot find them and returns
-    /// [`GraphBuildError::ForeignActorRef`].
+    /// [`GraphLookupError::ForeignActorRef`].
     fn node(
         graph: &Graph,
         refs: &Self::Refs,
         scopes: Self::Scopes,
-    ) -> Result<ReservedSupervisionTree, GraphBuildError>;
+    ) -> Result<ReservedSupervisionTree, GraphLookupError>;
 }
 
 /// A bundle of factories filling every slot a supervision struct declares.

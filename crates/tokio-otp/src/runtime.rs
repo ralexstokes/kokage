@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio_supervisor::{
     AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
     LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
-    SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -404,10 +404,12 @@ pub struct RuntimeHandle {
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AddSubtreeError {
-    /// The reserved tree contains an invalid supervisor configuration.
+    /// The reserved tree itself failed validation before insertion was
+    /// attempted.
     #[error("failed to build runtime subtree: {0}")]
     Build(#[from] tokio_supervisor::SupervisorBuildError),
-    /// The parent supervisor rejected the dynamic child operation.
+    /// The tree built successfully, but the parent supervisor rejected or
+    /// could not complete the insertion operation.
     #[error("failed to add runtime subtree: {0}")]
     Control(#[from] ControlError),
 }
@@ -565,7 +567,7 @@ impl RuntimeHandle {
     /// can be used immediately, while [`wait_started`](Self::wait_started)
     /// retains the stronger readiness contract. A zero
     /// [`ActorOptions::mailbox_capacity`] is rejected with
-    /// [`ControlError::InvalidConfig`].
+    /// [`ControlError::Rejected`].
     pub async fn add_actor_with<F>(
         &self,
         label: impl Into<String>,
@@ -581,7 +583,7 @@ impl RuntimeHandle {
         actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
-                ControlError::InvalidConfig(error.message())
+                ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
             })?;
         let actor = self.actors.make_actor(label, factory, actor_options);
         self.add_constructed_actor(actor, dynamic_options).await
@@ -620,9 +622,8 @@ impl RuntimeHandle {
     /// to the queued prefix handled before `on_stop`. With `Discard`, accepted
     /// work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly return
-    /// [`SendError::MailboxClosed`](crate::SendError::MailboxClosed), while an
-    /// awaited `send` waits and then returns
-    /// [`SendError::ActorTerminated`](crate::SendError::ActorTerminated).
+    /// [`TrySendError::Closed`](crate::TrySendError::Closed), while an awaited
+    /// `send` waits and then returns [`SendError`](crate::SendError).
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {

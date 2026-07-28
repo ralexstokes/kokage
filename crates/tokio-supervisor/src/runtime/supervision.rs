@@ -28,7 +28,7 @@ use crate::{
     },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
-    scope::{ControlOperation, ScopeKind},
+    scope::ScopeKind,
     shutdown::ShutdownPolicy,
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, NestedSnapshotNotification,
@@ -104,7 +104,7 @@ impl From<ExitReason> for CommandFailure {
     fn from(exit: ExitReason) -> Self {
         let error = match &exit {
             ExitReason::Shutdown => ControlError::SupervisorStopping,
-            ExitReason::Failure(error) => map_supervisor_error_to_control(error.clone()),
+            ExitReason::Failure(error) => ControlError::Failed(error.clone()),
         };
         Self {
             error,
@@ -952,7 +952,7 @@ impl SupervisorRuntime {
     fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
         if self.meta.kind == ScopeKind::Ordered {
             return Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::AddChild,
+                operation: "add_child",
                 kind: self.meta.kind,
             }
             .into());
@@ -962,20 +962,25 @@ impl SupervisorRuntime {
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
 
         if child.id().is_empty() {
-            return Err(ControlError::InvalidConfig("child id must not be empty").into());
+            return Err(
+                ControlError::Rejected(crate::error::SupervisorBuildError::InvalidConfig(
+                    "child id must not be empty",
+                ))
+                .into(),
+            );
         }
 
         if let Some(restart_intensity) = child.restart_intensity_override() {
             restart_intensity
                 .validate()
-                .map_err(|err| map_build_error_to_control(child.id(), err))?;
+                .map_err(ControlError::Rejected)?;
         }
         let id = child.id().to_owned();
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
                 ControlError::ChildRemovalInProgress(id)
             } else {
-                ControlError::DuplicateChildId(id)
+                ControlError::Rejected(crate::error::SupervisorBuildError::DuplicateChildId(id))
             };
             return Err(error.into());
         }
@@ -1003,7 +1008,7 @@ impl SupervisorRuntime {
     fn add_nested(&mut self, mut pending: PendingSupervisorChild) -> CommandResult<u64> {
         if self.meta.kind == ScopeKind::Ordered {
             return Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::AddChild,
+                operation: "add_child",
                 kind: self.meta.kind,
             }
             .into());
@@ -1015,18 +1020,21 @@ impl SupervisorRuntime {
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
         let id = spec.id().to_owned();
         if id.is_empty() {
-            return Err(ControlError::InvalidConfig("child id must not be empty").into());
+            return Err(
+                ControlError::Rejected(crate::error::SupervisorBuildError::InvalidConfig(
+                    "child id must not be empty",
+                ))
+                .into(),
+            );
         }
         if let Some(intensity) = spec.restart_intensity_override() {
-            intensity
-                .validate()
-                .map_err(|error| map_build_error_to_control(&id, error))?;
+            intensity.validate().map_err(ControlError::Rejected)?;
         }
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
                 ControlError::ChildRemovalInProgress(id)
             } else {
-                ControlError::DuplicateChildId(id)
+                ControlError::Rejected(crate::error::SupervisorBuildError::DuplicateChildId(id))
             };
             return Err(error.into());
         }
@@ -1103,7 +1111,7 @@ impl SupervisorRuntime {
     ) -> RuntimeResult<()> {
         if self.meta.kind == ScopeKind::Ordered {
             let _ = reply.send(Err(ControlError::UnsupportedByScopeKind {
-                operation: ControlOperation::RemoveChild,
+                operation: "remove_child",
                 kind: self.meta.kind,
             }));
             return Ok(());
@@ -1327,7 +1335,9 @@ impl SupervisorRuntime {
         if failure.is_some() {
             Err(ControlError::SupervisorStopping)
         } else if grace_expired {
-            Err(ControlError::ShutdownTimedOut(id.to_owned()))
+            Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(
+                id.to_owned(),
+            )))
         } else {
             Ok(())
         }
@@ -2050,27 +2060,6 @@ fn classify_join_error(err: JoinError) -> ExitStatus {
     }
 }
 
-fn map_build_error_to_control(id: &str, err: crate::error::SupervisorBuildError) -> ControlError {
-    match err {
-        crate::error::SupervisorBuildError::DuplicateChildId(_) => {
-            ControlError::DuplicateChildId(id.to_owned())
-        }
-        crate::error::SupervisorBuildError::InvalidConfig(message) => {
-            ControlError::InvalidConfig(message)
-        }
-    }
-}
-
-fn map_supervisor_error_to_control(err: SupervisorError) -> ControlError {
-    match err {
-        SupervisorError::ShutdownTimedOut(ids) => ControlError::ShutdownTimedOut(ids),
-        SupervisorError::Internal(message) => ControlError::Internal(message),
-        SupervisorError::RestartIntensityExceeded | SupervisorError::StartupAborted(_) => {
-            ControlError::SupervisorStopping
-        }
-    }
-}
-
 pub(crate) struct ClassifiedExit {
     pub(crate) key: ChildKey,
     lineage: u64,
@@ -2164,6 +2153,24 @@ mod tests {
             false,
             own_handle,
         )
+    }
+
+    #[test]
+    fn command_failures_preserve_fatal_supervisor_errors() {
+        for error in [
+            SupervisorError::RestartIntensityExceeded,
+            SupervisorError::StartupAborted("worker".to_owned()),
+        ] {
+            let failure = CommandFailure::from(ExitReason::Failure(error.clone()));
+
+            assert_eq!(failure.error, ControlError::Failed(error.clone()));
+            match failure.exit {
+                Some(ExitReason::Failure(exit_error)) => assert_eq!(exit_error, error),
+                Some(ExitReason::Shutdown) | None => {
+                    panic!("fatal command failure must retain its exit reason")
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -2275,7 +2282,9 @@ mod tests {
 
         assert_eq!(
             reply_rx.try_recv(),
-            Ok(Err(ControlError::ShutdownTimedOut("removable".to_owned())))
+            Ok(Err(ControlError::Failed(
+                SupervisorError::ShutdownTimedOut("removable".to_owned())
+            )))
         );
     }
 

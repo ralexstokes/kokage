@@ -24,7 +24,7 @@ use crate::{
         },
         builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
         context::{ActorContext, ActorLifetime, ActorRef},
-        error::GraphBuildError,
+        error::GraphLookupError,
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
         observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
@@ -221,7 +221,7 @@ impl Graph {
     ///
     /// Identity, rather than the actor label, is compared. A ref from another
     /// graph is rejected even when both graphs use the same label.
-    pub fn actor_for<M>(&self, actor_ref: &ActorRef<M>) -> Result<RunnableActor, GraphBuildError> {
+    pub fn actor_for<M>(&self, actor_ref: &ActorRef<M>) -> Result<RunnableActor, GraphLookupError> {
         self.inner
             .actors
             .iter()
@@ -232,7 +232,7 @@ impl Graph {
                 )
             })
             .cloned()
-            .ok_or_else(|| GraphBuildError::ForeignActorRef {
+            .ok_or_else(|| GraphLookupError::ForeignActorRef {
                 actor_id: actor_ref.id().to_owned(),
             })
     }
@@ -306,7 +306,8 @@ impl RunnableActor {
     /// Marks the actor's binding terminated.
     ///
     /// Call this when no further run will be started so senders fail fast with
-    /// `ActorTerminated` instead of waiting for a rebind that will never come.
+    /// [`SendError`](crate::SendError) instead of waiting for a rebind that
+    /// will never come.
     pub fn terminate_binding(&self) {
         self.apply_run_disposition(RunDisposition::Terminate);
     }

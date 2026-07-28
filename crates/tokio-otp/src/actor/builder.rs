@@ -371,10 +371,10 @@ impl GraphBuilder {
         let Some(index) = index else {
             return;
         };
-        let Some(slot) = self.slots.get_mut(index) else {
-            self.errors.push(GraphBuildError::DetachedSlot);
-            return;
-        };
+        let slot = self
+            .slots
+            .get_mut(index)
+            .expect("actor slot index was registered by this builder");
 
         slot.runner = Some(Arc::new(TypedRunner {
             factory: Arc::new(factory),
@@ -498,19 +498,6 @@ mod tests {
     }
 
     #[test]
-    fn detached_slot_is_a_matchable_build_error() {
-        let mut builder = GraphBuilder::new();
-        let (mut slot, _) = builder.slot::<OpaqueMessage>("worker");
-        slot.index = Some(usize::MAX);
-        builder.define(slot, || OpaqueActor);
-
-        assert!(matches!(
-            builder.build(),
-            Err(GraphBuildError::DetachedSlot)
-        ));
-    }
-
-    #[test]
     fn graph_actor_for_uses_binding_identity() {
         let mut first = GraphBuilder::new();
         let (slot, actor_ref) = first.slot::<OpaqueMessage>("worker");
@@ -532,13 +519,13 @@ mod tests {
         second.build().expect("second graph builds");
         assert!(matches!(
             graph.actor_for(&foreign_ref),
-            Err(GraphBuildError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
+            Err(crate::GraphLookupError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
         ));
 
         let detached = crate::ActorRef::<OpaqueMessage>::detached("worker".into());
         assert!(matches!(
             graph.actor_for(&detached),
-            Err(GraphBuildError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
+            Err(crate::GraphLookupError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
         ));
     }
 

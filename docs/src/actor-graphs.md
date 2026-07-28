@@ -261,7 +261,7 @@ and `call` only "downhill" along a DAG ordering of the graph.
 ## Conflating Mailboxes
 
 FIFO mailboxes are right for commands: `send` waits for capacity and
-`try_send` reports `MailboxFull`. High-rate state snapshots often need the
+`try_send` reports `TrySendError::Full`. High-rate state snapshots often need the
 opposite policy—a slow consumer should skip stale updates instead of making
 the producer fall behind. Configure those actors explicitly:
 
@@ -312,8 +312,8 @@ newer message replaces a request before it is handled, the caller receives
 
 | Method | Behavior |
 |--------|----------|
-| `send` | Waits for a bound mailbox and retries across expected restart windows; FIFO queues wait for capacity, while conflating mailboxes replace stale state. |
-| `try_send` | Returns immediately; FIFO queues report full capacity, while conflating mailboxes replace stale state. |
+| `send` | Waits for a bound mailbox and retries across expected restart windows; FIFO queues wait for capacity, while conflating mailboxes replace stale state. It returns `SendError` only when the membership is terminal or unavailable. |
+| `try_send` | Returns immediately with `TrySendError::{NotRunning, Full, Closed, Terminated}` when delivery cannot proceed; conflating mailboxes replace stale state instead of reporting `Full`. |
 | `call` | Sends a message carrying `Reply<T>` and awaits the reply until its required caller-owned timeout expires. |
 
 Refs are bound to long-lived mailbox bindings, not one actor incarnation. A
@@ -365,11 +365,10 @@ available directly from `ActorContext` to both actor styles.
 `AmbientContext` names the identity, shutdown-observation, and blocking-work
 methods shared by every stage, including `StopContext`.
 
-`ctx.try_recv()` returns the crate-owned `tokio_otp::TryRecvError`, not Tokio's
-channel error. Code passing it to an API that expects
-`tokio::sync::mpsc::error::TryRecvError` must map the `Empty` and
-`Disconnected` variants explicitly. This boundary keeps actor code independent
-of the mailbox channel implementation.
+`ctx.try_recv()` returns `Option<M>`: `Some(message)` for an immediately
+available delivery and `None` when there is no queued message. The actor run
+owns a mailbox sender for its entire lifetime, so a separate disconnected
+state is not observable through this API.
 
 Restarts have the same loss boundary. Each actor run binds a fresh mailbox, so
 messages queued behind the message that makes an actor crash are lost with the

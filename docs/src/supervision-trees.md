@@ -91,6 +91,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Graph validation and post-build ref lookup are intentionally separate error
+domains: `GraphBuilder::build` returns `GraphBuildError`, while
+`Graph::actor_for` returns `GraphLookupError`. The example uses
+`Box<dyn Error>` so `?` can carry both. Production code can instead define an
+application error enum with one transparent variant for each type.
+
 The actor refs minted by `GraphBuilder::slot` continue to follow those actors
 across their respective restarts. `RuntimeHandle::actor_stats()` also recurses
 through the tree, and the same local child id may be reused in a different

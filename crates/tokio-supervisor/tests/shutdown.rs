@@ -501,7 +501,10 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .remove_child("stubborn")
         .await
         .expect_err("pure cooperative child removal should time out");
-    assert_eq!(err, ControlError::ShutdownTimedOut("stubborn".to_owned()));
+    assert_eq!(
+        err,
+        ControlError::Failed(SupervisorError::ShutdownTimedOut("stubborn".to_owned()))
+    );
     assert!(
         !live_flag.is_live(),
         "timed-out cooperative removal should abort the child before returning"

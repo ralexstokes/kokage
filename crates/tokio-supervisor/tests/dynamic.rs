@@ -5,8 +5,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_supervisor::{
-    ChildSpec, ControlError, ControlOperation, DynamicSupervisorBuilder, ExitStatusView,
-    RestartIntensity, RestartPolicy, ScopeKind, ShutdownPolicy, Supervisor, SupervisorError,
+    ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView, RestartIntensity,
+    RestartPolicy, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError, SupervisorError,
     SupervisorHandle,
 };
 
@@ -38,7 +38,7 @@ fn empty_supervisors_are_valid() {
 }
 
 #[tokio::test]
-async fn ordered_membership_operations_name_the_rejected_operation_and_kind() {
+async fn ordered_membership_operations_report_the_scope_kind() {
     let handle = Supervisor::ordered()
         .child(ChildSpec::task("declared", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -55,7 +55,7 @@ async fn ordered_membership_operations_name_the_rejected_operation_and_kind() {
     assert_eq!(
         add_child,
         ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         }
     );
@@ -70,7 +70,7 @@ async fn ordered_membership_operations_name_the_rejected_operation_and_kind() {
     assert_eq!(
         add_nested,
         ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::AddChild,
+            operation: "add_child",
             kind: ScopeKind::Ordered,
         }
     );
@@ -82,7 +82,7 @@ async fn ordered_membership_operations_name_the_rejected_operation_and_kind() {
     assert_eq!(
         remove_child,
         ControlError::UnsupportedByScopeKind {
-            operation: ControlOperation::RemoveChild,
+            operation: "remove_child",
             kind: ScopeKind::Ordered,
         }
     );
@@ -680,7 +680,10 @@ async fn duplicate_add_and_unknown_remove_are_rejected() {
         .add_child(ChildSpec::task("seed", |_ctx| async move { Ok(()) }))
         .await
         .expect_err("duplicate id should be rejected");
-    assert_eq!(duplicate, ControlError::DuplicateChildId("seed".to_owned()));
+    assert_eq!(
+        duplicate,
+        ControlError::Rejected(SupervisorBuildError::DuplicateChildId("seed".to_owned()))
+    );
 
     let missing = handle
         .remove_child("missing")
@@ -821,7 +824,7 @@ async fn shutdown_completes_a_pending_removal_and_preserves_its_timeout() {
     let removal = remove_task.await.expect("remove task should join");
     assert!(matches!(
         removal,
-        Err(ControlError::ShutdownTimedOut(id)) if id == "removable"
+        Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(id))) if id == "removable"
     ));
 
     assert!(matches!(
@@ -1038,7 +1041,7 @@ async fn cooperative_removal_reports_timeout_after_the_abort_join() {
         .expect("remove should finish after aborting the child");
     assert!(matches!(
         removal,
-        Err(ControlError::ShutdownTimedOut(id)) if id == "stubborn"
+        Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(id))) if id == "stubborn"
     ));
     assert!(handle.snapshot().child("stubborn").is_none());
 

@@ -11,7 +11,7 @@ use std::{
 use tokio_otp::{
     Actor, ActorRef, ActorResult, AmbientContext, ChildMembershipView, ControlError, GraphBuilder,
     LifecycleEvent, LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle, StartContext,
-    Strategy, SupervisionTree, SupervisorSnapshot,
+    Strategy, SupervisionTree, SupervisorError, SupervisorSnapshot,
 };
 
 use crate::{
@@ -204,7 +204,7 @@ impl Router {
                     mount.remove_child(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
-                        | Err(ControlError::ShutdownTimedOut(_))
+                        | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
                 )
             },
             false,
@@ -228,7 +228,7 @@ impl Router {
                     mount.remove_child(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
-                        | Err(ControlError::ShutdownTimedOut(_))
+                        | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
                         | Err(ControlError::ChildRemovalInProgress(_))
                 )
             },

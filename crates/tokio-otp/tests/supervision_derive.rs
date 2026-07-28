@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
-    GraphConfig, MailboxMode, MessageContext, MessageSize, RawActor, SendError, Supervision,
+    GraphConfig, MailboxMode, MessageContext, MessageSize, RawActor, Supervision, TrySendError,
 };
 
 enum FrontendMsg {
@@ -285,7 +285,7 @@ async fn tree_with_applies_graph_config() {
     park.send(()).await.expect("first message fits");
     assert!(matches!(
         park.try_send(()),
-        Err(SendError::MailboxFull { actor_id, .. }) if actor_id == "park"
+        Err(TrySendError::Full { actor_id, .. }) if actor_id == "park"
     ));
 
     handle.shutdown_and_wait().await.expect("clean shutdown");

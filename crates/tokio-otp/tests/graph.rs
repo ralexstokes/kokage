@@ -19,7 +19,7 @@ use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
     DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, LiveContext,
     MessageContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
-    StopContext, TryRecvError,
+    StopContext, TrySendError,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -231,7 +231,7 @@ async fn try_send_reports_unbound_and_terminated_states() {
 
     assert!(matches!(
         worker.try_send(()),
-        Err(SendError::ActorNotRunning { actor_id , .. }) if actor_id == "worker"
+        Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "worker"
     ));
 
     let (stop, task) = start_graph(&graph);
@@ -239,7 +239,7 @@ async fn try_send_reports_unbound_and_terminated_states() {
 
     assert!(matches!(
         worker.try_send(()),
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+        Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
     ));
 }
 
@@ -900,18 +900,17 @@ impl RawActor for TryDrainActor {
 
         loop {
             match ctx.try_recv() {
-                Ok(TryDrainMsg::Value(value)) => self
+                Some(TryDrainMsg::Value(value)) => self
                     .events
                     .send(TryDrainEvent::Drained(value))
                     .expect("receiver alive"),
-                Ok(TryDrainMsg::Start) => panic!("unexpected start message"),
-                Err(TryRecvError::Empty) => {
+                Some(TryDrainMsg::Start) => panic!("unexpected start message"),
+                None => {
                     self.events
                         .send(TryDrainEvent::Empty)
                         .expect("receiver alive");
                     break;
                 }
-                Err(TryRecvError::Disconnected) => panic!("mailbox disconnected"),
             }
         }
 
@@ -1313,7 +1312,7 @@ async fn send_to_dropped_never_started_graph_returns_actor_terminated() {
     drop(graph);
     assert!(matches!(
         echo.send(1).await,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "echo"
+        Err(SendError { actor_id , .. }) if actor_id == "echo"
     ));
 }
 
@@ -1338,7 +1337,7 @@ mod runnable_actor {
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
         GraphBuilder, MessageContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
-        SendError, StartContext, SupervisionTree,
+        SendError, StartContext, SupervisionTree, SupervisorError, TrySendError,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1457,7 +1456,7 @@ mod runnable_actor {
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
         assert!(matches!(
             detached.try_send(SizedPayload(Vec::new())),
-            Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+            Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
         ));
     }
 
@@ -1541,7 +1540,7 @@ mod runnable_actor {
         worker_ref.try_send(2).expect("try_send accepted");
         assert!(matches!(
             worker_ref.try_send(3),
-            Err(SendError::MailboxFull { .. })
+            Err(TrySendError::Full { .. })
         ));
 
         let stats = worker_ref.stats();
@@ -1591,7 +1590,7 @@ mod runnable_actor {
             .expect("first message accepted");
         assert!(matches!(
             worker_ref.try_send(SizedPayload(vec![0; 100])),
-            Err(SendError::MailboxFull { .. })
+            Err(TrySendError::Full { .. })
         ));
         assert_eq!(worker_ref.stats().message_bytes_accepted, Some(4));
 
@@ -1665,7 +1664,8 @@ mod runnable_actor {
         handle.wait_started().await.expect("dynamic actor started");
         assert!(matches!(
             handle.remove_child("worker").await,
-            Err(ControlError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
+            Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
+                if actor_id == "worker"
         ));
         handle.shutdown_and_wait().await.expect("clean shutdown");
     }
@@ -1674,14 +1674,14 @@ mod runnable_actor {
         timeout(Duration::from_secs(1), async {
             loop {
                 match actor_ref.try_send("probe".to_owned()) {
-                    Err(SendError::MailboxClosed { .. }) => break,
-                    Err(SendError::ActorNotRunning { .. }) => {
+                    Err(TrySendError::Closed { .. }) => break,
+                    Err(TrySendError::NotRunning { .. }) => {
                         panic!("binding cleared before stale mailbox was observed");
                     }
-                    Err(SendError::ActorTerminated { .. }) => {
+                    Err(TrySendError::Terminated { .. }) => {
                         panic!("binding terminated before stale mailbox was observed");
                     }
-                    Ok(()) | Err(SendError::MailboxFull { .. }) => {
+                    Ok(()) | Err(TrySendError::Full { .. }) => {
                         sleep(Duration::from_millis(1)).await;
                     }
                     Err(_) => panic!("unexpected send error while observing stale mailbox"),
@@ -1855,7 +1855,7 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(SendError::ActorNotRunning { actor_id, .. }) if actor_id == "worker"
+            Err(TrySendError::NotRunning { actor_id, .. }) if actor_id == "worker"
         ));
     }
 
@@ -1888,11 +1888,11 @@ mod runnable_actor {
             let disposition = timeout(Duration::from_secs(1), async {
                 loop {
                     match worker_ref.try_send(()) {
-                        Err(error @ SendError::ActorNotRunning { .. })
-                        | Err(error @ SendError::ActorTerminated { .. }) => break error,
+                        Err(error @ TrySendError::NotRunning { .. })
+                        | Err(error @ TrySendError::Terminated { .. }) => break error,
                         Ok(())
-                        | Err(SendError::MailboxFull { .. })
-                        | Err(SendError::MailboxClosed { .. }) => tokio::task::yield_now().await,
+                        | Err(TrySendError::Full { .. })
+                        | Err(TrySendError::Closed { .. }) => tokio::task::yield_now().await,
                         Err(error) => panic!("unexpected send error after dropped run: {error}"),
                     }
                 }
@@ -1901,9 +1901,9 @@ mod runnable_actor {
             .expect("binding reached its dropped-run disposition");
 
             if expect_terminated {
-                assert!(matches!(disposition, SendError::ActorTerminated { .. }));
+                assert!(matches!(disposition, TrySendError::Terminated { .. }));
             } else {
-                assert!(matches!(disposition, SendError::ActorNotRunning { .. }));
+                assert!(matches!(disposition, TrySendError::NotRunning { .. }));
             }
         }
     }
@@ -1927,7 +1927,7 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(SendError::ActorNotRunning { actor_id , .. }) if actor_id == "worker"
+            Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "worker"
         ));
 
         // A second run of the same actor declares Never: the same failed exit
@@ -1945,7 +1945,7 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+            Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
         ));
     }
 
@@ -2097,7 +2097,7 @@ mod runnable_actor {
         // terminated.
         assert!(matches!(
             worker_ref.try_send("early".to_owned()),
-            Err(SendError::ActorNotRunning { actor_id , .. }) if actor_id == "worker"
+            Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "worker"
         ));
 
         // Each run ends by clean early exit (not requested shutdown), so the
@@ -2136,7 +2136,7 @@ mod runnable_actor {
         worker.terminate_binding();
         assert!(matches!(
             worker_ref.try_send("late".to_owned()),
-            Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+            Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
         ));
     }
 
@@ -2326,7 +2326,7 @@ mod runnable_actor {
                 .try_recv()
                 .unwrap_or_else(|_| panic!("drained message {expected} produced an outcome"));
             assert!(
-                matches!(outcome, Err(SendError::ActorTerminated { ref actor_id , .. }) if actor_id == "sink"),
+                matches!(outcome, Err(SendError { ref actor_id , .. }) if actor_id == "sink"),
                 "drained send observed the stopped sibling: {outcome:?}"
             );
         }

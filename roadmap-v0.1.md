@@ -212,13 +212,12 @@ example owns the direct `serde_json` pattern.
 
 ### 1.5 Contain dependency coupling
 
-**Status: complete.** `ActorContext::try_recv` now returns the crate-owned
-`TryRecvError`; the cancellation-token coupling and nested actor/supervisor
-shutdown deadlines are documented; and the deadline interaction is covered by
-runtime tests.
+**Status: complete.** `ActorContext::try_recv` now returns `Option<M>`; the
+cancellation-token coupling and nested actor/supervisor shutdown deadlines are
+documented; and the deadline interaction is covered by runtime tests.
 
-- Replace the direct `TryRecvError` re-export with a crate-owned error or a
-  method-specific result that can evolve independently of Tokio.
+- Replace the direct `TryRecvError` re-export with a method-specific result
+  that can evolve independently of Tokio.
 - Document deliberate public coupling to `tokio_util::sync::CancellationToken`
   where it remains in signatures.
 - Each child's `ShutdownPolicy` owns its shutdown clock; standalone
@@ -490,7 +489,7 @@ Big shapes that neither application covers, roughly in priority order:
 4. **Overload where conflation does not apply.** Both applications absorb
    overload with keyed conflation, which only works for replaceable state.
    Bounded FIFO mailboxes under sustained pressure — `try_send` +
-   `SendError::Full` as deliberate load shedding, backpressure propagating
+   `TrySendError::Full` as deliberate load shedding, backpressure propagating
    through a multi-stage pipeline, and reading `ActorStats` correctly while
    it happens — is only covered by small unit examples.
 5. **The real-I/O boundary.** Both applications are deliberately in-process

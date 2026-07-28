@@ -19,9 +19,8 @@ mod coverage_probe {
     mod advanced_root {
         use tokio_supervisor::{
             BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard,
-            CompletionOutcome, ControlOperation, ExitStatusView, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, ScopeKind, SupervisorSnapshot,
-            SupervisorStateView,
+            CompletionOutcome, ExitStatusView, LifecycleEvent, LifecyclePathSegment,
+            LifecycleWatch, ScopeKind, SupervisorSnapshot, SupervisorStateView,
         };
     }
 }

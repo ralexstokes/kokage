@@ -246,7 +246,7 @@ pub use event::ExitStatusView;
 pub use handle::SupervisorHandle;
 pub use lifecycle::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch};
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
-pub use scope::{ControlOperation, ScopeKind};
+pub use scope::ScopeKind;
 pub use shutdown::ShutdownPolicy;
 pub use snapshot::{
     ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,

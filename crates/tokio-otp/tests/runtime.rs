@@ -19,7 +19,8 @@ use tokio_otp::{
 };
 use tokio_supervisor::{
     ChildSpec, ChildStateView, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity,
-    RestartPolicy, ShutdownPolicy, Strategy, SupervisorError, SupervisorStateView,
+    RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
+    SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -443,11 +444,33 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 }
 
 #[tokio::test]
-async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
+async fn subtree_build_and_control_errors_remain_distinct() {
     let root = SupervisionTree::dynamic()
         .build()
         .expect("runtime builds")
         .spawn();
+
+    let invalid = SupervisionTree::new()
+        .task(
+            ChildSpec::task("duplicate", |_| async { Ok(()) }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
+        .task(
+            ChildSpec::task("duplicate", |_| async { Ok(()) }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
+        .reserve();
+    assert_eq!(
+        root.add_subtree("invalid", invalid)
+            .await
+            .expect_err("invalid subtree fails before insertion"),
+        AddSubtreeError::Build(SupervisorBuildError::DuplicateChildId(
+            "duplicate".to_owned()
+        ))
+    );
+
     let first = root
         .add_subtree("workers", SupervisionTree::dynamic().reserve())
         .await
@@ -463,7 +486,9 @@ async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
         .expect_err("duplicate subtree rejected");
     assert_eq!(
         error,
-        AddSubtreeError::Control(ControlError::DuplicateChildId("workers".to_owned()))
+        AddSubtreeError::Control(ControlError::Rejected(
+            SupervisorBuildError::DuplicateChildId("workers".to_owned())
+        ))
     );
     assert_eq!(root.actor_stats().len(), 1);
     assert!(root.subtree("workers").is_some());
@@ -644,10 +669,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let stats = handle.actor_stats();
     assert_eq!(stats.len(), 1);
     assert_eq!(stats[0].actor_id, static_ref.id());
-    assert!(matches!(
-        dynamic_ref.send(()).await,
-        Err(SendError::ActorTerminated { .. })
-    ));
+    assert!(matches!(dynamic_ref.send(()).await, Err(SendError { .. })));
     for _ in 0..100 {
         tokio::task::yield_now().await;
     }
@@ -721,10 +743,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let stats = root.actor_stats();
     assert_eq!(stats.len(), 1);
     assert_eq!(stats[0].actor_id, static_ref.id());
-    assert!(matches!(
-        dynamic_ref.send(()).await,
-        Err(SendError::ActorTerminated { .. })
-    ));
+    assert!(matches!(dynamic_ref.send(()).await, Err(SendError { .. })));
 
     root.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -1106,7 +1125,7 @@ async fn send_fails_after_restart_intensity_is_exhausted() {
     let result = timeout(Duration::from_millis(500), worker_ref.send(()))
         .await
         .expect("send resolved after the supervisor gave up");
-    assert!(matches!(result, Err(SendError::ActorTerminated { .. })));
+    assert!(matches!(result, Err(SendError { .. })));
 }
 
 enum CounterMsg {
