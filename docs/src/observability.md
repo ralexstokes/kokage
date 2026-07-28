@@ -101,14 +101,14 @@ for another child's loss. Filter on `seq`, not on the marker's identity fields.
 
 ### Waiting for one restart
 
-`LifecycleWatch::wait_started(id, after_generation)` collapses the common
+`LifecycleWatch::started_after(id, after_generation)` collapses the common
 one-shot wait into a single call, returning the generation that started:
 
 ```rust,ignore
 let mut lifecycle = handle.watch_lifecycle();
 let baseline = handle.snapshot().child("press").unwrap().generation;
 
-lifecycle.wait_started("press", baseline).await;
+lifecycle.started_after("press", baseline).await;
 ```
 
 It returns `None` once that start can no longer be observed on this watch —
@@ -180,7 +180,7 @@ staged events have drained.
 
 Use a direct watch when per-scope sequence alignment is the goal. Use a
 recursive watch for diagnostics, dashboards, and any observer that needs a
-single tree feed. Both watch types provide a `wait_started` helper; the
+single tree feed. Both watch types provide a `started_after` helper; the
 recursive form additionally takes the exact supervisor path. The
 `trading_engine` example's breaker consumes
 direct `event.total_restarts`; that counter records scheduled restarts — the
@@ -224,11 +224,9 @@ let uploads = graph.actor_with_options(
 );
 ```
 
-The same `ActorOptions` value works with `GraphBuilder::slot_with_options`,
-`GraphBuilder::add_with_options`, and
-`RunnableActorBuilder::actor_with_options`. Dynamic registration exposes the
-same settings directly on `DynamicActorOptions`, so mailbox and size settings
-can be combined with
+The same `ActorOptions` value works with `GraphBuilder::slot_with_options` and
+`GraphBuilder::add_with_options`. Dynamic registration exposes the same
+settings directly on `DynamicActorOptions`, so mailbox and size settings can be combined with
 `DynamicActorOptions::new().mailbox(MailboxMode::Conflate).message_size()`
 and passed to `RuntimeHandle::add_actor`.
 

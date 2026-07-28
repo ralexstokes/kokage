@@ -1,11 +1,7 @@
 use std::future::Future;
 
 use crate::actor::context::ActorContext;
-
-/// A type-erased, thread-safe error type used by actor functions.
-///
-/// This is identical to and interchangeable with `tokio_supervisor::BoxError`.
-pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub(crate) use tokio_supervisor::BoxError;
 
 /// Controls whether a handler actor continues receiving messages or stops
 /// cleanly.

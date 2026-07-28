@@ -177,8 +177,8 @@ impl SupervisorSnapshot {
 impl ChildSnapshot {
     /// Creates a child snapshot with active membership and no prior exit.
     ///
-    /// Readiness, exit, restart, membership, and nested-supervisor details can
-    /// be supplied with the builder-style setters.
+    /// Readiness, latest-exit, membership, and pending-restart details can be
+    /// supplied with the builder-style setters.
     pub fn new(id: impl Into<String>, generation: u64, state: ChildStateView) -> Self {
         Self {
             id: id.into(),
@@ -196,24 +196,10 @@ impl ChildSnapshot {
         }
     }
 
-    /// Sets this child's lineage.
-    #[must_use]
-    pub fn lineage(mut self, lineage: u64) -> Self {
-        self.lineage = lineage;
-        self
-    }
-
     /// Sets whether the child reported readiness in this generation.
     #[must_use]
     pub fn started(mut self, started: bool) -> Self {
         self.started = started;
-        self
-    }
-
-    /// Sets whether this generation permanently exited before readiness.
-    #[must_use]
-    pub fn startup_aborted(mut self, startup_aborted: bool) -> Self {
-        self.startup_aborted = startup_aborted;
         self
     }
 
@@ -231,31 +217,10 @@ impl ChildSnapshot {
         self
     }
 
-    /// Records whether the last exit was cancellation-driven.
-    #[must_use]
-    pub fn last_exit_cancelled(mut self, last_exit_cancelled: bool) -> Self {
-        self.last_exit_cancelled = last_exit_cancelled;
-        self
-    }
-
-    /// Sets the number of completed restarts.
-    #[must_use]
-    pub fn restart_count(mut self, restart_count: u64) -> Self {
-        self.restart_count = restart_count;
-        self
-    }
-
     /// Sets the delay remaining before the next scheduled restart.
     #[must_use]
     pub fn next_restart_in(mut self, next_restart_in: Option<Duration>) -> Self {
         self.next_restart_in = next_restart_in;
-        self
-    }
-
-    /// Sets the recursive snapshot for a nested supervisor child.
-    #[must_use]
-    pub fn supervisor(mut self, supervisor: Option<SupervisorSnapshot>) -> Self {
-        self.supervisor = supervisor.map(Box::new);
         self
     }
 

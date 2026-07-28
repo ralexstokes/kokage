@@ -70,25 +70,29 @@ impl RestartTracker {
     }
 
     pub(crate) fn backoff(&mut self) -> Duration {
-        let deterministic = match self.intensity.backoff {
+        let (deterministic, jitter) = match self.intensity.backoff {
             BackoffPolicy::None => return Duration::ZERO,
             BackoffPolicy::Fixed(delay) => return delay,
-            BackoffPolicy::Exponential { base, factor, max }
-            | BackoffPolicy::JitteredExponential { base, factor, max } => exponential_backoff(
+            BackoffPolicy::Exponential {
                 base,
                 factor,
                 max,
-                self.consecutive_restarts.saturating_sub(1),
+                jitter,
+            } => (
+                exponential_backoff(
+                    base,
+                    factor,
+                    max,
+                    self.consecutive_restarts.saturating_sub(1),
+                ),
+                jitter,
             ),
         };
 
-        match self.intensity.backoff {
-            BackoffPolicy::JitteredExponential { .. } => {
-                self.rng.jitter_between(deterministic / 2, deterministic)
-            }
-            BackoffPolicy::None | BackoffPolicy::Fixed(_) | BackoffPolicy::Exponential { .. } => {
-                deterministic
-            }
+        if jitter {
+            self.rng.jitter_between(deterministic / 2, deterministic)
+        } else {
+            deterministic
         }
     }
 
@@ -200,6 +204,7 @@ mod tests {
             base: Duration::from_millis(10),
             factor: 2,
             max: Duration::from_millis(500),
+            jitter: false,
         });
 
         let started_at = Instant::now();
@@ -222,6 +227,7 @@ mod tests {
             base: Duration::from_millis(25),
             factor: 1,
             max: Duration::from_millis(500),
+            jitter: false,
         });
 
         let started_at = Instant::now();
@@ -245,10 +251,11 @@ mod tests {
 
     #[test]
     fn jittered_backoff_stays_within_equal_jitter_bounds() {
-        let mut tracker = tracker(BackoffPolicy::JitteredExponential {
+        let mut tracker = tracker(BackoffPolicy::Exponential {
             base: Duration::from_millis(80),
             factor: 2,
             max: Duration::from_millis(500),
+            jitter: true,
         });
         let started_at = Instant::now();
         record_short_restart(&mut tracker, started_at);
@@ -266,6 +273,7 @@ mod tests {
             base: Duration::from_millis(10),
             factor: 2,
             max: Duration::from_millis(500),
+            jitter: false,
         });
         let started_at = Instant::now();
 
@@ -283,6 +291,7 @@ mod tests {
             base: Duration::from_millis(10),
             factor: 2,
             max: Duration::from_millis(500),
+            jitter: false,
         });
         let started_at = Instant::now();
 

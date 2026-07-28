@@ -1229,7 +1229,7 @@ mod runnable_actor {
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
         GraphBuilder, MessageContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
-        RunnableActorBuilder, SendError, StartContext, SupervisionTree, prelude::Continue,
+        SendError, ShutdownMode, StartContext, SupervisionTree, prelude::Continue,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1552,11 +1552,10 @@ mod runnable_actor {
             .add_actor(
                 "worker",
                 || NeverStops,
-                DynamicActorOptions::default().shutdown(
-                    tokio_supervisor::ShutdownPolicy::cooperative_strict(Duration::from_millis(
-                        100,
-                    )),
-                ),
+                DynamicActorOptions::default().shutdown(tokio_supervisor::ShutdownPolicy::new(
+                    Duration::from_millis(100),
+                    ShutdownMode::CooperativeStrict,
+                )),
             )
             .await
             .expect("dynamic actor added");
@@ -1977,9 +1976,12 @@ mod runnable_actor {
     #[tokio::test]
     async fn factory_minted_ref_is_live_across_runs_and_dies_with_the_binding() {
         let (out_tx, mut out_rx) = mpsc::unbounded_channel();
-        let (worker, worker_ref) = RunnableActorBuilder::new().actor("worker", move || Forward {
+        let mut builder = GraphBuilder::new();
+        let worker_ref = builder.actor("worker", move || Forward {
             out: out_tx.clone(),
         });
+        let graph = builder.build().expect("worker graph builds");
+        let worker = graph.actor("worker").expect("worker is registered").clone();
 
         // Typed at creation: before any run the binding is unbound, not
         // terminated.

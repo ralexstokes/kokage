@@ -18,8 +18,8 @@ use tokio_otp::{
     Actor, ActorContext, ActorRef, ActorResult, BoxError, CancellationHandle, ChildMembershipView,
     ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy, DynamicActorOptions,
     DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageContext, MessageSize, MonitorEvent,
-    RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy,
-    StartContext, StopContext, SupervisorBuilder,
+    RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownMode,
+    ShutdownPolicy, StartContext, StopContext, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
 
@@ -1290,8 +1290,9 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         .add_actor(
             "dynamic",
             || PendingActor,
-            DynamicActorOptions::new().shutdown(ShutdownPolicy::cooperative_strict(
+            DynamicActorOptions::new().shutdown(ShutdownPolicy::new(
                 Duration::from_millis(20),
+                ShutdownMode::CooperativeStrict,
             )),
         )
         .await

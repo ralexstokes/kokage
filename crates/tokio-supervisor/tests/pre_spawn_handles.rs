@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEventKind,
-    Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
+    RestartIntensity, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
 };
 
 mod common;
@@ -119,10 +119,10 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             "builder" => drop(builder),
             "failed-build" => {
                 let error = builder
-                    .control_channel_capacity(0)
+                    .restart_intensity(RestartIntensity::new(1, Duration::ZERO))
                     .build()
                     .expect_err("invalid build fails");
-                assert!(error.to_string().contains("capacity"));
+                assert!(error.to_string().contains("window"));
             }
             "built-supervisor" => {
                 let supervisor = builder.build().expect("supervisor builds");

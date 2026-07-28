@@ -8,7 +8,8 @@ use tokio_supervisor::{
 };
 
 use crate::{
-    Graph, RunnableActor, RunnableActorBuilder, Runtime,
+    Graph, RunnableActor, Runtime,
+    actor::RunnableActorBuilder,
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 

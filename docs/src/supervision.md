@@ -9,8 +9,8 @@ and a `press` that keeps jamming. Along the way we meet every knob a
 use std::time::Duration;
 
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartPolicy, RestartIntensity, ShutdownPolicy, Strategy,
-    SupervisorBuilder,
+    BackoffPolicy, ChildSpec, RestartPolicy, RestartIntensity, ShutdownMode, ShutdownPolicy,
+    Strategy, SupervisorBuilder,
 };
 
 #[tokio::main]
@@ -26,7 +26,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         RestartIntensity::new(3, Duration::from_secs(10))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
     )
-    .shutdown(ShutdownPolicy::cooperative_then_abort(Duration::from_secs(1)));
+    .shutdown(ShutdownPolicy::new(
+        Duration::from_secs(1),
+        ShutdownMode::CooperativeThenAbort,
+    ));
 
     // A front desk that runs until asked to stop.
     let front_desk = ChildSpec::new("front-desk", |ctx| async move {
@@ -87,11 +90,11 @@ restarts within a sliding `within` window (the default is 5 restarts within
 `SupervisorError::RestartIntensityExceeded` — in a supervision tree, that
 escalates the failure to the parent.
 
-A [`BackoffPolicy`] optionally delays each restart attempt: `Fixed`,
-`Exponential`, or `JitteredExponential`. The exponential attempt count is a
-per-child consecutive-restart counter that resets once a run survives longer
-than the intensity window. A shutdown request always wins over a pending
-restart delay.
+A [`BackoffPolicy`] optionally delays each restart attempt with `Fixed` or
+`Exponential`; the exponential variant's `jitter` flag enables equal jitter.
+The exponential attempt count is a per-child consecutive-restart counter that
+resets once a run survives longer than the intensity window. A shutdown
+request always wins over a pending restart delay.
 
 Intensity can be set on the supervisor as a whole
 (`SupervisorBuilder::restart_intensity`) or overridden per child, as we did
@@ -168,12 +171,12 @@ example] pins the last-child behavior with per-child restart-count assertions.
 When a child must stop — on supervisor shutdown, removal, or a group restart —
 its [`ShutdownPolicy`] governs how:
 
-- **`ShutdownPolicy::cooperative_strict(grace)`** — cancel the child's token
-  and wait up to `grace` for a voluntary exit; abort *and report a timeout
-  error* otherwise.
-- **`ShutdownPolicy::cooperative_then_abort(grace)`** (default, 5 s grace) —
-  same, but the enclosing shutdown operation does not return an error. The
-  child's lifecycle exit still reads `ShutdownTimedOut`.
+- **`ShutdownPolicy::new(grace, ShutdownMode::CooperativeStrict)`** — cancel
+  the child's token and wait up to `grace` for a voluntary exit; abort *and
+  report a timeout error* otherwise.
+- **`ShutdownPolicy::new(grace, ShutdownMode::CooperativeThenAbort)`**
+  (default, 5 s grace) — same, but the enclosing shutdown operation does not
+  return an error. The child's lifecycle exit still reads `ShutdownTimedOut`.
 - **`ShutdownPolicy::abort()`** — abort immediately.
 
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.

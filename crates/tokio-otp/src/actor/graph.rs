@@ -619,50 +619,21 @@ impl std::fmt::Debug for RunnableActor {
     }
 }
 
-/// Registration surface for constructing runtime-added actors that share
-/// execution settings.
-///
-/// Its [`actor`](Self::actor) methods take an [`ActorFactory`] — the reusable
-/// recipe that constructs each actor incarnation — and return the
-/// [`RunnableActor`] that wraps it. The two are distinct layers: a factory
-/// builds one incarnation, while this builder assembles the runnable actor
-/// around it.
 #[derive(Clone, Debug)]
-pub struct RunnableActorBuilder {
+pub(crate) struct RunnableActorBuilder {
     observability: GraphObservability,
     mailbox_capacity: usize,
 }
 
 impl RunnableActorBuilder {
-    /// Creates a factory with the same defaults [`GraphBuilder`](crate::GraphBuilder)
-    /// uses for a graph without an explicit name.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             observability: GraphObservability::new(anonymous_graph_name()),
             mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
         }
     }
 
-    /// Constructs a runnable actor from a reusable incarnation factory and
-    /// returns its stable typed ref.
-    ///
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub fn actor<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-    ) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
-    where
-        F: ActorFactory,
-    {
-        self.actor_with_options(label, factory, ActorOptions::new())
-    }
-
-    /// Constructs a runnable actor from a reusable incarnation factory with
-    /// explicit per-actor options and returns its stable typed ref.
-    ///
-    /// See [`ActorFactory`] for the incarnation lifecycle contract.
-    pub fn actor_with_options<F>(
+    pub(crate) fn actor_with_options<F>(
         &self,
         label: impl Into<String>,
         factory: F,

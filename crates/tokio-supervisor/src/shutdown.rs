@@ -80,19 +80,6 @@ impl ShutdownPolicy {
         Self { grace, mode }
     }
 
-    /// Strict cooperative shutdown: cancel the child and wait up to `grace`
-    /// for it to exit. If the child does not exit within the grace period, the
-    /// task is aborted and a timeout error is reported.
-    pub fn cooperative_strict(grace: Duration) -> Self {
-        Self::new(grace, ShutdownMode::CooperativeStrict)
-    }
-
-    /// Cancel the child and wait up to `grace`; if it has not exited by then,
-    /// abort the Tokio task.
-    pub fn cooperative_then_abort(grace: Duration) -> Self {
-        Self::new(grace, ShutdownMode::CooperativeThenAbort)
-    }
-
     /// Abort the Tokio task immediately with no grace period.
     pub fn abort() -> Self {
         Self::new(Duration::ZERO, ShutdownMode::Abort)
@@ -101,7 +88,7 @@ impl ShutdownPolicy {
 
 impl Default for ShutdownPolicy {
     fn default() -> Self {
-        Self::cooperative_then_abort(Duration::from_secs(5))
+        Self::new(Duration::from_secs(5), ShutdownMode::CooperativeThenAbort)
     }
 }
 

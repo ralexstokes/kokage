@@ -26,8 +26,6 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
         .spawn();
 
     let mut events = common::event_watch(&handle);
-    let mut snapshots = handle.subscribe_snapshots();
-
     assert_eq!(common::recv_event(&mut started_rx).await, 0);
 
     let started = timeout(
@@ -51,17 +49,7 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
         } if id == "worker"
     ));
 
-    let snapshot = timeout(
-        common::EVENT_TIMEOUT,
-        snapshots.wait_for_snapshot(|snapshot| {
-            snapshot
-                .child("worker")
-                .is_some_and(|child| child.state == ChildStateView::Running)
-        }),
-    )
-    .await
-    .expect("timed out waiting for running snapshot")
-    .expect("snapshot stream should remain open");
+    let snapshot = handle.snapshot();
     assert_eq!(
         snapshot
             .child("worker")
@@ -98,9 +86,10 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(ShutdownPolicy::cooperative_strict(Duration::from_millis(
-                25,
-            ))),
+            .shutdown(ShutdownPolicy::new(
+                Duration::from_millis(25),
+                ShutdownMode::CooperativeStrict,
+            )),
         )
         .supervisor(SupervisorSpec::new("nested", nested))
         .build()
@@ -121,15 +110,7 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 }
 
 #[test]
-fn prelude_policy_builders_cover_common_configuration() {
-    assert_eq!(
-        ShutdownPolicy::cooperative_strict(Duration::from_secs(2)),
-        ShutdownPolicy::new(Duration::from_secs(2), ShutdownMode::CooperativeStrict)
-    );
-    assert_eq!(
-        ShutdownPolicy::cooperative_then_abort(Duration::from_secs(3)),
-        ShutdownPolicy::new(Duration::from_secs(3), ShutdownMode::CooperativeThenAbort)
-    );
+fn prelude_policy_types_cover_common_configuration() {
     assert_eq!(ShutdownPolicy::abort().mode, ShutdownMode::Abort);
     assert!(ShutdownPolicy::abort().grace.is_zero());
 

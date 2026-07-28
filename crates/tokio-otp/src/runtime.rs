@@ -5,15 +5,14 @@ use std::{
 
 use crate::{
     ActorFactory, ActorOptions, ActorRef, ActorStats, MailboxMode, MessageSize, RawActor,
-    RunnableActor, RunnableActorBuilder, SupervisorPathSegment,
+    RunnableActor, SupervisorPathSegment, actor::RunnableActorBuilder,
 };
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
-    AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
-    LifecycleEvent, LifecycleWatch, RecursiveLifecycleWatch, RestartIntensity, RestartPolicy,
-    ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-    SupervisorSpec,
+    AttachedChildIdentity, ChildSpec, ControlError, LifecycleEvent, LifecycleWatch,
+    RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
+    SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -738,39 +737,6 @@ impl RuntimeHandle {
     /// Waits until all current actor children have completed `on_start`.
     pub async fn wait_started(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait_started().await
-    }
-
-    /// Delegates to [`SupervisorHandle::wait_completed`]: waits until every
-    /// named child of this scope is simultaneously in a completed state.
-    ///
-    /// Actors are addressed by their graph label. Use a
-    /// [`subtree`](Self::subtree) handle for nested scopes.
-    pub async fn wait_completed<I, S>(&self, ids: I) -> CompletionOutcome
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.supervisor.wait_completed(ids).await
-    }
-
-    /// Delegates to [`SupervisorHandle::shutdown_on_completion`]: stops this
-    /// scope once its finite work is done.
-    ///
-    /// This is the actor-graph spelling of a subtree whose lifetime is bounded
-    /// by finite work. Take the handle from
-    /// [`RuntimeBuilder::handle`](crate::RuntimeBuilder::handle) and arm it
-    /// before spawning, so a fast actor's completion is still observed. The
-    /// returned guard must be retained.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.supervisor.shutdown_on_completion(ids)
     }
 
     /// Returns the ordered lifecycle stream for this runtime's direct

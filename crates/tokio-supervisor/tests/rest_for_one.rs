@@ -7,7 +7,9 @@ use std::{
 };
 
 use tokio::sync::{Notify, mpsc};
-use tokio_supervisor::{ChildSpec, RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder};
+use tokio_supervisor::{
+    ChildSpec, RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder,
+};
 
 mod common;
 
@@ -188,9 +190,10 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative_then_abort(Duration::from_secs(
-        1,
-    )));
+    .shutdown(ShutdownPolicy::new(
+        Duration::from_secs(1),
+        ShutdownMode::CooperativeThenAbort,
+    ));
 
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::RestForOne)
@@ -355,9 +358,10 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative_then_abort(Duration::from_secs(
-        1,
-    )));
+    .shutdown(ShutdownPolicy::new(
+        Duration::from_secs(1),
+        ShutdownMode::CooperativeThenAbort,
+    ));
 
     let handle = SupervisorBuilder::new()
         .strategy(Strategy::RestForOne)
@@ -430,7 +434,8 @@ fn failing_once_child(
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::cooperative_then_abort(
+    .shutdown(ShutdownPolicy::new(
         Duration::from_millis(200),
+        ShutdownMode::CooperativeThenAbort,
     ))
 }

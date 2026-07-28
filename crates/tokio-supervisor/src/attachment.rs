@@ -8,6 +8,7 @@ use crate::SupervisorHandle;
 /// tree without consulting serializable supervisor snapshots.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
+#[doc(hidden)]
 pub struct AttachedChildIdentity {
     /// Child id within its direct supervisor.
     pub id: String,
@@ -23,6 +24,7 @@ pub struct AttachedChildIdentity {
 /// from [`ChildSnapshot`](crate::ChildSnapshot), including when the `serde`
 /// feature is enabled.
 #[derive(Clone)]
+#[doc(hidden)]
 pub struct AttachedChild<T> {
     path: Vec<AttachedChildIdentity>,
     attachment: Arc<T>,

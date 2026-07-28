@@ -168,6 +168,8 @@ impl ActorStatsCounters {
     }
 }
 
+type KeyMatcher<M> = Arc<dyn Fn(&M, &M) -> bool + Send + Sync>;
+
 /// Selects how an actor stores unread messages.
 ///
 /// FIFO [`Queue`](Self::Queue) mailboxes apply backpressure at the configured
@@ -200,14 +202,9 @@ pub enum MailboxMode<M> {
     #[non_exhaustive]
     ConflateByKey {
         #[doc(hidden)]
-        key_matches: MailboxKeyMatcher<M>,
+        key_matches: KeyMatcher<M>,
     },
 }
-
-type KeyMatcherFn<M> = dyn Fn(&M, &M) -> bool + Send + Sync;
-
-#[doc(hidden)]
-pub struct MailboxKeyMatcher<M>(Arc<KeyMatcherFn<M>>);
 
 impl<M> MailboxMode<M> {
     /// Creates a keyed latest-wins mailbox using `key` to group messages.
@@ -221,7 +218,7 @@ impl<M> MailboxMode<M> {
         F: Fn(&M) -> K + Send + Sync + 'static,
     {
         Self::ConflateByKey {
-            key_matches: MailboxKeyMatcher(Arc::new(move |left, right| key(left) == key(right))),
+            key_matches: Arc::new(move |left, right| key(left) == key(right)),
         }
     }
 }
@@ -232,7 +229,7 @@ impl<M> Clone for MailboxMode<M> {
             Self::Queue => Self::Queue,
             Self::Conflate => Self::Conflate,
             Self::ConflateByKey { key_matches } => Self::ConflateByKey {
-                key_matches: MailboxKeyMatcher(Arc::clone(&key_matches.0)),
+                key_matches: Arc::clone(key_matches),
             },
         }
     }
@@ -315,7 +312,7 @@ pub(crate) fn mailbox<M>(
             )
         }
         MailboxMode::ConflateByKey { key_matches } => {
-            let (sender, receiver) = conflating_channel(capacity, Some(Arc::clone(&key_matches.0)));
+            let (sender, receiver) = conflating_channel(capacity, Some(Arc::clone(key_matches)));
             (
                 MailboxSender::Conflating(sender),
                 MailboxReceiver::Conflating(receiver),
@@ -469,8 +466,6 @@ impl<M> MailboxSender<M> {
         }
     }
 }
-
-type KeyMatcher<M> = Arc<dyn Fn(&M, &M) -> bool + Send + Sync>;
 
 struct ConflatingState<M> {
     messages: VecDeque<M>,
