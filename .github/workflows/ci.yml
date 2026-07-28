@@ -56,7 +56,7 @@ jobs:
 
       - name: Restore pull request Cargo target cache
         if: steps.lane.outputs.full != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             target
@@ -75,7 +75,7 @@ jobs:
       - name: Restore shared Cargo target cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: shared-cargo-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             target
@@ -120,7 +120,7 @@ jobs:
           github.ref == 'refs/heads/main' &&
           steps.shared-cargo-cache.outputs.cache-hit != 'true' &&
           success()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             target
