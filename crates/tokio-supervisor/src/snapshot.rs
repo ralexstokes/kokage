@@ -127,13 +127,6 @@ impl SupervisorSnapshot {
         }
     }
 
-    /// Sets the immutable scope kind represented by this snapshot.
-    #[must_use]
-    pub fn kind(mut self, kind: ScopeKind) -> Self {
-        self.kind = kind;
-        self
-    }
-
     /// Sets the cumulative restart count recorded by this supervisor.
     #[must_use]
     pub fn total_restarts(mut self, total_restarts: u64) -> Self {
@@ -177,8 +170,8 @@ impl SupervisorSnapshot {
 impl ChildSnapshot {
     /// Creates a child snapshot with active membership and no prior exit.
     ///
-    /// Readiness, latest-exit, membership, and pending-restart details can be
-    /// supplied with the builder-style setters.
+    /// Additional details can be assigned through the snapshot's public
+    /// fields.
     pub fn new(id: impl Into<String>, generation: u64, state: ChildStateView) -> Self {
         Self {
             id: id.into(),
@@ -194,34 +187,6 @@ impl ChildSnapshot {
             next_restart_in: None,
             supervisor: None,
         }
-    }
-
-    /// Sets whether the child reported readiness in this generation.
-    #[must_use]
-    pub fn started(mut self, started: bool) -> Self {
-        self.started = started;
-        self
-    }
-
-    /// Sets whether the child is active or being removed.
-    #[must_use]
-    pub fn membership(mut self, membership: ChildMembershipView) -> Self {
-        self.membership = membership;
-        self
-    }
-
-    /// Sets the child's most recent exit status.
-    #[must_use]
-    pub fn last_exit(mut self, last_exit: Option<ExitStatusView>) -> Self {
-        self.last_exit = last_exit;
-        self
-    }
-
-    /// Sets the delay remaining before the next scheduled restart.
-    #[must_use]
-    pub fn next_restart_in(mut self, next_restart_in: Option<Duration>) -> Self {
-        self.next_restart_in = next_restart_in;
-        self
     }
 
     /// Looks up a grandchild by id within this child's nested supervisor

@@ -377,6 +377,44 @@ async fn stopped_snapshot_remains_available_after_shutdown() {
 }
 
 #[tokio::test]
+async fn snapshot_reports_stopping_while_shutdown_drains_children() {
+    let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let release_for_child = Arc::clone(&release);
+    let supervisor = SupervisorBuilder::new()
+        .child(ChildSpec::new("worker", move |ctx| {
+            let cancelled_tx = cancelled_tx.clone();
+            let release = Arc::clone(&release_for_child);
+            async move {
+                ctx.shutdown_token().cancelled().await;
+                cancelled_tx.send(()).expect("test receiver dropped");
+                release.notified().await;
+                Ok(())
+            }
+        }))
+        .build()
+        .expect("valid supervisor");
+
+    let handle = supervisor.spawn();
+    let mut snapshots = handle.subscribe_snapshots();
+    let _ = wait_for_snapshot(&mut snapshots, |snapshot| {
+        child(snapshot, "worker").is_some_and(|child| child.state == ChildStateView::Running)
+    })
+    .await;
+
+    handle.shutdown();
+    common::recv_event(&mut cancelled_rx).await;
+    let stopping = wait_for_snapshot(&mut snapshots, |snapshot| {
+        snapshot.state == SupervisorStateView::Stopping
+    })
+    .await;
+    assert_eq!(stopping.state, SupervisorStateView::Stopping);
+
+    release.notify_one();
+    handle.wait().await.expect("shutdown should succeed");
+}
+
+#[tokio::test]
 async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
     let supervisor = SupervisorBuilder::new()
         .child(

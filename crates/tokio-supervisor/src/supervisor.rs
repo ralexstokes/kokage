@@ -136,11 +136,6 @@ impl Supervisor {
         }
     }
 
-    /// Returns this supervisor's immutable scope kind.
-    pub fn kind(&self) -> ScopeKind {
-        self.config.kind
-    }
-
     /// Returns the restart policy inherited by runtime-added children.
     #[doc(hidden)]
     pub fn default_restart_policy(&self) -> RestartPolicy {
