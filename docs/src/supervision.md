@@ -9,7 +9,7 @@ and a `press` that keeps jamming. Along the way we meet every knob a
 use std::time::Duration;
 
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartPolicy, RestartIntensity, ShutdownPolicy, Strategy,
+    BackoffPolicy, ChildSpec, RestartPolicy, RestartConfig, ShutdownPolicy, Strategy,
     Supervisor,
 };
 
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(
-        RestartIntensity::new(3, Duration::from_secs(10))
+        RestartConfig::new(3, Duration::from_secs(10))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
     )
     .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
@@ -81,7 +81,7 @@ restart:
 ## Restart intensity and backoff
 
 Unbounded restarting would turn a persistent fault into a busy loop, so
-restarts are budgeted by a [`RestartIntensity`]: at most `max_restarts`
+restarts are budgeted by a [`RestartConfig`]: at most `max_restarts`
 restarts within a sliding `within` window (the default is 5 restarts within
 30 seconds). Exceeding the budget makes the whole supervisor exit with
 `SupervisorError::RestartIntensityExceeded` — in a supervision tree, that
@@ -92,6 +92,11 @@ A [`BackoffPolicy`] optionally delays each restart attempt with `Fixed` or
 The exponential attempt count is a per-child consecutive-restart counter that
 resets once a run survives longer than the intensity window. A shutdown
 request always wins over a pending restart delay.
+
+The API deliberately keeps `restart_intensity` as the setter and serialized
+outline-field name: it names the supervisor behavior being configured.
+`RestartConfig` names the value passed through those surfaces because that
+value carries both the restart budget and its backoff policy.
 
 Intensity can be set on the supervisor as a whole
 (`Supervisor::ordered().restart_intensity(...)`) or overridden per child, as we did
@@ -320,7 +325,7 @@ actors](dynamic-actors.md) chapter.
 
 [`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
 [`RestartPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.RestartPolicy.html
-[`RestartIntensity`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.RestartIntensity.html
+[`RestartConfig`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.RestartConfig.html
 [`BackoffPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.BackoffPolicy.html
 [`Strategy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.Strategy.html
 [`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ShutdownPolicy.html

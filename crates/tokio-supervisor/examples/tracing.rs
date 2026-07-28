@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .restart(RestartPolicy::OnFailure)
             .restart_intensity(
-                RestartIntensity::new(5, Duration::from_secs(5))
+                RestartConfig::new(5, Duration::from_secs(5))
                     .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
             ),
         )

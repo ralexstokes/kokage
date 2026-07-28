@@ -205,18 +205,6 @@ impl Graph {
         &self.inner.actors
     }
 
-    /// Finds a runnable actor by its label.
-    ///
-    /// Labels are unique within a graph, so at most one actor matches. This is
-    /// how a supervision declaration places a named actor without depending on
-    /// declaration order.
-    pub fn actor(&self, label: &str) -> Option<&RunnableActor> {
-        self.inner
-            .actors
-            .iter()
-            .find(|actor| actor.label() == label)
-    }
-
     /// Resolves a typed actor ref to the runnable actor with the same binding.
     ///
     /// Identity, rather than the actor label, is compared. A ref from another

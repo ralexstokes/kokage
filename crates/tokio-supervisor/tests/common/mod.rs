@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_supervisor::{
     BoxError, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSnapshot, ChildSpec,
-    ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartIntensity,
+    ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig,
     RestartPolicy, SupervisorError, SupervisorHandle, SupervisorLifecycleEvent, SupervisorSnapshot,
 };
 
@@ -371,7 +371,7 @@ pub fn failing_child(
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+    .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(

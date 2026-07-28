@@ -11,7 +11,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
+    BackoffPolicy, ChildSpec, ControlError, ExitStatusView, RestartConfig, RestartPolicy,
     ScopeKind, ShutdownPolicy, Supervisor, SupervisorError, SupervisorStateView,
 };
 
@@ -514,7 +514,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .child(ChildSpec::task("leaf", {
             let attempts = attempts.clone();
             let fail_first = fail_first.clone();
@@ -643,7 +643,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .child(ChildSpec::task("leaf", {
             let fail = fail.clone();
             let attempts = attempts.clone();
@@ -670,7 +670,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let handle = Supervisor::ordered()
         .child(
             ChildSpec::supervisor("nested", nested).restart_intensity(
-                RestartIntensity::new(5, Duration::from_secs(30))
+                RestartConfig::new(5, Duration::from_secs(30))
                     .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(500))),
             ),
         )
@@ -742,7 +742,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .expect("valid grandchild supervisor");
 
     let mid = Supervisor::ordered()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .child(
             ChildSpec::task("fuse", {
                 let fail = fail.clone();
@@ -841,7 +841,7 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .child(ChildSpec::supervisor("nested", nested))
         .child(
             ChildSpec::task("fatal", |_| async { Err(common::test_error("fatal")) })
-                .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+                .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor");

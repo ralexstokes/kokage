@@ -71,7 +71,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     assert_eq!(nested.kind, ScopeKind::Ordered);
     assert_eq!(nested.strategy, Strategy::OneForAll);
 
-    let ChildOutline::Child {
+    let ChildOutline::Task {
         restart, shutdown, ..
     } = outline.child("clock").expect("task is present")
     else {
@@ -90,6 +90,10 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
         panic!("expected an actor");
     };
     assert_eq!(*restart, RestartPolicy::Always);
+    assert!(matches!(
+        outline.child("clock"),
+        Some(ChildOutline::Task { .. })
+    ));
 }
 
 #[test]
@@ -211,7 +215,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
     let children = SupervisionTree::new()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
         .task(
             ChildSpec::task("fatal", move |_| {
                 let fail = Arc::clone(&fail_child);
@@ -283,8 +287,17 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
                 .default_restart(RestartPolicy::Never)
                 .default_shutdown(ShutdownPolicy::abort()),
         )
+        .task(
+            ChildSpec::task("clock", |_ctx| async { Ok(()) }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
         .outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
+    assert!(
+        json.contains("\"Task\""),
+        "task outline uses its public tag"
+    );
     let decoded: tokio_otp::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");
     assert_eq!(outline, decoded);
@@ -296,4 +309,8 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     };
     assert_eq!(workers.default_restart, RestartPolicy::Never);
     assert_eq!(workers.default_shutdown, ShutdownPolicy::abort());
+    assert!(matches!(
+        decoded.child("clock"),
+        Some(ChildOutline::Task { .. })
+    ));
 }

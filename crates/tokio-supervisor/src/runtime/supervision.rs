@@ -28,7 +28,7 @@ use crate::{
         SupervisorLifecycleEvent,
     },
     observability::{SupervisorObservability, format_child_path},
-    restart::{RestartIntensity, RestartPolicy},
+    restart::{RestartConfig, RestartPolicy},
     scope::ScopeKind,
     shutdown::ShutdownPolicy,
     snapshot::{
@@ -212,7 +212,7 @@ impl ChildEntry {
         formatted_path: String,
         definition: Arc<ChildDefinition>,
         nested_channels: Option<Arc<StableSupervisorChannels>>,
-        default_restart_intensity: RestartIntensity,
+        default_restart_intensity: RestartConfig,
         lineage: u64,
     ) -> Self {
         Self {
@@ -299,7 +299,7 @@ pub(crate) fn reconcile_stable_identities(
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
     pub(crate) kind: ScopeKind,
-    pub(crate) default_restart_intensity: RestartIntensity,
+    pub(crate) default_restart_intensity: RestartConfig,
     pub(crate) default_restart: RestartPolicy,
     pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) path_prefix: Vec<String>,

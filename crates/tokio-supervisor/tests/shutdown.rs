@@ -9,7 +9,7 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec,
-    ControlError, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
+    ControlError, ExitStatusView, RestartConfig, RestartPolicy, ShutdownPolicy, Supervisor,
     SupervisorError,
 };
 
@@ -569,7 +569,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_preempts_zero_delay_restart() {
     let supervisor = Supervisor::ordered()
-        .restart_intensity(RestartIntensity::new(8, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(8, Duration::from_secs(1)))
         .child(
             ChildSpec::task("flaky", |_ctx| async move {
                 Err(common::test_error("restart immediately"))
@@ -621,7 +621,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
     let saw_cancel_for_keeper = saw_cancel.clone();
     let supervisor = Supervisor::ordered()
         .restart_intensity(
-            RestartIntensity::new(8, Duration::from_secs(1))
+            RestartConfig::new(8, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(200))),
         )
         .child(

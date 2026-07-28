@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use tokio_supervisor::{
-    ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartIntensity, RestartPolicy,
+    ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartConfig, RestartPolicy,
     ScopeKind, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
 };
 
@@ -19,7 +19,7 @@ use crate::{
 #[derive(Clone)]
 struct ScopeConfig {
     strategy: Strategy,
-    restart_intensity: Option<RestartIntensity>,
+    restart_intensity: Option<RestartConfig>,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
     dynamic_builder: Option<RunnableActorBuilder>,
@@ -172,7 +172,7 @@ pub struct ActorSpec {
     child_id: Option<String>,
     restart: Option<RestartPolicy>,
     shutdown: Option<ShutdownPolicy>,
-    restart_intensity: Option<RestartIntensity>,
+    restart_intensity: Option<RestartConfig>,
 }
 
 impl ActorSpec {
@@ -216,7 +216,7 @@ impl ActorSpec {
 
     /// Gives this actor its own restart-intensity window.
     #[must_use]
-    pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
         self.restart_intensity = Some(intensity);
         self
     }
@@ -389,7 +389,7 @@ impl<const DYNAMIC: bool> SupervisionTree<DYNAMIC> {
 
     /// Sets this scope's default restart intensity.
     #[must_use]
-    pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
         self.config_mut().restart_intensity = Some(intensity);
         self
     }
@@ -567,7 +567,7 @@ impl SupervisionChild {
                 child,
                 restart,
                 shutdown,
-            } => ChildOutline::Child {
+            } => ChildOutline::Task {
                 id: child.id().to_owned(),
                 restart: *restart,
                 shutdown: *shutdown,
@@ -780,7 +780,7 @@ impl<const DYNAMIC: bool> ReservedSupervisionTree<DYNAMIC> {
 
     /// Sets this scope's default restart intensity.
     #[must_use]
-    pub fn restart_intensity(self, intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(self, intensity: RestartConfig) -> Self {
         self.map_tree(|tree| tree.restart_intensity(intensity))
     }
 
@@ -936,7 +936,11 @@ pub struct SupervisionOutline {
     #[cfg_attr(feature = "serde", serde(default))]
     pub default_shutdown: ShutdownPolicy,
     /// Default restart-intensity policy.
-    pub restart_intensity: RestartIntensity,
+    ///
+    /// The serialized field deliberately keeps the behavior name
+    /// `restart_intensity`; [`RestartConfig`] names its combined budget and
+    /// backoff value.
+    pub restart_intensity: RestartConfig,
     /// Declared children in semantic order; empty for a dynamic scope.
     pub children: Vec<ChildOutline>,
 }
@@ -955,10 +959,10 @@ pub enum ChildOutline {
         /// Resolved shutdown policy.
         shutdown: ShutdownPolicy,
         /// Optional child-specific intensity policy.
-        restart_intensity: Option<RestartIntensity>,
+        restart_intensity: Option<RestartConfig>,
     },
     /// An arbitrary task child.
-    Child {
+    Task {
         /// Child id.
         id: String,
         /// Restart policy.
@@ -1003,7 +1007,7 @@ impl ChildOutline {
     pub fn id(&self) -> &str {
         match self {
             Self::Actor { id, .. }
-            | Self::Child { id, .. }
+            | Self::Task { id, .. }
             | Self::Scope { id, .. }
             | Self::ActorWithScope { id, .. } => id,
         }

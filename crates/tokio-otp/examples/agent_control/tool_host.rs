@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use tokio_otp::{Actor, ActorResult, AmbientContext, MessageContext};
+use tokio_otp::{Actor, ActorResult, MessageContext};
 
 use crate::messages::{EffectStatus, ToolHostMsg, ToolOutcome, ToolReport};
 

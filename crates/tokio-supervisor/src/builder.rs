@@ -4,7 +4,7 @@ use crate::{
     child::{ChildDefinition, ChildSpec},
     error::SupervisorBuildError,
     handle::{StableSupervisorChannels, SupervisorHandle},
-    restart::{RestartIntensity, RestartPolicy},
+    restart::{RestartConfig, RestartPolicy},
     shutdown::ShutdownPolicy,
     strategy::Strategy,
     supervisor::{
@@ -34,7 +34,7 @@ use crate::{
 /// ```
 pub struct OrderedSupervisorBuilder {
     strategy: Strategy,
-    restart_intensity: RestartIntensity,
+    restart_intensity: RestartConfig,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
     children: Vec<Arc<ChildDefinition>>,
@@ -47,7 +47,7 @@ pub struct OrderedSupervisorBuilder {
 /// and stop children concurrently. Children can be added and removed through
 /// the resulting supervisor's handle. Create one with [`Supervisor::dynamic`].
 pub struct DynamicSupervisorBuilder {
-    restart_intensity: RestartIntensity,
+    restart_intensity: RestartConfig,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
     channels: Option<Arc<StableSupervisorChannels>>,
@@ -71,7 +71,7 @@ impl OrderedSupervisorBuilder {
     pub(crate) fn new() -> Self {
         let mut builder = Self {
             strategy: Strategy::default(),
-            restart_intensity: RestartIntensity::default(),
+            restart_intensity: RestartConfig::default(),
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             children: Vec::new(),
@@ -131,7 +131,7 @@ impl OrderedSupervisorBuilder {
     /// Sets the default restart intensity for all children that do not have a
     /// per-child override.
     #[must_use]
-    pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
         self.restart_intensity = intensity;
         self
     }
@@ -203,7 +203,7 @@ impl OrderedSupervisorBuilder {
 impl DynamicSupervisorBuilder {
     pub(crate) fn new() -> Self {
         let mut builder = Self {
-            restart_intensity: RestartIntensity::default(),
+            restart_intensity: RestartConfig::default(),
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
             channels: None,
@@ -240,7 +240,7 @@ impl DynamicSupervisorBuilder {
     /// Sets the default restart intensity for dynamically added children that
     /// do not carry a per-child override.
     #[must_use]
-    pub fn restart_intensity(mut self, intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
         self.restart_intensity = intensity;
         self
     }

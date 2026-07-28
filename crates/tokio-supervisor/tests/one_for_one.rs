@@ -8,7 +8,7 @@ use tokio::{
     time::{Duration, sleep, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ExitStatusView, RestartIntensity, RestartPolicy, Strategy, Supervisor,
+    BackoffPolicy, ChildSpec, ExitStatusView, RestartConfig, RestartPolicy, Strategy, Supervisor,
 };
 
 mod common;
@@ -42,7 +42,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(
-        RestartIntensity::new(4, Duration::from_secs(2))
+        RestartConfig::new(4, Duration::from_secs(2))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(30))),
     );
     let fast = ChildSpec::task("fast", {
@@ -262,7 +262,7 @@ async fn temporary_child_does_not_restart() {
 
 #[tokio::test]
 async fn child_restart_intensity_is_isolated_per_child() {
-    let child_restart_intensity = RestartIntensity::new(1, Duration::from_secs(1));
+    let child_restart_intensity = RestartConfig::new(1, Duration::from_secs(1));
 
     let (child_a_tx, mut child_a_rx) = mpsc::unbounded_channel();
     let (child_b_tx, mut child_b_rx) = mpsc::unbounded_channel();
@@ -307,7 +307,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .child(child_a)
         .child(child_b)
         .build()
@@ -330,7 +330,7 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
 
     let handle = Supervisor::ordered()
         .restart_intensity(
-            RestartIntensity::new(2, Duration::from_secs(1))
+            RestartConfig::new(2, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
         )
         .child(

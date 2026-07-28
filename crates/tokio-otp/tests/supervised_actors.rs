@@ -15,7 +15,7 @@ use tokio_otp::{
     ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
     SendError, SupervisionTree,
 };
-use tokio_supervisor::{BackoffPolicy, ExitStatusView, RestartIntensity, RestartPolicy, Strategy};
+use tokio_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
 
 fn oneshot_slot<T>(tx: oneshot::Sender<T>) -> Arc<Mutex<Option<oneshot::Sender<T>>>> {
     Arc::new(Mutex::new(Some(tx)))
@@ -186,7 +186,7 @@ async fn send_waits_during_permanent_restart_window() {
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::Always)
                 .restart_intensity(
-                    RestartIntensity::new(10, Duration::from_secs(1))
+                    RestartConfig::new(10, Duration::from_secs(1))
                         .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
                 ),
         )
@@ -346,7 +346,7 @@ async fn call_succeeds_across_restart_window() {
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(
-                    RestartIntensity::new(10, Duration::from_secs(1))
+                    RestartConfig::new(10, Duration::from_secs(1))
                         .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
                 ),
         )

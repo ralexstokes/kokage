@@ -17,35 +17,23 @@ use crate::actor::{
     raw::RawActor,
 };
 
-/// Provides an application-defined size for a typed actor message.
-///
-/// The value is an observability hint, normally the size of payload buffers
-/// owned by the message. It is sampled only when the target actor opts in via
-/// [`ActorOptions::message_size`] when registering the actor.
-pub trait MessageSize {
-    /// Returns the message size to report, in bytes.
-    fn size_hint(&self) -> usize;
-}
-
 /// Per-actor registration options.
 ///
 /// Options compose independently, so an actor can use a non-default mailbox
 /// and message-size observation together:
 ///
 /// ```
-/// use tokio_otp::{ActorOptions, MailboxMode, MessageSize};
+/// use tokio_otp::{ActorOptions, MailboxMode};
 ///
 /// struct Snapshot(Vec<u8>);
 ///
-/// impl MessageSize for Snapshot {
-///     fn size_hint(&self) -> usize {
-///         self.0.len()
-///     }
+/// fn snapshot_size(message: &Snapshot) -> usize {
+///     message.0.len()
 /// }
 ///
 /// let options: ActorOptions<Snapshot> = ActorOptions::new()
 ///     .mailbox(MailboxMode::conflate())
-///     .message_size();
+///     .message_size(snapshot_size);
 /// ```
 pub struct ActorOptions<M> {
     pub(crate) mailbox_mode: MailboxMode<M>,
@@ -121,12 +109,17 @@ impl<M> ActorOptions<M> {
         self
     }
 
-    /// Enables accepted-message byte observation using `M`'s size hint.
-    pub fn message_size(mut self) -> Self
-    where
-        M: MessageSize,
-    {
-        self.size_hint = Some(MessageSize::size_hint);
+    /// Enables accepted-message byte observation using `size_hint`.
+    ///
+    /// The function normally reports the size of payload buffers owned by the
+    /// message. A bare function pointer keeps the option cheap to clone and
+    /// permits foreign message types without an orphan-rule workaround.
+    /// Non-capturing closures also coerce to the function pointer when their
+    /// parameter type is explicit, for example
+    /// `.message_size(|message: &Snapshot| message.0.len())`; closures that
+    /// capture state are not accepted.
+    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
+        self.size_hint = Some(size_hint);
         self
     }
 }
@@ -474,6 +467,8 @@ mod tests {
 
     struct OpaqueMessage;
 
+    struct Snapshot(Vec<u8>);
+
     struct OpaqueActor;
 
     impl Actor for OpaqueActor {
@@ -495,6 +490,23 @@ mod tests {
 
         let cloned = options.clone();
         assert_eq!(format!("{cloned:?}"), format!("{options:?}"));
+    }
+
+    #[test]
+    fn message_size_accepts_a_foreign_message_type() {
+        let options = ActorOptions::<String>::new().message_size(String::len);
+        let size_hint = options.size_hint.expect("message sizing is enabled");
+
+        assert_eq!(size_hint(&"payload".to_owned()), 7);
+    }
+
+    #[test]
+    fn message_size_accepts_an_explicitly_typed_non_capturing_closure() {
+        let options =
+            ActorOptions::<Snapshot>::new().message_size(|message: &Snapshot| message.0.len());
+        let size_hint = options.size_hint.expect("message sizing is enabled");
+
+        assert_eq!(size_hint(&Snapshot(vec![0; 7])), 7);
     }
 
     #[test]

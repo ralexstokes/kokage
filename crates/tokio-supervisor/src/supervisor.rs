@@ -20,7 +20,7 @@ use crate::{
     },
     lifecycle::{LifecycleHub, LifecycleTreeSink},
     observability::{format_path, strategy_label, supervisor_name_for_path},
-    restart::{RestartIntensity, RestartPolicy},
+    restart::{RestartConfig, RestartPolicy},
     runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
     scope::ScopeKind,
     shutdown::ShutdownPolicy,
@@ -68,7 +68,7 @@ pub struct Supervisor {
 pub(crate) struct SupervisorConfig {
     pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) restart_intensity: RestartIntensity,
+    pub(crate) restart_intensity: RestartConfig,
     pub(crate) default_restart: RestartPolicy,
     pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) children: Vec<Arc<ChildDefinition>>,

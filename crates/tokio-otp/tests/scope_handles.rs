@@ -8,9 +8,9 @@ use std::{
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
-    Actor, ActorResult, AddSubtreeError, AmbientContext, BoxError, ControlError, GraphBuilder,
-    LiveContext, MessageContext, ReservedSupervisionTree, RestartIntensity, RestartPolicy,
-    RuntimeHandle, ScopeKind, ShutdownPolicy, StartContext, StopContext, Strategy, SupervisionTree,
+    Actor, ActorResult, AddSubtreeError, BoxError, ControlError, GraphBuilder, LiveContext,
+    MessageContext, ReservedSupervisionTree, RestartConfig, RestartPolicy, RuntimeHandle,
+    ScopeKind, ShutdownPolicy, StartContext, StopContext, Strategy, SupervisionTree,
 };
 use tokio_supervisor::ChildSpec;
 
@@ -333,7 +333,7 @@ async fn runtime_build_errors_and_rejected_subtrees_terminalize_reserved_handles
     assert_snapshot_stream_closes(&failed_ordered).await;
 
     let builder = SupervisionTree::dynamic()
-        .restart_intensity(RestartIntensity::new(1, Duration::ZERO))
+        .restart_intensity(RestartConfig::new(1, Duration::ZERO))
         .reserve();
     let failed_dynamic = builder.handle();
     assert!(builder.build().is_err());
@@ -688,7 +688,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     });
     let workers = workers.build().expect("workers build");
     let inner = SupervisionTree::graph(&workers)
-        .restart_intensity(RestartIntensity::new(1, Duration::from_secs(30)));
+        .restart_intensity(RestartConfig::new(1, Duration::from_secs(30)));
     let handle = SupervisionTree::new()
         .actor_with_scope(
             "owned",

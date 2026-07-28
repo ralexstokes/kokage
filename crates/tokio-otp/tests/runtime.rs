@@ -19,7 +19,7 @@ use tokio_otp::{
     SupervisionTree,
 };
 use tokio_supervisor::{
-    ChildSpec, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
+    ChildSpec, CompletionOutcome, ControlError, ExitStatusView, RestartConfig, RestartPolicy,
     ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorStateView,
 };
 
@@ -605,7 +605,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
             "workers",
             SupervisionTree::graph(&nested_graph)
                 .subtree("dynamic", SupervisionTree::dynamic())
-                .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+                .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("nested runtime builds");
@@ -712,7 +712,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
             "workers",
             SupervisionTree::graph(&graph)
                 .subtree("dynamic", SupervisionTree::dynamic())
-                .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+                .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
                 .reserve(),
         )
         .await
@@ -759,7 +759,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
             "parent",
             SupervisionTree::graph(&parent_graph)
                 .subtree("dynamic", SupervisionTree::dynamic())
-                .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+                .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("runtime builds")
@@ -1110,7 +1110,7 @@ async fn send_fails_after_restart_intensity_is_exhausted() {
     let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::Always)
-        .restart_intensity(RestartIntensity::new(1, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(1, Duration::from_secs(60)))
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();

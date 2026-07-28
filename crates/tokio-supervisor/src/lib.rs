@@ -41,7 +41,7 @@
 //! - **[`Never`](RestartPolicy::Never)** — never restarted. Runs at most
 //!   once.
 //!
-//! Restarts are bounded by a [`RestartIntensity`] limit (default: 5 restarts
+//! Restarts are bounded by a [`RestartConfig`] limit (default: 5 restarts
 //! within 30 seconds). When exceeded, the supervisor exits with
 //! [`SupervisorError::RestartIntensityExceeded`]. An optional [`BackoffPolicy`]
 //! inserts a delay before each restart attempt (fixed, exponential, or
@@ -248,7 +248,7 @@ pub use lifecycle::{
     ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, LifecycleEvent,
     LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent,
 };
-pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
+pub use restart::{BackoffPolicy, RestartConfig, RestartPolicy};
 pub use scope::ScopeKind;
 pub use shutdown::ShutdownPolicy;
 pub use snapshot::{

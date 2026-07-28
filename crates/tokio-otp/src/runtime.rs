@@ -11,9 +11,8 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
     AttachedChildIdentity, ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard,
-    CompletionOutcome, ControlError, LifecycleWatch, RestartIntensity, RestartPolicy,
-    ShutdownPolicy, Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot,
+    CompletionOutcome, ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
+    Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -127,14 +126,12 @@ impl RuntimeAttachment {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct DynamicActorOptions<M = ()> {
-    // Restart policy for the supervised actor child.
-    restart: RestartPolicy,
-    restart_is_default: bool,
-    // Shutdown policy for the supervised actor child.
-    shutdown: ShutdownPolicy,
-    shutdown_is_default: bool,
+    // Restart-policy override for the supervised actor child.
+    restart: Option<RestartPolicy>,
+    // Shutdown-policy override for the supervised actor child.
+    shutdown: Option<ShutdownPolicy>,
     // Optional restart intensity override for this actor child.
-    restart_intensity: Option<RestartIntensity>,
+    restart_intensity: Option<RestartConfig>,
     actor_options: ActorOptions<M>,
     // `None` selects the dynamic-actor default. Keeping the override unresolved
     // makes `restart(...).remove_on_exit(...)` order-independent.
@@ -145,9 +142,7 @@ impl<M> Clone for DynamicActorOptions<M> {
     fn clone(&self) -> Self {
         Self {
             restart: self.restart,
-            restart_is_default: self.restart_is_default,
             shutdown: self.shutdown,
-            shutdown_is_default: self.shutdown_is_default,
             restart_intensity: self.restart_intensity,
             actor_options: self.actor_options.clone(),
             remove_on_exit: self.remove_on_exit,
@@ -158,10 +153,8 @@ impl<M> Clone for DynamicActorOptions<M> {
 impl<M> Default for DynamicActorOptions<M> {
     fn default() -> Self {
         Self {
-            restart: RestartPolicy::OnFailure,
-            restart_is_default: true,
-            shutdown: ShutdownPolicy::default(),
-            shutdown_is_default: true,
+            restart: None,
+            shutdown: None,
             restart_intensity: None,
             actor_options: ActorOptions::new(),
             remove_on_exit: None,
@@ -170,7 +163,8 @@ impl<M> Default for DynamicActorOptions<M> {
 }
 
 impl<M> DynamicActorOptions<M> {
-    /// Creates options with restart-on-failure and the default shutdown policy.
+    /// Creates options that inherit the dynamic scope's restart and shutdown
+    /// policies.
     pub fn new() -> Self {
         Self::default()
     }
@@ -181,8 +175,7 @@ impl<M> DynamicActorOptions<M> {
     /// configured restart default.
     #[must_use]
     pub fn restart(mut self, restart: RestartPolicy) -> Self {
-        self.restart = restart;
-        self.restart_is_default = false;
+        self.restart = Some(restart);
         self
     }
 
@@ -192,14 +185,13 @@ impl<M> DynamicActorOptions<M> {
     /// configured shutdown default.
     #[must_use]
     pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
-        self.shutdown = shutdown;
-        self.shutdown_is_default = false;
+        self.shutdown = Some(shutdown);
         self
     }
 
     /// Overrides the supervisor's restart intensity for this actor.
     #[must_use]
-    pub fn restart_intensity(mut self, restart_intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(mut self, restart_intensity: RestartConfig) -> Self {
         self.restart_intensity = Some(restart_intensity);
         self
     }
@@ -236,16 +228,8 @@ impl<M> DynamicActorOptions<M> {
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
     ) -> DynamicChildOptions {
-        let restart = if self.restart_is_default {
-            default_restart
-        } else {
-            self.restart
-        };
-        let shutdown = if self.shutdown_is_default {
-            default_shutdown
-        } else {
-            self.shutdown
-        };
+        let restart = self.restart.unwrap_or(default_restart);
+        let shutdown = self.shutdown.unwrap_or(default_shutdown);
         let remove_on_exit = self.remove_on_exit.unwrap_or(true);
         DynamicChildOptions {
             restart,
@@ -268,7 +252,7 @@ impl<M> DynamicActorOptions<M> {
 struct DynamicChildOptions {
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartIntensity>,
+    restart_intensity: Option<RestartConfig>,
     remove_on_exit: bool,
 }
 
@@ -814,7 +798,7 @@ pub(crate) struct ActorChildOptions {
     pub(crate) child_id: Option<String>,
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: ShutdownPolicy,
-    pub(crate) restart_intensity: Option<RestartIntensity>,
+    pub(crate) restart_intensity: Option<RestartConfig>,
     /// Whether the membership disappears when the actor exits, rather than
     /// resting as an inactive entry.
     pub(crate) remove_on_exit: bool,
@@ -840,7 +824,7 @@ impl ActorChildOptions {
         self
     }
 
-    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartIntensity>) -> Self {
+    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartConfig>) -> Self {
         self.restart_intensity = intensity;
         self
     }

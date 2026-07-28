@@ -12,7 +12,7 @@ use tokio_otp::{
     Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, StartContext,
     SupervisionTree,
 };
-use tokio_supervisor::{RestartIntensity, RestartPolicy, Strategy};
+use tokio_supervisor::{RestartConfig, RestartPolicy, Strategy};
 
 #[derive(Clone)]
 struct Frontend {
@@ -72,8 +72,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         run: 0,
     });
     let graph = builder.build()?;
-    let frontend_actor = graph.actor("frontend").expect("frontend actor").clone();
-    let worker_actor = graph.actor("worker").expect("worker actor").clone();
+    let frontend_actor = graph.actor_for(&frontend)?;
+    let worker_actor = graph.actor_for(&worker_ref)?;
 
     let runtime = SupervisionTree::new()
         .strategy(Strategy::OneForOne)
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .actor(
             ActorSpec::new(worker_actor)
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, std::time::Duration::from_secs(5))),
+                .restart_intensity(RestartConfig::new(5, std::time::Duration::from_secs(5))),
         )
         .build()?;
     let handle = runtime.spawn();

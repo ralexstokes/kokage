@@ -225,25 +225,23 @@ the supervisor snapshot — a ~10-line task you own, not a framework pipeline.
 The `tokio-otp` `actor_metrics` example prints the result in
 Prometheus-shaped text without an actor-layer metrics backend.
 
-Message sizes are application-defined and fully opt-in. Implement
-`MessageSize` for a message type and enable it in the actor's `ActorOptions`:
+Message sizes are application-defined and fully opt-in. Pass a sizing function
+to the actor's `ActorOptions`:
 
 ```rust,ignore
-impl MessageSize for Upload {
-    fn size_hint(&self) -> usize {
-        self.payload.len()
-    }
+fn upload_size(message: &Upload) -> usize {
+    message.payload.len()
 }
 
 let (uploads_slot, uploads) =
-    graph.slot_with("uploads", ActorOptions::new().message_size());
+    graph.slot_with("uploads", ActorOptions::new().message_size(upload_size));
 graph.define(uploads_slot, UploadActor::new);
 ```
 
 The same `ActorOptions` value works with `GraphBuilder::slot_with`. Pass it to
 `DynamicActorOptions::options` when registering an actor dynamically, so the
 same mailbox vocabulary configures graph and dynamic actors:
-`DynamicActorOptions::new().options(ActorOptions::new().mailbox(MailboxMode::conflate()).message_size())`.
+`DynamicActorOptions::new().options(ActorOptions::new().mailbox(MailboxMode::conflate()).message_size(upload_size))`.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that

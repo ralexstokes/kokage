@@ -375,13 +375,11 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     ActorContext, ActorOptions, ActorResult, MailboxMode, MessageSize, RawActor,
+/// #     ActorContext, ActorOptions, ActorResult, MailboxMode, RawActor,
 /// # };
 /// # struct Snapshot(Vec<u8>);
-/// # impl MessageSize for Snapshot {
-/// #     fn size_hint(&self) -> usize {
-/// #         self.0.len()
-/// #     }
+/// # fn snapshot_size(message: &Snapshot) -> usize {
+/// #     message.0.len()
 /// # }
 /// # struct SnapshotActor;
 /// # impl RawActor for SnapshotActor {
@@ -394,7 +392,7 @@ fn parse_factory_attributes(
 /// struct MarketData {
 ///     #[supervision(options = ActorOptions::new()
 ///         .mailbox(MailboxMode::conflate())
-///         .message_size())]
+///         .message_size(snapshot_size))]
 ///     snapshots: SnapshotActor,
 /// }
 /// ```

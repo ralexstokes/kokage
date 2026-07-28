@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(
-        RestartIntensity::new(1, Duration::from_secs(1))
+        RestartConfig::new(1, Duration::from_secs(1))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
     );
 
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Supervisor default: children do not get any restart budget unless they override it.
     let supervisor = Supervisor::ordered()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
         .build()?;

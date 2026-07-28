@@ -96,9 +96,8 @@ where
     builder.define(slot, factory);
     let graph = builder.build().expect("test graph builds");
     let actor = graph
-        .actor(label)
-        .expect("test actor is registered")
-        .clone();
+        .actor_for(&actor_ref)
+        .expect("test actor is registered");
     (actor, actor_ref)
 }
 

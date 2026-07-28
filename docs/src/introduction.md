@@ -38,7 +38,7 @@ If you have used Erlang/OTP or Elixir, the mapping is direct:
 | Supervisor + child specs | [`SupervisionTree`] + [`ActorSpec`] / [`ChildSpec`] |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
 | `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
-| Restart intensity (`MaxR`/`MaxT`) | `RestartIntensity::new(max_restarts, within)` |
+| Restart intensity (`MaxR`/`MaxT`) | `RestartConfig::new(max_restarts, within)` |
 | GenServer-ish process with a mailbox | An actor with an [`ActorContext`] |
 | Registered process name | A typed `ActorRef<M>`, minted at wiring time and passed around (labels are display names, not addresses) |
 

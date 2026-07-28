@@ -5,7 +5,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_supervisor::{
-    ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView, RestartIntensity,
+    ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView, RestartConfig,
     RestartPolicy, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError, SupervisorError,
     SupervisorHandle,
 };
@@ -840,7 +840,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
     let fail_now = Arc::new(Notify::new());
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart_intensity(RestartIntensity::new(0, Duration::from_secs(1))),
+        Supervisor::dynamic().restart_intensity(RestartConfig::new(0, Duration::from_secs(1))),
         [
             ChildSpec::task("removable", {
                 let removable_started = Arc::clone(&removable_started);
@@ -1085,7 +1085,7 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
 
     let handle = spawn_dynamic(
         Supervisor::dynamic().restart_intensity(
-            tokio_supervisor::RestartIntensity::new(4, std::time::Duration::from_secs(60))
+            tokio_supervisor::RestartConfig::new(4, std::time::Duration::from_secs(60))
                 .with_backoff(tokio_supervisor::BackoffPolicy::Fixed(
                     std::time::Duration::from_secs(30),
                 )),
@@ -1137,7 +1137,7 @@ async fn remove_child_preempts_zero_delay_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart_intensity(tokio_supervisor::RestartIntensity::new(
+        Supervisor::dynamic().restart_intensity(tokio_supervisor::RestartConfig::new(
             8,
             std::time::Duration::from_secs(1),
         )),
@@ -1187,7 +1187,7 @@ async fn remove_child_preempts_zero_delay_restart() {
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
     let handle = Supervisor::dynamic()
-        .restart_intensity(tokio_supervisor::RestartIntensity::new(
+        .restart_intensity(tokio_supervisor::RestartConfig::new(
             8,
             std::time::Duration::from_secs(1),
         ))
@@ -1261,7 +1261,7 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
 
     let handle = spawn_dynamic(
         Supervisor::dynamic().restart_intensity(
-            tokio_supervisor::RestartIntensity::new(4, std::time::Duration::from_secs(1))
+            tokio_supervisor::RestartConfig::new(4, std::time::Duration::from_secs(1))
                 .with_backoff(tokio_supervisor::BackoffPolicy::Fixed(backoff)),
         ),
         [

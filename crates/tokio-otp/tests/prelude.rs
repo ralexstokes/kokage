@@ -10,10 +10,9 @@ mod coverage_probe {
     mod expected {
         use tokio_otp::prelude::{
             Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-            AmbientContext, BoxError, CallError, GraphBuilder, GraphConfig, LiveContext,
-            MessageContext, RawActor, Reply, RestartIntensity, RestartPolicy, Runtime,
-            RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext, Strategy,
-            Supervision, SupervisionTree,
+            BoxError, CallError, GraphBuilder, GraphConfig, LiveContext, MessageContext, RawActor,
+            Reply, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
+            StartContext, StopContext, Strategy, Supervision, SupervisionTree,
         };
     }
 
@@ -25,7 +24,7 @@ mod coverage_probe {
             ChildStateView, CompletionOutcome, ControlError, DEFAULT_SHUTDOWN_BOUND, Down,
             DownReason, DrainPolicy, DynamicScope, ExitStatusView, Graph, GraphBuildError,
             GraphLookupError, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
-            LifecycleWatch, LifecycleWatchGuard, Lifetime, MailboxMode, MessageSize, MonitorEvent,
+            LifecycleWatch, LifecycleWatchGuard, Lifetime, MailboxMode, MonitorEvent,
             OffloadDeadline, OffloadHandle, ReservedSupervisionTree, RestrictedScope, ScopeKind,
             SupervisionFactories, SupervisionOutline, SupervisorBuildError, SupervisorError,
             SupervisorLifecycleEvent, SupervisorPathSegment, SupervisorSnapshot,

@@ -11,7 +11,7 @@ mod coverage_probe {
     mod expected {
         use tokio_supervisor::prelude::{
             BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-            OrderedSupervisorBuilder, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy,
+            OrderedSupervisorBuilder, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy,
             Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
         };
     }
@@ -169,13 +169,13 @@ fn prelude_policy_types_cover_common_configuration() {
     assert_eq!(ShutdownPolicy::abort(), ShutdownPolicy::Abort);
 
     assert_eq!(
-        RestartIntensity::new(3, Duration::from_secs(10)),
-        RestartIntensity::new(3, Duration::from_secs(10))
+        RestartConfig::new(3, Duration::from_secs(10)),
+        RestartConfig::new(3, Duration::from_secs(10))
     );
     assert_eq!(
-        RestartIntensity::new(2, Duration::from_secs(5))
+        RestartConfig::new(2, Duration::from_secs(5))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50))),
-        RestartIntensity::new(2, Duration::from_secs(5))
+        RestartConfig::new(2, Duration::from_secs(5))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50)))
     );
 }

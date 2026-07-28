@@ -1336,8 +1336,8 @@ mod runnable_actor {
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
         ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
-        GraphBuilder, MessageContext, MessageSize, RawActor, RestartPolicy, RunnableActor,
-        SendError, StartContext, SupervisionTree, SupervisorError, TrySendError,
+        GraphBuilder, MessageContext, RawActor, RestartPolicy, RunnableActor, SendError,
+        StartContext, SupervisionTree, SupervisorError, TrySendError,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1412,10 +1412,8 @@ mod runnable_actor {
     #[derive(Debug)]
     struct SizedPayload(Vec<u8>);
 
-    impl MessageSize for SizedPayload {
-        fn size_hint(&self) -> usize {
-            self.0.len()
-        }
+    fn sized_payload_size(message: &SizedPayload) -> usize {
+        message.0.len()
     }
 
     #[derive(Clone)]
@@ -1441,18 +1439,28 @@ mod runnable_actor {
     #[test]
     fn failed_sized_registration_returns_a_sized_detached_ref() {
         let mut builder = GraphBuilder::new();
-        let (actor_slot, _) = builder.slot_with("worker", ActorOptions::new().message_size());
+        let (actor_slot, _) = builder.slot_with(
+            "worker",
+            ActorOptions::new().message_size(sized_payload_size),
+        );
         builder.define(actor_slot, Drain::<SizedPayload>::new);
-        let (detached_slot, detached) =
-            builder.slot_with("worker", ActorOptions::new().message_size());
+        let (detached_slot, detached) = builder.slot_with(
+            "worker",
+            ActorOptions::new().message_size(sized_payload_size),
+        );
         builder.define(detached_slot, Drain::<SizedPayload>::new);
 
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
 
         let mut slot_builder = GraphBuilder::new();
-        slot_builder.slot_with::<SizedPayload>("worker", ActorOptions::new().message_size());
-        let (_detached_slot, detached) =
-            slot_builder.slot_with::<SizedPayload>("worker", ActorOptions::new().message_size());
+        slot_builder.slot_with::<SizedPayload>(
+            "worker",
+            ActorOptions::new().message_size(sized_payload_size),
+        );
+        let (_detached_slot, detached) = slot_builder.slot_with::<SizedPayload>(
+            "worker",
+            ActorOptions::new().message_size(sized_payload_size),
+        );
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
         assert!(matches!(
             detached.try_send(SizedPayload(Vec::new())),
@@ -1570,8 +1578,10 @@ mod runnable_actor {
         let release = Arc::new(Notify::new());
         let mut builder = GraphBuilder::new();
         builder.mailbox_capacity(1);
-        let (worker_ref_slot, worker_ref) =
-            builder.slot_with("worker", ActorOptions::new().message_size());
+        let (worker_ref_slot, worker_ref) = builder.slot_with(
+            "worker",
+            ActorOptions::new().message_size(sized_payload_size),
+        );
         builder.define(worker_ref_slot, {
             let release = release.clone();
             move || GatedSizedDrain {
@@ -2091,7 +2101,7 @@ mod runnable_actor {
             out: out_tx.clone(),
         });
         let graph = builder.build().expect("worker graph builds");
-        let worker = graph.actor("worker").expect("worker is registered").clone();
+        let worker = graph.actor_for(&worker_ref).expect("worker is registered");
 
         // Typed at creation: before any run the binding is unbound, not
         // terminated.

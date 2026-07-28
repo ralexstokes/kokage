@@ -8,7 +8,7 @@ use tokio::{
     time::{Duration, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
+    BackoffPolicy, ChildSpec, ExitStatusView, RestartConfig, RestartPolicy, ShutdownPolicy,
     Strategy, Supervisor,
 };
 
@@ -565,7 +565,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartIntensity::new(1, Duration::from_secs(1)));
+    .restart_intensity(RestartConfig::new(1, Duration::from_secs(1)));
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -578,11 +578,11 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
         }
     })
     .restart(RestartPolicy::Always)
-    .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)));
+    .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)));
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .child(trigger)
         .child(peer)
         .build()
@@ -623,7 +623,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
     let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_intensity(
-            RestartIntensity::new(2, Duration::from_secs(1))
+            RestartConfig::new(2, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
         )
         .child(trigger)
@@ -772,7 +772,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_intensity(
-            RestartIntensity::new(2, Duration::from_secs(1))
+            RestartConfig::new(2, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
         )
         .child(trigger)

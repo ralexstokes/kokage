@@ -10,8 +10,7 @@ use std::{
 use tokio::sync::{Notify, mpsc};
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorResult, CallError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy,
-    GraphBuilder, MailboxMode, MessageContext, MessageSize, RawActor, Reply, RestartPolicy,
-    StartContext,
+    GraphBuilder, MailboxMode, MessageContext, RawActor, Reply, RestartPolicy, StartContext,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -170,10 +169,8 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
 
 struct SizedSnapshot(Vec<u8>);
 
-impl MessageSize for SizedSnapshot {
-    fn size_hint(&self) -> usize {
-        self.0.len()
-    }
+fn sized_snapshot_size(message: &SizedSnapshot) -> usize {
+    message.0.len()
 }
 
 #[tokio::test]
@@ -186,7 +183,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
         "snapshots",
         ActorOptions::new()
             .mailbox(MailboxMode::conflate())
-            .message_size(),
+            .message_size(sized_snapshot_size),
     );
     builder.define(actor_ref_slot, {
         let release = release.clone();

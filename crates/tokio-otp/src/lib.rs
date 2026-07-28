@@ -57,7 +57,6 @@
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
 //! | [`ActorContext`] | The full context a [`RawActor`] run receives: mailbox, watches, lifetime, blocking work, shutdown token. |
 //! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
-//! | [`AmbientContext`] | Identity, shutdown observation, and blocking work shared by every context. |
 //! | [`LiveContext`] | Timers, continuations, and other capabilities shared by the running stages. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
@@ -275,10 +274,9 @@ pub mod prelude {
     // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-        AmbientContext, BoxError, CallError, GraphBuilder, GraphConfig, LiveContext,
-        MessageContext, RawActor, Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
-        SendError, ShutdownPolicy, StartContext, StopContext, Strategy, Supervision,
-        SupervisionTree, TrySendError,
+        BoxError, CallError, GraphBuilder, GraphConfig, LiveContext, MessageContext, RawActor,
+        Reply, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
+        StartContext, StopContext, Strategy, Supervision, SupervisionTree, TrySendError,
     };
 }
 
@@ -287,9 +285,9 @@ pub use tokio_otp_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, AmbientContext, BlockingCancelled, CallError, CancellationHandle,
+    ActorSlot, ActorStats, BlockingCancelled, CallError, CancellationHandle,
     DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph, GraphBuildError, GraphBuilder,
-    GraphConfig, GraphLookupError, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize,
+    GraphConfig, GraphLookupError, Lifetime, LiveContext, MailboxMode, MessageContext,
     MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor,
     SendError, StartContext, StopContext, SupervisorPathSegment, TimerKey, TrySendError,
 };
@@ -308,7 +306,7 @@ pub use tokio_supervisor::{
     BackoffPolicy, BoxError, ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind,
     ChildLifecycleWatch, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
     CompletionGuard, CompletionOutcome, ControlError, ExitStatusView, LifecycleEvent,
-    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
+    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RestartConfig, RestartPolicy,
     ScopeKind, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
     SupervisorLifecycleEvent, SupervisorSnapshot, SupervisorStateView,
 };

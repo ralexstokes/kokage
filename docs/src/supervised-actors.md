@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(5, Duration::from_secs(60)))
         .build()?;
     let handle = runtime.spawn();
 
@@ -144,7 +144,7 @@ let tree = SupervisionTree::new()
     .actor(graph.actor_for(&orders)?)
     .actor(
         ActorSpec::new(graph.actor_for(&press_ref)?)
-            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
     );
 let runtime = tree.build()?;
 ```

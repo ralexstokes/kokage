@@ -9,7 +9,7 @@ use std::{
 use tokio::{sync::Notify, time::timeout};
 use tokio_supervisor::{
     BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSpec, CompletionGuard,
-    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RestartIntensity,
+    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RestartConfig,
     RestartPolicy, ShutdownPolicy, Strategy, Supervisor, SupervisorLifecycleEvent,
 };
 
@@ -74,7 +74,7 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
     let child_crash = Arc::clone(&crash);
     let builder = Supervisor::ordered()
         .restart_intensity(
-            RestartIntensity::new(5, Duration::from_secs(60))
+            RestartConfig::new(5, Duration::from_secs(60))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
         )
         .child(
@@ -192,7 +192,7 @@ async fn recursive_started_after_matches_a_non_empty_supervisor_path() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid nested supervisor");
@@ -231,7 +231,7 @@ async fn scheduled_restart_event_observes_its_aligned_snapshot() {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(
-        RestartIntensity::new(5, Duration::from_secs(60))
+        RestartConfig::new(5, Duration::from_secs(60))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(30))),
     );
     let handle = Supervisor::ordered()
@@ -259,7 +259,7 @@ async fn scheduled_restart_event_observes_its_aligned_snapshot() {
 #[tokio::test]
 async fn restart_intensity_is_recursive_only_and_closes_the_direct_watch() {
     let builder = Supervisor::ordered()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
         .child(ChildSpec::task("worker", |_| async {
             Err(common::test_error("boom"))
         }));
@@ -302,7 +302,7 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
     let builder = Supervisor::ordered().child(
         ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
     );
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
@@ -420,7 +420,7 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60)));
+    .restart_intensity(RestartConfig::new(100, Duration::from_secs(60)));
     let builder = Supervisor::dynamic();
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
@@ -712,7 +712,7 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60)));
+    .restart_intensity(RestartConfig::new(100, Duration::from_secs(60)));
     let handle = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
@@ -822,7 +822,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
             .shutdown(ShutdownPolicy::abort()),
         )
         .build()
@@ -831,7 +831,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .child(
             ChildSpec::supervisor("middle", middle)
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+                .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor")
@@ -1071,7 +1071,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("valid nested supervisor");
@@ -1118,7 +1118,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
         .child(
             ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+                .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid supervisor")
@@ -1175,7 +1175,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .child(
             ChildSpec::supervisor("middle", middle)
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+                .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor")
@@ -1194,7 +1194,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .await
         .expect("bomb added");
@@ -1296,7 +1296,7 @@ fn middle_supervisor(
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
             .shutdown(ShutdownPolicy::abort()),
         )
         .build()
@@ -1313,7 +1313,7 @@ fn middle_supervisor(
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
             .shutdown(ShutdownPolicy::abort()),
         )
         .build()
@@ -1380,7 +1380,7 @@ async fn started_after_reports_a_start_lost_to_overflow() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartIntensity::new(100, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(100, Duration::from_secs(60))),
         )
         .await
         .expect("dynamic add succeeds");

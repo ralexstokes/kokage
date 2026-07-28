@@ -6,9 +6,7 @@ use std::sync::{
 use tokio::{task::AbortHandle, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    child::ChildDefinition, restart::RestartIntensity, runtime::intensity::RestartTracker,
-};
+use crate::{child::ChildDefinition, restart::RestartConfig, runtime::intensity::RestartTracker};
 
 const COMPLETION_PENDING: u8 = 0;
 const COMPLETION_CANCELLED: u8 = 1;
@@ -96,7 +94,7 @@ impl RuntimeChildState {
 impl ChildRuntime {
     pub(crate) fn new(
         definition: Arc<ChildDefinition>,
-        default_restart_intensity: RestartIntensity,
+        default_restart_intensity: RestartConfig,
     ) -> Self {
         let restart_intensity = definition
             .restart_intensity

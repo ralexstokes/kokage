@@ -224,19 +224,23 @@ retain the default FIFO mailbox without message-size observation:
 ```rust,ignore
 use tokio_otp::{ActorOptions, MailboxMode, Supervision};
 
+fn snapshot_size(message: &Snapshot) -> usize {
+    message.payload.len()
+}
+
 #[derive(Supervision)]
 struct MarketData {
     #[supervision(options = ActorOptions::new()
         .mailbox(MailboxMode::conflate())
-        .message_size())]
+        .message_size(snapshot_size))]
     snapshots: SnapshotActor,
     orders: OrderActor,
 }
 ```
 
-The expression is type-checked against the field actor's message type, so
-options that require `MessageSize` add that requirement only to the annotated
-actor message.
+The expression is type-checked against the field actor's message type. Message
+size observation accepts a bare `fn(&M) -> usize`, so it works with foreign
+message types as well as application-owned ones.
 
 ## Dynamic and Advanced Builder Wiring
 
@@ -362,8 +366,10 @@ The framework owns those operations for `Actor`; its stage contexts therefore
 withhold direct mailbox reads and readiness, while the live stages implement
 `LiveContext` for loop-owned timers and continuations. Watches and offloads are
 available directly from `ActorContext` to both actor styles.
-`AmbientContext` names the identity, shutdown-observation, and blocking-work
-methods shared by every stage, including `StopContext`.
+Identity, shutdown-observation, blocking-work, and scope-access methods are
+inherent on every stage context, including `StopContext`; no context trait
+import is needed to call them. `LiveContext` remains the generic bound for
+helpers shared by the startup and message stages.
 
 `ctx.try_recv()` returns `Option<M>`: `Some(message)` for an immediately
 available delivery and `None` when there is no queued message. The actor run

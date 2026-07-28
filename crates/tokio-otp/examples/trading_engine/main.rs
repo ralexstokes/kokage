@@ -174,7 +174,7 @@ fn venue_options<M: Send + 'static>() -> ActorOptions<M> {
 fn feed_options() -> ActorOptions<FeedMsg> {
     venue_options()
         .mailbox(MailboxMode::conflate_by_key(feed_message_key))
-        .message_size()
+        .message_size(messages::feed_message_size)
 }
 
 /// One scope per venue-facing pair, restart-budgeted as a group. Labels are
@@ -182,7 +182,7 @@ fn feed_options() -> ActorOptions<FeedMsg> {
 #[derive(Supervision)]
 #[supervision(
     strategy = Strategy::OneForOne,
-    restart_intensity = RestartIntensity::new(5, Duration::from_secs(10)),
+    restart_intensity = RestartConfig::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
     #[supervision(label = "venue-a-feed", options = feed_options())]

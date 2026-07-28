@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
-    GraphConfig, MailboxMode, MessageContext, MessageSize, RawActor, Supervision, TrySendError,
+    GraphConfig, MailboxMode, MessageContext, RawActor, Supervision, TrySendError,
 };
 
 enum FrontendMsg {
@@ -190,10 +190,8 @@ struct ParkGraph {
 
 struct SizedMessage(Vec<u8>);
 
-impl MessageSize for SizedMessage {
-    fn size_hint(&self) -> usize {
-        self.0.len()
-    }
+fn sized_message_size(message: &SizedMessage) -> usize {
+    message.0.len()
 }
 
 #[derive(Clone)]
@@ -212,12 +210,12 @@ impl RawActor for OptionsActor {
 struct OptionsGraph {
     #[supervision(options = ActorOptions::new().mailbox(MailboxMode::conflate()))]
     mailbox_only: OptionsActor,
-    #[supervision(options = ActorOptions::new().message_size())]
+    #[supervision(options = ActorOptions::new().message_size(sized_message_size))]
     message_size_only: OptionsActor,
     #[supervision(
         options = ActorOptions::new()
             .mailbox(MailboxMode::conflate())
-            .message_size()
+            .message_size(sized_message_size)
     )]
     combined: OptionsActor,
     defaults: OptionsActor,

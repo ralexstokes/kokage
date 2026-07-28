@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use tokio::time::Instant;
-use tokio_otp::{MessageSize, MonitorEvent, Reply};
+use tokio_otp::{MonitorEvent, Reply};
 
 pub type VenueId = &'static str;
 pub type OrderKey = String;
@@ -23,12 +23,10 @@ pub enum FeedMsg {
     Crash,
 }
 
-impl MessageSize for FeedMsg {
-    fn size_hint(&self) -> usize {
-        match self {
-            Self::Tick(_) => std::mem::size_of::<MarketSnapshot>(),
-            Self::Crash => 0,
-        }
+pub fn feed_message_size(message: &FeedMsg) -> usize {
+    match message {
+        FeedMsg::Tick(_) => std::mem::size_of::<MarketSnapshot>(),
+        FeedMsg::Crash => 0,
     }
 }
 

@@ -17,8 +17,8 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
     ChildMembershipView, ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions,
-    GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent, RawActor,
-    RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, StartContext, StopContext,
+    GraphBuilder, LiveContext, MailboxMode, MessageContext, MonitorEvent, RawActor, RestartPolicy,
+    RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, StartContext, StopContext,
     SupervisionTree, SupervisorBuildError, SupervisorError, TrySendError,
 };
 
@@ -223,10 +223,8 @@ async fn shutdown_runtime(handle: &RuntimeHandle, phase: &str) {
 
 struct SizedMessage(Vec<u8>);
 
-impl MessageSize for SizedMessage {
-    fn size_hint(&self) -> usize {
-        self.0.len()
-    }
+fn sized_message_size(message: &SizedMessage) -> usize {
+    message.0.len()
 }
 
 #[derive(Clone)]
@@ -1108,7 +1106,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
             DynamicActorOptions::default().options(
                 ActorOptions::new()
                     .mailbox(MailboxMode::conflate())
-                    .message_size(),
+                    .message_size(sized_message_size),
             ),
         )
         .await

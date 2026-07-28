@@ -12,9 +12,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorResult, AmbientContext, ChildLifecycleEvent, ChildLifecycleEventKind,
-    DynamicActorOptions, GraphBuilder, LifecycleWatchGuard, MessageContext, RestartIntensity,
-    RestartPolicy, RuntimeHandle, StartContext, SupervisionTree,
+    Actor, ActorResult, ChildLifecycleEvent, ChildLifecycleEventKind, DynamicActorOptions,
+    GraphBuilder, LifecycleWatchGuard, MessageContext, RestartConfig, RestartPolicy, RuntimeHandle,
+    StartContext, SupervisionTree,
 };
 
 enum SinkMsg {
@@ -128,7 +128,7 @@ async fn runtime_with_watched_subtree() -> (
             "watched",
             SupervisionTree::graph(&graph.build().expect("nested graph builds"))
                 .default_restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartIntensity::new(8, Duration::from_secs(1)))
+                .restart_intensity(RestartConfig::new(8, Duration::from_secs(1)))
                 .reserve(),
         )
         .await

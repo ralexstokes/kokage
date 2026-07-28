@@ -12,7 +12,7 @@ use tokio::{
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildExitView, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
-    ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind, Supervisor, SupervisorSnapshot,
+    ExitStatusView, RestartConfig, RestartPolicy, ScopeKind, Supervisor, SupervisorSnapshot,
     SupervisorStateView,
 };
 
@@ -157,7 +157,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_intensity(
-        RestartIntensity::new(5, Duration::from_secs(1))
+        RestartConfig::new(5, Duration::from_secs(1))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(200))),
     );
 

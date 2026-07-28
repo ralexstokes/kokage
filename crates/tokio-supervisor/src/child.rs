@@ -2,7 +2,7 @@ use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     context::ChildContext,
-    restart::{RestartIntensity, RestartPolicy},
+    restart::{RestartConfig, RestartPolicy},
     shutdown::ShutdownPolicy,
     supervisor::Supervisor,
 };
@@ -29,7 +29,7 @@ pub(crate) struct ChildDefinition {
     pub(crate) restart: RestartPolicy,
     restart_is_default: bool,
     pub(crate) remove_on_exit: bool,
-    pub(crate) restart_intensity: Option<RestartIntensity>,
+    pub(crate) restart_intensity: Option<RestartConfig>,
     pub(crate) shutdown_policy: ShutdownPolicy,
     shutdown_is_default: bool,
     pub(crate) readiness: ChildReadiness,
@@ -198,12 +198,12 @@ impl ChildSpec {
         })
     }
 
-    /// Overrides the supervisor-level [`RestartIntensity`] for this child.
+    /// Overrides the supervisor-level [`RestartConfig`] for this child.
     ///
     /// When set, this child tracks its own sliding restart window instead of
     /// sharing the supervisor's default.
     #[must_use]
-    pub fn restart_intensity(self, intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(self, intensity: RestartConfig) -> Self {
         self.map_inner(|inner| inner.restart_intensity = Some(intensity))
     }
 
@@ -243,7 +243,7 @@ impl ChildSpec {
         &self.inner.id
     }
 
-    pub(crate) fn restart_intensity_override(&self) -> Option<RestartIntensity> {
+    pub(crate) fn restart_intensity_override(&self) -> Option<RestartConfig> {
         self.inner.restart_intensity
     }
 }

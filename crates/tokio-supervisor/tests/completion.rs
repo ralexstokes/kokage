@@ -18,7 +18,7 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, CompletionOutcome, ExitStatusView, RestartIntensity, RestartPolicy,
+    ChildSpec, ChildStateView, CompletionOutcome, ExitStatusView, RestartConfig, RestartPolicy,
     ShutdownPolicy, Strategy, Supervisor, SupervisorError,
 };
 
@@ -609,7 +609,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
     });
 
     let handle = Supervisor::dynamic()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

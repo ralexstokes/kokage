@@ -30,7 +30,7 @@ use tokio_otp::{
 };
 use tokio_otp_console::Console;
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy,
+    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy,
 };
 
 fn example_error(message: &'static str) -> BoxError {
@@ -103,13 +103,13 @@ fn pipeline_runtime() -> SupervisionTree {
         }
     })
     .restart_intensity(
-        RestartIntensity::new(60, Duration::from_secs(60))
+        RestartConfig::new(60, Duration::from_secs(60))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(2))),
     );
 
     SupervisionTree::new()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .task(source, RestartPolicy::default(), ShutdownPolicy::default())
         .task(
             transform,
@@ -150,7 +150,7 @@ fn telemetry_runtime() -> SupervisionTree {
 
     SupervisionTree::new()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .task(heartbeat, RestartPolicy::Always, ShutdownPolicy::default())
         .task(migration, RestartPolicy::Never, ShutdownPolicy::default())
         .subtree("exporters", exporters)
@@ -167,16 +167,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     builder.define(worker_slot, || Worker);
     let graph = builder.build()?;
-    let frontend_actor = graph.actor("frontend").expect("frontend actor").clone();
-    let worker_actor = graph.actor("worker").expect("worker actor").clone();
+    let frontend_actor = graph.actor_for(&frontend)?;
+    let worker_actor = graph.actor_for(&worker_ref)?;
 
     let runtime = SupervisionTree::new()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor).restart_intensity(
-                RestartIntensity::new(60, Duration::from_secs(60))
+                RestartConfig::new(60, Duration::from_secs(60))
                     .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(1500))),
             ),
         )

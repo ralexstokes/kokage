@@ -10,9 +10,9 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, AmbientContext, CancellationHandle, CancellationToken,
-    DrainPolicy, DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext,
-    TimerKey, timers,
+    Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
+    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
+    timers,
 };
 
 use crate::{

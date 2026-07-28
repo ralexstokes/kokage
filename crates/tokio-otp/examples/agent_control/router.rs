@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, AmbientContext, ChildLifecycleEvent, ChildLifecycleEventKind,
+    Actor, ActorRef, ActorResult, ChildLifecycleEvent, ChildLifecycleEventKind,
     ChildMembershipView, ControlError, GraphBuilder, LifecycleWatchGuard, LiveContext,
     MessageContext, RuntimeHandle, StartContext, Strategy, SupervisionTree, SupervisorError,
     SupervisorSnapshot,

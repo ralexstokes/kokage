@@ -179,7 +179,7 @@ struct Gateway {
 #[derive(Supervision)]
 #[supervision(strategy = Strategy::OneForOne)]
 struct Core {
-    #[supervision(options = ActorOptions::new().message_size())]
+    #[supervision(options = ActorOptions::new().message_size(messages::journal_message_size))]
     journal: Journal,
     budget: Budget,
     guard: Guard,

@@ -7,7 +7,7 @@ use std::{
 };
 
 use tokio::sync::{Mutex, Notify, mpsc};
-use tokio_supervisor::{ChildSpec, RestartIntensity, RestartPolicy, Strategy, Supervisor};
+use tokio_supervisor::{ChildSpec, RestartConfig, RestartPolicy, Strategy, Supervisor};
 
 mod common;
 
@@ -358,7 +358,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     for index in 0..4 {
         let attempts = Arc::clone(&noisy_attempts);
         let nested = Supervisor::ordered()
-            .restart_intensity(RestartIntensity::new(100_000, Duration::from_secs(60)))
+            .restart_intensity(RestartConfig::new(100_000, Duration::from_secs(60)))
             .child(
                 ChildSpec::task("flapping", move |_ctx| {
                     attempts.fetch_add(1, Ordering::SeqCst);
