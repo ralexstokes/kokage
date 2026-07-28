@@ -8,9 +8,9 @@ use std::{
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
-    Actor, ActorResult, AddSubtreeError, BoxError, ControlError, DynamicActorOptions, GraphBuilder,
-    LiveContext, MessageContext, ReservedSupervisionTree, RestartIntensity, Runtime, RuntimeHandle,
-    ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
+    Actor, ActorResult, AddSubtreeError, AmbientContext, BoxError, ControlError, GraphBuilder,
+    MessageContext, ReservedSupervisionTree, RestartIntensity, Runtime, RuntimeHandle, ScopeKind,
+    StartContext, StopContext, Strategy, SupervisionTree,
     prelude::{Continue, Stop},
 };
 use tokio_supervisor::ChildSpec;
@@ -50,9 +50,7 @@ impl Actor for ScopeProbe {
             let supervisor = ctx.supervisor();
             assert_eq!(supervisor.snapshot().kind, ScopeKind::Ordered);
             assert!(matches!(
-                supervisor
-                    .add_actor("forbidden", || Idle, DynamicActorOptions::new())
-                    .await,
+                supervisor.add_actor("forbidden", || Idle).await,
                 Err(ControlError::UnsupportedByScopeKind { .. })
             ));
             self.reports
@@ -87,7 +85,7 @@ impl Actor for ScopeProbe {
             let result = async {
                 children.wait_started().await.map_err(|_| ())?;
                 children
-                    .add_actor("from-on-start", || Idle, DynamicActorOptions::new())
+                    .add_actor("from-on-start", || Idle)
                     .await
                     .map_err(|_| ())?;
                 Ok::<_, ()>(())
@@ -106,9 +104,7 @@ impl Actor for ScopeProbe {
         match message {
             LeaderMsg::AddFromHandler => {
                 let children = ctx.children().expect("ActorWithScope leader has children");
-                children
-                    .add_actor("from-handler", || Idle, DynamicActorOptions::new())
-                    .await?;
+                children.add_actor("from-handler", || Idle).await?;
                 self.reports
                     .send("handler-added")
                     .expect("test receiver open");
@@ -159,9 +155,7 @@ impl Actor for BuilderHandleOwner {
     type Msg = ();
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        self.mount
-            .add_actor("owned", || Idle, DynamicActorOptions::new())
-            .await?;
+        self.mount.add_actor("owned", || Idle).await?;
         self.report.send("mounted").expect("test receiver open");
         Ok(Continue)
     }
@@ -195,7 +189,7 @@ fn builder_owned_mount(report: mpsc::UnboundedSender<&'static str>) -> ReservedS
     let mount_builder = Runtime::dynamic();
     let mount = mount_builder.handle();
     let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("owner", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = graph.slot("owner");
     graph.define(actor_slot, move || BuilderHandleOwner {
         mount: mount.clone(),
         report: report.clone(),
@@ -238,7 +232,7 @@ async fn reserved_tree_handle_binds_to_the_built_runtime() {
         .await
         .expect("reserved scope starts");
     reserved
-        .add_actor("worker", || Idle, DynamicActorOptions::new())
+        .add_actor("worker", || Idle)
         .await
         .expect("reserved handle controls the built scope");
     assert!(spawned.snapshot().child("worker").is_some());
@@ -290,7 +284,7 @@ async fn runtime_builders_reserve_handles_and_terminalize_when_dropped() {
 #[test]
 fn runtime_builder_strategy_preserves_declared_pre_spawn_snapshot() {
     let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("actor", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = graph.slot("actor");
     graph.define(actor_slot, || Idle);
     let graph = graph.build().expect("graph builds");
     let tree = SupervisionTree::new()
@@ -397,7 +391,7 @@ async fn builder_owned_mount_handle_supports_awaited_and_pipelined_subtree_adds(
 async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("ordinary", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = graph.slot("ordinary");
     graph.define(actor_slot, move || ScopeProbe {
         reports: reports_tx.clone(),
         starts: Arc::new(AtomicUsize::new(0)),
@@ -420,7 +414,7 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let starts = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
-    let (leader_slot, leader) = graph.slot("leader", tokio_otp::ActorOptions::new());
+    let (leader_slot, leader) = graph.slot("leader");
     graph.define(leader_slot, {
         let starts = Arc::clone(&starts);
         move || ScopeProbe {
@@ -485,7 +479,7 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
 async fn restricted_scope_add_child_returns_the_inserted_lineage() {
     let (lineage_tx, mut lineage_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (adder_slot, adder) = graph.slot("adder", tokio_otp::ActorOptions::new());
+    let (adder_slot, adder) = graph.slot("adder");
     graph.define(adder_slot, move || RestrictedTaskAdder {
         lineage: lineage_tx.clone(),
     });
@@ -529,7 +523,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     let starts = Arc::new(AtomicUsize::new(0));
     let child_stopped = Arc::new(AtomicBool::new(false));
     let mut leaders = GraphBuilder::new();
-    let (actor_slot, _) = leaders.slot("leader", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = leaders.slot("leader");
     leaders.define(actor_slot, {
         let starts = Arc::clone(&starts);
         let child_stopped = Arc::clone(&child_stopped);
@@ -542,7 +536,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     });
     let leaders = leaders.build().expect("leader graph builds");
     let mut workers = GraphBuilder::new();
-    let (actor_slot, _) = workers.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = workers.slot("worker");
     workers.define(actor_slot, {
         let child_stopped = Arc::clone(&child_stopped);
         move || StopProbe(Arc::clone(&child_stopped))
@@ -620,7 +614,7 @@ async fn actor_with_scope_uses_explicit_rest_for_one() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let mut leaders = GraphBuilder::new();
-    let (leader_slot, leader) = leaders.slot("leader", tokio_otp::ActorOptions::new());
+    let (leader_slot, leader) = leaders.slot("leader");
     leaders.define(leader_slot, {
         let starts = Arc::clone(&leader_starts);
         move || RestartProbe {
@@ -629,7 +623,7 @@ async fn actor_with_scope_uses_explicit_rest_for_one() {
     });
     let leaders = leaders.build().expect("leaders build");
     let mut workers = GraphBuilder::new();
-    let (worker_slot, worker) = workers.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker) = workers.slot("worker");
     workers.define(worker_slot, {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
@@ -669,7 +663,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let mut leaders = GraphBuilder::new();
-    let (actor_slot, _) = leaders.slot("leader", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = leaders.slot("leader");
     leaders.define(actor_slot, {
         let starts = Arc::clone(&leader_starts);
         move || RestartProbe {
@@ -678,7 +672,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     });
     let leaders = leaders.build().expect("leaders build");
     let mut workers = GraphBuilder::new();
-    let (worker_slot, worker) = workers.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker) = workers.slot("worker");
     workers.define(worker_slot, {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {

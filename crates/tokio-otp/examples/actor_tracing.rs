@@ -1,7 +1,9 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorResult, GraphBuilder, LiveContext, MessageContext, prelude::Continue};
+use tokio_otp::{
+    Actor, ActorResult, AmbientContext, GraphBuilder, MessageContext, prelude::Continue,
+};
 
 mod support;
 
@@ -31,7 +33,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker) = builder.slot("Worker", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker) = builder.slot("Worker");
     builder.define(worker_slot, move || Worker {
         completed: completed_tx.clone(),
     });

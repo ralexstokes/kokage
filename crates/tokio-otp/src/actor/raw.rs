@@ -29,18 +29,30 @@ pub type ActorResult = Result<Flow, BoxError>;
 /// and shutdown drain policy. Implement `RawActor` directly when an actor needs
 /// custom loop control.
 ///
+/// # Capability contract
+///
+/// A raw actor receives the mailbox-owning [`ActorContext`], including
+/// `recv`, `try_recv`, and `mark_ready`. It does not implement
+/// [`LiveContext`](crate::LiveContext): loop-owned timers and continuations
+/// depend on the framework-owned handler loop. A raw actor expresses those
+/// branches directly with Tokio futures beside `recv`, while watches,
+/// offloads, blocking work, identity, and restricted scope access remain
+/// available on `ActorContext` itself.
+///
 /// Implementors can use
 /// `async fn run(&mut self, ctx: ActorContext<Self::Msg>) -> ActorResult` in
 /// their trait impls. Registration takes a reusable
 /// [`ActorFactory`](crate::ActorFactory), so each run owns fresh
 /// incarnation-local state, including non-[`Clone`] fields. Custom raw actors
-/// can acquire fallible or asynchronous resources at the start of
+/// need not implement [`Sync`] because each incarnation moves into one task;
+/// the reusable factory remains `Send + Sync` across restarts. Custom raw
+/// actors can acquire fallible or asynchronous resources at the start of
 /// [`run`](Self::run), where failure participates in supervision and readiness.
 ///
 /// This trait is deliberately not implemented for plain closures: an actor is
 /// a named type that implements `RawActor`, which keeps the message type visible
 /// at the definition site and the actor's state explicit.
-pub trait RawActor: Send + Sync + 'static {
+pub trait RawActor: Send + 'static {
     /// The message type this actor receives.
     type Msg: Send + 'static;
 

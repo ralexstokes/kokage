@@ -33,7 +33,7 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let (printer_slot, printer) = graph.slot("Printer", tokio_otp::ActorOptions::new());
+    let (printer_slot, printer) = graph.slot("Printer");
     graph.define(printer_slot, || Printer);
     let handle = Runtime::builder().graph(graph.build()?).build()?.spawn();
 

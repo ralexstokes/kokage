@@ -12,9 +12,7 @@ use tokio::{
     sync::watch,
     time::{sleep, timeout},
 };
-use tokio_otp::{
-    Actor, ActorResult, DynamicActorOptions, MessageContext, Runtime, prelude::Continue,
-};
+use tokio_otp::{Actor, ActorResult, MessageContext, Runtime, prelude::Continue};
 use tokio_otp_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use tokio_supervisor::{
     ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder, Strategy, SupervisorHandle,
@@ -505,7 +503,7 @@ async fn runtime_convenience_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
-        .add_actor("tracked", || IdleActor, DynamicActorOptions::default())
+        .add_actor("tracked", || IdleActor)
         .await
         .expect("failed to add runtime actor");
 

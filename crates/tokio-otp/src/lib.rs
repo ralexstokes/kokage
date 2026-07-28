@@ -24,7 +24,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut graph = GraphBuilder::new();
-//! let (echo_slot, echo) = graph.slot("Echo", tokio_otp::ActorOptions::new());
+//! let (echo_slot, echo) = graph.slot("Echo");
 //! graph.define(echo_slot, || Echo);
 //!
 //! let graph = graph.build()?;
@@ -59,7 +59,8 @@
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
 //! | [`ActorContext`] | The full context a [`RawActor`] run receives: mailbox, watches, lifetime, blocking work, shutdown token. |
 //! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
-//! | [`LiveContext`] | The capabilities shared by the running stages; the type shared helpers take. |
+//! | [`AmbientContext`] | Identity, shutdown observation, and blocking work shared by every context. |
+//! | [`LiveContext`] | Timers, continuations, and other capabilities shared by the running stages. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`RunnableActor`] | One actor plus stable binding — the unit of execution. |
@@ -163,7 +164,7 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut builder = GraphBuilder::new();
 //! builder.name("example");
-//! let (counter_slot, counter) = builder.slot("Counter", tokio_otp::ActorOptions::new());
+//! let (counter_slot, counter) = builder.slot("Counter");
 //! builder.define(counter_slot, || Counter { total: 0 });
 //! let graph = builder.build().expect("valid graph");
 //!
@@ -279,9 +280,9 @@ pub mod prelude {
     // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-        AddSubtreeError, BlockingCancelled, BoxError, CallError, CancellationHandle,
-        CancellationToken, ChildOutline, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy,
-        DynamicRuntimeBuilder, DynamicScope, Flow,
+        AddSubtreeError, AmbientContext, BlockingCancelled, BoxError, CallError,
+        CancellationHandle, CancellationToken, ChildOutline, DEFAULT_SHUTDOWN_BOUND, Down,
+        DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Flow,
         Flow::{Continue, Stop},
         Graph, GraphBuilder, LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode,
         MessageContext, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply,
@@ -302,11 +303,11 @@ pub use tokio_otp_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, BlockingCancelled, CallError, CancellationHandle,
-    DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow, Graph, GraphBuildError,
-    GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
-    OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor, SendError,
-    StartContext, StopContext, SupervisorPathSegment, TimerKey, TryRecvError,
+    ActorSlot, ActorStats, ActorSupervisorPathSegment, AmbientContext, BlockingCancelled,
+    CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Flow,
+    Graph, GraphBuildError, GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext,
+    MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope,
+    RunnableActor, SendError, StartContext, StopContext, TimerKey, TryRecvError,
 };
 pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 pub use runtime::{

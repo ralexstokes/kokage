@@ -9,9 +9,9 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ChildMembershipView, ControlError, GraphBuilder, LifecycleEvent,
-    LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle, StartContext, Strategy,
-    SupervisionTree, SupervisorSnapshot, prelude::Continue,
+    Actor, ActorRef, ActorResult, AmbientContext, ChildMembershipView, ControlError, GraphBuilder,
+    LifecycleEvent, LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle, StartContext,
+    Strategy, SupervisionTree, SupervisorSnapshot, prelude::Continue,
 };
 
 use crate::{
@@ -128,7 +128,7 @@ impl Router {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
         let mut graph = GraphBuilder::new();
-        let (actor_slot, actor) = graph.slot("session", tokio_otp::ActorOptions::new());
+        let (actor_slot, actor) = graph.slot("session");
         graph.define(
             actor_slot,
             SessionFactory {

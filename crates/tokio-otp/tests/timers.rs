@@ -23,7 +23,7 @@ where
     F: ActorFactory,
 {
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("timer", tokio_otp::ActorOptions::new());
+    let (actor_ref_slot, actor_ref) = builder.slot("timer");
     builder.define(actor_ref_slot, factory);
     let graph = builder.build().expect("valid graph");
     let runtime = Runtime::builder()
@@ -634,12 +634,11 @@ where
 {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (sink_ref_slot, sink_ref) = builder.slot("sink", tokio_otp::ActorOptions::new());
+    let (sink_ref_slot, sink_ref) = builder.slot("sink");
     builder.define(sink_ref_slot, move || Sink {
         observed: observed_tx.clone(),
     });
-    let (scheduler_ref_slot, scheduler_ref) =
-        builder.slot("scheduler", tokio_otp::ActorOptions::new());
+    let (scheduler_ref_slot, scheduler_ref) = builder.slot("scheduler");
     builder.define(scheduler_ref_slot, scheduler(sink_ref));
     let graph = builder.build().expect("valid graph");
     let runtime = Runtime::builder()

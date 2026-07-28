@@ -18,12 +18,14 @@ mod raw;
 
 pub(crate) use context::deadline_after;
 
-pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
+pub(crate) use binding::SupervisorPathSegment;
+pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment as ActorSupervisorPathSegment};
+pub(crate) use builder::ActorOptionsValidationError;
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::{CancellationHandle, Lifetime};
 pub use context::{
-    ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, RestrictedScope,
-    StartContext, StopContext, TimerKey,
+    ActorContext, ActorRef, AmbientContext, LiveContext, MessageContext, OffloadHandle, Reply,
+    RestrictedScope, StartContext, StopContext, TimerKey,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError,

@@ -36,12 +36,12 @@ impl RawActor for SizedWorker {
 
 #[derive(Supervision)]
 struct OptionsGraph {
-    #[supervision(options = ActorOptions::new().mailbox(MailboxMode::Conflate))]
+    #[supervision(options = ActorOptions::new().mailbox(MailboxMode::conflate()))]
     mailbox_only: MailboxWorker,
     #[supervision(options = ActorOptions::new().message_size())]
     message_size_only: SizedWorker,
     #[supervision(options = ActorOptions::new()
-        .mailbox(MailboxMode::Conflate)
+        .mailbox(MailboxMode::conflate())
         .message_size())]
     combined: SizedWorker,
 }

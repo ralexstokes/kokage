@@ -62,7 +62,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
     let mut builder = GraphBuilder::new();
-    let (frontend_slot, frontend) = builder.slot("Observe", tokio_otp::ActorOptions::new());
+    let (frontend_slot, frontend) = builder.slot("Observe");
     builder.define(frontend_slot, move || {
         Observe::<String>::new(observed_tx.clone())
     });

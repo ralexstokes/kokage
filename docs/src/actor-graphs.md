@@ -150,7 +150,7 @@ as a startup or run panic.
 Constructor functions are the common case:
 
 ```rust,ignore
-let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+let (actor_slot, _) = builder.slot("worker");
 builder.define(actor_slot, Worker::new);
 ```
 
@@ -160,7 +160,7 @@ constructing each incarnation:
 
 ```rust,ignore
 let ledger = ledger_ref.clone();
-let (actor_slot, _) = builder.slot("gateway", tokio_otp::ActorOptions::new());
+let (actor_slot, _) = builder.slot("gateway");
 builder.define(actor_slot, move || Gateway::new(ledger.clone()));
 ```
 
@@ -178,7 +178,7 @@ struct Gateway {
     pending: Vec<Order>,
 }
 
-let (actor_slot, _) = builder.slot("gateway", tokio_otp::ActorOptions::new());
+let (actor_slot, _) = builder.slot("gateway");
 builder.define(actor_slot, GatewayFactory { ledger, exchange });
 ```
 
@@ -227,7 +227,7 @@ use tokio_otp::{ActorOptions, MailboxMode, Supervision};
 #[derive(Supervision)]
 struct MarketData {
     #[supervision(options = ActorOptions::new()
-        .mailbox(MailboxMode::Conflate)
+        .mailbox(MailboxMode::conflate())
         .message_size())]
     snapshots: SnapshotActor,
     orders: OrderActor,
@@ -241,9 +241,10 @@ actor message.
 ## Dynamic and Advanced Builder Wiring
 
 Use `GraphBuilder` directly when actors are dynamic, generated in a loop, or
-require hand-written wiring. Registration has one primitive:
-`builder.slot::<M>(id, options)` reserves the typed ref and
-`builder.define(slot, factory)` fills that token-protected slot. Reserve all
+require hand-written wiring. `builder.slot::<M>(id)` reserves a typed ref with
+default actor options; use `builder.slot_with::<M>(id, options)` when the actor
+needs a different mailbox or message-size observation. In both cases,
+`builder.define(slot, factory)` fills the token-protected slot. Reserve all
 slots before defining actors when wiring cycles.
 
 The direct builder still validates runtime configuration facts:
@@ -267,13 +268,13 @@ the producer fall behind. Configure those actors explicitly:
 ```rust,ignore
 use tokio_otp::{ActorOptions, MailboxMode};
 
-let (latest_slot, latest) = builder.slot(
+let (latest_slot, latest) = builder.slot_with(
     "latest-market",
-    ActorOptions::new().mailbox(MailboxMode::Conflate),
+    ActorOptions::new().mailbox(MailboxMode::conflate()),
 );
 builder.define(latest_slot, MarketActor::new);
 
-let (per_symbol_slot, per_symbol) = builder.slot(
+let (per_symbol_slot, per_symbol) = builder.slot_with(
     "market-by-symbol",
     ActorOptions::new().mailbox(MailboxMode::conflate_by_key(
         |tick: &Tick| tick.symbol_id,
@@ -282,8 +283,9 @@ let (per_symbol_slot, per_symbol) = builder.slot(
 builder.define(per_symbol_slot, KeyedMarketActor::new);
 ```
 
-`Conflate` stores at most one unread message. `ConflateByKey` stores one
-unread message per distinct key, preserving the first-arrival order of keys;
+`MailboxMode::conflate()` stores at most one unread message.
+`MailboxMode::conflate_by_key(...)` stores one unread message per distinct
+key, preserving the first-arrival order of keys;
 its number of keys is bounded by `mailbox_capacity`, and a new key evicts the
 oldest unread key when full. Both `send` and `try_send` replace stale state
 without waiting for capacity. `ActorStats::messages_conflated` counts replaced
@@ -352,6 +354,16 @@ Hand-written `RawActor::run` loops are
 still available as the escape hatch for custom loop control; after
 `ctx.recv().await` returns `None` because shutdown was requested, such actors
 can use `ctx.try_recv()` to drain immediately queued messages.
+
+The two actor styles intentionally receive non-nested capability sets.
+`RawActor` owns `ActorContext`, so it can call `recv`, `try_recv`, and
+`mark_ready`, but it must express timers and other loop branches directly.
+The framework owns those operations for `Actor`; its stage contexts therefore
+withhold direct mailbox reads and readiness, while the live stages implement
+`LiveContext` for loop-owned timers and continuations. Watches and offloads are
+available directly from `ActorContext` to both actor styles.
+`AmbientContext` names the identity, shutdown-observation, and blocking-work
+methods shared by every stage, including `StopContext`.
 
 `ctx.try_recv()` returns the crate-owned `tokio_otp::TryRecvError`, not Tokio's
 channel error. Code passing it to an API that expects

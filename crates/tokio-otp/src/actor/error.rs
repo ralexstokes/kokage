@@ -50,9 +50,21 @@ pub enum GraphBuildError {
         /// Actor id without an implementation.
         actor_id: String,
     },
-    /// Generic invalid builder configuration.
-    #[error("{0}")]
-    InvalidConfig(&'static str),
+    /// A graph-wide or per-actor mailbox capacity was zero.
+    #[error("mailbox capacity must be non-zero")]
+    ZeroMailboxCapacity,
+    /// The graph's configured name was empty.
+    #[error("graph name must not be empty")]
+    EmptyGraphName,
+    /// An actor slot was opened with an empty id.
+    #[error("actor id must not be empty")]
+    EmptyActorId,
+    /// An actor slot from a different graph builder was passed to `define`.
+    #[error("actor slot belongs to a different graph builder")]
+    ForeignSlot,
+    /// An actor slot no longer names a registered position in its builder.
+    #[error("actor slot is detached")]
+    DetachedSlot,
 }
 
 /// Errors returned when sending to an actor mailbox.

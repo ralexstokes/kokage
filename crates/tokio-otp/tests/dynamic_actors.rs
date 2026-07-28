@@ -176,7 +176,7 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
     .expect("terminal child remains in membership");
 
     handle
-        .add_actor("settle", Drain::<()>::new, DynamicActorOptions::new())
+        .add_actor("settle", Drain::<()>::new)
         .await
         .expect("settling actor added");
     handle
@@ -301,7 +301,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
 
     assert!(handle.snapshot().children.is_empty());
     let sink = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             {
                 let observed_tx = observed_tx.clone();
@@ -345,7 +345,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     ));
 
     let replacement = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             move || Observe {
                 observed: observed_tx.clone(),
@@ -395,7 +395,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
         .expect("graphless runtime builds")
         .spawn();
     let actor = handle
-        .add_actor(
+        .add_actor_with(
             "ordered",
             move || ObserveOrder {
                 observed: observed_tx.clone(),
@@ -507,7 +507,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect("graphless runtime builds")
         .spawn();
     let actor = handle
-        .add_actor(
+        .add_actor_with(
             "removable",
             {
                 let release_handler = release_handler.clone();
@@ -598,7 +598,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     assert!(handle.snapshot().child("removable").is_none());
 
     let replacement = handle
-        .add_actor(
+        .add_actor_with(
             "removable",
             Drain::<RemovalMsg>::new,
             DynamicActorOptions::default(),
@@ -627,7 +627,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         .expect("graphless runtime builds")
         .spawn();
     let actor = handle
-        .add_actor(
+        .add_actor_with(
             "discarding",
             {
                 let release_handler = release_handler.clone();
@@ -708,7 +708,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (watcher_slot, watcher) = graph.slot("watcher", tokio_otp::ActorOptions::new());
+    let (watcher_slot, watcher) = graph.slot("watcher");
     graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
@@ -724,7 +724,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .expect("dynamic subtree is available");
     let starts = Arc::new(AtomicUsize::new(0));
     let target = dynamic
-        .add_actor(
+        .add_actor_with(
             "temporary",
             {
                 let starts = starts.clone();
@@ -764,7 +764,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     ));
 
     dynamic
-        .add_actor("temporary", Drain::<()>::new, DynamicActorOptions::new())
+        .add_actor("temporary", Drain::<()>::new)
         .await
         .expect("auto-removed actor id is reusable");
     shutdown_runtime(&handle, "remove-on-exit monitor test shutdown").await;
@@ -779,7 +779,7 @@ async fn clean_stop_applies_restart_policy_before_default_removal() {
 
     let transient_starts = Arc::new(AtomicUsize::new(0));
     let transient = handle
-        .add_actor(
+        .add_actor_with(
             "transient",
             {
                 let starts = transient_starts.clone();
@@ -801,7 +801,7 @@ async fn clean_stop_applies_restart_policy_before_default_removal() {
 
     let permanent_starts = Arc::new(AtomicUsize::new(0));
     let permanent = handle
-        .add_actor(
+        .add_actor_with(
             "permanent",
             {
                 let starts = permanent_starts.clone();
@@ -841,7 +841,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
         .spawn();
     let inherited_starts = Arc::new(AtomicUsize::new(0));
     let inherited = handle
-        .add_actor(
+        .add_actor_with(
             "inherited",
             {
                 let starts = Arc::clone(&inherited_starts);
@@ -855,7 +855,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
         .expect("inherited actor added");
     let explicit_starts = Arc::new(AtomicUsize::new(0));
     let explicit = handle
-        .add_actor(
+        .add_actor_with(
             "explicit",
             {
                 let starts = Arc::clone(&explicit_starts);
@@ -893,7 +893,7 @@ async fn runtime_new_inherits_the_supplied_dynamic_supervisors_defaults() {
     let handle = Runtime::new(supervisor).spawn();
     let starts = Arc::new(AtomicUsize::new(0));
     let actor = handle
-        .add_actor(
+        .add_actor_with(
             "inherited-restart",
             {
                 let starts = Arc::clone(&starts);
@@ -915,7 +915,7 @@ async fn runtime_new_inherits_the_supplied_dynamic_supervisors_defaults() {
     .expect("supplied supervisor restart default is inherited");
 
     handle
-        .add_actor(
+        .add_actor_with(
             "inherited-shutdown",
             || PendingActor,
             DynamicActorOptions::default(),
@@ -941,7 +941,7 @@ async fn never_actor_auto_removes_after_failure() {
         .spawn();
     let release = Arc::new(Notify::new());
     let target = handle
-        .add_actor(
+        .add_actor_with(
             "temporary",
             {
                 let release = release.clone();
@@ -973,7 +973,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
 
     let default_release = Arc::new(Notify::new());
     handle
-        .add_actor(
+        .add_actor_with(
             "transient-default",
             {
                 let release = default_release.clone();
@@ -991,7 +991,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
 
     let transient_release = Arc::new(Notify::new());
     handle
-        .add_actor(
+        .add_actor_with(
             "transient-retained",
             {
                 let release = transient_release.clone();
@@ -1011,7 +1011,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
 
     let reversed_release = Arc::new(Notify::new());
     handle
-        .add_actor(
+        .add_actor_with(
             "transient-retained-reversed",
             {
                 let release = reversed_release.clone();
@@ -1031,7 +1031,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
 
     let never_release = Arc::new(Notify::new());
     handle
-        .add_actor(
+        .add_actor_with(
             "never-retained",
             {
                 let release = never_release.clone();
@@ -1060,7 +1060,7 @@ async fn default_remove_on_exit_does_not_remove_an_actor_that_restarts() {
         .spawn();
     let starts = Arc::new(AtomicUsize::new(0));
     handle
-        .add_actor(
+        .add_actor_with(
             "restart-once",
             {
                 let starts = starts.clone();
@@ -1103,12 +1103,12 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .expect("graphless runtime builds")
         .spawn();
     let sink = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             Drain::<SizedMessage>::new,
             DynamicActorOptions::default().options(
                 ActorOptions::new()
-                    .mailbox(MailboxMode::Conflate)
+                    .mailbox(MailboxMode::conflate())
                     .message_size(),
             ),
         )
@@ -1152,7 +1152,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
         .spawn();
     let release = Arc::new(Notify::new());
     let sink = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             {
                 let release = release.clone();
@@ -1161,7 +1161,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
                 }
             },
             DynamicActorOptions::default()
-                .options(ActorOptions::new().mailbox(MailboxMode::Conflate)),
+                .options(ActorOptions::new().mailbox(MailboxMode::conflate())),
         )
         .await
         .expect("conflating actor added");
@@ -1185,7 +1185,7 @@ async fn runtime_added_actor_can_override_mailbox_capacity() {
         .expect("graphless runtime builds")
         .spawn();
     let sink = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             Drain::<u64>::new,
             DynamicActorOptions::default().options(ActorOptions::new().mailbox_capacity(9)),
@@ -1206,7 +1206,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
         .expect("graphless runtime builds")
         .spawn();
     let result = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             Drain::<u64>::new,
             DynamicActorOptions::default().options(ActorOptions::new().mailbox_capacity(0)),
@@ -1227,7 +1227,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
 async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (forwarder_slot, forwarder) = builder.slot("forwarder", tokio_otp::ActorOptions::new());
+    let (forwarder_slot, forwarder) = builder.slot("forwarder");
     builder.define(forwarder_slot, || Forwarder);
     let graph = builder.build().expect("valid graph");
     let handle = SupervisionTree::graph(&graph)
@@ -1241,7 +1241,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         .expect("dynamic subtree is available");
 
     let sink = dynamic
-        .add_actor(
+        .add_actor_with(
             "sink",
             move || Observe {
                 observed: observed_tx.clone(),
@@ -1286,7 +1286,7 @@ impl RawActor for ForwardTo {
 async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (sink_slot, sink) = builder.slot("sink", tokio_otp::ActorOptions::new());
+    let (sink_slot, sink) = builder.slot("sink");
     builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });
@@ -1302,7 +1302,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
         .expect("dynamic subtree is available");
 
     let dynamic = dynamic_scope
-        .add_actor(
+        .add_actor_with(
             "dynamic",
             move || ForwardTo {
                 target: sink.clone(),
@@ -1339,7 +1339,7 @@ impl RawActor for PendingActor {
 async fn timed_out_removal_terminates_the_typed_ref() {
     let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
     let actor_ref = handle
-        .add_actor(
+        .add_actor_with(
             "dynamic",
             || PendingActor,
             DynamicActorOptions::new().shutdown(ShutdownPolicy::new(
@@ -1367,7 +1367,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
     ));
 
     handle
-        .add_actor("dynamic", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("dynamic", Drain::<()>::new)
         .await
         .expect("label reusable after timed-out removal");
     shutdown_runtime(&handle, "timed-out removal test shutdown").await;
@@ -1385,7 +1385,7 @@ async fn runtime_new_preserves_the_supervisors_ordered_scope_kind() {
     let handle = Runtime::new(supervisor).spawn();
 
     let error = handle
-        .add_actor("dynamic", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("dynamic", Drain::<()>::new)
         .await
         .expect_err("ordered runtimes reject runtime membership changes");
     assert_eq!(

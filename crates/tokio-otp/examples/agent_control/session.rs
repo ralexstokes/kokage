@@ -10,9 +10,9 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
-    prelude::Continue, timers,
+    Actor, ActorRef, ActorResult, AmbientContext, CancellationHandle, CancellationToken,
+    DrainPolicy, DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext,
+    TimerKey, prelude::Continue, timers,
 };
 
 use crate::{
@@ -109,7 +109,7 @@ impl Session {
             .children()
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
-            .add_actor(
+            .add_actor_with(
                 id.clone(),
                 AgentRunFactory {
                     chat: self.chat,

@@ -223,14 +223,14 @@ impl MessageSize for Upload {
 }
 
 let (uploads_slot, uploads) =
-    graph.slot("uploads", ActorOptions::new().message_size());
+    graph.slot_with("uploads", ActorOptions::new().message_size());
 graph.define(uploads_slot, UploadActor::new);
 ```
 
-The same `ActorOptions` value works with `GraphBuilder::slot`. Pass it to
+The same `ActorOptions` value works with `GraphBuilder::slot_with`. Pass it to
 `DynamicActorOptions::options` when registering an actor dynamically, so the
 same mailbox vocabulary configures graph and dynamic actors:
-`DynamicActorOptions::new().options(ActorOptions::new().mailbox(MailboxMode::Conflate).message_size())`.
+`DynamicActorOptions::new().options(ActorOptions::new().mailbox(MailboxMode::conflate()).message_size())`.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that
@@ -241,9 +241,9 @@ membership identity retained when the actor was registered. They also carry
 by id, lineage, and generation. Use the full supervisor path together
 with `(actor_id, lineage)` to join a flattened recursive sample to the
 exact current tree node; local lineages can repeat in sibling subtrees. A direct
-child has an empty path. Stats sampled directly from an `ActorRef`,
-`RunnableActor`, or standalone `Graph` report `None` for both runtime-scoped
-identity fields because those surfaces have no supervisor context.
+child has an empty path. Stats sampled directly from an `ActorRef` report
+`None` for both runtime-scoped identity fields because a ref has no supervisor
+context.
 
 `ActorStats::outstanding_offloads` is a point-in-time gauge of bounded futures
 owned by the current actor incarnation. It rises when `ActorContext::offload`

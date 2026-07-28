@@ -43,10 +43,8 @@ impl Actor for FrontDesk {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire a static graph with typed, restart-stable actor refs.
     let mut builder = GraphBuilder::new();
-    let (press_slot, press_ref) =
-        builder.slot::<String>("press", ActorOptions::new());
-    let (orders_slot, orders) =
-        builder.slot("front-desk", ActorOptions::new());
+    let (press_slot, press_ref) = builder.slot::<String>("press");
+    let (orders_slot, orders) = builder.slot("front-desk");
     builder.define(orders_slot, move || FrontDesk {
         press: press_ref.clone(),
     });

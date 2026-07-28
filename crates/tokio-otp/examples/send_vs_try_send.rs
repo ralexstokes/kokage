@@ -32,7 +32,7 @@ impl RawActor for OneMessageSink {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (sink_ref_slot, sink_ref) = builder.slot("OneMessageSink", tokio_otp::ActorOptions::new());
+    let (sink_ref_slot, sink_ref) = builder.slot("OneMessageSink");
     builder.define(sink_ref_slot, move || OneMessageSink {
         observed: observed_tx.clone(),
     });

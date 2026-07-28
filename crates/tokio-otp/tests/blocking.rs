@@ -79,7 +79,7 @@ async fn run_blocking_returns_the_closure_result() {
     let (observed_tx, observed_rx) = oneshot::channel();
     let observed = sender_slot(observed_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, move || ReturnsResult {
         observed: observed.clone(),
     });
@@ -121,7 +121,7 @@ async fn run_blocking_token_is_cancelled_on_actor_shutdown() {
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let cancelled = sender_slot(cancelled_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, {
         let started = started.clone();
         move || WaitsForShutdown {
@@ -185,7 +185,7 @@ async fn dropping_run_blocking_future_cancels_its_token() {
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let cancelled = sender_slot(cancelled_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, {
         let started = started.clone();
         let drop_future = drop_future.clone();
@@ -241,7 +241,7 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
     let (finished_tx, finished_rx) = oneshot::channel();
     let finished = sender_slot(finished_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, {
         let started = started.clone();
         let release = release.clone();
@@ -302,7 +302,7 @@ impl RawActor for Panics {
 #[tokio::test]
 async fn blocking_panic_propagates_as_actor_panic() {
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, || Panics);
     let graph = builder.build().expect("valid graph");
 

@@ -40,7 +40,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// # }
 ///
 /// let mut graph = GraphBuilder::new();
-/// let (worker_slot, _worker_ref) = graph.slot("worker", tokio_otp::ActorOptions::new());
+/// let (worker_slot, _worker_ref) = graph.slot("worker");
 /// graph.define(worker_slot, WorkerFactory { client: Client });
 /// ```
 ///
@@ -368,7 +368,7 @@ fn parse_factory_attributes(
 /// # Per-actor options
 ///
 /// Add `#[supervision(options = expression)]` to a field to pass an
-/// `ActorOptions` expression to `GraphBuilder::slot`. Fields
+/// `ActorOptions` expression to `GraphBuilder::slot_with`. Fields
 /// without this attribute continue to use the default options:
 ///
 /// ```
@@ -391,7 +391,7 @@ fn parse_factory_attributes(
 /// #[derive(tokio_otp::Supervision)]
 /// struct MarketData {
 ///     #[supervision(options = ActorOptions::new()
-///         .mailbox(MailboxMode::Conflate)
+///         .mailbox(MailboxMode::conflate())
 ///         .message_size())]
 ///     snapshots: SnapshotActor,
 /// }
@@ -792,10 +792,6 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 let slot_ty = quote_spanned! {ty.span()=>
                     ::tokio_otp::ActorSlot<<#ty as ::tokio_otp::RawActor>::Msg>
                 };
-                let options = attrs.options.clone().map_or_else(
-                    || quote! { ::tokio_otp::ActorOptions::new() },
-                    |options| quote! { #options },
-                );
                 slot_fields.push(quote! { #field_vis #ident: #slot_ty });
                 refs_fields.push(quote! {
                     #[allow(dead_code)]
@@ -807,13 +803,22 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 });
                 factory_bounds.push(quote! { #param: ::tokio_otp::ActorFactory<Actor = #ty> });
                 bound_idents.push(ident);
-                open_stmts.push(quote_spanned! {ty.span()=>
-                    let (#slot_ident, #ident) = builder.slot::
-                        <<#ty as ::tokio_otp::RawActor>::Msg>(
-                            &::tokio_otp::qualified_label(prefix, #name),
-                            #options,
-                        );
-                });
+                if let Some(options) = &attrs.options {
+                    open_stmts.push(quote_spanned! {ty.span()=>
+                        let (#slot_ident, #ident) = builder.slot_with::
+                            <<#ty as ::tokio_otp::RawActor>::Msg>(
+                                &::tokio_otp::qualified_label(prefix, #name),
+                                #options,
+                            );
+                    });
+                } else {
+                    open_stmts.push(quote_spanned! {ty.span()=>
+                        let (#slot_ident, #ident) = builder.slot::
+                            <<#ty as ::tokio_otp::RawActor>::Msg>(
+                                &::tokio_otp::qualified_label(prefix, #name),
+                            );
+                    });
+                }
                 define_stmts.push(quote! {
                     builder.define(slots.#ident, self.#ident);
                 });

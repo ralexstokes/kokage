@@ -5,9 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, CancellationHandle,
-    DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent,
-    RawActor, RestartPolicy, RunnableActor, Runtime, prelude::Continue,
+    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
+    Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent, RawActor, RestartPolicy,
+    RunnableActor, Runtime, prelude::Continue,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -92,7 +92,7 @@ where
     F: ActorFactory,
 {
     let mut builder = GraphBuilder::new();
-    let (slot, actor_ref) = builder.slot(label, ActorOptions::new());
+    let (slot, actor_ref) = builder.slot(label);
     builder.define(slot, factory);
     let graph = builder.build().expect("test graph builds");
     let actor = graph
@@ -1326,7 +1326,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
         .expect("dynamic runtime builds")
         .spawn();
     let peer_ref = handle
-        .add_actor(
+        .add_actor_with(
             "peer",
             move || StubbornPeer {
                 started: peer_started_tx.clone(),
@@ -1338,7 +1338,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     handle
-        .add_actor(
+        .add_actor_with(
             "observer",
             {
                 let peer_ref = peer_ref.clone();

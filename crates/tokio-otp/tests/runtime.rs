@@ -82,7 +82,7 @@ where
     F: ActorFactory,
 {
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_ref_slot, actor_ref) = builder.slot("worker");
     builder.define(actor_ref_slot, factory);
     let graph = builder.build().expect("valid graph");
 
@@ -225,14 +225,13 @@ async fn runtime_handle_enumerates_actor_stats() {
 #[tokio::test]
 async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
     let mut root_graph = GraphBuilder::new();
-    let (root_ref_slot, root_ref) = root_graph.slot("root-worker", tokio_otp::ActorOptions::new());
+    let (root_ref_slot, root_ref) = root_graph.slot("root-worker");
     root_graph.define(root_ref_slot, Drain::<()>::new);
     let mut nested_graph = GraphBuilder::new();
-    let (nested_ref_slot, nested_ref) =
-        nested_graph.slot("nested-worker", tokio_otp::ActorOptions::new());
+    let (nested_ref_slot, nested_ref) = nested_graph.slot("nested-worker");
     nested_graph.define(nested_ref_slot, Drain::<()>::new);
     let mut leaf_graph = GraphBuilder::new();
-    let (leaf_ref_slot, leaf_ref) = leaf_graph.slot("leaf-worker", tokio_otp::ActorOptions::new());
+    let (leaf_ref_slot, leaf_ref) = leaf_graph.slot("leaf-worker");
     leaf_graph.define(leaf_ref_slot, Drain::<()>::new);
 
     let root_graph = root_graph.build().expect("valid root graph");
@@ -312,7 +311,7 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         .subtree("dynamic")
         .expect("declared dynamic subtree");
     let dynamic = dynamic_scope
-        .add_actor(
+        .add_actor_with(
             "dynamic-worker",
             Drain::<()>::new,
             DynamicActorOptions::default(),
@@ -357,7 +356,7 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
 #[tokio::test]
 async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     let mut graph = GraphBuilder::new();
-    let (static_ref_slot, static_ref) = graph.slot("static-worker", tokio_otp::ActorOptions::new());
+    let (static_ref_slot, static_ref) = graph.slot("static-worker");
     graph.define(static_ref_slot, Drain::<()>::new);
     let root = Runtime::dynamic().build().expect("runtime builds").spawn();
 
@@ -377,7 +376,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
         .subtree("dynamic")
         .expect("declared dynamic subtree");
     let dynamic_ref = dynamic
-        .add_actor(
+        .add_actor_with(
             "dynamic-worker",
             Drain::<()>::new,
             DynamicActorOptions::default(),
@@ -417,7 +416,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
         .await
         .expect("leaf subtree added");
     let actor = leaf
-        .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("worker", Drain::<()>::new)
         .await
         .expect("nested actor added");
     actor.send(()).await.expect("nested actor receives");
@@ -433,8 +432,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     assert!(middle.actor_stats().is_empty());
     assert!(leaf.actor_stats().is_empty());
     assert!(matches!(
-        leaf.add_actor("late", Drain::<()>::new, DynamicActorOptions::default())
-            .await,
+        leaf.add_actor("late", Drain::<()>::new).await,
         Err(ControlError::Unavailable)
     ));
 
@@ -449,7 +447,7 @@ async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
         .await
         .expect("first subtree added");
     first
-        .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("worker", Drain::<()>::new)
         .await
         .expect("actor added");
 
@@ -470,10 +468,10 @@ async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
 #[tokio::test]
 async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
     let mut left_graph = GraphBuilder::new();
-    let (actor_slot, _) = left_graph.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = left_graph.slot("worker");
     left_graph.define(actor_slot, Drain::<()>::new);
     let mut right_graph = GraphBuilder::new();
-    let (actor_slot, _) = right_graph.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = right_graph.slot("worker");
     right_graph.define(actor_slot, Drain::<()>::new);
 
     let left_graph = left_graph.build().expect("left graph builds");
@@ -511,7 +509,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
     let tracked = handle
-        .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("worker", Drain::<()>::new)
         .await
         .expect("tracked actor added");
     tracked.send(()).await.expect("tracked actor receives");
@@ -565,8 +563,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let mut nested_graph = GraphBuilder::new();
-    let (static_ref_slot, static_ref) =
-        nested_graph.slot("static-worker", tokio_otp::ActorOptions::new());
+    let (static_ref_slot, static_ref) = nested_graph.slot("static-worker");
     nested_graph.define(static_ref_slot, || FailOnMessage);
     let nested_graph = nested_graph.build().expect("valid nested graph");
     let runtime = SupervisionTree::new()
@@ -586,7 +583,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         .subtree("dynamic")
         .expect("declared dynamic subtree");
     let dynamic_ref = dynamic
-        .add_actor(
+        .add_actor_with(
             "dynamic-worker",
             Drain::<()>::new,
             DynamicActorOptions::default(),
@@ -672,7 +669,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
 #[tokio::test]
 async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let mut graph = GraphBuilder::new();
-    let (static_ref_slot, static_ref) = graph.slot("static-worker", tokio_otp::ActorOptions::new());
+    let (static_ref_slot, static_ref) = graph.slot("static-worker");
     graph.define(static_ref_slot, || FailOnMessage);
     let root = Runtime::dynamic().build().expect("runtime builds").spawn();
     let graph = graph.build().expect("graph builds");
@@ -692,7 +689,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
         .subtree("dynamic")
         .expect("declared dynamic subtree");
     let dynamic_ref = dynamic
-        .add_actor(
+        .add_actor_with(
             "dynamic-worker",
             Drain::<()>::new,
             DynamicActorOptions::default(),
@@ -724,7 +721,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
 #[tokio::test]
 async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     let mut parent_graph = GraphBuilder::new();
-    let (fuse_slot, fuse) = parent_graph.slot("fuse", tokio_otp::ActorOptions::new());
+    let (fuse_slot, fuse) = parent_graph.slot("fuse");
     parent_graph.define(fuse_slot, || FailOnMessage);
     let parent_graph = parent_graph.build().expect("graph builds");
     let root = SupervisionTree::new()
@@ -743,7 +740,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
         .subtree("dynamic")
         .expect("declared dynamic subtree available");
     dynamic
-        .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("worker", Drain::<()>::new)
         .await
         .expect("dynamic actor added");
     assert!(
@@ -771,7 +768,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
         .subtree("dynamic")
         .expect("dynamic subtree rebound");
     rebound_dynamic
-        .add_actor("worker", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("worker", Drain::<()>::new)
         .await
         .expect("same id can be replayed");
     assert!(
@@ -949,7 +946,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
 async fn runtime_builder_wires_graph_into_supervised_runtime() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_ref_slot, worker_ref) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_ref_slot, worker_ref) = builder.slot("worker");
     builder.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });
@@ -982,7 +979,7 @@ async fn runtime_builder_wires_graph_into_supervised_runtime() {
 #[tokio::test]
 async fn runtime_builder_mixes_actor_and_non_actor_children() {
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("actor", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("actor");
     builder.define(actor_slot, Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
     let sidecar_started = Arc::new(Notify::new());
@@ -1031,9 +1028,9 @@ async fn runtime_builder_mixes_actor_and_non_actor_children() {
 #[tokio::test]
 async fn snapshot_wait_reports_all_children_running_after_spawn() {
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("one", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("one");
     builder.define(actor_slot, Drain::<()>::new);
-    let (actor_slot, _) = builder.slot("two", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("two");
     builder.define(actor_slot, Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
@@ -1082,7 +1079,7 @@ impl RawActor for FailOnMessage {
 #[tokio::test]
 async fn runtime_handle_exposes_lifecycle_watch() {
     let mut builder = GraphBuilder::new();
-    let (worker_ref_slot, worker_ref) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_ref_slot, worker_ref) = builder.slot("worker");
     builder.define(worker_ref_slot, || FailOnMessage);
     let graph = builder.build().expect("valid graph");
 
@@ -1125,7 +1122,7 @@ impl RawActor for AlwaysFails {
 #[tokio::test]
 async fn send_fails_after_restart_intensity_is_exhausted() {
     let mut builder = GraphBuilder::new();
-    let (worker_ref_slot, worker_ref) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_ref_slot, worker_ref) = builder.slot("worker");
     builder.define(worker_ref_slot, || AlwaysFails);
     let graph = builder.build().expect("valid graph");
 
@@ -1195,7 +1192,7 @@ impl Actor for ResettingCounter {
 async fn supervised_restart_constructs_fresh_actor_state() {
     let on_starts = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let (counter_slot, counter) = builder.slot("counter", tokio_otp::ActorOptions::new());
+    let (counter_slot, counter) = builder.slot("counter");
     builder.define(counter_slot, {
         let on_starts = on_starts.clone();
         move || ResettingCounter {
@@ -1313,7 +1310,7 @@ async fn child_grace_bounds_the_whole_actor_drain() {
     let handling_gate = Arc::new(Notify::new());
     let release_gate = Arc::new(Notify::new());
     let mut graph = GraphBuilder::new();
-    let (worker_slot, worker) = graph.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker) = graph.slot("worker");
     graph.define(worker_slot, {
         let handling_gate = handling_gate.clone();
         let release_gate = release_gate.clone();
@@ -1376,7 +1373,7 @@ impl RawActor for PendingActor {
 async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
     let started = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, {
         let started = started.clone();
         move || PendingActor {
@@ -1422,7 +1419,7 @@ async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
 async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
     let started = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("worker");
     builder.define(actor_slot, {
         let started = started.clone();
         move || PendingActor {
@@ -1468,7 +1465,7 @@ async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
 async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (worker_ref_slot, worker_ref) = graph.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_ref_slot, worker_ref) = graph.slot("worker");
     graph.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });
@@ -1496,7 +1493,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
 
     let dynamic = handle.subtree("dynamic").expect("declared dynamic subtree");
     let extra = dynamic
-        .add_actor("extra", Drain::<()>::new, DynamicActorOptions::default())
+        .add_actor("extra", Drain::<()>::new)
         .await
         .expect("actor added");
     extra.send(()).await.expect("message sent");

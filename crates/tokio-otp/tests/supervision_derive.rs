@@ -166,8 +166,8 @@ fn unfilled_slot_is_a_build_error() {
     let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
     let mut builder = GraphBuilder::new();
-    let (_slot, _sink_ref) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
-    let (defined_slot, _) = builder.slot::<SinkMsg>("defined", tokio_otp::ActorOptions::new());
+    let (_slot, _sink_ref) = builder.slot::<SinkMsg>("sink");
+    let (defined_slot, _) = builder.slot::<SinkMsg>("defined");
     builder.define(defined_slot, move || Sink {
         out: out_tx.clone(),
     });
@@ -182,8 +182,8 @@ fn unfilled_slot_is_a_build_error() {
 #[test]
 fn duplicate_slot_name_is_a_build_error() {
     let mut builder = GraphBuilder::new();
-    let (_a, _) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
-    let (_b, _) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
+    let (_a, _) = builder.slot::<SinkMsg>("sink");
+    let (_b, _) = builder.slot::<SinkMsg>("sink");
 
     match builder.build() {
         Err(GraphBuildError::DuplicateActorId { actor_id, .. }) => assert_eq!(actor_id, "sink"),
@@ -197,20 +197,15 @@ fn slot_token_from_another_builder_is_a_build_error() {
     let (out_tx, _out_rx) = mpsc::unbounded_channel();
 
     let mut other = GraphBuilder::new();
-    let (foreign_slot, _) = other.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
+    let (foreign_slot, _) = other.slot::<SinkMsg>("sink");
 
     let mut builder = GraphBuilder::new();
-    let (_own_slot, _) = builder.slot::<SinkMsg>("sink", tokio_otp::ActorOptions::new());
+    let (_own_slot, _) = builder.slot::<SinkMsg>("sink");
     builder.define(foreign_slot, move || Sink {
         out: out_tx.clone(),
     });
 
-    assert!(matches!(
-        builder.build(),
-        Err(GraphBuildError::InvalidConfig(
-            "actor slot belongs to a different graph builder"
-        ))
-    ));
+    assert!(matches!(builder.build(), Err(GraphBuildError::ForeignSlot)));
 }
 
 #[derive(Clone)]
@@ -252,13 +247,13 @@ impl RawActor for OptionsActor {
 
 #[derive(Supervision)]
 struct OptionsGraph {
-    #[supervision(options = ActorOptions::new().mailbox(MailboxMode::Conflate))]
+    #[supervision(options = ActorOptions::new().mailbox(MailboxMode::conflate()))]
     mailbox_only: OptionsActor,
     #[supervision(options = ActorOptions::new().message_size())]
     message_size_only: OptionsActor,
     #[supervision(
         options = ActorOptions::new()
-            .mailbox(MailboxMode::Conflate)
+            .mailbox(MailboxMode::conflate())
             .message_size()
     )]
     combined: OptionsActor,
@@ -337,7 +332,7 @@ async fn graph_with_applies_builder_config() {
 #[test]
 fn graph_with_reports_field_name_collision_with_pre_registered_actor() {
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("park", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("park");
     builder.define(actor_slot, || Park);
 
     match ParkGraph::graph_with(builder, |_| ParkGraphFactories { park: || Park }) {
@@ -348,27 +343,25 @@ fn graph_with_reports_field_name_collision_with_pre_registered_actor() {
 }
 
 #[test]
-fn empty_slot_name_records_invalid_config_and_detaches() {
+fn empty_slot_name_records_empty_name_error_and_detaches() {
     let mut builder = GraphBuilder::new();
-    let (slot, actor_ref) = builder.slot::<()>("", tokio_otp::ActorOptions::new());
+    let (slot, actor_ref) = builder.slot::<()>("");
     assert_eq!(actor_ref.id(), "");
     builder.define(slot, || Park);
-    let (actor_slot, _) = builder.slot("real", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("real");
     builder.define(actor_slot, || Park);
 
-    match builder.build() {
-        Err(GraphBuildError::InvalidConfig(msg)) => {
-            assert_eq!(msg, "actor id must not be empty")
-        }
-        other => panic!("expected InvalidConfig, got {other:?}"),
-    }
+    assert!(matches!(
+        builder.build(),
+        Err(GraphBuildError::EmptyActorId)
+    ));
 }
 
 #[test]
 fn define_on_duplicate_detached_token_does_not_corrupt_first_slot() {
     let mut builder = GraphBuilder::new();
-    let (first_slot, _first_ref) = builder.slot::<()>("park", tokio_otp::ActorOptions::new());
-    let (dup_slot, _dup_ref) = builder.slot::<()>("park", tokio_otp::ActorOptions::new());
+    let (first_slot, _first_ref) = builder.slot::<()>("park");
+    let (dup_slot, _dup_ref) = builder.slot::<()>("park");
 
     builder.define(first_slot, || Park);
     builder.define(dup_slot, || Park);

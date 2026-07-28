@@ -215,11 +215,6 @@ impl Graph {
             .find(|actor| actor.label() == label)
     }
 
-    /// Returns point-in-time stats for every actor in graph declaration order.
-    pub fn stats(&self) -> Vec<ActorStats> {
-        self.inner.actors.iter().map(RunnableActor::stats).collect()
-    }
-
     pub(crate) fn dynamic_builder(&self) -> RunnableActorBuilder {
         RunnableActorBuilder {
             observability: self.inner.observability.clone(),
@@ -282,8 +277,7 @@ impl RunnableActor {
         &self.inner.actor_id
     }
 
-    /// Returns a point-in-time snapshot of this actor's stats.
-    pub fn stats(&self) -> ActorStats {
+    pub(crate) fn stats(&self) -> ActorStats {
         self.inner.binding_lifecycle.stats()
     }
 

@@ -1,9 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{
-    Actor, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime, prelude::Continue,
-};
+use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, Runtime, prelude::Continue};
 
 #[derive(Clone)]
 struct Frontend {
@@ -59,20 +57,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let handle = runtime.spawn();
 
     let orders = handle
-        .add_actor(
-            "front-desk",
-            || Frontend { rush: None },
-            DynamicActorOptions::default(),
-        )
+        .add_actor("front-desk", || Frontend { rush: None })
         .await?;
     let rush = handle
-        .add_actor(
-            "rush-press",
-            move || RushPress {
-                observed: observed_tx.clone(),
-            },
-            DynamicActorOptions::default(),
-        )
+        .add_actor("rush-press", move || RushPress {
+            observed: observed_tx.clone(),
+        })
         .await?;
 
     orders.send(FrontendMsg::SetRushPress(rush.clone())).await?;

@@ -18,6 +18,8 @@ use crate::actor::{
 
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
 ///
+/// Sample these stats either through [`ActorRef::stats`](crate::ActorRef::stats)
+/// or [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
 /// Message counters accumulate for the lifetime of the actor binding and
 /// therefore survive restarts. Mailbox fields describe the currently bound
 /// incarnation and are zero while no mailbox is bound.
@@ -32,8 +34,9 @@ pub struct ActorStats {
     /// A direct child of the sampled runtime has an empty path. Each nested
     /// segment includes the supervisor child's lineage and generation
     /// so identical actor ids and local lineages in sibling or restarted
-    /// subtrees remain distinguishable. Standalone actor and graph stats have
-    /// no supervisor context and report `None`.
+    /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
+    /// have no supervisor context and report `None`. The segment type is
+    /// exported as [`ActorSupervisorPathSegment`](crate::ActorSupervisorPathSegment).
     pub supervisor_path: Option<Vec<SupervisorPathSegment>>,
     /// Identity of the actor's current supervisor membership, when sampled
     /// through [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
@@ -41,8 +44,8 @@ pub struct ActorStats {
     /// Pair this with [`actor_id`](Self::actor_id) and
     /// [`supervisor_path`](Self::supervisor_path) to distinguish a removed
     /// actor from a later actor added under the same id, including actors with
-    /// identical local identities in different subtrees. Standalone actor and
-    /// graph stats have no supervisor membership and report `None`.
+    /// identical local identities in different subtrees. Samples taken from
+    /// `ActorRef::stats` have no supervisor membership and report `None`.
     pub lineage: Option<u64>,
     /// Messages delivered to the actor for handling.
     ///
@@ -73,9 +76,11 @@ pub struct ActorStats {
     /// This is a gauge rather than a lifetime counter. It returns to zero
     /// when offloads finish, time out, or are aborted.
     pub outstanding_offloads: u64,
-    /// Messages currently occupying the bound mailbox.
+    /// Messages currently occupying the bound mailbox, or zero when sampled
+    /// while the actor has no bound incarnation.
     pub mailbox_depth: usize,
-    /// Maximum capacity of the currently bound mailbox.
+    /// Maximum capacity of the currently bound mailbox, or zero when sampled
+    /// while the actor has no bound incarnation.
     pub mailbox_capacity: usize,
 }
 
@@ -172,7 +177,7 @@ type KeyMatcher<M> = Arc<dyn Fn(&M, &M) -> bool + Send + Sync>;
 
 /// Selects how an actor stores unread messages.
 ///
-/// FIFO [`Queue`](Self::Queue) mailboxes apply backpressure at the configured
+/// FIFO [`queue`](Self::queue) mailboxes apply backpressure at the configured
 /// capacity. Conflating mailboxes never wait for capacity: they replace stale
 /// unread state and are intended for idempotent snapshots, not commands.
 #[non_exhaustive]
@@ -188,16 +193,17 @@ enum MailboxKind<M> {
 
 impl<M> Default for MailboxMode<M> {
     fn default() -> Self {
-        Self::Queue
+        Self::queue()
     }
 }
 
 impl<M> MailboxMode<M> {
-    /// A bounded FIFO queue. This is the default.
-    #[allow(non_upper_case_globals)]
-    pub const Queue: Self = Self {
-        kind: MailboxKind::Queue,
-    };
+    /// Creates a bounded FIFO queue. This is the default.
+    pub fn queue() -> Self {
+        Self {
+            kind: MailboxKind::Queue,
+        }
+    }
 
     /// One latest-wins slot for the whole mailbox.
     ///
@@ -207,10 +213,11 @@ impl<M> MailboxMode<M> {
     /// Sending never waits for capacity. Awaited
     /// [`ActorRef::send`](crate::ActorRef::send) calls consume Tokio's
     /// cooperative task budget so tight producer loops remain fair.
-    #[allow(non_upper_case_globals)]
-    pub const Conflate: Self = Self {
-        kind: MailboxKind::Conflate,
-    };
+    pub fn conflate() -> Self {
+        Self {
+            kind: MailboxKind::Conflate,
+        }
+    }
 
     /// Creates a keyed latest-wins mailbox using `key` to group messages.
     ///

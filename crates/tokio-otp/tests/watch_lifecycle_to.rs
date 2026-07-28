@@ -12,8 +12,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorResult, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleWatchGuard,
-    LiveContext, MessageContext, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
+    Actor, ActorResult, AmbientContext, DynamicActorOptions, GraphBuilder, LifecycleEvent,
+    LifecycleWatchGuard, MessageContext, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
     StartContext, prelude::Continue,
 };
 
@@ -104,7 +104,7 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = handle
-        .add_actor(
+        .add_actor_with(
             "sink",
             move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
@@ -118,7 +118,7 @@ async fn runtime_with_watched_subtree() -> (
         .await
         .expect("sink added");
     let mut graph = GraphBuilder::new();
-    let (crasher_slot, crasher) = graph.slot("crasher", tokio_otp::ActorOptions::new());
+    let (crasher_slot, crasher) = graph.slot("crasher");
     graph.define(crasher_slot, || Crasher);
     let watched = handle
         .add_subtree(
@@ -343,18 +343,14 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     handle
-        .add_actor(
-            "sink",
-            move || RestrictedSink {
-                observed: observed_tx.clone(),
-                watch: None,
-            },
-            DynamicActorOptions::new(),
-        )
+        .add_actor("sink", move || RestrictedSink {
+            observed: observed_tx.clone(),
+            watch: None,
+        })
         .await
         .expect("restricted sink added");
     let crasher = handle
-        .add_actor(
+        .add_actor_with(
             "crasher",
             || Crasher,
             DynamicActorOptions::new().restart(RestartPolicy::OnFailure),
