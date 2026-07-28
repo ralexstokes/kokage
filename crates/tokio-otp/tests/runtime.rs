@@ -85,8 +85,7 @@ where
     builder.define(actor_ref_slot, factory);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .build()
         .expect("runtime builds");
@@ -222,7 +221,7 @@ async fn runtime_handle_enumerates_actor_stats() {
 }
 
 #[tokio::test]
-async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
+async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     let mut root_graph = GraphBuilder::new();
     let (root_ref_slot, root_ref) = root_graph.slot("root-worker");
     root_graph.define(root_ref_slot, Drain::<()>::new);
@@ -357,7 +356,10 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     let mut graph = GraphBuilder::new();
     let (static_ref_slot, static_ref) = graph.slot("static-worker");
     graph.define(static_ref_slot, Drain::<()>::new);
-    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let root = SupervisionTree::dynamic()
+        .build()
+        .expect("runtime builds")
+        .spawn();
 
     let graph = graph.build().expect("graph builds");
     let subtree = root
@@ -365,8 +367,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
             "workers",
             SupervisionTree::graph(&graph)
                 .subtree("dynamic", SupervisionTree::dynamic())
-                .reserve()
-                .expect("subtree identity reserves"),
+                .reserve(),
         )
         .await
         .expect("subtree added");
@@ -405,13 +406,16 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 
 #[tokio::test]
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
-    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let root = SupervisionTree::dynamic()
+        .build()
+        .expect("runtime builds")
+        .spawn();
     let middle = root
-        .add_subtree("middle", Runtime::dynamic())
+        .add_subtree("middle", SupervisionTree::dynamic().reserve())
         .await
         .expect("middle subtree added");
     let leaf = middle
-        .add_subtree("leaf", Runtime::dynamic())
+        .add_subtree("leaf", SupervisionTree::dynamic().reserve())
         .await
         .expect("leaf subtree added");
     let actor = leaf
@@ -440,9 +444,12 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 
 #[tokio::test]
 async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
-    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let root = SupervisionTree::dynamic()
+        .build()
+        .expect("runtime builds")
+        .spawn();
     let first = root
-        .add_subtree("workers", Runtime::dynamic())
+        .add_subtree("workers", SupervisionTree::dynamic().reserve())
         .await
         .expect("first subtree added");
     first
@@ -451,7 +458,7 @@ async fn duplicate_dynamic_subtree_id_leaves_attachment_unchanged() {
         .expect("actor added");
 
     let error = root
-        .add_subtree("workers", Runtime::dynamic())
+        .add_subtree("workers", SupervisionTree::dynamic().reserve())
         .await
         .expect_err("duplicate subtree rejected");
     assert_eq!(
@@ -506,7 +513,10 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
-    let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let handle = SupervisionTree::dynamic()
+        .build()
+        .expect("runtime builds")
+        .spawn();
     let tracked = handle
         .add_actor("worker", Drain::<()>::new)
         .await
@@ -670,7 +680,10 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let mut graph = GraphBuilder::new();
     let (static_ref_slot, static_ref) = graph.slot("static-worker");
     graph.define(static_ref_slot, || FailOnMessage);
-    let root = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let root = SupervisionTree::dynamic()
+        .build()
+        .expect("runtime builds")
+        .spawn();
     let graph = graph.build().expect("graph builds");
     let subtree = root
         .add_subtree(
@@ -678,8 +691,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
             SupervisionTree::graph(&graph)
                 .subtree("dynamic", SupervisionTree::dynamic())
                 .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
-                .reserve()
-                .expect("subtree identity reserves"),
+                .reserve(),
         )
         .await
         .expect("subtree added");
@@ -942,7 +954,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
 }
 
 #[tokio::test]
-async fn runtime_builder_wires_graph_into_supervised_runtime() {
+async fn supervision_tree_wires_graph_into_supervised_runtime() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
     let (worker_ref_slot, worker_ref) = builder.slot("worker");
@@ -951,8 +963,7 @@ async fn runtime_builder_wires_graph_into_supervised_runtime() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .build()
         .expect("runtime builds");
@@ -976,7 +987,7 @@ async fn runtime_builder_wires_graph_into_supervised_runtime() {
 }
 
 #[tokio::test]
-async fn runtime_builder_mixes_actor_and_non_actor_children() {
+async fn supervision_tree_mixes_actor_and_non_actor_children() {
     let mut builder = GraphBuilder::new();
     let (actor_slot, _) = builder.slot("actor");
     builder.define(actor_slot, Drain::<()>::new);
@@ -1033,8 +1044,7 @@ async fn snapshot_wait_reports_all_children_running_after_spawn() {
     builder.define(actor_slot, Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .build()
         .expect("runtime builds");
@@ -1082,8 +1092,7 @@ async fn runtime_handle_exposes_lifecycle_watch() {
     builder.define(worker_ref_slot, || FailOnMessage);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .build()
@@ -1125,8 +1134,7 @@ async fn send_fails_after_restart_intensity_is_exhausted() {
     builder.define(worker_ref_slot, || AlwaysFails);
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::Always)
         .restart_intensity(RestartIntensity::new(1, Duration::from_secs(60)))
@@ -1201,8 +1209,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .default_restart(RestartPolicy::Always)
         .build()
         .expect("runtime builds");
@@ -1247,17 +1254,18 @@ async fn supervised_restart_constructs_fresh_actor_state() {
 }
 
 #[test]
-fn runtime_builder_allows_an_empty_runtime() {
-    Runtime::dynamic().build().expect("empty runtime builds");
+fn dynamic_tree_allows_an_empty_runtime() {
+    SupervisionTree::dynamic()
+        .build()
+        .expect("empty runtime builds");
 }
 
 #[tokio::test]
-async fn runtime_into_supervisor_round_trips_supervisor() {
+async fn runtime_into_supervisor_is_a_one_way_raw_escape_hatch() {
     let (runtime, _worker_ref) = build_runtime(Drain::<()>::new);
 
     let supervisor = runtime.into_supervisor();
-    let runtime = Runtime::new(supervisor);
-    let handle = runtime.spawn();
+    let handle = supervisor.spawn();
 
     timeout(Duration::from_secs(1), handle.shutdown_and_wait())
         .await
@@ -1318,8 +1326,7 @@ async fn child_grace_bounds_the_whole_actor_drain() {
             release_gate: release_gate.clone(),
         }
     });
-    let handle = Runtime::builder()
-        .graph(graph.build().expect("graph builds"))
+    let handle = SupervisionTree::graph(&graph.build().expect("graph builds"))
         .default_shutdown(ShutdownPolicy::new(
             Duration::from_millis(20),
             ShutdownMode::CooperativeStrict,
@@ -1379,8 +1386,7 @@ async fn strict_actor_shutdown_timeout_is_truthful_across_layers() {
             started: started.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(builder.build().expect("valid graph"))
+    let runtime = SupervisionTree::graph(&builder.build().expect("valid graph"))
         .default_shutdown(ShutdownPolicy::new(
             Duration::from_millis(20),
             ShutdownMode::CooperativeStrict,
@@ -1425,8 +1431,7 @@ async fn cooperative_then_abort_timeout_is_truthful_but_shutdown_succeeds() {
             started: started.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(builder.build().expect("valid graph"))
+    let runtime = SupervisionTree::graph(&builder.build().expect("valid graph"))
         .default_shutdown(ShutdownPolicy::new(
             Duration::from_millis(20),
             ShutdownMode::CooperativeThenAbort,

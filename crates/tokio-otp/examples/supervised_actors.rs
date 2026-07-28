@@ -72,8 +72,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     });
     let graph = builder.build()?;
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .build()?;

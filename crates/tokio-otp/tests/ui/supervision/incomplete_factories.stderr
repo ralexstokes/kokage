@@ -1,5 +1,5 @@
 error[E0063]: missing field `second` in initializer of `ApplicationFactories<_, _>`
-  --> tests/ui/supervision/incomplete_factories.rs:20:28
+  --> tests/ui/supervision/incomplete_factories.rs:20:27
    |
-20 |     Application::graph(|_| ApplicationFactories { first: || Worker }).unwrap();
-   |                            ^^^^^^^^^^^^^^^^^^^^ missing `second`
+20 |     Application::tree(|_| ApplicationFactories { first: || Worker }).unwrap();
+   |                           ^^^^^^^^^^^^^^^^^^^^ missing `second`

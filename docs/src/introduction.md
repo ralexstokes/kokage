@@ -12,8 +12,8 @@ a *supervisor* restart the ones that fail.
 `tokio-otp` is the actor product: its prelude imports the day-one surface,
 while observability and advanced configuration remain explicit crate-root
 imports. Wire actors in a `Graph` and compose them with a `SupervisionTree`;
-`Runtime::builder()` is the concise convenience when one graph occupies one
-ordered scope. Raw task supervision requires a direct `tokio-supervisor`
+`SupervisionTree::graph(&graph)` is the concise path when one graph occupies
+one ordered scope. Raw task supervision requires a direct `tokio-supervisor`
 dependency. The actor crate contains both the typed actor layer and the
 runtime that supervises it, built on that deliberately independent crate:
 
@@ -72,7 +72,7 @@ binary crate and run it, or explore the closely related examples that ship in
 each crate's `examples/` directory (listed in [Where to go
 next](next-steps.md)).
 
-[`SupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/enum.SupervisionTree.html
+[`SupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.SupervisionTree.html
 [`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
 [`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
 [`ActorContext`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorContext.html

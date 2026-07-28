@@ -12,7 +12,7 @@ use tokio::{
     sync::watch,
     time::{sleep, timeout},
 };
-use tokio_otp::{Actor, ActorResult, MessageContext, Runtime};
+use tokio_otp::{Actor, ActorResult, MessageContext, SupervisionTree};
 use tokio_otp_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use tokio_supervisor::{
     ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder, Strategy, SupervisorHandle,
@@ -475,8 +475,8 @@ async fn ws_streams_events() {
 }
 
 #[tokio::test]
-async fn runtime_convenience_wires_public_observability() {
-    let runtime = Runtime::dynamic()
+async fn dynamic_tree_wires_public_observability() {
+    let runtime = SupervisionTree::dynamic()
         .build()
         .expect("failed to build empty runtime");
     let runtime = runtime.spawn();

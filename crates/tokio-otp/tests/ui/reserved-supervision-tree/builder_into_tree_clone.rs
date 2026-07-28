@@ -1,6 +1,6 @@
-use tokio_otp::Runtime;
+use tokio_otp::SupervisionTree;
 
 fn main() {
-    let tree = Runtime::builder().into_tree();
+    let tree = SupervisionTree::dynamic().reserve();
     let _copy = tree.clone();
 }

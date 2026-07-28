@@ -3,8 +3,6 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, Supervision};
 
-mod support;
-
 enum FrontendMsg {
     Feed(String),
     Ack,
@@ -85,7 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (acked_tx, mut acked_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let (graph, refs) = Pipeline::graph(|refs| PipelineFactories {
+    let (tree, refs) = Pipeline::tree(|refs| PipelineFactories {
         frontend: {
             let refs = refs.clone();
             move || Frontend {
@@ -104,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             out: out_tx.clone(),
         },
     })?;
-    let handle = support::ActorTasks::start(&graph);
+    let handle = tree.build()?.spawn();
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))

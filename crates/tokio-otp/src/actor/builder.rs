@@ -204,6 +204,55 @@ struct Slot {
 
 pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
 
+/// Value configuration used when generated code constructs an actor graph.
+///
+/// Unlike [`GraphBuilder`], this contains no actor slots or other mutable
+/// construction state, so it is safe to pass into generated composition APIs.
+#[derive(Clone, Debug)]
+pub struct GraphConfig {
+    name: Option<String>,
+    mailbox_capacity: usize,
+}
+
+impl GraphConfig {
+    /// Creates configuration with an anonymous name and capacity 64.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the graph name used in tracing fields.
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Sets the default bounded mailbox capacity.
+    #[must_use]
+    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.mailbox_capacity = capacity;
+        self
+    }
+}
+
+impl Default for GraphConfig {
+    fn default() -> Self {
+        Self {
+            name: None,
+            mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
+        }
+    }
+}
+
+impl From<GraphConfig> for GraphBuilder {
+    fn from(config: GraphConfig) -> Self {
+        let mut builder = Self::new();
+        builder.name = config.name;
+        builder.mailbox_capacity = config.mailbox_capacity;
+        builder
+    }
+}
+
 impl Default for GraphBuilder {
     fn default() -> Self {
         Self::new()
@@ -420,7 +469,7 @@ impl GraphBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActorOptions, GraphBuilder, MailboxMode};
+    use super::{ActorOptions, GraphBuilder, GraphConfig, MailboxMode};
     use crate::{Actor, ActorResult, GraphBuildError, MessageContext};
 
     struct OpaqueMessage;
@@ -458,6 +507,58 @@ mod tests {
         assert!(matches!(
             builder.build(),
             Err(GraphBuildError::DetachedSlot)
+        ));
+    }
+
+    #[test]
+    fn graph_actor_for_uses_binding_identity() {
+        let mut first = GraphBuilder::new();
+        let (slot, actor_ref) = first.slot::<OpaqueMessage>("worker");
+        first.define(slot, || OpaqueActor);
+        let graph = first.build().expect("first graph builds");
+
+        assert_eq!(
+            graph
+                .actor_for(&actor_ref)
+                .expect("ref resolves in its graph")
+                .label(),
+            "worker"
+        );
+        assert!(graph.actor_for(&actor_ref.clone()).is_ok());
+
+        let mut second = GraphBuilder::new();
+        let (slot, foreign_ref) = second.slot::<OpaqueMessage>("worker");
+        second.define(slot, || OpaqueActor);
+        second.build().expect("second graph builds");
+        assert!(matches!(
+            graph.actor_for(&foreign_ref),
+            Err(GraphBuildError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
+        ));
+
+        let detached = crate::ActorRef::<OpaqueMessage>::detached("worker".into());
+        assert!(matches!(
+            graph.actor_for(&detached),
+            Err(GraphBuildError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
+        ));
+    }
+
+    #[test]
+    fn graph_config_only_configures_new_builder_state() {
+        let mut builder: GraphBuilder = GraphConfig::new()
+            .name("configured")
+            .mailbox_capacity(8)
+            .into();
+        let (slot, _) = builder.slot::<OpaqueMessage>("worker");
+        builder.define(slot, || OpaqueActor);
+        let graph = builder.build().expect("configured graph builds");
+        assert_eq!(graph.name(), "configured");
+
+        let mut invalid: GraphBuilder = GraphConfig::new().mailbox_capacity(0).into();
+        let (slot, _) = invalid.slot::<OpaqueMessage>("worker");
+        invalid.define(slot, || OpaqueActor);
+        assert!(matches!(
+            invalid.build(),
+            Err(GraphBuildError::ZeroMailboxCapacity)
         ));
     }
 }

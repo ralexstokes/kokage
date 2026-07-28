@@ -1,0 +1,31 @@
+error[E0599]: no method named `strategy` found for struct `SupervisionTree<true>` in the current scope
+  --> tests/ui/reserved-supervision-tree/dynamic_mutation_methods.rs:12:40
+   |
+12 |     let _ = SupervisionTree::dynamic().strategy(Strategy::OneForAll);
+   |                                        ^^^^^^^^ method not found in `SupervisionTree<true>`
+   |
+   = note: the method was found for `SupervisionTree`
+
+error[E0599]: no method named `actor` found for struct `SupervisionTree<true>` in the current scope
+  --> tests/ui/reserved-supervision-tree/dynamic_mutation_methods.rs:13:40
+   |
+13 |     let _ = SupervisionTree::dynamic().actor(actor());
+   |                                        ^^^^^ method not found in `SupervisionTree<true>`
+   |
+   = note: the method was found for `SupervisionTree`
+
+error[E0599]: no method named `task` found for struct `SupervisionTree<true>` in the current scope
+  --> tests/ui/reserved-supervision-tree/dynamic_mutation_methods.rs:14:40
+   |
+14 |     let _ = SupervisionTree::dynamic().task(task());
+   |                                        ^^^^ method not found in `SupervisionTree<true>`
+   |
+   = note: the method was found for `SupervisionTree`
+
+error[E0599]: no method named `subtree` found for struct `SupervisionTree<true>` in the current scope
+  --> tests/ui/reserved-supervision-tree/dynamic_mutation_methods.rs:15:40
+   |
+15 |     let _ = SupervisionTree::dynamic().subtree("nested", SupervisionTree::new());
+   |                                        ^^^^^^^ method not found in `SupervisionTree<true>`
+   |
+   = note: the method was found for `SupervisionTree`

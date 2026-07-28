@@ -7,7 +7,7 @@ use tokio::{
 use tokio_otp::{
     ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
     Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent, RawActor, RestartPolicy,
-    RunnableActor, Runtime,
+    RunnableActor, SupervisionTree,
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -1321,7 +1321,7 @@ impl RawActor for UnitObserver {
 #[tokio::test]
 async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("dynamic runtime builds")
         .spawn();

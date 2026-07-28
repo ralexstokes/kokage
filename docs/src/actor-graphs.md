@@ -98,7 +98,7 @@ struct PrintShop {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (graph, refs) = PrintShop::graph(|refs| {
+    let (tree, refs) = PrintShop::tree(|refs| {
         PrintShopFactories {
             front_desk: {
                 let refs = refs.clone();
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
-    let handle = Runtime::builder().graph(graph).build()?.spawn();
+    let handle = tree.build()?.spawn();
 
     refs.front_desk
         .send(Order("business cards x100".into()))
@@ -133,9 +133,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For lower-level hosting, iterate `graph.actors()` and drive each
-`RunnableActor::run_until` independently. `tokio-otp` performs that adaptation
-for the common supervised runtime.
+For lower-level hosting, construct a `GraphBuilder` manually, iterate
+`graph.actors()`, and drive each `RunnableActor::run_until` independently.
+`tokio-otp` performs that adaptation for the common supervised runtime.
 
 ## Incarnation-local state
 
@@ -197,10 +197,10 @@ custom synchronous construction rather than `Default`.
 `RawActor`. Field names become actor labels, qualified by the path of any
 enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
-Rename a node with `#[supervision(label = "...")]`. The generated `graph` returns
-both the graph and its cloneable typed refs — write `let (graph, _) = ...` when
-the refs are not needed — and `graph_with` does the same from a preconfigured
-`GraphBuilder`, for graph name and mailbox capacity.
+Rename a node with `#[supervision(label = "...")]`. The generated `tree`
+returns a reserved supervision tree and its cloneable typed refs. `tree_with`
+does the same from an immutable `GraphConfig` carrying the graph name and
+mailbox capacity.
 
 The same derive can declare the supervision tree that runs those actors — see
 [Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
@@ -218,8 +218,8 @@ The derive keeps that shape in the type system:
 
 Configure an individual actor's mailbox or message-size observation with a
 normal Rust expression in `#[supervision(options = ...)]`. Annotated fields use
-`GraphBuilder::slot`; other fields retain the default FIFO
-mailbox without message-size observation:
+generated `GraphBuilder::slot_with`; plain fields use `GraphBuilder::slot` and
+retain the default FIFO mailbox without message-size observation:
 
 ```rust,ignore
 use tokio_otp::{ActorOptions, MailboxMode, Supervision};

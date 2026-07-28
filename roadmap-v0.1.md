@@ -43,8 +43,8 @@ hidden in example scaffolding, per the Milestone 2 rule:
   supervisor handles provides ordered child transitions with cumulative
   restart counters — the supported primitive for application-owned
   correlated-failure detection.
-- **Recursive runtime subtrees.** `RuntimeBuilder::subtree` composes nested
-  runtime graphs with reconciled recursive actor stats. Static subtrees and
+- **Recursive runtime subtrees.** `SupervisionTree::subtree` composes nested
+  actor scopes with reconciled recursive actor stats. Static subtrees and
   runtime-added `RuntimeHandle::add_subtree` memberships now share the same
   actor-registry mechanism.
 - **Lifecycle-bound cross-actor timers.** `send_after_to` and `interval_to`
@@ -107,7 +107,7 @@ channel. Document this architecture in the proving example.
 
 ### One flagship composition path
 
-`Runtime::builder()` is the primary documented entry point. Raw `ChildSpec`
+`SupervisionTree` is the primary documented entry point. Raw `ChildSpec`
 composition and hand-driven `RunnableActor` remain supported escape hatches,
 but are documented as advanced APIs rather than peer starting points.
 

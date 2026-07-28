@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use tokio_otp::{
-    ChildOutline, DynamicScope, ScopeKind, SupervisionFactories, SupervisorBuildError, prelude::*,
+    ChildOutline, DynamicScope, GraphBuildError, ScopeKind, SupervisionFactories, prelude::*,
 };
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -57,7 +57,7 @@ fn app_factories(_refs: &AppRefs) -> AppWiring {
 #[test]
 fn a_nested_scope_becomes_a_named_subtree_with_path_qualified_labels() {
     let (tree, _refs) = App::tree(app_factories).expect("tree builds");
-    let outline = tree.outline().expect("valid tree has an outline");
+    let outline = tree.outline();
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::OneForOne);
@@ -82,17 +82,21 @@ fn a_nested_scope_becomes_a_named_subtree_with_path_qualified_labels() {
 }
 
 #[test]
-fn graph_labels_are_qualified_by_scope_path() {
-    let (graph, _refs) = App::graph(app_factories).expect("graph builds");
-    let mut labels: Vec<_> = graph.actors().iter().map(|actor| actor.label()).collect();
+fn actor_refs_are_qualified_by_scope_path() {
+    let (_tree, refs) = App::tree(app_factories).expect("tree builds");
+    let mut labels = vec![
+        refs.ingest.id(),
+        refs.workers.parse.id(),
+        refs.workers.render.id(),
+    ];
     labels.sort_unstable();
     assert_eq!(labels, ["ingest", "workers.parse", "workers.render"]);
 }
 
 #[tokio::test]
 async fn a_derived_runtime_runs_actors_across_scope_levels() {
-    let (runtime, refs) = App::runtime(app_factories).expect("runtime builds");
-    let handle = runtime.spawn();
+    let (tree, refs) = App::tree(app_factories).expect("tree builds");
+    let handle = tree.build().expect("runtime builds").spawn();
 
     for actor in [&refs.ingest, &refs.workers.parse, &refs.workers.render] {
         assert_eq!(
@@ -145,19 +149,16 @@ fn a_label_attribute_overrides_the_field_name_in_paths_and_child_ids() {
             render: || Worker,
         },
     };
-    let (graph, _refs) = Renamed::graph(wire).expect("graph builds");
-
-    let mut labels: Vec<_> = graph.actors().iter().map(|actor| actor.label()).collect();
+    let (tree, refs) = Renamed::tree(wire).expect("tree builds");
+    let mut labels = vec![
+        refs.ingest.id(),
+        refs.workers.parse.id(),
+        refs.workers.render.id(),
+    ];
     labels.sort_unstable();
     assert_eq!(labels, ["collector", "pool.parse", "pool.render"]);
 
-    let (tree, _refs) = Renamed::tree(wire).expect("tree builds");
-    assert_eq!(
-        tree.outline()
-            .expect("valid tree has an outline")
-            .child_ids(),
-        ["collector", "pool"]
-    );
+    assert_eq!(tree.outline().child_ids(), ["collector", "pool"]);
 }
 
 #[derive(Supervision)]
@@ -171,10 +172,12 @@ struct WithDynamic {
 fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
     let (tree, _refs) = WithDynamic::tree(|_refs| WithDynamicFactories {
         manager: || Worker,
-        sessions: Runtime::dynamic().default_restart(RestartPolicy::Never),
+        sessions: SupervisionTree::dynamic()
+            .default_restart(RestartPolicy::Never)
+            .reserve(),
     })
     .expect("tree builds");
-    let outline = tree.outline().expect("valid tree has an outline");
+    let outline = tree.outline();
 
     assert_eq!(outline.child_ids(), ["manager", "sessions"]);
     let ChildOutline::Scope {
@@ -192,12 +195,12 @@ fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
 
 #[tokio::test]
 async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
-    let (runtime, _refs) = WithDynamic::runtime(|_refs| WithDynamicFactories {
+    let (tree, _refs) = WithDynamic::tree(|_refs| WithDynamicFactories {
         manager: || Worker,
-        sessions: Runtime::dynamic(),
+        sessions: SupervisionTree::dynamic().reserve(),
     })
-    .expect("runtime builds");
-    let handle = runtime.spawn();
+    .expect("tree builds");
+    let handle = tree.build().expect("runtime builds").spawn();
     handle.wait_started().await.expect("runtime starts");
 
     let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
@@ -223,33 +226,24 @@ struct Flat {
 }
 
 #[test]
-fn a_declaration_without_scope_attributes_matches_a_whole_graph_tree() {
+fn a_declaration_without_scope_attributes_is_an_ordered_tree() {
     let (tree, _refs) = Flat::tree(|_refs| FlatFactories {
         ingest: || Worker,
         parse: || Worker,
     })
     .expect("tree builds");
-    let (graph, _refs) = Flat::graph(|_refs| FlatFactories {
-        ingest: || Worker,
-        parse: || Worker,
-    })
-    .expect("graph builds");
 
-    assert_eq!(
-        tree.outline().expect("valid tree has an outline"),
-        SupervisionTree::graph(&graph)
-            .outline()
-            .expect("valid tree has an outline")
-    );
+    let outline = tree.outline();
+    assert_eq!(outline.kind, ScopeKind::Ordered);
+    assert_eq!(outline.child_ids(), ["ingest", "parse"]);
 }
 
 #[test]
 fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
     // `node` resolves each declared actor out of the graph `open` populated.
-    // Handing it a different graph used to panic inside generated code; it now
-    // poisons the scope, so the mismatch arrives as an ordinary build error.
+    // Handing it a different graph returns an ordinary graph build error.
     let mut builder = GraphBuilder::new();
-    let (slots, _refs) = <Flat as Supervision>::open(&mut builder, "");
+    let (slots, refs) = <Flat as Supervision>::open(&mut builder, "");
     let scopes = FlatFactories {
         ingest: || Worker,
         parse: || Worker,
@@ -262,14 +256,9 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
     foreign.define(actor_slot, || Worker);
     let foreign = foreign.build().expect("foreign graph builds");
 
-    let tree = <Flat as Supervision>::node(&foreign, scopes, "flat", "");
     assert!(matches!(
-        tree.outline(),
-        Err(SupervisorBuildError::InvalidConfig(_))
-    ));
-    assert!(matches!(
-        tree.build(),
-        Err(SupervisorBuildError::InvalidConfig(_))
+        <Flat as Supervision>::node(&foreign, &refs, scopes),
+        Err(GraphBuildError::ForeignActorRef { actor_id, .. }) if actor_id == "ingest"
     ));
 }
 
@@ -308,17 +297,17 @@ async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
     // The reservation is what a `#[supervision(dynamic)]` field buys over
     // appending the scope afterwards: the handle exists early enough to become
     // a durable factory field, so it survives restarts of the actor holding it.
-    let sessions = Runtime::dynamic();
+    let sessions = SupervisionTree::dynamic().reserve();
     let mount = sessions.handle();
 
-    let (runtime, refs) = Mounted::runtime(|_refs| MountedFactories {
+    let (tree, refs) = Mounted::tree(|_refs| MountedFactories {
         mounter: move || Mounter {
             sessions: mount.clone(),
         },
         sessions,
     })
-    .expect("runtime builds");
-    let handle = runtime.spawn();
+    .expect("tree builds");
+    let handle = tree.build().expect("runtime builds").spawn();
     handle.wait_started().await.expect("runtime starts");
 
     // The mounter reaches the declared scope through the handle it was built

@@ -24,6 +24,7 @@ use crate::{
         },
         builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
         context::{ActorContext, ActorLifetime, ActorRef},
+        error::GraphBuildError,
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
         observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
@@ -214,6 +215,26 @@ impl Graph {
             .actors
             .iter()
             .find(|actor| actor.label() == label)
+    }
+
+    /// Resolves a typed actor ref to the runnable actor with the same binding.
+    ///
+    /// Identity, rather than the actor label, is compared. A ref from another
+    /// graph is rejected even when both graphs use the same label.
+    pub fn actor_for<M>(&self, actor_ref: &ActorRef<M>) -> Result<RunnableActor, GraphBuildError> {
+        self.inner
+            .actors
+            .iter()
+            .find(|actor| {
+                Arc::ptr_eq(
+                    actor.inner.binding_lifecycle.identity(),
+                    actor_ref.binding_identity(),
+                )
+            })
+            .cloned()
+            .ok_or_else(|| GraphBuildError::ForeignActorRef {
+                actor_id: actor_ref.id().to_owned(),
+            })
     }
 
     pub(crate) fn dynamic_builder(&self) -> RunnableActorBuilder {

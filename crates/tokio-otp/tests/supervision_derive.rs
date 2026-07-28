@@ -1,46 +1,8 @@
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuildError, GraphBuilder, MailboxMode, MessageContext,
-    MessageSize, RawActor, RestartPolicy, SendError, Supervision,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
+    GraphConfig, MailboxMode, MessageContext, MessageSize, RawActor, SendError, Supervision,
 };
-use tokio_util::sync::CancellationToken;
-
-fn start_graph(
-    graph: &Graph,
-) -> (
-    CancellationToken,
-    Vec<JoinHandle<Result<(), ActorRunError>>>,
-) {
-    let stop = CancellationToken::new();
-    let tasks = graph
-        .actors()
-        .iter()
-        .cloned()
-        .map(|actor| {
-            let stop = stop.clone();
-            tokio::spawn(async move {
-                actor
-                    .run_until(
-                        stop.cancelled(),
-                        RestartPolicy::Never,
-                        DEFAULT_SHUTDOWN_BOUND,
-                    )
-                    .await
-            })
-        })
-        .collect();
-    (stop, tasks)
-}
-
-async fn stop_graph(stop: CancellationToken, tasks: Vec<JoinHandle<Result<(), ActorRunError>>>) {
-    stop.cancel();
-    for task in tasks {
-        task.await
-            .expect("actor task joined")
-            .expect("actor stopped cleanly");
-    }
-}
 
 enum FrontendMsg {
     Feed(String),
@@ -119,11 +81,11 @@ struct Pipeline {
 }
 
 #[tokio::test]
-async fn derived_graph_runs_cyclic_pipeline() {
+async fn derived_tree_runs_cyclic_pipeline() {
     let (acks_tx, mut acks_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let (graph, refs) = Pipeline::graph(|refs| PipelineFactories {
+    let (tree, refs) = Pipeline::tree(|refs| PipelineFactories {
         frontend: {
             let refs = refs.clone();
             move || Frontend {
@@ -142,13 +104,14 @@ async fn derived_graph_runs_cyclic_pipeline() {
             out: out_tx.clone(),
         },
     })
-    .expect("valid graph");
+    .expect("valid tree");
 
     let cloned_refs = refs.clone();
     assert_eq!(refs.frontend.id(), "frontend");
     assert_eq!(cloned_refs.parser.id(), "parser");
     assert_eq!(refs.sink.id(), "sink");
-    let (stop, tasks) = start_graph(&graph);
+    let handle = tree.build().expect("tree builds").spawn();
+    handle.wait_started().await.expect("runtime starts");
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))
@@ -158,7 +121,7 @@ async fn derived_graph_runs_cyclic_pipeline() {
     assert_eq!(out_rx.recv().await.as_deref(), Some("HELLO"));
     assert_eq!(acks_rx.recv().await, Some(()));
 
-    stop_graph(stop, tasks).await;
+    handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[test]
@@ -261,16 +224,16 @@ struct OptionsGraph {
 }
 
 #[tokio::test]
-async fn derived_graph_applies_per_actor_options() {
-    let (graph, refs) = OptionsGraph::graph(|_| OptionsGraphFactories {
+async fn derived_tree_applies_per_actor_options() {
+    let (tree, refs) = OptionsGraph::tree(|_| OptionsGraphFactories {
         mailbox_only: || OptionsActor,
         message_size_only: || OptionsActor,
         combined: || OptionsActor,
         defaults: || OptionsActor,
     })
-    .expect("options graph builds");
-    let (stop, tasks) = start_graph(&graph);
-    tokio::task::yield_now().await;
+    .expect("options tree builds");
+    let handle = tree.build().expect("tree builds").spawn();
+    handle.wait_started().await.expect("runtime starts");
 
     refs.mailbox_only
         .try_send(SizedMessage(vec![0; 2]))
@@ -300,46 +263,42 @@ async fn derived_graph_applies_per_actor_options() {
     assert_eq!(refs.defaults.stats().messages_conflated, 0);
     assert_eq!(refs.defaults.stats().message_bytes_accepted, None);
 
-    stop_graph(stop, tasks).await;
+    handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[tokio::test]
-async fn graph_with_applies_builder_config() {
-    let mut builder = GraphBuilder::new();
-    builder.name("configured");
-    builder.mailbox_capacity(1);
-
+async fn tree_with_applies_graph_config() {
     let mut park = None;
-    let (graph, _refs) = ParkGraph::graph_with(builder, |refs| {
-        park = Some(refs.park.clone());
-        ParkGraphFactories { park: || Park }
-    })
+    let (tree, _refs) = ParkGraph::tree_with(
+        GraphConfig::new().name("configured").mailbox_capacity(1),
+        |refs| {
+            park = Some(refs.park.clone());
+            ParkGraphFactories { park: || Park }
+        },
+    )
     .expect("configured graph builds");
-    assert_eq!(graph.name(), "configured");
 
     let park = park.expect("wiring closure captured park ref");
-    let (stop, tasks) = start_graph(&graph);
+    let handle = tree.build().expect("tree builds").spawn();
+    handle.wait_started().await.expect("runtime starts");
 
     park.send(()).await.expect("first message fits");
     assert!(matches!(
         park.try_send(()),
-        Err(SendError::MailboxFull { actor_id , .. }) if actor_id == "park"
+        Err(SendError::MailboxFull { actor_id, .. }) if actor_id == "park"
     ));
 
-    stop_graph(stop, tasks).await;
+    handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[test]
-fn graph_with_reports_field_name_collision_with_pre_registered_actor() {
-    let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("park");
-    builder.define(actor_slot, || Park);
-
-    match ParkGraph::graph_with(builder, |_| ParkGraphFactories { park: || Park }) {
-        Err(GraphBuildError::DuplicateActorId { actor_id, .. }) => assert_eq!(actor_id, "park"),
-        Ok(_) => panic!("expected DuplicateActorId, got valid graph"),
-        Err(error) => panic!("expected DuplicateActorId, got {error:?}"),
-    }
+fn tree_with_reports_invalid_graph_config() {
+    assert!(matches!(
+        ParkGraph::tree_with(GraphConfig::new().mailbox_capacity(0), |_| {
+            ParkGraphFactories { park: || Park }
+        }),
+        Err(GraphBuildError::ZeroMailboxCapacity)
+    ));
 }
 
 #[test]

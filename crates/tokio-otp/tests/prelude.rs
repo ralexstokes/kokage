@@ -8,9 +8,10 @@ mod coverage_probe {
     mod expected {
         use tokio_otp::prelude::{
             Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-            AmbientContext, BoxError, CallError, GraphBuilder, LiveContext, MessageContext,
-            RawActor, Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, SendError,
-            ShutdownPolicy, StartContext, StopContext, Strategy, Supervision, SupervisionTree,
+            AmbientContext, BoxError, CallError, GraphBuilder, GraphConfig, LiveContext,
+            MessageContext, RawActor, Reply, RestartIntensity, RestartPolicy, Runtime,
+            RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext, Strategy,
+            Supervision, SupervisionTree,
         };
     }
 
@@ -19,11 +20,10 @@ mod coverage_probe {
             ActorSupervisorPathSegment, AddSubtreeError, BackoffPolicy, BlockingCancelled,
             CancellationHandle, CancellationToken, ChildMembershipView, ChildOutline,
             ChildSnapshot, ChildSpec, ChildStateView, CompletionOutcome, ControlError,
-            DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicRuntimeBuilder,
-            DynamicScope, ExitStatusView, Graph, GraphBuildError, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard, Lifetime, MailboxMode,
-            MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, ReservedSupervisionTree,
-            RestrictedScope, RuntimeBuilder, ScopeKind, ShutdownMode, SupervisionBuildError,
+            DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicScope, ExitStatusView,
+            Graph, GraphBuildError, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
+            LifecycleWatchGuard, Lifetime, MailboxMode, MessageSize, MonitorEvent, OffloadDeadline,
+            OffloadHandle, ReservedSupervisionTree, RestrictedScope, ScopeKind, ShutdownMode,
             SupervisionFactories, SupervisionOutline, SupervisorBuildError, SupervisorError,
             SupervisorSnapshot, SupervisorStateView, TimerKey, TryRecvError,
         };
@@ -65,8 +65,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         observed: observed_tx.clone(),
     });
 
-    let runtime = Runtime::builder()
-        .graph(graph.build().expect("valid graph"))
+    let runtime = SupervisionTree::graph(&graph.build().expect("valid graph"))
         .strategy(Strategy::OneForOne)
         .build()
         .expect("runtime builds");

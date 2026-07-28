@@ -13,7 +13,8 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorFactory, ActorRef, ActorResult, BoxError, CancellationHandle, GraphBuilder,
-    LiveContext, MessageContext, RawActor, Runtime, StartContext, TimerKey, timers,
+    LiveContext, MessageContext, RawActor, Runtime, StartContext, SupervisionTree, TimerKey,
+    timers,
 };
 use tokio_supervisor::Strategy;
 
@@ -25,8 +26,7 @@ where
     let (actor_ref_slot, actor_ref) = builder.slot("timer");
     builder.define(actor_ref_slot, factory);
     let graph = builder.build().expect("valid graph");
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .build()
         .expect("runtime builds");
@@ -640,8 +640,7 @@ where
     let (scheduler_ref_slot, scheduler_ref) = builder.slot("scheduler");
     builder.define(scheduler_ref_slot, scheduler(sink_ref));
     let graph = builder.build().expect("valid graph");
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .build()
         .expect("runtime builds");

@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_otp::{
     ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
-    Runtime, SendError, SupervisionTree,
+    SendError, SupervisionTree,
 };
 use tokio_supervisor::{
     BackoffPolicy, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy, Strategy,
@@ -100,8 +100,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .build()
@@ -255,8 +254,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = Runtime::builder()
-        .graph(graph)
+    let runtime = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .build()

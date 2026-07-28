@@ -91,9 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `SupervisionTree` is the composition front door. `SupervisionTree::graph`
 handles the common flat case above by turning every actor in one graph into a
-direct child of one ordered scope. `Runtime::builder()` remains thin sugar for
-that same shape; its `into_tree()` method exposes the pre-reserved declaration
-when a root handle is needed before build.
+direct child of one ordered scope. Call `reserve()` on the tree when a root
+handle is needed before build.
 
 For nested scopes, build each graph independently so typed refs can cross graph
 boundaries, then compose them directly as a tree:
@@ -142,9 +141,9 @@ on that actor's `ActorSpec`. Scope methods set inherited defaults, while an
 let tree = SupervisionTree::new()
     .strategy(Strategy::OneForOne)
     .default_restart(RestartPolicy::OnFailure)
-    .actor(graph.actor("front-desk").unwrap().clone())
+    .actor(graph.actor_for(&orders)?)
     .actor(
-        ActorSpec::new(graph.actor("press").unwrap().clone())
+        ActorSpec::new(graph.actor_for(&press_ref)?)
             .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
     );
 let runtime = tree.build()?;
@@ -154,8 +153,7 @@ Use `SupervisionTree::task` to mix an arbitrary non-actor `ChildSpec` into an
 ordered scope, and `SupervisionTree::subtree` for recursive actor-aware or
 graph-less scopes. A dynamic `RuntimeHandle::add_child` adds the same task
 shape at runtime; task children appear in snapshots and lifecycle watches but
-not actor stats. The flat runtime builders intentionally have no parallel
-child, subtree, or per-actor APIs.
+not actor stats.
 
 There are no string lookups anywhere on this path: every ref you need is
 minted at wiring time (or returned by `add_actor` for runtime-added actors)
@@ -191,10 +189,12 @@ struct App {
 }
 
 // Reserved before wiring, so an actor factory can capture the mount.
-let sessions = Runtime::dynamic();
+let sessions = SupervisionTree::dynamic()
+    .default_restart(RestartPolicy::Never)
+    .reserve();
 let mount = sessions.handle();
 
-let (runtime, refs) = App::runtime(|_refs| AppFactories {
+let (tree, refs) = App::tree(|_refs| AppFactories {
     ingest: move || Ingest::new(mount.clone()),
     workers: WorkersFactories {
         parse: || Parser::new(),
@@ -202,7 +202,7 @@ let (runtime, refs) = App::runtime(|_refs| AppFactories {
     },
     sessions,
 })?;
-let handle = runtime.spawn();
+let handle = tree.build()?.spawn();
 ```
 
 All three actors join **one** graph, so refs cross scope boundaries freely and
@@ -230,11 +230,11 @@ Two field attributes select what a field is:
   scope.
 - `#[supervision(dynamic)]` — an empty scope whose membership is written at
   runtime. The field type is the `DynamicScope` marker, which is never
-  constructed; its wiring entry is a `DynamicRuntimeBuilder`. Supplying the
-  builder is what makes the scope's mount handle available *before* wiring, so
+  constructed; its wiring entry is a `ReservedSupervisionTree<true>`. Supplying the
+  reserved tree is what makes the scope's mount handle available *before* wiring, so
   an actor can hold it as a durable factory field instead of looking the scope
-  up after spawn. Policy comes from the builder
-  (`Runtime::dynamic().default_restart(..)`), not from attributes.
+  up after spawn. Policy comes from the tree
+  (`SupervisionTree::dynamic().default_restart(..)`), not from attributes.
 
 Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
 field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
@@ -244,17 +244,12 @@ reservation carries the pre-spawn identities for dynamic fields, so the mount
 handles supplied during wiring bind to the runtime eventually built from that
 exact declaration. It is also useful for asserting shape through `outline()`.
 
-Each of `graph`, `tree`, and `runtime` has a `_with` form taking a
-`GraphBuilder`. That builder is for graph-wide configuration — name and mailbox
-capacity — and must not have actors registered on it already: `tree_with` and
-`runtime_with` place only the derived struct's own fields in the supervision
-tree, so
-a pre-registered actor joins the graph but is never started. Use `graph_with`
-when composing a graph by hand and hosting it yourself.
+The derive generates `tree` and `tree_with`. The latter takes a `GraphConfig`
+for graph-wide name and mailbox capacity without exposing mutable actor slots
+to generated composition.
 
 Use `GraphBuilder::slot(id)` plus `define` when graph actors are created in a
 loop or need hand-written wiring; choose `slot_with(id, ActorOptions)` for
 non-default mailbox behavior. Compose the resulting graph with
 `SupervisionTree`; reserve the tree first when wiring needs its pre-spawn
-handle. Reach for `Runtime::builder()` only when the final shape really is one
-graph in one ordered scope.
+handle.

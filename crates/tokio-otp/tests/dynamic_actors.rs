@@ -18,10 +18,9 @@ use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
     ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
     DynamicActorOptions, GraphBuilder, LiveContext, MailboxMode, MessageContext, MessageSize,
-    MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError,
-    ShutdownMode, ShutdownPolicy, StartContext, StopContext, SupervisionTree,
+    MonitorEvent, RawActor, RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownMode,
+    ShutdownPolicy, StartContext, StopContext, SupervisionTree,
 };
-use tokio_supervisor::{DynamicSupervisorBuilder, SupervisorBuilder};
 
 struct Drain<M>(PhantomData<fn(M)>);
 
@@ -294,7 +293,7 @@ impl RawActor for Forwarder {
 #[tokio::test]
 async fn graphless_runtime_adds_removes_and_readds_actors() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -390,7 +389,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
     const MESSAGES_PER_SENDER: u32 = 64;
 
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -502,7 +501,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release_handler = Arc::new(Notify::new());
     let release_on_stop = Arc::new(Notify::new());
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -622,7 +621,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release_handler = Arc::new(Notify::new());
     let release_on_stop = Arc::new(Notify::new());
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -772,7 +771,7 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
 
 #[tokio::test]
 async fn message_context_stop_applies_restart_policy_before_default_removal() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -833,7 +832,7 @@ async fn message_context_stop_applies_restart_policy_before_default_removal() {
 
 #[tokio::test]
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .default_restart(RestartPolicy::Always)
         .default_shutdown(ShutdownPolicy::abort())
         .build()
@@ -884,13 +883,13 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
 }
 
 #[tokio::test]
-async fn runtime_new_inherits_the_supplied_dynamic_supervisors_defaults() {
-    let supervisor = DynamicSupervisorBuilder::new()
-        .restart(RestartPolicy::Always)
-        .shutdown(ShutdownPolicy::abort())
+async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
+    let handle = SupervisionTree::dynamic()
+        .default_restart(RestartPolicy::Always)
+        .default_shutdown(ShutdownPolicy::abort())
         .build()
-        .expect("dynamic supervisor builds");
-    let handle = Runtime::new(supervisor).spawn();
+        .expect("dynamic tree builds")
+        .spawn();
     let starts = Arc::new(AtomicUsize::new(0));
     let actor = handle
         .add_actor_with(
@@ -935,7 +934,7 @@ async fn runtime_new_inherits_the_supplied_dynamic_supervisors_defaults() {
 
 #[tokio::test]
 async fn never_actor_auto_removes_after_failure() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -966,7 +965,7 @@ async fn never_actor_auto_removes_after_failure() {
 
 #[tokio::test]
 async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1054,7 +1053,7 @@ async fn remove_on_exit_defaults_to_true_and_false_override_is_order_independent
 
 #[tokio::test]
 async fn default_remove_on_exit_does_not_remove_an_actor_that_restarts() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1098,7 +1097,7 @@ async fn default_remove_on_exit_does_not_remove_an_actor_that_restarts() {
 
 #[tokio::test]
 async fn runtime_added_actor_can_observe_message_sizes() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1146,7 +1145,7 @@ impl RawActor for GatedDrain {
 
 #[tokio::test]
 async fn runtime_added_actor_uses_non_default_mailbox_options() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1180,7 +1179,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
 
 #[tokio::test]
 async fn runtime_added_actor_can_override_mailbox_capacity() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1201,7 +1200,7 @@ async fn runtime_added_actor_can_override_mailbox_capacity() {
 
 #[tokio::test]
 async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
-    let handle = Runtime::dynamic()
+    let handle = SupervisionTree::dynamic()
         .build()
         .expect("graphless runtime builds")
         .spawn();
@@ -1337,7 +1336,10 @@ impl RawActor for PendingActor {
 
 #[tokio::test]
 async fn timed_out_removal_terminates_the_typed_ref() {
-    let handle = Runtime::dynamic().build().expect("runtime builds").spawn();
+    let handle = SupervisionTree::dynamic()
+        .build()
+        .expect("runtime builds")
+        .spawn();
     let actor_ref = handle
         .add_actor_with(
             "dynamic",
@@ -1374,15 +1376,15 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 }
 
 #[tokio::test]
-async fn runtime_new_preserves_the_supervisors_ordered_scope_kind() {
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("seed", |ctx| async move {
+async fn ordered_tree_rejects_runtime_membership_changes() {
+    let handle = SupervisionTree::new()
+        .task(ChildSpec::new("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
         .build()
-        .expect("valid supervisor");
-    let handle = Runtime::new(supervisor).spawn();
+        .expect("valid tree")
+        .spawn();
 
     let error = handle
         .add_actor("dynamic", Drain::<()>::new)

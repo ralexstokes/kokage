@@ -65,6 +65,13 @@ pub enum GraphBuildError {
     /// An actor slot no longer names a registered position in its builder.
     #[error("actor slot is detached")]
     DetachedSlot,
+    /// An actor ref does not belong to this graph.
+    #[error("actor ref `{actor_id}` does not belong to this graph")]
+    #[non_exhaustive]
+    ForeignActorRef {
+        /// Id carried by the foreign actor ref.
+        actor_id: String,
+    },
 }
 
 /// Errors returned when sending to an actor mailbox.
