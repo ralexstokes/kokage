@@ -432,7 +432,10 @@ async fn send_after_can_be_cancelled_after_its_deadline_until_delivery() {
 
     let timer = timer_rx.recv().await.expect("timer armed");
     advance(Duration::from_millis(20)).await;
+    let waiter = timer.clone();
+    let cancelled = tokio::spawn(async move { waiter.cancelled().await });
     timer.cancel();
+    cancelled.await.expect("cancellation waiter completed");
     release.notify_one();
     assert!(
         timeout(Duration::from_millis(60), observed_rx.recv())
@@ -780,13 +783,4 @@ async fn interval_to_repeats_until_cancelled() {
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[tokio::test]
-async fn public_cancellation_handle_can_be_awaited() {
-    let cancellation = CancellationHandle::new();
-    let waiter = cancellation.clone();
-    let joined = tokio::spawn(async move { waiter.cancelled().await });
-    cancellation.cancel();
-    joined.await.expect("waiter completed");
 }

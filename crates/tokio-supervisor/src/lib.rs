@@ -160,6 +160,12 @@
 //! without a crate-specific wrapper or adapter. Other implementation details,
 //! including supervisor control channels and their errors, remain crate-owned.
 //!
+//! Snapshot subscriptions likewise expose Tokio's
+//! [`watch::Receiver`](tokio::sync::watch::Receiver) directly.
+//! [`SupervisorHandle::subscribe_snapshots`] deliberately preserves the
+//! receiver's conflating delivery and `wait_for` API instead of wrapping it in
+//! a crate-specific stream.
+//!
 //! # Quick start
 //!
 //! ```no_run
@@ -192,6 +198,7 @@
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
 //! | `metrics` | no | Enables `metrics` crate integration for counters, gauges, and histograms. |
+//! | `serde` | no | Implements `Serialize` and `Deserialize` for public policy, event, and snapshot views. |
 //!
 //! # Examples
 //!

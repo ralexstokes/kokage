@@ -67,15 +67,10 @@ pub enum ScopeKind {
 
 const DEFAULT_CONTROL_CHANNEL_CAPACITY: usize = 64;
 
-impl Default for SupervisorBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SupervisorBuilder {
     /// Creates a new builder with default settings: [`OneForOne`](Strategy::OneForOne)
     /// strategy, default [`RestartIntensity`], and no children.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let mut builder = Self {
             strategy: Strategy::default(),
@@ -198,15 +193,10 @@ impl SupervisorBuilder {
     }
 }
 
-impl Default for DynamicSupervisorBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl DynamicSupervisorBuilder {
     /// Creates an empty dynamic supervisor with the default restart intensity
     /// and control-channel capacity.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let mut builder = Self {
             restart_intensity: RestartIntensity::default(),

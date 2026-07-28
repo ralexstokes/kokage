@@ -424,10 +424,9 @@ mod tests {
     #[test]
     fn realigning_counts_a_child_that_already_completed() {
         let mut set = CompletionSet::new(["source"]);
-        let seq = set.realign(&snapshot(vec![
-            ChildSnapshot::new("source", 0, ChildStateView::Stopped)
-                .last_exit(Some(ExitStatusView::Completed)),
-        ]));
+        let mut source = ChildSnapshot::new("source", 0, ChildStateView::Stopped);
+        source.last_exit = Some(ExitStatusView::Completed);
+        let seq = set.realign(&snapshot(vec![source]));
         assert_eq!(seq, 0);
         assert!(set.is_complete());
     }
@@ -435,11 +434,10 @@ mod tests {
     #[test]
     fn realigning_does_not_count_a_pending_restart() {
         let mut set = CompletionSet::new(["source"]);
-        set.realign(&snapshot(vec![
-            ChildSnapshot::new("source", 0, ChildStateView::Stopped)
-                .last_exit(Some(ExitStatusView::Completed))
-                .next_restart_in(Some(std::time::Duration::from_millis(10))),
-        ]));
+        let mut source = ChildSnapshot::new("source", 0, ChildStateView::Stopped);
+        source.last_exit = Some(ExitStatusView::Completed);
+        source.next_restart_in = Some(std::time::Duration::from_millis(10));
+        set.realign(&snapshot(vec![source]));
         assert!(!set.is_complete());
     }
 

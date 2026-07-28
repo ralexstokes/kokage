@@ -466,14 +466,16 @@ mod tests {
             MountEventDisposition::Apply
         );
 
+        let mut already_removing =
+            ChildSnapshot::new("already-removing", 0, ChildStateView::Stopping);
+        already_removing.membership = ChildMembershipView::Removing;
         let snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
             vec![
                 ChildSnapshot::new("routed", 0, ChildStateView::Running),
                 ChildSnapshot::new("orphan", 0, ChildStateView::Running),
-                ChildSnapshot::new("already-removing", 0, ChildStateView::Stopping)
-                    .membership(ChildMembershipView::Removing),
+                already_removing,
             ],
         )
         .lifecycle_seq(73);

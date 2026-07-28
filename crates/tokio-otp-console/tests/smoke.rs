@@ -17,8 +17,8 @@ use tokio_otp::{
 };
 use tokio_otp_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use tokio_supervisor::{
-    ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder,
-    Strategy, SupervisorHandle, SupervisorSnapshot, SupervisorStateView,
+    ChildSnapshot, ChildSpec, ChildStateView, DynamicSupervisorBuilder, Strategy, SupervisorHandle,
+    SupervisorSnapshot, SupervisorStateView,
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
@@ -43,14 +43,12 @@ impl Actor for IdleActor {
 }
 
 fn snapshot(child_state: ChildStateView) -> SupervisorSnapshot {
+    let mut worker = ChildSnapshot::new("worker", 0, child_state);
+    worker.started = child_state == ChildStateView::Running;
     SupervisorSnapshot::new(
         SupervisorStateView::Running,
         Strategy::OneForOne,
-        vec![
-            ChildSnapshot::new("worker", 0, child_state)
-                .started(child_state == ChildStateView::Running)
-                .membership(ChildMembershipView::Active),
-        ],
+        vec![worker],
     )
 }
 

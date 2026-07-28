@@ -37,8 +37,7 @@ pub struct CancellationHandle {
 }
 
 impl CancellationHandle {
-    /// Creates an independent cancellation handle.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cancellation: CancellationToken::new(),
         }
@@ -67,11 +66,5 @@ impl CancellationHandle {
     /// Waits until the operation is cancelled.
     pub async fn cancelled(&self) {
         self.cancellation.cancelled().await;
-    }
-}
-
-impl Default for CancellationHandle {
-    fn default() -> Self {
-        Self::new()
     }
 }

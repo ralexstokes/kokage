@@ -3,8 +3,10 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use tokio::sync::mpsc;
-use tokio_supervisor::{ChildSpec, RestartPolicy, Strategy, SupervisorBuilder};
+use tokio::sync::{Notify, mpsc};
+use tokio_supervisor::{
+    ChildSpec, ExitStatusView, RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder,
+};
 
 mod common;
 
@@ -38,6 +40,68 @@ async fn transient_child_panic_causes_restart() {
     let handle = supervisor.spawn();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
+    assert_eq!(
+        handle
+            .snapshot()
+            .child("panic-worker")
+            .expect("panic worker remains visible")
+            .last_exit,
+        Some(ExitStatusView::Panicked)
+    );
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
+}
+
+#[tokio::test]
+async fn abort_mode_group_peer_reports_aborted_exit_status() {
+    let trigger_failure = Arc::new(Notify::new());
+    let trigger_attempts = Arc::new(AtomicUsize::new(0));
+    let (peer_starts_tx, mut peer_starts_rx) = mpsc::unbounded_channel();
+
+    let peer = ChildSpec::new("abort-peer", move |ctx| {
+        let peer_starts_tx = peer_starts_tx.clone();
+        async move {
+            peer_starts_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::Always)
+    .shutdown(ShutdownPolicy::abort());
+
+    let trigger_failure_for_child = Arc::clone(&trigger_failure);
+    let trigger = ChildSpec::new("trigger", move |ctx| {
+        let trigger_failure = Arc::clone(&trigger_failure_for_child);
+        let trigger_attempts = Arc::clone(&trigger_attempts);
+        async move {
+            if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                trigger_failure.notified().await;
+                return Err(common::test_error("restart group"));
+            }
+
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::OnFailure);
+
+    let handle = SupervisorBuilder::new()
+        .strategy(Strategy::OneForAll)
+        .child(peer)
+        .child(trigger)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    let mut snapshots = handle.subscribe_snapshots();
+
+    assert_eq!(common::recv_event(&mut peer_starts_rx).await, 0);
+    trigger_failure.notify_one();
+    assert_eq!(common::recv_event(&mut peer_starts_rx).await, 1);
+    let peer = common::wait_for_child_running(&mut snapshots, "abort-peer", 1).await;
+    assert_eq!(peer.last_exit, Some(ExitStatusView::Aborted));
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
