@@ -10,7 +10,9 @@ use std::{
 };
 
 use tokio::sync::{Notify, mpsc, oneshot};
-use tokio_otp::{LiveContext, prelude::*};
+use tokio_otp::{
+    DrainPolicy, LiveContext, MailboxMode, OffloadDeadline, OffloadHandle, prelude::*,
+};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 

@@ -1,8 +1,7 @@
 use std::{collections::HashMap, time::Duration};
-use tokio_otp::LiveContext;
 
 use tokio::time::Instant;
-use tokio_otp::prelude::*;
+use tokio_otp::{DownReason, MonitorEvent, TimerKey, prelude::*};
 
 use crate::{
     messages::{FeedMsg, ReconcilerMsg, ReconcilerStatus, VenueHealth, VenueId},

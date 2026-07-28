@@ -9,12 +9,13 @@ a *supervisor* restart the ones that fail.
 
 ## The crates
 
-`tokio-otp` is the product: depend on it alone, import everything through
-`tokio_otp::prelude`, wire actors in a `Graph`, and compose them with a
-`SupervisionTree`. `Runtime::builder()` is the concise convenience when one
-graph occupies one ordered scope. The crate contains both the typed actor
-layer and the runtime that supervises it, built on one deliberately
-independent crate:
+`tokio-otp` is the actor product: its prelude imports the day-one surface,
+while observability and advanced configuration remain explicit crate-root
+imports. Wire actors in a `Graph` and compose them with a `SupervisionTree`;
+`Runtime::builder()` is the concise convenience when one graph occupies one
+ordered scope. Raw task supervision requires a direct `tokio-supervisor`
+dependency. The actor crate contains both the typed actor layer and the
+runtime that supervises it, built on that deliberately independent crate:
 
 | Crate | Role |
 |-------|------|

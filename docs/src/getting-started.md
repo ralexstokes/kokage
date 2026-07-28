@@ -14,9 +14,9 @@ tokio-otp = { git = "https://github.com/ralexstokes/tokio-otp" }
 tokio-supervisor = { git = "https://github.com/ralexstokes/tokio-otp" }
 ```
 
-`tokio_otp::prelude` covers the common actor product surface, including
-policies and `ChildSpec`. Raw supervisor construction and control types stay in
-`tokio-supervisor`; if tasks are all you need, depend on that crate alone.
+`tokio_otp::prelude` covers the day-one actor product surface and core policies.
+Raw supervisor construction and control types stay in `tokio-supervisor`; if
+tasks are all you need, depend on that crate alone.
 
 ## Your first supervised task
 

@@ -6,7 +6,7 @@
 use std::{error::Error, time::Duration};
 
 use tokio::sync::mpsc;
-use tokio_otp::prelude::*;
+use tokio_otp::{CancellationToken, prelude::*};
 
 #[derive(Clone)]
 struct Worker {
