@@ -208,7 +208,7 @@ impl<M> DynamicActorOptions<M> {
     /// [`ActorOptions::mailbox_capacity`] overrides the hosting scope's
     /// default for this actor. Unkeyed
     /// [`MailboxMode::Conflate`](crate::MailboxMode::Conflate) always has
-    /// capacity one and ignores both values.
+    /// capacity one and ignores both the scope default and the override.
     #[must_use]
     pub fn options(mut self, options: ActorOptions<M>) -> Self {
         self.actor_options = options;
@@ -661,11 +661,9 @@ impl RuntimeHandle {
         let (default_restart, default_shutdown) = self.actors.actor_defaults();
         let (actor_options, dynamic_options) =
             options.into_parts(default_restart, default_shutdown);
-        if actor_options.mailbox_capacity == Some(0) {
-            return Err(ControlError::InvalidConfig(
-                "actor mailbox capacity must be non-zero",
-            ));
-        }
+        actor_options
+            .validate()
+            .map_err(ControlError::InvalidConfig)?;
         let actor = self.actors.make_actor(label, factory, actor_options);
         self.add_constructed_actor(actor, dynamic_options).await
     }
