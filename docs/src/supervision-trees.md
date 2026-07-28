@@ -62,7 +62,7 @@ actors to be siblings. A hand-built tree can place individual runnable actors
 at different levels:
 
 ```rust,no_run
-use tokio_otp::{ActorOptions, ActorSpec, SupervisionTree, prelude::*};
+use tokio_otp::{ActorSpec, SupervisionTree, prelude::*};
 
 struct Worker;
 
@@ -76,8 +76,8 @@ impl Actor for Worker {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let (ingest_slot, _ingest) = graph.slot("ingest", ActorOptions::new());
-    let (parse_slot, _parse) = graph.slot("parse", ActorOptions::new());
+    let (ingest_slot, _ingest) = graph.slot("ingest");
+    let (parse_slot, _parse) = graph.slot("parse");
     graph.define(ingest_slot, || Worker);
     graph.define(parse_slot, || Worker);
     let graph = graph.build()?;
@@ -132,7 +132,7 @@ let sessions_tree = SupervisionTree::dynamic()
 let sessions = sessions_tree.handle();
 
 let mut graph = GraphBuilder::new();
-let (router_slot, _) = graph.slot("router", ActorOptions::new());
+let (router_slot, _) = graph.slot("router");
 graph.define(router_slot, move || Router::new(sessions.clone()));
 let graph = graph.build()?;
 

@@ -7,10 +7,11 @@ use tokio_otp::prelude::*;
 mod coverage_probe {
     mod actor {
         use tokio_otp::prelude::{
-            Actor, ActorOptions, ActorRef, ActorResult, BoxError, CallError, CancellationHandle,
-            CancellationToken, Continue, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy,
-            Flow, Graph, GraphBuilder, Lifetime, MailboxMode, MessageContext, MessageSize,
-            MonitorEvent, RawActor, Reply, SendError, Stop, Supervision, TimerKey,
+            Actor, ActorOptions, ActorRef, ActorResult, AmbientContext, BoxError, CallError,
+            CancellationHandle, CancellationToken, Continue, DEFAULT_SHUTDOWN_BOUND, Down,
+            DownReason, DrainPolicy, Flow, Graph, GraphBuilder, Lifetime, MailboxMode,
+            MessageContext, MessageSize, MonitorEvent, RawActor, Reply, SendError, Stop,
+            Supervision, TimerKey,
         };
     }
 
@@ -29,8 +30,9 @@ mod coverage_probe {
 
     mod advanced_root {
         use tokio_otp::{
-            ChildSpec, ControlError, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
-            LiveContext, SupervisorBuildError, SupervisorError,
+            ActorSupervisorPathSegment, ChildSpec, ControlError, LifecycleEvent,
+            LifecyclePathSegment, LifecycleWatch, LiveContext, SupervisorBuildError,
+            SupervisorError,
         };
         use tokio_supervisor::{
             ChildContext, ChildResult, DynamicSupervisorBuilder, Supervisor, SupervisorBuilder,
@@ -65,7 +67,7 @@ impl Actor for BlockingWorker {
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (worker_slot, worker) = graph.slot("worker", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker) = graph.slot("worker");
     graph.define(worker_slot, move || BlockingWorker {
         observed: observed_tx.clone(),
     });

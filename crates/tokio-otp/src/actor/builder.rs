@@ -44,13 +44,26 @@ pub trait MessageSize {
 /// }
 ///
 /// let options: ActorOptions<Snapshot> = ActorOptions::new()
-///     .mailbox(MailboxMode::Conflate)
+///     .mailbox(MailboxMode::conflate())
 ///     .message_size();
 /// ```
 pub struct ActorOptions<M> {
     pub(crate) mailbox_mode: MailboxMode<M>,
     pub(crate) size_hint: Option<fn(&M) -> usize>,
     pub(crate) mailbox_capacity: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ActorOptionsValidationError {
+    ZeroMailboxCapacity,
+}
+
+impl ActorOptionsValidationError {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::ZeroMailboxCapacity => "actor mailbox capacity must be non-zero",
+        }
+    }
 }
 
 impl<M> Clone for ActorOptions<M> {
@@ -77,15 +90,15 @@ impl<M> ActorOptions<M> {
     /// Creates options using a FIFO queue without message-size observation.
     pub fn new() -> Self {
         Self {
-            mailbox_mode: MailboxMode::Queue,
+            mailbox_mode: MailboxMode::queue(),
             size_hint: None,
             mailbox_capacity: None,
         }
     }
 
-    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self) -> Result<(), ActorOptionsValidationError> {
         if self.mailbox_capacity == Some(0) {
-            return Err("actor mailbox capacity must be non-zero");
+            return Err(ActorOptionsValidationError::ZeroMailboxCapacity);
         }
         Ok(())
     }
@@ -128,7 +141,8 @@ static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Unfilled position for one actor in a graph builder.
 ///
-/// Slots are created by [`GraphBuilder::slot`] and consumed by
+/// Slots are created by [`GraphBuilder::slot`] or
+/// [`GraphBuilder::slot_with`] and consumed by
 /// [`GraphBuilder::define`]. The token is intentionally neither [`Clone`] nor
 /// [`Copy`], so a slot can only be filled once in ordinary Rust code.
 pub struct ActorSlot<M> {
@@ -170,7 +184,7 @@ impl<M> ActorSlot<M> {
 /// [`call`](ActorRef::call) cycle deadlocks at depth one because the callee
 /// cannot answer while the caller awaits the reply. Idioms: use
 /// [`try_send`](ActorRef::try_send) on feedback edges, select a
-/// [`MailboxMode::Conflate`](crate::MailboxMode::Conflate) mailbox for lossy
+/// [`MailboxMode::conflate`] mailbox for lossy
 /// state snapshots, and call only "downhill" along a DAG ordering.
 pub struct GraphBuilder {
     builder_id: u64,
@@ -230,14 +244,24 @@ impl GraphBuilder {
         self
     }
 
-    /// Opens a named slot and returns its fill token plus a restart-stable ref.
+    /// Opens a named slot with default [`ActorOptions`] and returns its fill
+    /// token plus a restart-stable ref.
+    ///
+    /// See [`slot_with`](Self::slot_with) for cyclic-wiring order and explicit
+    /// mailbox or message-size options.
+    pub fn slot<M: Send + 'static>(&mut self, actor_id: &str) -> (ActorSlot<M>, ActorRef<M>) {
+        self.slot_with(actor_id, ActorOptions::new())
+    }
+
+    /// Opens a named slot with explicit options and returns its fill token plus
+    /// a restart-stable ref.
     ///
     /// This enables cyclic wiring: create all refs first, hand them to actor
     /// constructors, then consume each [`ActorSlot`] with [`define`](Self::define).
     /// The name is fixed when the slot is opened because it is used as the
     /// actor label in observability. `options` configures this actor's mailbox
     /// and message-size observation.
-    pub fn slot<M: Send + 'static>(
+    pub fn slot_with<M: Send + 'static>(
         &mut self,
         actor_id: &str,
         options: ActorOptions<M>,
@@ -259,8 +283,8 @@ impl GraphBuilder {
             Ok(()) => {
                 self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core), mailbox_capacity)
             }
-            Err(message) => {
-                self.errors.push(GraphBuildError::InvalidConfig(message));
+            Err(ActorOptionsValidationError::ZeroMailboxCapacity) => {
+                self.errors.push(GraphBuildError::ZeroMailboxCapacity);
                 None
             }
         };
@@ -291,9 +315,7 @@ impl GraphBuilder {
             mailbox_mode,
         } = slot;
         if builder_id != self.builder_id {
-            self.errors.push(GraphBuildError::InvalidConfig(
-                "actor slot belongs to a different graph builder",
-            ));
+            self.errors.push(GraphBuildError::ForeignSlot);
             return;
         }
 
@@ -301,8 +323,7 @@ impl GraphBuilder {
             return;
         };
         let Some(slot) = self.slots.get_mut(index) else {
-            self.errors
-                .push(GraphBuildError::InvalidConfig("actor slot is detached"));
+            self.errors.push(GraphBuildError::DetachedSlot);
             return;
         };
 
@@ -317,9 +338,7 @@ impl GraphBuilder {
     pub fn build(mut self) -> Result<Graph, GraphBuildError> {
         let graph_name = match self.name {
             Some(name) if name.is_empty() => {
-                return Err(GraphBuildError::InvalidConfig(
-                    "graph name must not be empty",
-                ));
+                return Err(GraphBuildError::EmptyGraphName);
             }
             Some(name) => Arc::from(name),
             None => anonymous_graph_name(),
@@ -332,9 +351,7 @@ impl GraphBuilder {
             return Err(GraphBuildError::EmptyGraph);
         }
         if self.mailbox_capacity == 0 {
-            return Err(GraphBuildError::InvalidConfig(
-                "mailbox capacity must be non-zero",
-            ));
+            return Err(GraphBuildError::ZeroMailboxCapacity);
         }
 
         let observability = GraphObservability::new(Arc::clone(&graph_name));
@@ -377,8 +394,7 @@ impl GraphBuilder {
         mailbox_capacity: Option<usize>,
     ) -> Option<(usize, ActorRef<M>)> {
         if actor_id.is_empty() {
-            self.errors
-                .push(GraphBuildError::InvalidConfig("actor id must not be empty"));
+            self.errors.push(GraphBuildError::EmptyActorId);
             return None;
         }
 
@@ -404,16 +420,44 @@ impl GraphBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActorOptions, MailboxMode};
+    use super::{ActorOptions, GraphBuilder, MailboxMode};
+    use crate::{Actor, ActorResult, GraphBuildError, MessageContext, prelude::Continue};
 
     struct OpaqueMessage;
+
+    struct OpaqueActor;
+
+    impl Actor for OpaqueActor {
+        type Msg = OpaqueMessage;
+
+        async fn handle(
+            &mut self,
+            _: OpaqueMessage,
+            _: &mut MessageContext<'_, Self>,
+        ) -> ActorResult {
+            Ok(Continue)
+        }
+    }
 
     #[test]
     fn actor_options_clone_and_debug_do_not_bound_the_message_type() {
         let options: ActorOptions<OpaqueMessage> =
-            ActorOptions::new().mailbox(MailboxMode::Conflate);
+            ActorOptions::new().mailbox(MailboxMode::conflate());
 
         let cloned = options.clone();
         assert_eq!(format!("{cloned:?}"), format!("{options:?}"));
+    }
+
+    #[test]
+    fn detached_slot_is_a_matchable_build_error() {
+        let mut builder = GraphBuilder::new();
+        let (mut slot, _) = builder.slot::<OpaqueMessage>("worker");
+        slot.index = Some(usize::MAX);
+        builder.define(slot, || OpaqueActor);
+
+        assert!(matches!(
+            builder.build(),
+            Err(GraphBuildError::DetachedSlot)
+        ));
     }
 }

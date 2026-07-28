@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     ActorFactory, ActorOptions, ActorRef, ActorStats, RawActor, RunnableActor,
-    SupervisorPathSegment, actor::RunnableActorBuilder,
+    actor::{ActorOptionsValidationError, RunnableActorBuilder, SupervisorPathSegment},
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -120,7 +120,7 @@ impl RuntimeAttachment {
 ///
 /// These options configure both the actor's mailbox and its supervised-child
 /// lifecycle. The message type is inferred from the factory passed to
-/// [`RuntimeHandle::add_actor`]. Configure restart and shutdown behavior with
+/// [`RuntimeHandle::add_actor_with`]. Configure restart and shutdown behavior with
 /// [`restart`](Self::restart) and [`shutdown`](Self::shutdown); options left
 /// unset inherit the dynamic runtime's defaults.
 #[derive(Debug)]
@@ -132,8 +132,8 @@ pub struct DynamicActorOptions<M = ()> {
     // Shutdown policy for the supervised actor child.
     shutdown: ShutdownPolicy,
     shutdown_is_default: bool,
-    /// Optional restart intensity override for this actor child.
-    pub restart_intensity: Option<RestartIntensity>,
+    // Optional restart intensity override for this actor child.
+    restart_intensity: Option<RestartIntensity>,
     actor_options: ActorOptions<M>,
     // `None` selects the dynamic-actor default. Keeping the override unresolved
     // makes `restart(...).remove_on_exit(...)` order-independent.
@@ -207,7 +207,7 @@ impl<M> DynamicActorOptions<M> {
     ///
     /// [`ActorOptions::mailbox_capacity`] overrides the hosting scope's
     /// default for this actor. Unkeyed
-    /// [`MailboxMode::Conflate`](crate::MailboxMode::Conflate) always has
+    /// [`MailboxMode::conflate()`](crate::MailboxMode::conflate()) always has
     /// capacity one and ignores both the scope default and the override.
     #[must_use]
     pub fn options(mut self, options: ActorOptions<M>) -> Self {
@@ -412,7 +412,7 @@ impl Runtime {
     /// let supervisor = DynamicSupervisorBuilder::new().build()?;
     /// let handle = Runtime::new(supervisor).spawn();
     /// handle
-    ///     .add_actor("worker", || Worker, DynamicActorOptions::new())
+    ///     .add_actor_with("worker", || Worker, DynamicActorOptions::new())
     ///     .await?;
     /// handle.shutdown_and_wait().await?;
     /// # Ok(())
@@ -470,7 +470,7 @@ impl Runtime {
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut graph = GraphBuilder::new();
-    /// let (actor_slot, _) = graph.slot("worker", tokio_otp::ActorOptions::new());
+    /// let (actor_slot, _) = graph.slot("worker");
     /// graph.define(actor_slot, || Worker);
     /// let actor_subtree = Runtime::builder()
     ///     .graph(graph.build()?)
@@ -649,8 +649,25 @@ impl RuntimeHandle {
         self.supervisor.add_child(child).await
     }
 
-    /// Adds a supervised runtime actor from an incarnation factory and returns
-    /// its stable typed ref.
+    /// Adds a supervised runtime actor with default options and returns its
+    /// stable typed ref.
+    ///
+    /// See [`add_actor_with`](Self::add_actor_with) for child-id, readiness,
+    /// scope-kind, and explicit mailbox-option details.
+    pub async fn add_actor<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
+    where
+        F: ActorFactory,
+    {
+        self.add_actor_with(label, factory, DynamicActorOptions::new())
+            .await
+    }
+
+    /// Adds a supervised runtime actor from an incarnation factory with
+    /// explicit options and returns its stable typed ref.
     ///
     /// The actor's label is also its direct supervisor child id, so it can be
     /// removed later with [`remove_child`](Self::remove_child). See
@@ -662,7 +679,7 @@ impl RuntimeHandle {
     /// retains the stronger readiness contract. A zero
     /// [`ActorOptions::mailbox_capacity`] is rejected with
     /// [`ControlError::InvalidConfig`].
-    pub async fn add_actor<F>(
+    pub async fn add_actor_with<F>(
         &self,
         label: impl Into<String>,
         factory: F,
@@ -676,7 +693,9 @@ impl RuntimeHandle {
             options.into_parts(default_restart, default_shutdown);
         actor_options
             .validate()
-            .map_err(ControlError::InvalidConfig)?;
+            .map_err(|error: ActorOptionsValidationError| {
+                ControlError::InvalidConfig(error.message())
+            })?;
         let actor = self.actors.make_actor(label, factory, actor_options);
         self.add_constructed_actor(actor, dynamic_options).await
     }
@@ -825,6 +844,11 @@ impl RuntimeHandle {
     /// supervisor's current child membership. This excludes stale actors after
     /// raw child removal, same-id replacement, or a subtree restart that drops
     /// incarnation-local dynamic children by construction.
+    ///
+    /// Unlike [`ActorRef::stats`], each returned sample populates
+    /// [`ActorStats::supervisor_path`] and [`ActorStats::lineage`] from the
+    /// current runtime membership. Message-size totals remain `None` unless
+    /// observation was enabled in that actor's [`ActorOptions`].
     pub fn actor_stats(&self) -> Vec<ActorStats> {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();

@@ -25,8 +25,8 @@ use std::{error::Error, io, time::Duration};
 
 use tokio::time::sleep;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, DynamicActorOptions, GraphBuilder,
-    MessageContext, SupervisionTree, prelude::Continue,
+    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext,
+    SupervisionTree, prelude::Continue,
 };
 use tokio_otp_console::Console;
 use tokio_supervisor::{BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, Strategy};
@@ -151,10 +151,9 @@ fn telemetry_runtime() -> SupervisionTree {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) =
-        builder.slot::<String>("worker", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
     let frontend_worker = worker_ref.clone();
-    let (frontend_slot, frontend) = builder.slot("frontend", tokio_otp::ActorOptions::new());
+    let (frontend_slot, frontend) = builder.slot("frontend");
     builder.define(frontend_slot, move || Frontend {
         worker: frontend_worker.clone(),
     });
@@ -199,10 +198,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         loop {
             sleep(Duration::from_secs(12)).await;
-            let Ok(burst) = dynamic
-                .add_actor("burst", || Burst, DynamicActorOptions::default())
-                .await
-            else {
+            let Ok(burst) = dynamic.add_actor("burst", || Burst).await else {
                 break;
             };
             for index in 0..40u32 {

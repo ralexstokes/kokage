@@ -47,14 +47,14 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
     let failing_runs = Arc::new(AtomicUsize::new(0));
     let healthy_runs = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("healthy", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("healthy");
     builder.define(actor_slot, {
         let healthy_runs = healthy_runs.clone();
         move || Healthy {
             runs: healthy_runs.clone(),
         }
     });
-    let (actor_slot, _) = builder.slot("failing", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("failing");
     builder.define(actor_slot, {
         let failing_runs = failing_runs.clone();
         move || FailsOnce {

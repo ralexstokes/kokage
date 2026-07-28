@@ -56,9 +56,9 @@ impl Actor for Press {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = GraphBuilder::new();
     let (press_slot, press_ref) =
-        builder.slot::<String>("press", ActorOptions::new());
+        builder.slot::<String>("press");
     let (orders_slot, orders) =
-        builder.slot("front-desk", ActorOptions::new());
+        builder.slot("front-desk");
     builder.define(orders_slot, {
         let press_ref = press_ref.clone();
         move || FrontDesk { press: press_ref.clone() }
@@ -252,8 +252,9 @@ tree, so
 a pre-registered actor joins the graph but is never started. Use `graph_with`
 when composing a graph by hand and hosting it yourself.
 
-Use `GraphBuilder::slot(id, ActorOptions)` plus `define` when graph actors are
-created in a loop or need hand-written wiring. Compose the resulting graph
-with `SupervisionTree`; reserve the tree first when wiring needs its pre-spawn
+Use `GraphBuilder::slot(id)` plus `define` when graph actors are created in a
+loop or need hand-written wiring; choose `slot_with(id, ActorOptions)` for
+non-default mailbox behavior. Compose the resulting graph with
+`SupervisionTree`; reserve the tree first when wiring needs its pre-spawn
 handle. Reach for `Runtime::builder()` only when the final shape really is one
 graph in one ordered scope.

@@ -57,9 +57,8 @@ impl Actor for Worker {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) =
-        builder.slot::<String>("worker", tokio_otp::ActorOptions::new());
-    let (frontend_slot, frontend) = builder.slot("frontend", tokio_otp::ActorOptions::new());
+    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
+    let (frontend_slot, frontend) = builder.slot("frontend");
     builder.define(frontend_slot, {
         let worker_ref = worker_ref.clone();
         move || Frontend {

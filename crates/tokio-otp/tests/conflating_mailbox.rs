@@ -52,8 +52,10 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) =
-        builder.slot("ticks", ActorOptions::new().mailbox(MailboxMode::Conflate));
+    let (actor_ref_slot, actor_ref) = builder.slot_with(
+        "ticks",
+        ActorOptions::new().mailbox(MailboxMode::conflate()),
+    );
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -112,8 +114,10 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
     let (received_tx, _received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) =
-        builder.slot("ticks", ActorOptions::new().mailbox(MailboxMode::Conflate));
+    let (actor_ref_slot, actor_ref) = builder.slot_with(
+        "ticks",
+        ActorOptions::new().mailbox(MailboxMode::conflate()),
+    );
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -178,10 +182,10 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot(
+    let (actor_ref_slot, actor_ref) = builder.slot_with(
         "snapshots",
         ActorOptions::new()
-            .mailbox(MailboxMode::Conflate)
+            .mailbox(MailboxMode::conflate())
             .message_size(),
     );
     builder.define(actor_ref_slot, {
@@ -243,7 +247,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
     builder.mailbox_capacity(2);
-    let (slot, actor_ref) = builder.slot(
+    let (slot, actor_ref) = builder.slot_with(
         "market-data",
         ActorOptions::new().mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol)),
     );
@@ -335,9 +339,9 @@ async fn replaced_call_reports_reply_dropped() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot(
+    let (actor_ref_slot, actor_ref) = builder.slot_with(
         "requests",
-        ActorOptions::new().mailbox(MailboxMode::Conflate),
+        ActorOptions::new().mailbox(MailboxMode::conflate()),
     );
     builder.define(actor_ref_slot, {
         let release = release.clone();
@@ -433,8 +437,10 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) =
-        builder.slot("drain", ActorOptions::new().mailbox(MailboxMode::Conflate));
+    let (actor_ref_slot, actor_ref) = builder.slot_with(
+        "drain",
+        ActorOptions::new().mailbox(MailboxMode::conflate()),
+    );
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedDrainActor {
@@ -478,7 +484,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
     let release = Arc::new(Notify::new());
     let panic_once = Arc::new(AtomicBool::new(true));
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot(
+    let (actor_ref_slot, actor_ref) = builder.slot_with(
         "poison-recovery",
         ActorOptions::new().mailbox(MailboxMode::conflate_by_key({
             let panic_once = Arc::clone(&panic_once);

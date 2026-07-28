@@ -1,7 +1,7 @@
 error[E0382]: use of moved value: `slot`
   --> tests/ui/supervision/double_define.rs:18:20
    |
-16 |     let (slot, _worker) = builder.slot::<()>("worker", tokio_otp::ActorOptions::new());
+16 |     let (slot, _worker) = builder.slot::<()>("worker");
    |          ---- move occurs because `slot` has type `ActorSlot<()>`, which does not implement the `Copy` trait
 17 |     builder.define(slot, || Worker);
    |                    ---- value moved here

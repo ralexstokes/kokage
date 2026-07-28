@@ -32,7 +32,7 @@ use crate::{Graph, ReservedSupervisionTree, Runtime, RuntimeHandle, SupervisionT
 ///
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut graph = GraphBuilder::new();
-/// let (echo_slot, echo) = graph.slot("echo", ActorOptions::new());
+/// let (echo_slot, echo) = graph.slot("echo");
 /// graph.define(echo_slot, || Echo);
 ///
 /// let runtime = Runtime::builder()

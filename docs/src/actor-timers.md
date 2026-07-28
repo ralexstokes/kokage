@@ -190,10 +190,15 @@ timers::interval_to(
 ```
 
 These timers really do cross an actor boundary, so delivery uses the target's
-mailbox policy. Their tasks stop when cancelled, when the scheduling lifetime
-ends, or when the target permanently terminates. A target that merely restarts
-receives later deliveries through its restart-stable ref. Messages should
-carry a key or generation when the target must reject stale cross-actor work.
+ordinary `ActorRef::send` path and mailbox policy. A full FIFO mailbox delays
+the timer task until capacity opens; a conflating mailbox may replace an unread
+earlier delivery. Successful sends increment accepted-message counters. None
+of those behaviors applies to loop-owned self timers, which bypass capacity
+and conflation and increment only received-message counters. The cross-actor
+timer tasks stop when cancelled, when the scheduling lifetime ends, or when
+the target permanently terminates. A target that merely restarts receives
+later deliveries through its restart-stable ref. Messages should carry a key
+or generation when the target must reject stale cross-actor work.
 
 `Lifetime` cannot stop its actor; it only exposes `is_ended` and the awaitable
 `ended`. `CancellationHandle` owns the separate authority to stop the timer

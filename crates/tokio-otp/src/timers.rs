@@ -3,7 +3,11 @@
 //! Self-scheduled timers belong to the actor loop and are available through
 //! [`LiveContext`](crate::LiveContext). These utilities cross an actor
 //! boundary, so they deliver through the target's ordinary public
-//! [`ActorRef`] API instead.
+//! [`ActorRef`] API instead. That distinction is observable: cross-actor
+//! delivery waits for FIFO mailbox capacity, participates in conflation, and
+//! increments accepted-message counters. Loop-owned `LiveContext` timers
+//! bypass mailbox capacity and conflation and increment only received-message
+//! counters.
 
 use std::time::Duration;
 
@@ -17,6 +21,9 @@ use crate::{ActorRef, CancellationHandle, Lifetime, actor::deadline_after};
 /// actor's [`LiveContext::lifetime`](crate::LiveContext::lifetime). It is not
 /// bound to the target: if the target restarts before fire time, delivery
 /// follows the target's restart-stable `ActorRef`.
+///
+/// Delivery is an ordinary awaited [`ActorRef::send`]: it can wait for FIFO
+/// capacity and can replace unread state in a conflating mailbox.
 pub fn send_after_to<T: Send + 'static>(
     lifetime: &Lifetime,
     target: &ActorRef<T>,
@@ -52,6 +59,11 @@ pub fn send_after_to<T: Send + 'static>(
 /// Missed ticks are skipped. The timer stops when cancelled, when `lifetime`
 /// ends, or when the target permanently terminates. A zero period returns an
 /// already-cancelled handle and sends no messages.
+///
+/// Each tick uses an ordinary awaited [`ActorRef::send`]. FIFO backpressure
+/// delays the timer task, while a conflating target may replace an unread
+/// earlier tick; neither behavior applies to loop-owned
+/// [`LiveContext::interval`](crate::LiveContext::interval).
 pub fn interval_to<T: Clone + Send + 'static>(
     lifetime: &Lifetime,
     target: &ActorRef<T>,

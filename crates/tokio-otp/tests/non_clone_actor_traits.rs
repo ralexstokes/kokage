@@ -11,9 +11,9 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder,
-    LifecycleWatch, LiveContext, MessageContext, RawActor, Reply, RestartPolicy, Runtime,
-    RuntimeHandle, prelude::Continue,
+    Actor, ActorContext, ActorFactory, ActorResult, AmbientContext, DEFAULT_SHUTDOWN_BOUND,
+    GraphBuilder, LifecycleWatch, LiveContext, MessageContext, RawActor, Reply, RestartPolicy,
+    Runtime, RuntimeHandle, prelude::Continue,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -33,8 +33,12 @@ async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
         .expect("runtime remains live");
 }
 
+struct SendOnlyState {
+    _not_sync: Cell<()>,
+}
+
 struct HandlerWithNonCloneState {
-    _state: Mutex<()>,
+    _state: SendOnlyState,
 }
 
 impl Actor for HandlerWithNonCloneState {
@@ -62,7 +66,7 @@ impl Actor for HandlerWithSendOnlyMessage {
 }
 
 struct RawWithNonCloneState {
-    _state: Mutex<()>,
+    _state: SendOnlyState,
 }
 
 impl RawActor for RawWithNonCloneState {
@@ -77,7 +81,7 @@ fn assert_actor<T: Actor>() {}
 fn assert_raw_actor<T: RawActor>() {}
 
 #[test]
-fn actor_traits_accept_non_clone_state() {
+fn actor_traits_accept_non_clone_send_only_state() {
     assert_actor::<HandlerWithNonCloneState>();
     assert_raw_actor::<HandlerWithNonCloneState>();
     assert_raw_actor::<RawWithNonCloneState>();
@@ -138,7 +142,7 @@ impl ActorFactory for NonCloneHandlerFactory {
 async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     let constructions = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("handler", tokio_otp::ActorOptions::new());
+    let (actor_ref_slot, actor_ref) = builder.slot("handler");
     builder.define(
         actor_ref_slot,
         NonCloneHandlerFactory {
@@ -211,7 +215,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     let constructions = Arc::new(AtomicUsize::new(0));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("raw", tokio_otp::ActorOptions::new());
+    let (actor_ref_slot, actor_ref) = builder.slot("raw");
     builder.define(actor_ref_slot, {
         let constructions = constructions.clone();
         move || NonCloneRaw {
@@ -260,7 +264,7 @@ async fn constructor_panic_uses_the_actor_panic_path() {
     }
 
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("panics", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = builder.slot("panics");
     builder.define(actor_slot, PanickingFactory);
     let graph = builder.build().expect("registration does not construct");
     let actor = graph.actors()[0].clone();
@@ -292,7 +296,7 @@ impl Actor for DefaultActor {
 #[tokio::test]
 async fn default_constructor_path_is_an_actor_factory() {
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("DefaultActor", tokio_otp::ActorOptions::new());
+    let (actor_ref_slot, actor_ref) = builder.slot("DefaultActor");
     builder.define(actor_ref_slot, DefaultActor::default);
     let handle = Runtime::builder()
         .graph(builder.build().expect("graph builds"))

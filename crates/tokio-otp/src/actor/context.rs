@@ -116,6 +116,11 @@ impl<M> ActorRef<M> {
 
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
+    ///
+    /// A ref has no enclosing runtime context, so
+    /// [`ActorStats::supervisor_path`] and [`ActorStats::lineage`] are `None`.
+    /// Mailbox depth and capacity are zero while the ref is unbound between
+    /// incarnations or permanently terminated.
     pub fn stats(&self) -> ActorStats {
         let (depth, capacity) = match &*self.binding.borrow() {
             BindingState::Bound(mailbox) => mailbox.usage(),
@@ -866,25 +871,21 @@ impl<M: Send + 'static> ActorContext<M> {
         &self.shutdown
     }
 
-    /// Returns the actor-aware handle for this actor's enclosing scope.
+    /// Returns this actor's enclosing scope with lifecycle waits withheld.
     ///
-    /// Awaiting control operations on the enclosing scope is safe. The
-    /// remaining self-deadlock is awaiting removal of a sibling whose drain
-    /// depends on this actor draining its own mailbox; pipeline that operation
-    /// with [`offload`](Self::offload) instead.
-    ///
-    /// Do not await this scope's `wait_started()` from
-    /// [`Actor::on_start`](crate::Actor::on_start): this actor cannot report
-    /// ready until `on_start` returns, so the wait depends on itself. Pipeline
-    /// the wait and consume its result after startup instead.
+    /// The restriction is the same in every actor stage: awaiting scope or
+    /// child lifecycle progress can deadlock when that progress depends on
+    /// this actor returning from its current work. Use
+    /// [`RestrictedScope::release`] to move a full handle into independent
+    /// work when a lifecycle wait is genuinely required.
     ///
     /// Actors run directly through
     /// [`RunnableActor::run_until`](crate::RunnableActor::run_until), outside a
     /// supervisor, receive a terminal handle here. Its control operations
     /// return [`ControlError::Unavailable`](crate::ControlError::Unavailable)
     /// and its observation streams are closed.
-    pub fn supervisor(&self) -> RuntimeHandle {
-        self.supervisor.clone()
+    pub fn supervisor(&self) -> RestrictedScope {
+        RestrictedScope::new(self.supervisor.clone())
     }
 
     /// Returns the actor-aware handle for this leader's declared child scope.
@@ -898,8 +899,8 @@ impl<M: Send + 'static> ActorContext<M> {
     /// leader must therefore not await `children().wait_started()` inline from
     /// `on_start`; launch that wait as pipelined work, return from `on_start`,
     /// and consume the result after the child scope binds.
-    pub fn children(&self) -> Option<RuntimeHandle> {
-        self.children.clone()
+    pub fn children(&self) -> Option<RestrictedScope> {
+        self.children.clone().map(RestrictedScope::new)
     }
 
     /// Returns `true` if graph shutdown has been requested.
@@ -1116,6 +1117,70 @@ mod sealed {
     }
 }
 
+impl<M> sealed::Sealed<M> for ActorContext<M> {
+    fn cx(&self) -> &Self {
+        self
+    }
+
+    fn cx_mut(&mut self) -> &mut Self {
+        self
+    }
+}
+
+/// The ambient capabilities shared by every actor context.
+///
+/// Implemented by [`ActorContext`], [`StartContext`], [`MessageContext`], and
+/// [`StopContext`]. A helper that only needs identity, shutdown observation,
+/// or blocking work should accept this narrower trait rather than
+/// [`LiveContext`]. Stage-specific mailbox, timer, continuation, and scope
+/// capabilities remain on their concrete context or narrower stage trait.
+///
+/// This trait is sealed. It names framework-provided context capabilities; it
+/// is not an extension point for application types.
+pub trait AmbientContext<M: Send + 'static>: sealed::Sealed<M> {
+    /// Returns the actor's unique identifier within the graph.
+    fn id(&self) -> &str {
+        self.cx().id()
+    }
+
+    /// Returns a sender targeting this actor's own mailbox.
+    ///
+    /// In [`StopContext`] the mailbox is no longer read by this incarnation.
+    /// Teardown can pass the ref elsewhere, but should not post work to itself.
+    fn myself(&self) -> ActorRef<M> {
+        self.cx().myself()
+    }
+
+    /// Returns the shared graph shutdown token.
+    fn shutdown_token(&self) -> &CancellationToken {
+        self.cx().shutdown_token()
+    }
+
+    /// Returns `true` if graph shutdown has been requested.
+    ///
+    /// This remains `false` when an actor stops itself with
+    /// [`Flow::Stop`](crate::Flow) while the graph stays live.
+    fn is_shutting_down(&self) -> bool {
+        self.cx().is_shutting_down()
+    }
+
+    /// Runs blocking work on Tokio's blocking pool.
+    ///
+    /// See [`ActorContext::run_blocking`].
+    fn run_blocking<F, R>(
+        &self,
+        f: F,
+    ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
+    where
+        F: FnOnce(&CancellationToken) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.cx().run_blocking(f)
+    }
+}
+
+impl<M: Send + 'static> AmbientContext<M> for ActorContext<M> {}
+
 /// The capabilities an actor has while its incarnation is still live,
 /// independent of which lifecycle stage it is in.
 ///
@@ -1141,27 +1206,7 @@ mod sealed {
 ///
 /// This trait is sealed. It exists to name the shared surface, not to let
 /// callers substitute their own context.
-pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
-    /// Returns the actor's unique identifier within the graph.
-    fn id(&self) -> &str {
-        self.cx().id()
-    }
-
-    /// Returns a sender targeting this actor's own mailbox.
-    fn myself(&self) -> ActorRef<M> {
-        self.cx().myself()
-    }
-
-    /// Returns the shared graph shutdown token.
-    fn shutdown_token(&self) -> &CancellationToken {
-        self.cx().shutdown_token()
-    }
-
-    /// Returns `true` if graph shutdown has been requested.
-    fn is_shutting_down(&self) -> bool {
-        self.cx().is_shutting_down()
-    }
-
+pub trait LiveContext<M: Send + 'static>: AmbientContext<M> {
     /// Returns an observe-only view of this actor incarnation's lifetime.
     fn lifetime(&self) -> Lifetime {
         self.cx().lifetime()
@@ -1301,20 +1346,6 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     {
         self.cx_mut().offload(deadline, future, continuation)
     }
-
-    /// Runs blocking work on Tokio's blocking pool.
-    ///
-    /// See [`ActorContext::run_blocking`].
-    fn run_blocking<F, R>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
-    where
-        F: FnOnce(&CancellationToken) -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        self.cx().run_blocking(f)
-    }
 }
 
 macro_rules! live_context {
@@ -1329,13 +1360,14 @@ macro_rules! live_context {
             }
         }
 
+        impl<A: Actor + ?Sized> AmbientContext<A::Msg> for $view<'_, A> {}
         impl<A: Actor + ?Sized> LiveContext<A::Msg> for $view<'_, A> {}
     };
 }
 
 /// A lifecycle-restricted scope handle as seen from
-/// [`Actor::on_start`](crate::Actor::on_start) and
-/// [`Actor::on_stop`](crate::Actor::on_stop).
+/// every [`Actor`] lifecycle stage and directly from [`RawActor`](crate::RawActor)
+/// code.
 ///
 /// This is a [`RuntimeHandle`] with the lifecycle-awaiting operations withheld.
 /// An actor cannot report ready until its `on_start` returns, so awaiting any
@@ -1349,6 +1381,10 @@ macro_rules! live_context {
 /// nested scope's shutdown is sequenced with this one's. The full
 /// [`RuntimeHandle`] — which carries those waits — is not reachable without
 /// an explicit [`release`](Self::release).
+///
+/// During ordinary message handling or a raw receive loop, lifecycle waits can
+/// likewise depend on the current actor draining work or returning from the
+/// operation that holds up the target child.
 ///
 /// The shutdown-stage restriction has a different cause but the same shape. A
 /// stopping child is still attached to its supervisor: cooperative removal
@@ -1394,7 +1430,7 @@ impl RestrictedScope {
         self.handle.subtree(id).map(Self::new)
     }
 
-    /// Inserts an actor into this scope.
+    /// Inserts an actor with default options into this scope.
     ///
     /// Safe to await here: insertion schedules startup rather than waiting for
     /// it, so it does not block on another child's lifecycle. See
@@ -1403,12 +1439,26 @@ impl RestrictedScope {
         &self,
         label: impl Into<String>,
         factory: F,
+    ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
+    where
+        F: crate::ActorFactory,
+    {
+        self.handle.add_actor(label, factory).await
+    }
+
+    /// Inserts an actor with explicit options into this scope.
+    ///
+    /// Safe to await for the same reason as [`add_actor`](Self::add_actor).
+    pub async fn add_actor_with<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
         options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
     ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
     where
         F: crate::ActorFactory,
     {
-        self.handle.add_actor(label, factory, options).await
+        self.handle.add_actor_with(label, factory, options).await
     }
 
     /// Inserts an arbitrary supervised task child into this scope.
@@ -1500,7 +1550,7 @@ impl RestrictedScope {
 /// Context handed to [`Actor::on_start`](crate::Actor::on_start).
 ///
 /// Adds [`continue_with`](LiveContext::continue_with) to the ambient
-/// capabilities and narrows the scope handles to [`RestrictedScope`], which
+/// capabilities and exposes scope handles as [`RestrictedScope`], which
 /// withholds the lifecycle waits that would deadlock an actor that has not
 /// reported ready.
 ///
@@ -1518,7 +1568,7 @@ pub struct StartContext<'a, A: Actor + ?Sized> {
 /// which one message is handled.
 ///
 /// The ambient capabilities plus [`continue_with`](LiveContext::continue_with)
-/// and full scope handles. The mailbox is absent because the provided receive
+/// and restricted scope handles. The mailbox is absent because the provided receive
 /// loop owns it; a handler that reads it directly would bypass drain accounting
 /// and the continuation queue.
 ///
@@ -1542,7 +1592,8 @@ pub struct MessageContext<'a, A: Actor + ?Sized> {
 /// queues future work for this incarnation — timers, intervals, watches,
 /// offloads, continuations — has no one left to deliver to and
 /// is withheld. What remains is identity, the shutdown token, the scope
-/// handles, and [`run_blocking`](Self::run_blocking) for synchronous teardown.
+/// handles, and [`run_blocking`](AmbientContext::run_blocking) for synchronous
+/// teardown. The shared ambient methods come from [`AmbientContext`].
 ///
 /// The scope handles are narrowed to [`RestrictedScope`], which withholds the
 /// lifecycle waits that would block on a detach this hook is itself holding up.
@@ -1557,6 +1608,18 @@ pub struct StopContext<'a, A: Actor + ?Sized> {
 live_context!(StartContext);
 live_context!(MessageContext);
 
+impl<A: Actor + ?Sized> sealed::Sealed<A::Msg> for StopContext<'_, A> {
+    fn cx(&self) -> &ActorContext<A::Msg> {
+        self.cx
+    }
+
+    fn cx_mut(&mut self) -> &mut ActorContext<A::Msg> {
+        self.cx
+    }
+}
+
+impl<A: Actor + ?Sized> AmbientContext<A::Msg> for StopContext<'_, A> {}
+
 impl<'a, A: Actor + ?Sized> StartContext<'a, A> {
     pub(crate) fn new(cx: &'a mut ActorContext<A::Msg>) -> Self {
         Self { cx }
@@ -1567,7 +1630,7 @@ impl<'a, A: Actor + ?Sized> StartContext<'a, A> {
     /// See [`RestrictedScope`] for why the lifecycle waits are withheld here
     /// and how to pipeline one that must happen.
     pub fn supervisor(&self) -> RestrictedScope {
-        RestrictedScope::new(self.cx.supervisor())
+        self.cx.supervisor()
     }
 
     /// Returns this leader's declared child scope, restricted for the startup
@@ -1576,7 +1639,7 @@ impl<'a, A: Actor + ?Sized> StartContext<'a, A> {
     /// The child scope starts only after this hook returns, so awaiting its
     /// readiness inline can never succeed. See [`RestrictedScope`].
     pub fn children(&self) -> Option<RestrictedScope> {
-        self.cx.children().map(RestrictedScope::new)
+        self.cx.children()
     }
 }
 
@@ -1606,7 +1669,7 @@ impl<'a, A: Actor + ?Sized> MessageContext<'a, A> {
     /// intervals never fire, and a fresh
     /// [`offload`](LiveContext::offload) is racing the shutdown budget.
     ///
-    /// This is not [`is_shutting_down`](LiveContext::is_shutting_down), and
+    /// This is not [`is_shutting_down`](AmbientContext::is_shutting_down), and
     /// the difference is the reason it exists. A drain also follows the
     /// actor's own [`Flow::Stop`](crate::Flow), where the graph is not
     /// shutting down at all and `is_shutting_down` is `false` throughout.
@@ -1618,17 +1681,14 @@ impl<'a, A: Actor + ?Sized> MessageContext<'a, A> {
         self.draining
     }
 
-    /// Returns the actor-aware handle for this actor's enclosing scope.
-    ///
-    /// See [`ActorContext::supervisor`].
-    pub fn supervisor(&self) -> RuntimeHandle {
+    /// Returns this actor's enclosing scope, restricted to operations that
+    /// cannot await actor lifecycle progress.
+    pub fn supervisor(&self) -> RestrictedScope {
         self.cx.supervisor()
     }
 
-    /// Returns the actor-aware handle for this leader's declared child scope.
-    ///
-    /// See [`ActorContext::children`].
-    pub fn children(&self) -> Option<RuntimeHandle> {
+    /// Returns this leader's declared child scope with the same restriction.
+    pub fn children(&self) -> Option<RestrictedScope> {
         self.cx.children()
     }
 }
@@ -1638,39 +1698,12 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
         Self { cx }
     }
 
-    /// Returns the actor's unique identifier within the graph.
-    pub fn id(&self) -> &str {
-        self.cx.id()
-    }
-
-    /// Returns a sender targeting this actor's own mailbox.
-    ///
-    /// The mailbox is no longer being read by this incarnation. This is here
-    /// so teardown can hand the ref to something else, not so the actor can
-    /// post to itself.
-    pub fn myself(&self) -> ActorRef<A::Msg> {
-        self.cx.myself()
-    }
-
-    /// Returns the shared graph shutdown token.
-    pub fn shutdown_token(&self) -> &CancellationToken {
-        self.cx.shutdown_token()
-    }
-
-    /// Returns `true` if graph shutdown has been requested.
-    ///
-    /// This is `false` when the actor is stopping on its own
-    /// [`Flow::Stop`](crate::Flow) rather than on graph shutdown.
-    pub fn is_shutting_down(&self) -> bool {
-        self.cx.is_shutting_down()
-    }
-
     /// Returns this actor's enclosing scope, restricted for the shutdown stage.
     ///
     /// See [`RestrictedScope`] for why the lifecycle waits are withheld here
     /// and where teardown that needs one belongs instead.
     pub fn supervisor(&self) -> RestrictedScope {
-        RestrictedScope::new(self.cx.supervisor())
+        self.cx.supervisor()
     }
 
     /// Returns this leader's declared child scope, restricted for the shutdown
@@ -1679,21 +1712,7 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     /// The child scope is torn down around this hook, so awaiting its
     /// completion inline deadlocks the same way. See [`RestrictedScope`].
     pub fn children(&self) -> Option<RestrictedScope> {
-        self.cx.children().map(RestrictedScope::new)
-    }
-
-    /// Runs blocking teardown work on Tokio's blocking pool.
-    ///
-    /// See [`ActorContext::run_blocking`].
-    pub fn run_blocking<F, R>(
-        &self,
-        f: F,
-    ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
-    where
-        F: FnOnce(&CancellationToken) -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        self.cx.run_blocking(f)
+        self.cx.children()
     }
 }
 

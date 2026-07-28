@@ -3,9 +3,7 @@
 
 use std::time::Duration;
 
-use tokio_otp::{
-    ChildOutline, DynamicActorOptions, DynamicScope, ScopeKind, SupervisorBuildError, prelude::*,
-};
+use tokio_otp::{ChildOutline, DynamicScope, ScopeKind, SupervisorBuildError, prelude::*};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -202,7 +200,7 @@ async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
 
     let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
     let session = sessions
-        .add_actor("session-1", || Worker, DynamicActorOptions::new())
+        .add_actor("session-1", || Worker)
         .await
         .expect("actor added");
     assert_eq!(
@@ -258,7 +256,7 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
     builder.build().expect("the declared graph still builds");
 
     let mut foreign = GraphBuilder::new();
-    let (actor_slot, _) = foreign.slot("unrelated", tokio_otp::ActorOptions::new());
+    let (actor_slot, _) = foreign.slot("unrelated");
     foreign.define(actor_slot, || Worker);
     let foreign = foreign.build().expect("foreign graph builds");
 
@@ -288,7 +286,7 @@ impl Actor for Mounter {
     ) -> ActorResult {
         let worker = self
             .sessions
-            .add_actor("spawned", || Worker, DynamicActorOptions::new())
+            .add_actor("spawned", || Worker)
             .await
             .expect("dynamic scope accepts the actor");
         reply.send(worker.call(CALL_TIMEOUT, |reply| reply).await?);

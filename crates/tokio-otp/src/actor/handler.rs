@@ -122,6 +122,15 @@ pub enum DrainPolicy {
 /// Hand-writing [`RawActor::run`] remains the escape hatch for actors that need
 /// custom loop control.
 ///
+/// # Capability contract
+///
+/// Handler actors do not receive the mailbox-owning [`ActorContext`]. The
+/// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
+/// hook a stage-specific view instead. In return, the live startup and message
+/// stages implement [`LiveContext`](crate::LiveContext), which provides
+/// loop-owned timers and continuations that a custom raw loop must express
+/// directly. Watches and offloads remain available on [`ActorContext`].
+///
 /// A [`Flow::Stop`] exit is normal for monitoring and supervision. An
 /// [`Always`](tokio_supervisor::RestartPolicy::Always) child restarts after it;
 /// [`OnFailure`](tokio_supervisor::RestartPolicy::OnFailure) and
@@ -131,9 +140,12 @@ pub enum DrainPolicy {
 ///
 /// Registration takes a reusable [`ActorFactory`](crate::ActorFactory), whose
 /// output is fresh incarnation-local state and need not implement [`Clone`].
+/// An incarnation is moved into one task and need not implement [`Sync`]; the
+/// reusable factory remains `Send + Sync` because supervision may share it
+/// across restarts.
 /// Acquire fallible or asynchronous per-incarnation resources (connections,
 /// files, sessions) in [`on_start`](Self::on_start).
-pub trait Actor: Send + Sync + 'static {
+pub trait Actor: Send + 'static {
     /// The message type this handler receives.
     type Msg: Send + 'static;
 

@@ -111,9 +111,9 @@ impl SupervisionScope {
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut graph = GraphBuilder::new();
-/// let (_ingest_slot, _ingest) = graph.slot("ingest", tokio_otp::ActorOptions::new());
+/// let (_ingest_slot, _ingest) = graph.slot("ingest");
 /// graph.define(_ingest_slot, || Worker);
-/// let (_parse_slot, _parse) = graph.slot("parse", tokio_otp::ActorOptions::new());
+/// let (_parse_slot, _parse) = graph.slot("parse");
 /// graph.define(_parse_slot, || Worker);
 /// let graph = graph.build()?;
 ///

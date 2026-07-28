@@ -63,10 +63,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.spawn();
 
     let orders = handle
-        .add_actor("front-desk", || FrontDesk { rush: None }, DynamicActorOptions::default())
+        .add_actor("front-desk", || FrontDesk { rush: None })
         .await?;
     let rush = handle
-        .add_actor(
+        .add_actor_with(
             "rush-press",
             || RushPress,
             DynamicActorOptions::default()
@@ -98,8 +98,8 @@ value to `DynamicActorOptions::options`. The hosting runtime scope's mailbox
 capacity is the default: graph-backed scopes inherit their graph builder's
 setting, while graphless scopes use the library default.
 `ActorOptions::mailbox_capacity` overrides that default for one actor, and
-unkeyed `MailboxMode::Conflate` always stores one unread message and ignores
-either capacity. A zero per-actor capacity is rejected by `add_actor`.
+unkeyed `MailboxMode::conflate()` always stores one unread message and ignores
+either capacity. A zero per-actor capacity is rejected by `add_actor_with`.
 
 Dynamic actors are removed automatically after a terminal exit by default,
 independent of their restart policy. An exit is terminal only when the policy
@@ -159,11 +159,7 @@ and add the actor normally:
 ```rust,ignore
 let venue = handle.subtree("coinbase").expect("venue is running");
 let subscription = venue
-    .add_actor(
-        "btc-usd",
-        Subscription::new,
-        DynamicActorOptions::default(),
-    )
+    .add_actor("btc-usd", Subscription::new)
     .await?;
 ```
 
@@ -187,11 +183,7 @@ let session = sessions
     )
     .await?;
 session
-    .add_actor(
-        "current-run",
-        Run::new,
-        DynamicActorOptions::default(),
-    )
+    .add_actor("current-run", Run::new)
     .await?;
 ```
 
@@ -224,7 +216,7 @@ let sessions_tree = SupervisionTree::dynamic()
 let sessions = sessions_tree.handle();
 
 let mut graph = GraphBuilder::new();
-let (router_slot, _) = graph.slot("router", ActorOptions::new());
+let (router_slot, _) = graph.slot("router");
 graph.define(router_slot, move || Router::new(sessions.clone()));
 let graph = graph.build()?;
 
@@ -262,31 +254,24 @@ one identity.
 
 ## Scope handles inside actors
 
-`MessageContext::supervisor()` returns the actor-aware handle for the actor's
-enclosing scope. Observation always works. Membership changes work only for a
-dynamic scope; an ordered scope returns
-`ControlError::UnsupportedByScopeKind`. Awaiting ordinary scope operations is
-safe, with one residual cycle to avoid: do not await removal of a sibling whose
-drain needs this actor to keep consuming its own mailbox. Pipeline that removal
-with `ctx.offload`.
+Every actor stage has the same safe scope surface: `ActorContext`,
+`StartContext`, `MessageContext`, and `StopContext` return `RestrictedScope`
+from `supervisor()` and `children()`. Observation always works. Insertion
+(`add_actor`, `add_subtree`) schedules startup rather than waiting for it, so
+it remains available and works only for dynamic scopes. `subtree()` returns
+another `RestrictedScope`, so navigation cannot widen the surface.
 
-Startup is different, and the type system says so. `StartContext::supervisor()`
-returns a `RestrictedScope` rather than a `RuntimeHandle`: an actor cannot report
-ready until `on_start` returns, so awaiting `wait_started()`, `wait()`, or
-`shutdown_and_wait()` there waits on the current actor's own readiness and
-deadlocks. Those methods are simply absent from
-`RestrictedScope`. Insertion (`add_actor`, `add_child`, `add_subtree`) schedules
-startup rather than waiting for it, so it stays available, and `subtree()`
-returns another `RestrictedScope` so navigating to a nested scope does not
-widen the surface. When a wait must happen, call `RestrictedScope::release()`
-for the full handle and move it into the pipelined work:
+Lifecycle waits and membership removal are withheld because their progress may
+depend on the current actor returning from startup, its receive loop, a handler,
+or teardown. When a wait must happen, call `RestrictedScope::release()` for the
+full `RuntimeHandle` and move it into independent work:
 
 ```rust,ignore
 let children = ctx.children().expect("leader has a child scope").release();
 let myself = ctx.myself();
 tokio::spawn(async move {
     children.wait_started().await?;
-    children.add_actor("worker", || Worker, DynamicActorOptions::new()).await?;
+    children.add_actor("worker", || Worker).await?;
     myself.send(Msg::ScopeReady).await
 });
 ```
@@ -320,9 +305,9 @@ pre-spawn handle without changing the actor factory signature. The inner scope
 starts after the leader reports ready and stops before the leader is cancelled.
 Consequently, work launched during `on_start` must be pipelined: let `on_start`
 return, wait for `children.wait_started()` in the pipelined work, then add
-members — which is why `StartContext::children()` yields a `RestrictedScope`. A
-normal handler gets a full `RuntimeHandle` and can await
-`children.add_actor(...)` directly once the node is ready.
+members. Every stage yields a `RestrictedScope`; insertion itself is available
+directly because it only schedules startup, while lifecycle waits require
+`release()` and independent work.
 
 `actor_with_scope` takes the restart relationship explicitly. `RestForOne`
 means leader failure recycles the leader and owned scope, while a worker

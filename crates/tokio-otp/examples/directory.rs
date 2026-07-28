@@ -2,8 +2,8 @@ use std::{collections::HashMap, error::Error, time::Duration};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, DynamicActorOptions, GraphBuilder, MessageContext, Reply,
-    SupervisionTree, prelude::Continue,
+    Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, Reply, SupervisionTree,
+    prelude::Continue,
 };
 
 enum DirectoryMsg<M> {
@@ -62,7 +62,7 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut graph = GraphBuilder::new();
-    let (directory_slot, directory) = graph.slot("directory", tokio_otp::ActorOptions::new());
+    let (directory_slot, directory) = graph.slot("directory");
     graph.define(directory_slot, || Directory::<String> {
         entries: HashMap::new(),
     });
@@ -78,13 +78,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (printed, mut output) = mpsc::unbounded_channel();
     let printer = dynamic
-        .add_actor(
-            "printer",
-            move || Printer {
-                printed: printed.clone(),
-            },
-            DynamicActorOptions::default(),
-        )
+        .add_actor("printer", move || Printer {
+            printed: printed.clone(),
+        })
         .await?;
     directory
         .send(DirectoryMsg::Insert("receipts".to_owned(), printer))
