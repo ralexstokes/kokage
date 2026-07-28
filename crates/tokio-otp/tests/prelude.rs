@@ -17,10 +17,9 @@ mod coverage_probe {
     mod supervisor {
         use tokio_otp::prelude::{
             BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionOutcome,
-            ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
-            LifecycleWatch, RecursiveLifecycleEvent, RecursiveLifecycleEventKind,
-            RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode,
-            ShutdownPolicy, Strategy, SupervisorSnapshot, SupervisorStateView,
+            ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity,
+            RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorSnapshot,
+            SupervisorStateView,
         };
     }
 
@@ -30,9 +29,8 @@ mod coverage_probe {
 
     mod advanced_root {
         use tokio_otp::{
-            ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind,
-            LifecyclePathSegment, LifecycleWatch, LiveContext, RecursiveLifecycleEvent,
-            RecursiveLifecycleEventKind, RecursiveLifecycleWatch, Supervisor, SupervisorBuildError,
+            ChildContext, ChildResult, ChildSpec, ControlError, LifecycleEvent,
+            LifecyclePathSegment, LifecycleWatch, LiveContext, Supervisor, SupervisorBuildError,
             SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec,
         };
     }
@@ -87,12 +85,12 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         loop {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
-                event.kind,
-                RecursiveLifecycleEventKind::Child(LifecycleEvent {
+                event,
+                LifecycleEvent::Started {
                     ref child_id,
-                    kind: LifecycleEventKind::Started { generation: 0 },
+                    generation: 0,
                     ..
-                }) if child_id == "worker"
+                } if child_id == "worker"
             ) {
                 break event;
             }
@@ -101,12 +99,12 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     .await
     .expect("timed out waiting for started event");
     assert!(matches!(
-        started.kind,
-        RecursiveLifecycleEventKind::Child(LifecycleEvent {
+        started,
+        LifecycleEvent::Started {
             ref child_id,
-            kind: LifecycleEventKind::Started { generation: 0 },
+            generation: 0,
             ..
-        }) if child_id == "worker"
+        } if child_id == "worker"
     ));
 
     let snapshot = handle.snapshot();

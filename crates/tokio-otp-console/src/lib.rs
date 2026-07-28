@@ -41,7 +41,7 @@ use std::{net::SocketAddr, sync::Arc};
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio_otp::{ActorStats, RuntimeHandle};
-use tokio_supervisor::{RecursiveLifecycleWatch, SupervisorSnapshot};
+use tokio_supervisor::{LifecycleWatch, SupervisorSnapshot};
 
 /// Display-oriented snapshot of one actor's message and mailbox statistics.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -97,7 +97,7 @@ impl From<ActorStats> for ActorStatsView {
 }
 
 type StatsSource = Arc<dyn Fn() -> Vec<ActorStatsView> + Send + Sync>;
-type LifecycleSource = Arc<dyn Fn() -> RecursiveLifecycleWatch + Send + Sync>;
+type LifecycleSource = Arc<dyn Fn() -> LifecycleWatch + Send + Sync>;
 
 /// Errors returned while validating console configuration.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -149,7 +149,7 @@ impl ConsoleBuilder {
     /// for each WebSocket connection.
     pub fn lifecycle(
         mut self,
-        source: impl Fn() -> RecursiveLifecycleWatch + Send + Sync + 'static,
+        source: impl Fn() -> LifecycleWatch + Send + Sync + 'static,
     ) -> Self {
         self.lifecycle = Some(Arc::new(source));
         self

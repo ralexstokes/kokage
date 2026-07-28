@@ -55,10 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        if event.child_id == "flaky-worker"
-            && let LifecycleEventKind::Started { generation: 1 } = event.kind
+        if event.child_id() == Some("flaky-worker")
+            && let LifecycleEvent::Started { generation: 1, .. } = event
         {
-            println!("child {} restarted into generation 1", event.child_id);
+            println!("child flaky-worker restarted into generation 1");
             break;
         }
     }

@@ -11,8 +11,8 @@ use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
     AttachedChildIdentity, ChildSpec, ControlError, LifecycleEvent, LifecycleWatch,
-    RecursiveLifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
-    SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
+    RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot, SupervisorSpec,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -729,11 +729,11 @@ impl RuntimeHandle {
     }
 
     /// Returns the ordered lifecycle stream for this runtime's direct
-    /// children.
+    /// children, including restart scheduling and restart-intensity failure.
     ///
     /// Create the watch before reading [`snapshot`](Self::snapshot), then
-    /// discard events whose `seq` is at most the snapshot's `lifecycle_seq`
-    /// to obtain a gap-free state-plus-stream view. Pre-spawn snapshots
+    /// discard child transitions whose `seq` is at most the snapshot's
+    /// `lifecycle_seq` to obtain a gap-free state-plus-stream view. Pre-spawn snapshots
     /// already project configured children, so reducers should apply their
     /// later `Added` events as idempotent membership upserts. Use a
     /// [`subtree`](Self::subtree) handle for nested scopes.
@@ -747,7 +747,7 @@ impl RuntimeHandle {
     /// Events from nested scopes carry a stable supervisor path relative to
     /// this runtime. The stream also includes supervisor start/stop
     /// transitions and scheduled-restart delays.
-    pub fn watch_lifecycle_recursive(&self) -> RecursiveLifecycleWatch {
+    pub fn watch_lifecycle_recursive(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle_recursive()
     }
 

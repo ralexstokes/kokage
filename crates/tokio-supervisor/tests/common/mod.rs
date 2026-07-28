@@ -15,9 +15,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BoxError, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView, LifecycleEventKind,
-    RecursiveLifecycleEvent, RecursiveLifecycleEventKind, RecursiveLifecycleWatch,
-    RestartIntensity, RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    BoxError, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView, LifecycleEvent,
+    LifecycleWatch, RestartIntensity, RestartPolicy, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot,
 };
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -183,7 +183,7 @@ pub enum EventRecvError {
 }
 
 pub struct EventWatch {
-    lifecycle: RecursiveLifecycleWatch,
+    lifecycle: LifecycleWatch,
     pending: VecDeque<ObservedEvent>,
 }
 
@@ -221,49 +221,50 @@ impl EventWatch {
         }
     }
 
-    fn convert(
-        &mut self,
-        event: RecursiveLifecycleEvent,
-    ) -> Result<Option<ObservedEvent>, EventRecvError> {
+    fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
+        let path = event.supervisor_path().unwrap_or_default().to_vec();
         let mut pending = None;
-        let leaf = match event.kind {
-            RecursiveLifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
-            RecursiveLifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
-            RecursiveLifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
-            RecursiveLifecycleEventKind::Child(event) => match event.kind {
-                LifecycleEventKind::Added => return Ok(None),
-                LifecycleEventKind::Started { generation } => {
-                    // This compatibility shim preserves the removed test-event
-                    // shape. It deliberately assumes runtime generations are
-                    // contiguous when synthesizing `ChildRestarted`. If that
-                    // invariant changes, migrate these assertions to the raw
-                    // lifecycle events instead of extending this fiction.
-                    if generation > 0 {
-                        pending = Some(ObservedEvent::ChildRestarted {
-                            id: event.child_id.clone(),
-                            old_generation: generation - 1,
-                            new_generation: generation,
-                        });
-                    }
-                    ObservedEvent::ChildStarted {
-                        id: event.child_id,
-                        generation,
-                    }
+        let leaf = match event {
+            LifecycleEvent::SupervisorStarted { .. } => ObservedEvent::SupervisorStarted,
+            LifecycleEvent::SupervisorStopping { .. } => ObservedEvent::SupervisorStopping,
+            LifecycleEvent::SupervisorStopped { .. } => ObservedEvent::SupervisorStopped,
+            LifecycleEvent::Added { .. } => return Ok(None),
+            LifecycleEvent::Started {
+                child_id,
+                generation,
+                ..
+            } => {
+                // This compatibility shim preserves the removed test-event
+                // shape. It deliberately assumes runtime generations are
+                // contiguous when synthesizing `ChildRestarted`. If that
+                // invariant changes, migrate these assertions to the raw
+                // lifecycle events instead of extending this fiction.
+                if generation > 0 {
+                    pending = Some(ObservedEvent::ChildRestarted {
+                        id: child_id.clone(),
+                        old_generation: generation - 1,
+                        new_generation: generation,
+                    });
                 }
-                LifecycleEventKind::Exited {
-                    generation, reason, ..
-                } => ObservedEvent::ChildExited {
-                    id: event.child_id,
+                ObservedEvent::ChildStarted {
+                    id: child_id,
                     generation,
-                    status: reason,
-                },
-                LifecycleEventKind::Removed => ObservedEvent::ChildRemoved { id: event.child_id },
-                LifecycleEventKind::Lagged { dropped } => {
-                    return Err(EventRecvError::Lagged(dropped));
                 }
-                _ => return Ok(None),
+            }
+            LifecycleEvent::Exited {
+                child_id,
+                generation,
+                reason,
+                ..
+            } => ObservedEvent::ChildExited {
+                id: child_id,
+                generation,
+                status: reason,
             },
-            RecursiveLifecycleEventKind::RestartScheduled {
+            LifecycleEvent::Removed { child_id, .. } => {
+                ObservedEvent::ChildRemoved { id: child_id }
+            }
+            LifecycleEvent::RestartScheduled {
                 child_id,
                 generation,
                 delay,
@@ -273,15 +274,14 @@ impl EventWatch {
                 generation,
                 delay,
             },
-            RecursiveLifecycleEventKind::RestartIntensityExceeded { .. } => {
+            LifecycleEvent::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded
             }
-            RecursiveLifecycleEventKind::Lagged { dropped, .. } => {
+            LifecycleEvent::Lagged { dropped } => {
                 return Err(EventRecvError::Lagged(dropped));
             }
             _ => return Ok(None),
         };
-        let path = event.supervisor_path;
         if let Some(pending) = pending {
             self.pending.push_back(wrap_event(pending, &path));
         }

@@ -364,7 +364,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree")
         .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
-            total: event.total_restarts,
+            total: event.total_restarts().unwrap_or_default(),
         });
 
     Ok(App {
@@ -795,7 +795,7 @@ fn restart_observer(handle: &tokio_otp::SupervisorHandle, id: &str) -> (Lifecycl
 
 async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
     lifecycle
-        .started_after(id, baseline)
+        .started_after(&[], id, baseline)
         .await
         .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
 }

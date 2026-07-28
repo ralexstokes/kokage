@@ -1434,8 +1434,26 @@ impl RestrictedScope {
     }
 
     /// Observes lifecycle transitions of this scope and everything beneath it.
-    pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::RecursiveLifecycleWatch {
+    pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::LifecycleWatch {
         self.handle.watch_lifecycle_recursive()
+    }
+
+    /// Pumps direct-child lifecycle events into `target` using its ordinary
+    /// mailbox policy.
+    ///
+    /// The detached pump is safe to start from a lifecycle hook: it does not
+    /// wait for this scope or any child to transition. See
+    /// [`RuntimeHandle::watch_lifecycle_to`].
+    pub fn watch_lifecycle_to<M, F>(
+        &self,
+        target: &ActorRef<M>,
+        map: F,
+    ) -> crate::LifecycleWatchGuard
+    where
+        M: Send + 'static,
+        F: FnMut(tokio_supervisor::LifecycleEvent) -> M + Send + 'static,
+    {
+        self.handle.watch_lifecycle_to(target, map)
     }
 
     /// Requests shutdown of this scope without waiting for it.

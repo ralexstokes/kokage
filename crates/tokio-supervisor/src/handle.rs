@@ -16,7 +16,7 @@ use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
     error::{ControlError, SupervisorError},
-    lifecycle::{LifecycleHub, LifecycleWatch, RecursiveLifecycleWatch},
+    lifecycle::{LifecycleHub, LifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
     },
@@ -1751,19 +1751,21 @@ impl SupervisorHandle {
     }
 
     /// Returns an ordered, reliable stream of lifecycle transitions among
-    /// this supervisor's direct children.
+    /// this supervisor's direct children, including restart scheduling and
+    /// restart-intensity failure.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
     /// To obtain a gap-free state-plus-stream view, create the watch first,
-    /// then read [`snapshot`](Self::snapshot), then discard watched events
-    /// whose sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
+    /// then read [`snapshot`](Self::snapshot), then discard watched child
+    /// transitions whose sequence is at most
+    /// [`SupervisorSnapshot::lifecycle_seq`].
     /// Pre-spawn snapshots already project configured children as `Starting`,
     /// so apply a later `Added` for that membership as an idempotent upsert
     /// keyed by `(child_id, lineage)`. Lineage allocation continues across
     /// incarnations of this stable supervisor identity.
     ///
     /// Each watch owns a bounded buffer. Sustained overflow is represented by
-    /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged), never
+    /// [`LifecycleEvent::Lagged`](crate::LifecycleEvent::Lagged), never
     /// silent loss. This scope does not aggregate nested supervisors; obtain a
     /// nested handle with [`supervisor`](Self::supervisor) and watch it
     /// separately.
@@ -1781,10 +1783,10 @@ impl SupervisorHandle {
     ///
     /// Each watch owns one bounded buffer for the whole tree. Sustained
     /// overflow is represented by a tree-wide
-    /// [`RecursiveLifecycleEventKind::Lagged`](crate::RecursiveLifecycleEventKind::Lagged)
+    /// [`LifecycleEvent::Lagged`](crate::LifecycleEvent::Lagged)
     /// marker. Consumers maintaining derived state should then resynchronize
     /// from [`snapshot`](Self::snapshot).
-    pub fn watch_lifecycle_recursive(&self) -> RecursiveLifecycleWatch {
+    pub fn watch_lifecycle_recursive(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch_recursive()
     }
 

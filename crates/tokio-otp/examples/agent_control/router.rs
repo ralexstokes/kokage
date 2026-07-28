@@ -9,9 +9,9 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ChildMembershipView, ControlError, GraphBuilder,
-    LifecycleEventKind, LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle,
-    StartContext, Strategy, SupervisionTree, SupervisorSnapshot, prelude::Continue,
+    Actor, ActorRef, ActorResult, ChildMembershipView, ControlError, GraphBuilder, LifecycleEvent,
+    LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle, StartContext, Strategy,
+    SupervisionTree, SupervisorSnapshot, prelude::Continue,
 };
 
 use crate::{
@@ -69,14 +69,10 @@ enum MountEventDisposition {
     Ignore,
 }
 
-fn mount_event_disposition(
-    alignment_seq: u64,
-    event_seq: u64,
-    kind: &LifecycleEventKind,
-) -> MountEventDisposition {
-    if matches!(kind, LifecycleEventKind::Lagged { .. }) {
+fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountEventDisposition {
+    if matches!(event, LifecycleEvent::Lagged { .. }) {
         MountEventDisposition::ReconcileSnapshot
-    } else if event_seq > alignment_seq {
+    } else if event.seq().is_some_and(|seq| seq > alignment_seq) {
         MountEventDisposition::Apply
     } else {
         MountEventDisposition::Ignore
@@ -304,19 +300,21 @@ impl Actor for Router {
     ) -> ActorResult {
         match message {
             RouterMsg::MountLifecycle(event) => {
-                match mount_event_disposition(self.alignment_seq, event.seq, &event.kind) {
+                match mount_event_disposition(self.alignment_seq, &event) {
                     MountEventDisposition::ReconcileSnapshot => {
-                        // The marker retains the sequence of the oldest dropped
-                        // edge, which can precede our current baseline. Always
-                        // resnapshot instead of applying ordinary seq filtering.
+                        // A marker covers a dropped prefix without one usable
+                        // sequence. Always resnapshot instead of applying
+                        // ordinary sequence filtering.
                         self.reconcile_mount_snapshot(ctx);
                     }
                     MountEventDisposition::Apply => {
-                        self.alignment_seq = event.seq;
-                        if matches!(event.kind, LifecycleEventKind::Added)
-                            && !self.routes_subtree(&event.child_id)
+                        if let Some(seq) = event.seq() {
+                            self.alignment_seq = seq;
+                        }
+                        if let LifecycleEvent::Added { child_id, .. } = event
+                            && !self.routes_subtree(&child_id)
                         {
-                            self.pipeline_sweep(event.child_id, ctx);
+                            self.pipeline_sweep(child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}
@@ -453,16 +451,24 @@ mod tests {
 
     #[test]
     fn lagged_event_bypasses_seq_filter_and_reconciles_active_orphans() {
+        let added = |seq| LifecycleEvent::Added {
+            supervisor_path: Vec::new(),
+            seq,
+            child_id: "orphan".to_owned(),
+            lineage: 0,
+            total_restarts: 0,
+            child_restart_count: 0,
+        };
         assert_eq!(
-            mount_event_disposition(72, 1, &LifecycleEventKind::Lagged { dropped: 71 }),
+            mount_event_disposition(72, &LifecycleEvent::Lagged { dropped: 71 }),
             MountEventDisposition::ReconcileSnapshot
         );
         assert_eq!(
-            mount_event_disposition(72, 71, &LifecycleEventKind::Added),
+            mount_event_disposition(72, &added(71)),
             MountEventDisposition::Ignore
         );
         assert_eq!(
-            mount_event_disposition(72, 73, &LifecycleEventKind::Added),
+            mount_event_disposition(72, &added(73)),
             MountEventDisposition::Apply
         );
 

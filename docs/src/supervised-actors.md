@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let baseline = handle.snapshot().child("press").unwrap().generation;
     orders.send("origami cranes x1000".into()).await?;
     lifecycle
-        .started_after("press", baseline)
+        .started_after(&[], "press", baseline)
         .await
         .expect("press restart is observed");
     orders.send("flyers x500".into()).await?;

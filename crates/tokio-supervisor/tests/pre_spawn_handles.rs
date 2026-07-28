@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEventKind,
+    ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEvent,
     RestartIntensity, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
 };
 
@@ -91,14 +91,14 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
         .await
         .expect("Started arrives")
         .expect("watch remains open");
-    assert!(matches!(added.kind, LifecycleEventKind::Added));
+    assert!(matches!(&added, LifecycleEvent::Added { .. }));
     assert!(matches!(
-        started.kind,
-        LifecycleEventKind::Started { generation: 0 }
+        &started,
+        LifecycleEvent::Started { generation: 0, .. }
     ));
-    assert_eq!(added.seq, baseline.lifecycle_seq + 1);
-    assert_eq!(added.lineage, declared.lineage);
-    assert_eq!(started.seq, added.seq + 1);
+    assert_eq!(added.seq(), Some(baseline.lifecycle_seq + 1));
+    assert_eq!(added.lineage(), Some(declared.lineage));
+    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
 
     spawned
         .shutdown_and_wait()

@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
-            let stopped = matches!(event.kind, RecursiveLifecycleEventKind::SupervisorStopped);
+            let stopped = matches!(event, LifecycleEvent::SupervisorStopped { .. });
             print_event(&event);
             if stopped {
                 break;
@@ -34,9 +34,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn print_event(event: &RecursiveLifecycleEvent) {
+fn print_event(event: &LifecycleEvent) {
     let path = event
-        .supervisor_path
+        .supervisor_path()
+        .unwrap_or_default()
         .iter()
         .map(|segment| {
             format!(
@@ -48,37 +49,34 @@ fn print_event(event: &RecursiveLifecycleEvent) {
         .join("/");
     let scope = if path.is_empty() { "root" } else { &path };
 
-    match &event.kind {
-        RecursiveLifecycleEventKind::SupervisorStarted => {
+    match event {
+        LifecycleEvent::SupervisorStarted { .. } => {
             println!("{scope}: supervisor started");
         }
-        RecursiveLifecycleEventKind::SupervisorStopping => {
+        LifecycleEvent::SupervisorStopping { .. } => {
             println!("{scope}: supervisor stopping");
         }
-        RecursiveLifecycleEventKind::SupervisorStopped => {
+        LifecycleEvent::SupervisorStopped { .. } => {
             println!("{scope}: supervisor stopped");
         }
-        RecursiveLifecycleEventKind::Child(child) => match &child.kind {
-            LifecycleEventKind::Added => println!("{scope}: child added: {}", child.child_id),
-            LifecycleEventKind::Started { generation } => println!(
-                "{scope}: child started: {} generation={generation}",
-                child.child_id
-            ),
-            LifecycleEventKind::Exited {
-                generation, reason, ..
-            } => println!(
-                "{scope}: child exited: {} generation={generation} reason={reason:?}",
-                child.child_id
-            ),
-            LifecycleEventKind::Removed => {
-                println!("{scope}: child removed: {}", child.child_id);
-            }
-            LifecycleEventKind::Lagged { dropped } => {
-                println!("{scope}: direct lifecycle dropped {dropped} transitions");
-            }
-            _ => println!("{scope}: unknown child lifecycle event"),
-        },
-        RecursiveLifecycleEventKind::RestartScheduled {
+        LifecycleEvent::Added { child_id, .. } => println!("{scope}: child added: {child_id}"),
+        LifecycleEvent::Started {
+            child_id,
+            generation,
+            ..
+        } => println!("{scope}: child started: {child_id} generation={generation}"),
+        LifecycleEvent::Exited {
+            child_id,
+            generation,
+            reason,
+            ..
+        } => {
+            println!("{scope}: child exited: {child_id} generation={generation} reason={reason:?}")
+        }
+        LifecycleEvent::Removed { child_id, .. } => {
+            println!("{scope}: child removed: {child_id}");
+        }
+        LifecycleEvent::RestartScheduled {
             child_id,
             generation,
             delay,
@@ -88,12 +86,12 @@ fn print_event(event: &RecursiveLifecycleEvent) {
                 "{scope}: child restart scheduled: {child_id} generation={generation} delay={delay:?}"
             );
         }
-        RecursiveLifecycleEventKind::RestartIntensityExceeded { total_restarts, .. } => {
+        LifecycleEvent::RestartIntensityExceeded { total_restarts, .. } => {
             println!("{scope}: restart intensity exceeded after {total_restarts} restarts");
         }
-        RecursiveLifecycleEventKind::Lagged { dropped, .. } => {
+        LifecycleEvent::Lagged { dropped } => {
             println!("{scope}: recursive lifecycle dropped {dropped} events; resync snapshots");
         }
-        _ => println!("{scope}: unknown recursive lifecycle event"),
+        _ => println!("{scope}: unknown lifecycle event"),
     }
 }
