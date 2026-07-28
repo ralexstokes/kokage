@@ -54,7 +54,7 @@ jobs:
           name: ralexstokes
           skipPush: true
 
-      - name: Restore Cargo target cache
+      - name: Restore pull request Cargo target cache
         if: steps.lane.outputs.full != 'true'
         uses: actions/cache@v4
         with:
@@ -64,11 +64,27 @@ jobs:
             !target/doc/**
             !target/tests/trybuild/**
           # GitHub caches are immutable. Keep one cache per PR and dependency
-          # set so later commits get an exact hit instead of uploading another
-          # multi-gigabyte target archive for every SHA.
+          # set so later commits get an exact hit. A new PR falls back to the
+          # trusted cache produced for its base commit on main.
           key: cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-pr-${{ github.event.pull_request.number }}
           restore-keys: |
+            cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-main-${{ github.event.pull_request.base.sha }}
+            cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-main-
             cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-
+
+      - name: Restore shared Cargo target cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: shared-cargo-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            target
+            !target/debug/incremental/**
+            !target/doc/**
+            !target/tests/trybuild/**
+          key: cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-main-${{ github.sha }}
+          restore-keys: |
+            cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-main-
 
       - name: Validate flake
         if: steps.lane.outputs.full != 'true'
@@ -85,6 +101,33 @@ jobs:
       - name: Run full flake checks
         if: steps.lane.outputs.full == 'true'
         run: nix flake check --no-update-lock-file
+
+      - name: Seed shared Cargo target cache
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.shared-cargo-cache.outputs.cache-hit != 'true' &&
+          success()
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: nix develop --command just ci
+
+      - name: Save shared Cargo target cache
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.shared-cargo-cache.outputs.cache-hit != 'true' &&
+          success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            target
+            !target/debug/incremental/**
+            !target/doc/**
+            !target/tests/trybuild/**
+          key: cargo-target-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'flake.lock', 'rust-toolchain.toml') }}-main-${{ github.sha }}
 
       - name: Publish development shell to Cachix
         if: >-
