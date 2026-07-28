@@ -642,7 +642,12 @@ impl RunnableActorBuilder {
     where
         F: ActorFactory,
     {
+        debug_assert!(
+            options.validate().is_ok(),
+            "actor options must be validated before actor construction"
+        );
         let actor_id: Arc<str> = label.into().into();
+        let mailbox_capacity = options.mailbox_capacity.unwrap_or(self.mailbox_capacity);
         let binding = Arc::new(match options.size_hint {
             Some(size_hint) => BindingCore::<<F::Actor as RawActor>::Msg>::with_message_size(
                 actor_id.clone(),
@@ -650,7 +655,13 @@ impl RunnableActorBuilder {
             ),
             None => BindingCore::<<F::Actor as RawActor>::Msg>::new(actor_id.clone()),
         });
-        self.actor_with_binding(actor_id, factory, binding, options.mailbox_mode)
+        self.actor_with_binding(
+            actor_id,
+            factory,
+            binding,
+            options.mailbox_mode,
+            mailbox_capacity,
+        )
     }
 
     fn actor_with_binding<F>(
@@ -659,6 +670,7 @@ impl RunnableActorBuilder {
         factory: F,
         binding: Arc<BindingCore<<F::Actor as RawActor>::Msg>>,
         mailbox_mode: MailboxMode<<F::Actor as RawActor>::Msg>,
+        mailbox_capacity: usize,
     ) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
     where
         F: ActorFactory,
@@ -672,7 +684,7 @@ impl RunnableActorBuilder {
                 binding,
                 mailbox_mode,
             }),
-            mailbox_capacity: self.mailbox_capacity,
+            mailbox_capacity,
             observability: self.observability.clone(),
         });
         (runnable, actor_ref)

@@ -222,11 +222,10 @@ let (uploads_slot, uploads) =
 graph.define(uploads_slot, UploadActor::new);
 ```
 
-The same `ActorOptions` value works with `GraphBuilder::slot`. Dynamic
-registration exposes the same settings directly on `DynamicActorOptions`, so
-mailbox and size settings can be combined with
-`DynamicActorOptions::new().mailbox(MailboxMode::Conflate).message_size()`
-and passed to `RuntimeHandle::add_actor`.
+The same `ActorOptions` value works with `GraphBuilder::slot`. Pass it to
+`DynamicActorOptions::options` when registering an actor dynamically, so the
+same mailbox vocabulary configures graph and dynamic actors:
+`DynamicActorOptions::new().options(ActorOptions::new().mailbox(MailboxMode::Conflate).message_size())`.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that

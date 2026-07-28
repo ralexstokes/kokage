@@ -86,6 +86,14 @@ the `restart(...)` or `shutdown(...)` builder methods to override them. Those
 methods are how the runtime distinguishes an explicit override from an
 inherited default.
 
+Mailbox configuration is shared with graph actors: pass an `ActorOptions`
+value to `DynamicActorOptions::options`. The hosting runtime scope's mailbox
+capacity is the default: graph-backed scopes inherit their graph builder's
+setting, while graphless scopes use the library default.
+`ActorOptions::mailbox_capacity` overrides that default for one actor, and
+unkeyed `MailboxMode::Conflate` always stores one unread message and ignores
+either capacity. A zero per-actor capacity is rejected by `add_actor`.
+
 Dynamic actors are removed automatically after a terminal exit by default,
 independent of their restart policy. An exit is terminal only when the policy
 declines to restart it, so default removal never interrupts a restart cycle.

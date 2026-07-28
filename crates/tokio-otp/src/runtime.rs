@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorOptions, ActorRef, ActorStats, MailboxMode, MessageSize, RawActor,
-    RunnableActor, SupervisorPathSegment, actor::RunnableActorBuilder,
+    ActorFactory, ActorOptions, ActorRef, ActorStats, RawActor, RunnableActor,
+    SupervisorPathSegment, actor::RunnableActorBuilder,
 };
 use thiserror::Error;
 use tokio::sync::watch;
@@ -134,9 +134,7 @@ pub struct DynamicActorOptions<M = ()> {
     shutdown_is_default: bool,
     /// Optional restart intensity override for this actor child.
     pub restart_intensity: Option<RestartIntensity>,
-    mailbox_mode: MailboxMode<M>,
-    size_hint: Option<fn(&M) -> usize>,
-    mailbox_capacity: Option<usize>,
+    actor_options: ActorOptions<M>,
     // `None` selects the dynamic-actor default. Keeping the override unresolved
     // makes `restart(...).remove_on_exit(...)` order-independent.
     remove_on_exit: Option<bool>,
@@ -150,9 +148,7 @@ impl<M> Clone for DynamicActorOptions<M> {
             shutdown: self.shutdown,
             shutdown_is_default: self.shutdown_is_default,
             restart_intensity: self.restart_intensity,
-            mailbox_mode: self.mailbox_mode.clone(),
-            size_hint: self.size_hint,
-            mailbox_capacity: self.mailbox_capacity,
+            actor_options: self.actor_options.clone(),
             remove_on_exit: self.remove_on_exit,
         }
     }
@@ -166,9 +162,7 @@ impl<M> Default for DynamicActorOptions<M> {
             shutdown: ShutdownPolicy::default(),
             shutdown_is_default: true,
             restart_intensity: None,
-            mailbox_mode: MailboxMode::Queue,
-            size_hint: None,
-            mailbox_capacity: None,
+            actor_options: ActorOptions::new(),
             remove_on_exit: None,
         }
     }
@@ -209,27 +203,15 @@ impl<M> DynamicActorOptions<M> {
         self
     }
 
-    /// Selects the actor's mailbox storage policy.
+    /// Sets the actor's mailbox and message-observation options.
+    ///
+    /// [`ActorOptions::mailbox_capacity`] overrides the hosting scope's
+    /// default for this actor. Unkeyed
+    /// [`MailboxMode::Conflate`](crate::MailboxMode::Conflate) always has
+    /// capacity one and ignores both the scope default and the override.
     #[must_use]
-    pub fn mailbox(mut self, mailbox_mode: MailboxMode<M>) -> Self {
-        self.mailbox_mode = mailbox_mode;
-        self
-    }
-
-    /// Overrides the hosting scope's mailbox capacity for this actor alone.
-    #[must_use]
-    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.mailbox_capacity = Some(capacity);
-        self
-    }
-
-    /// Enables accepted-message byte observation using `M`'s size hint.
-    #[must_use]
-    pub fn message_size(mut self) -> Self
-    where
-        M: MessageSize,
-    {
-        self.size_hint = Some(MessageSize::size_hint);
+    pub fn options(mut self, options: ActorOptions<M>) -> Self {
+        self.actor_options = options;
         self
     }
 
@@ -278,14 +260,7 @@ impl<M> DynamicActorOptions<M> {
         default_shutdown: ShutdownPolicy,
     ) -> (ActorOptions<M>, DynamicChildOptions) {
         let child_options = self.child_options(default_restart, default_shutdown);
-        (
-            ActorOptions {
-                mailbox_mode: self.mailbox_mode,
-                size_hint: self.size_hint,
-                mailbox_capacity: self.mailbox_capacity,
-            },
-            child_options,
-        )
+        (self.actor_options, child_options)
     }
 }
 
@@ -671,7 +646,9 @@ impl RuntimeHandle {
     /// [`ControlError::UnsupportedByScopeKind`]. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`SupervisorHandle::wait_started`]
-    /// retains the stronger readiness contract.
+    /// retains the stronger readiness contract. A zero
+    /// [`ActorOptions::mailbox_capacity`] is rejected with
+    /// [`ControlError::InvalidConfig`].
     pub async fn add_actor<F>(
         &self,
         label: impl Into<String>,
@@ -684,6 +661,9 @@ impl RuntimeHandle {
         let (default_restart, default_shutdown) = self.actors.actor_defaults();
         let (actor_options, dynamic_options) =
             options.into_parts(default_restart, default_shutdown);
+        actor_options
+            .validate()
+            .map_err(ControlError::InvalidConfig)?;
         let actor = self.actors.make_actor(label, factory, actor_options);
         self.add_constructed_actor(actor, dynamic_options).await
     }
