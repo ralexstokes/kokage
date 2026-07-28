@@ -83,11 +83,11 @@ impl<M> ActorOptions<M> {
         }
     }
 
-    /// Overrides the graph's mailbox capacity for this actor alone.
+    /// Overrides the hosting scope's mailbox capacity for this actor alone.
     ///
-    /// The graph-wide default from
-    /// [`GraphBuilder::mailbox_capacity`] applies to every actor that does not
-    /// set this. As there, the value is the FIFO queue capacity and the maximum
+    /// Graph actors otherwise inherit [`GraphBuilder::mailbox_capacity`], while
+    /// runtime-added actors inherit the hosting runtime scope's default. The
+    /// value must be non-zero. It is the FIFO queue capacity and the maximum
     /// number of distinct unread keys for keyed conflation; unkeyed conflation
     /// always has capacity 1 and ignores it.
     pub fn mailbox_capacity(mut self, capacity: usize) -> Self {

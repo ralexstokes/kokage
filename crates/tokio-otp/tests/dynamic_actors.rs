@@ -15,11 +15,11 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, BoxError, CancellationHandle, ChildMembershipView,
-    ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy, DynamicActorOptions,
-    DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageContext, MessageSize, MonitorEvent,
-    RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownMode,
-    ShutdownPolicy, StartContext, StopContext, SupervisorBuilder,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
+    ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
+    DynamicActorOptions, DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageContext,
+    MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind,
+    SendError, ShutdownMode, ShutdownPolicy, StartContext, StopContext, SupervisorBuilder,
     prelude::{Continue, Stop},
 };
 
@@ -1105,9 +1105,11 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .add_actor(
             "sink",
             Drain::<SizedMessage>::new,
-            DynamicActorOptions::default()
-                .mailbox(MailboxMode::Conflate)
-                .message_size(),
+            DynamicActorOptions::default().options(
+                ActorOptions::new()
+                    .mailbox(MailboxMode::Conflate)
+                    .message_size(),
+            ),
         )
         .await
         .expect("sized actor added");
@@ -1157,7 +1159,8 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
                     release: release.clone(),
                 }
             },
-            DynamicActorOptions::default().mailbox(MailboxMode::Conflate),
+            DynamicActorOptions::default()
+                .options(ActorOptions::new().mailbox(MailboxMode::Conflate)),
         )
         .await
         .expect("conflating actor added");
@@ -1172,6 +1175,51 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
 
     release.notify_one();
     shutdown_runtime(&handle, "conflating dynamic actor test shutdown").await;
+}
+
+#[tokio::test]
+async fn runtime_added_actor_can_override_mailbox_capacity() {
+    let handle = Runtime::dynamic()
+        .build()
+        .expect("graphless runtime builds")
+        .spawn();
+    let sink = handle
+        .add_actor(
+            "sink",
+            Drain::<u64>::new,
+            DynamicActorOptions::default().options(ActorOptions::new().mailbox_capacity(9)),
+        )
+        .await
+        .expect("actor with a capacity override is added");
+
+    sink.send(1).await.expect("message accepted");
+    assert_eq!(sink.stats().mailbox_capacity, 9);
+
+    shutdown_runtime(&handle, "mailbox capacity override test shutdown").await;
+}
+
+#[tokio::test]
+async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
+    let handle = Runtime::dynamic()
+        .build()
+        .expect("graphless runtime builds")
+        .spawn();
+    let result = handle
+        .add_actor(
+            "sink",
+            Drain::<u64>::new,
+            DynamicActorOptions::default().options(ActorOptions::new().mailbox_capacity(0)),
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ControlError::InvalidConfig(
+            "actor mailbox capacity must be non-zero"
+        ))
+    ));
+
+    shutdown_runtime(&handle, "zero mailbox capacity test shutdown").await;
 }
 
 #[tokio::test]
