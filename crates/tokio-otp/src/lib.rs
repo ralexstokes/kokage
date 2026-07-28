@@ -1,11 +1,11 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style fault tolerance on `tokio`: supervised typed
-//! actor graphs with one integrated [`Runtime`].
+//! actor graphs with one integrated [`RuntimeHandle`].
 //!
 //! For the common setup — every actor of a graph running as its own
-//! supervised child — build a graph, place it in a [`SupervisionTree`], and
-//! spawn the resulting runtime:
+//! supervised child — build a graph, move it into an [`OrderedTree`], and
+//! spawn the tree:
 //!
 //! ```no_run
 //! use tokio_otp::prelude::*;
@@ -28,10 +28,9 @@
 //! graph.define(echo_slot, || Echo);
 //!
 //! let graph = graph.build()?;
-//! let runtime = SupervisionTree::graph(&graph)
+//! let handle = OrderedTree::graph(graph)
 //!     .strategy(Strategy::OneForOne)
-//!     .build()?;
-//! let handle = runtime.spawn();
+//!     .spawn()?;
 //!
 //! echo.send("hello".to_owned()).await?;
 //! handle.shutdown_and_wait().await?;
@@ -39,7 +38,7 @@
 //! # }
 //! ```
 //!
-//! See [`SupervisionTree`] for recursive composition and per-actor policy
+//! See [`OrderedTree`] for recursive composition and per-actor policy
 //! examples. The [`prelude`] re-exports the day-one composition and actor
 //! surface plus the core `tokio-supervisor` policies. Observability, advanced
 //! configuration, and raw supervisor construction stay at their crate roots.
@@ -48,8 +47,7 @@
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`SupervisionTree`] / [`ReservedSupervisionTree`] | Primary recursive declaration; reserve the non-cloneable form when a scope handle is needed before build. |
-//! | [`Runtime`] | Configured executable runtime produced by a supervision tree. |
+//! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their handles are available before spawn. |
 //! | [`RuntimeHandle`] | Control surface for shutdown, completion, and observability; dynamic-scope handles also add actors, task children, and subtrees. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
@@ -65,12 +63,12 @@
 //!
 //! # Composition modes
 //!
-//! - **Ordered actor trees** via [`SupervisionTree::new`] or
-//!   [`SupervisionTree::graph`]: per-actor supervision, recursive actor-aware
+//! - **Ordered actor trees** via [`OrderedTree::new`] or
+//!   [`OrderedTree::graph`]: per-actor supervision, recursive actor-aware
 //!   subtrees, arbitrary task children, and actor-owned scopes.
-//! - **Dynamic actor membership** via [`SupervisionTree::dynamic`]: an
+//! - **Dynamic actor membership** via [`DynamicTree::new`]: an
 //!   initially empty `OneForOne` scope that accepts actors and subtrees at
-//!   runtime. Reserve it before build when its handle is needed during wiring.
+//!   runtime. Its handle can be captured during wiring before the tree spawns.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.
@@ -120,10 +118,10 @@
 //!
 //! # Hand-driving actors
 //!
-//! Supervision through [`Runtime`] is the normal host, but the execution
-//! surface is public: each [`RunnableActor`] can be driven directly with
-//! [`run_until`](RunnableActor::run_until), which is how tests (and hosts
-//! with their own supervision story) run actors.
+//! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal host,
+//! but the execution surface is also public. Each [`RunnableActor`] can be
+//! driven directly with [`run_until`](RunnableActor::run_until), which is how
+//! tests (and hosts with their own supervision story) run actors.
 //!
 //! ```
 //! use tokio_otp::{
@@ -266,7 +264,7 @@ pub mod timers;
 /// Common imports for `tokio-otp` consumers.
 ///
 /// This prelude is intentionally limited to the actor traits and contexts,
-/// primary [`SupervisionTree`] composition path, core policies, and common
+/// primary [`OrderedTree`] composition path, core policies, and common
 /// send/call errors. Observability and advanced surfaces remain available at
 /// the crate root without being injected by a glob import.
 pub mod prelude {
@@ -274,9 +272,9 @@ pub mod prelude {
     // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-        BoxError, CallError, GraphBuilder, GraphConfig, LiveContext, MessageContext, RawActor,
-        Reply, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
-        StartContext, StopContext, Strategy, Supervision, SupervisionTree, TrySendError,
+        BoxError, CallError, DynamicTree, GraphBuilder, GraphConfig, LiveContext, MessageContext,
+        OrderedTree, RawActor, Reply, RestartConfig, RestartPolicy, RuntimeHandle, SendError,
+        ShutdownPolicy, StartContext, StopContext, Strategy, Supervision, TrySendError,
     };
 }
 
@@ -291,11 +289,9 @@ pub use actor::{
     MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor,
     SendError, StartContext, StopContext, SupervisorPathSegment, TimerKey, TrySendError,
 };
-pub use runtime::{
-    AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
-};
+pub use runtime::{DynamicActorOptions, LifecycleWatchGuard, RuntimeHandle};
 pub use supervision::{
-    ActorSpec, ChildOutline, ReservedSupervisionTree, SupervisionOutline, SupervisionTree,
+    ActorSpec, ChildOutline, DynamicTree, OrderedTree, SupervisionOutline, TreeNode,
 };
 #[doc(hidden)]
 pub use supervision_derive::qualified_label;

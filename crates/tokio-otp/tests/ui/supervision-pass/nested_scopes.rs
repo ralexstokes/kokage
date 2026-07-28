@@ -2,8 +2,8 @@
 //! marker scope all wire from one factories literal.
 
 use tokio_otp::{
-    ActorContext, ActorResult, DynamicScope, GraphBuildError, RestartPolicy, Strategy, Supervision,
-    SupervisionTree,
+    ActorContext, ActorResult, DynamicScope, DynamicTree, GraphBuildError, RestartPolicy, Strategy,
+    Supervision,
 };
 
 struct Worker;
@@ -51,9 +51,7 @@ fn main() -> Result<(), GraphBuildError> {
         },
         pool: PoolFactories {
             manager: || Worker,
-            sessions: SupervisionTree::dynamic()
-                .default_restart(RestartPolicy::Never)
-                .reserve(),
+            sessions: DynamicTree::new().default_restart(RestartPolicy::Never),
         },
     })?;
 

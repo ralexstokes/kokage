@@ -12,7 +12,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let handle = SupervisionTree::new().build()?.spawn();
+//! # let handle = OrderedTree::new().spawn()?;
 //! let console = Console::for_runtime(&handle)
 //!     .build()?
 //!     .spawn()

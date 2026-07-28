@@ -1,0 +1,14 @@
+error[E0599]: no associated function or constant named `Dynamic` found for struct `DynamicTree` in the current scope
+ --> tests/ui/single-use-tree/opaque.rs:4:26
+  |
+4 |     let _ = DynamicTree::Dynamic;
+  |                          ^^^^^^^ associated function or constant not found in `DynamicTree`
+
+error[E0599]: no associated function or constant named `Ordered` found for struct `OrderedTree` in the current scope
+ --> tests/ui/single-use-tree/opaque.rs:5:26
+  |
+5 |     let _ = OrderedTree::Ordered;
+  |                          ^^^^^^^ associated function or constant not found in `OrderedTree`
+  |
+help: there is a method `deref` with a similar name
+ --> $RUST/core/src/ops/deref.rs

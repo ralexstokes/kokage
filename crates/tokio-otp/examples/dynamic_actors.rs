@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::sync::mpsc;
-use tokio_otp::{Actor, ActorRef, ActorResult, MessageContext, SupervisionTree};
+use tokio_otp::{Actor, ActorRef, ActorResult, DynamicTree, MessageContext};
 
 #[derive(Clone)]
 struct Frontend {
@@ -53,8 +53,7 @@ impl Actor for RushPress {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let runtime = SupervisionTree::dynamic().build()?;
-    let handle = runtime.spawn();
+    let handle = DynamicTree::new().spawn()?;
 
     let orders = handle
         .add_actor("front-desk", || Frontend { rush: None })

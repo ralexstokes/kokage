@@ -158,7 +158,7 @@ pub enum ActorRunError {
 ///
 /// This matches the default grace of
 /// [`ShutdownPolicy`](crate::ShutdownPolicy), so an actor behaves the same
-/// whether it is hosted by hand or by [`Runtime`](crate::Runtime).
+/// whether it is hosted by hand or by an [`OrderedTree`](crate::OrderedTree).
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
 /// An actor graph containing wiring and independently runnable actors.
@@ -166,7 +166,6 @@ pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 /// Stable typed refs remain functional across independent actor restarts.
 /// Execution is performed by driving the actors returned by [`actors`](Self::actors),
 /// normally as separate supervisor children.
-#[derive(Clone)]
 pub struct Graph {
     inner: Arc<GraphInner>,
 }
@@ -285,6 +284,10 @@ impl RunnableActor {
     /// Returns the actor label.
     pub fn label(&self) -> &str {
         &self.inner.actor_id
+    }
+
+    pub(crate) fn binding_identity(&self) -> usize {
+        Arc::as_ptr(self.inner.binding_lifecycle.identity()) as usize
     }
 
     pub(crate) fn stats(&self) -> ActorStats {

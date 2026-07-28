@@ -25,8 +25,7 @@ use std::{error::Error, io, time::Duration};
 
 use tokio::time::sleep;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext,
-    SupervisionTree,
+    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, OrderedTree,
 };
 use tokio_otp_console::Console;
 use tokio_supervisor::{
@@ -87,7 +86,7 @@ impl Actor for Burst {
 
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
-fn pipeline_runtime() -> SupervisionTree {
+fn pipeline_runtime() -> OrderedTree {
     let source = ChildSpec::task("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
@@ -107,7 +106,7 @@ fn pipeline_runtime() -> SupervisionTree {
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(2))),
     );
 
-    SupervisionTree::new()
+    OrderedTree::new()
         .strategy(Strategy::OneForAll)
         .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .task(source, RestartPolicy::default(), ShutdownPolicy::default())
@@ -120,7 +119,7 @@ fn pipeline_runtime() -> SupervisionTree {
 
 /// A OneForOne group demonstrating the other restart policies, with a further
 /// nested supervisor one level deeper.
-fn telemetry_runtime() -> SupervisionTree {
+fn telemetry_runtime() -> OrderedTree {
     // `Always` restarts even after a clean exit, so this child completes and
     // comes back every 7 seconds.
     let heartbeat = ChildSpec::task("heartbeat", |ctx| async move {
@@ -142,13 +141,13 @@ fn telemetry_runtime() -> SupervisionTree {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let exporters = SupervisionTree::new().task(
+    let exporters = OrderedTree::new().task(
         exporter,
         RestartPolicy::default(),
         ShutdownPolicy::default(),
     );
 
-    SupervisionTree::new()
+    OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .task(heartbeat, RestartPolicy::Always, ShutdownPolicy::default())
@@ -170,7 +169,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let frontend_actor = graph.actor_for(&frontend)?;
     let worker_actor = graph.actor_for(&worker_ref)?;
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .actor(frontend_actor)
@@ -182,8 +181,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .subtree("pipeline", pipeline_runtime())
         .subtree("telemetry", telemetry_runtime())
-        .build()?;
-    let handle = runtime.spawn();
+        .spawn()?;
 
     let console = Console::for_runtime(&handle)
         .bind(([127, 0, 0, 1], 0))

@@ -1335,9 +1335,9 @@ mod runnable_actor {
     };
     use tokio_otp::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
-        ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, Graph,
+        ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, DynamicTree, Graph,
         GraphBuilder, MessageContext, RawActor, RestartPolicy, RunnableActor, SendError,
-        StartContext, SupervisionTree, SupervisorError, TrySendError,
+        StartContext, SupervisorError, TrySendError,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1655,12 +1655,10 @@ mod runnable_actor {
         let (actor_slot, _) = builder.slot("factory-template");
         builder.define(actor_slot, Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
-        let handle = SupervisionTree::dynamic()
-            .reserve()
+        let handle = DynamicTree::new()
             .derived_defaults(&graph)
-            .build()
-            .expect("dynamic runtime builds")
-            .spawn();
+            .spawn()
+            .expect("dynamic runtime builds");
         handle
             .add_actor_with(
                 "worker",

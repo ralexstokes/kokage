@@ -10,8 +10,8 @@ use std::{
 
 use tokio_otp::{
     Actor, ActorRef, ActorResult, ChildLifecycleEvent, ChildLifecycleEventKind,
-    ChildMembershipView, ControlError, GraphBuilder, LifecycleWatchGuard, LiveContext,
-    MessageContext, RuntimeHandle, StartContext, Strategy, SupervisionTree, SupervisorError,
+    ChildMembershipView, ControlError, DynamicTree, GraphBuilder, LifecycleWatchGuard, LiveContext,
+    MessageContext, OrderedTree, RuntimeHandle, StartContext, Strategy, SupervisorError,
     SupervisorSnapshot,
 };
 
@@ -167,14 +167,12 @@ impl Router {
                 let subtree = mount
                     .add_subtree(
                         offload_id,
-                        SupervisionTree::new()
-                            .actor_with_scope(
-                                "session-runtime",
-                                session_actor,
-                                SupervisionTree::dynamic(),
-                                Strategy::OneForAll,
-                            )
-                            .reserve(),
+                        OrderedTree::new().actor_with_scope(
+                            "session-runtime",
+                            session_actor,
+                            DynamicTree::new(),
+                            Strategy::OneForAll,
+                        ),
                     )
                     .await;
                 subtree.is_ok()

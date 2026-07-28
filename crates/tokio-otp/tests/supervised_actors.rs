@@ -12,8 +12,8 @@ use tokio::{
     time::{advance, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
-    SendError, SupervisionTree,
+    ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, OrderedTree, RawActor,
+    Reply, SendError,
 };
 use tokio_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
 
@@ -98,13 +98,11 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .build()
+        .spawn()
         .expect("runtime builds");
-
-    let handle = runtime.spawn();
 
     frontend_ref
         .send("first".to_owned())
@@ -180,7 +178,7 @@ async fn send_waits_during_permanent_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
@@ -190,9 +188,8 @@ async fn send_waits_during_permanent_restart_window() {
                         .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
                 ),
         )
-        .build()
+        .spawn()
         .expect("runtime builds");
-    let handle = runtime.spawn();
 
     timeout(Duration::from_secs(1), first_exited_rx)
         .await
@@ -252,12 +249,11 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .build()
+        .spawn()
         .expect("runtime builds");
-    let handle = runtime.spawn();
 
     timeout(Duration::from_secs(1), exited_rx)
         .await
@@ -340,7 +336,7 @@ async fn call_succeeds_across_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
@@ -350,9 +346,8 @@ async fn call_succeeds_across_restart_window() {
                         .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
                 ),
         )
-        .build()
+        .spawn()
         .expect("runtime builds");
-    let handle = runtime.spawn();
 
     rpc_ref
         .send(RpcMsg::FailOnce)

@@ -282,7 +282,7 @@ The separate `tokio-otp-console` workspace crate can launch a web console
 backed by the runtime's public snapshots, events, and actor stats:
 
 ```rust,ignore
-let handle = runtime.spawn();
+let handle = tree.spawn()?;
 let console = tokio_otp_console::Console::for_runtime(&handle)
     .bind(([127, 0, 0, 1], 8080))
     .build()?

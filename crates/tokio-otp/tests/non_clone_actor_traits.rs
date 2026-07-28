@@ -12,8 +12,8 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorResult, ChildLifecycleWatch, DEFAULT_SHUTDOWN_BOUND,
-    GraphBuilder, LiveContext, MessageContext, RawActor, Reply, RestartPolicy, RuntimeHandle,
-    SupervisionTree,
+    GraphBuilder, LiveContext, MessageContext, OrderedTree, RawActor, Reply, RestartPolicy,
+    RuntimeHandle,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
@@ -149,11 +149,10 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
             constructions: constructions.clone(),
         },
     );
-    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
+    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
-        .build()
-        .expect("runtime builds")
-        .spawn();
+        .spawn()
+        .expect("runtime builds");
 
     assert_eq!(
         actor_ref
@@ -223,11 +222,10 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
             observed: observed_tx.clone(),
         }
     });
-    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
+    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
-        .build()
-        .expect("runtime builds")
-        .spawn();
+        .spawn()
+        .expect("runtime builds");
 
     actor_ref.send(false).await.expect("first message accepted");
     assert_eq!(observed_rx.recv().await, Some((0, 1)));
@@ -296,10 +294,9 @@ async fn default_constructor_path_is_an_actor_factory() {
     let mut builder = GraphBuilder::new();
     let (actor_ref_slot, actor_ref) = builder.slot("DefaultActor");
     builder.define(actor_ref_slot, DefaultActor::default);
-    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
-        .build()
-        .expect("runtime builds")
-        .spawn();
+    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
+        .spawn()
+        .expect("runtime builds");
 
     handle.wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");

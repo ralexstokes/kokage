@@ -13,8 +13,8 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorResult, ChildLifecycleEvent, ChildLifecycleEventKind, DynamicActorOptions,
-    GraphBuilder, LifecycleWatchGuard, MessageContext, RestartConfig, RestartPolicy, RuntimeHandle,
-    StartContext, SupervisionTree,
+    DynamicTree, GraphBuilder, LifecycleWatchGuard, MessageContext, OrderedTree, RestartConfig,
+    RestartPolicy, RuntimeHandle, StartContext,
 };
 
 enum SinkMsg {
@@ -100,10 +100,7 @@ async fn runtime_with_watched_subtree() -> (
     tokio_otp::ActorRef<()>,
     mpsc::UnboundedReceiver<(u64, ChildLifecycleEvent)>,
 ) {
-    let handle = SupervisionTree::dynamic()
-        .build()
-        .expect("runtime builds")
-        .spawn();
+    let handle = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = handle
@@ -126,10 +123,9 @@ async fn runtime_with_watched_subtree() -> (
     let watched = handle
         .add_subtree(
             "watched",
-            SupervisionTree::graph(&graph.build().expect("nested graph builds"))
+            OrderedTree::graph(graph.build().expect("nested graph builds"))
                 .default_restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartConfig::new(8, Duration::from_secs(1)))
-                .reserve(),
+                .restart_intensity(RestartConfig::new(8, Duration::from_secs(1))),
         )
         .await
         .expect("watched subtree added");
@@ -327,7 +323,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     .expect("pump stops with watched identity");
 
     let replacement = handle
-        .add_subtree("replacement", SupervisionTree::new().reserve())
+        .add_subtree("replacement", OrderedTree::new())
         .await
         .expect("replacement subtree added");
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
@@ -345,10 +341,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
 
 #[tokio::test]
 async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
-    let handle = SupervisionTree::dynamic()
-        .build()
-        .expect("runtime builds")
-        .spawn();
+    let handle = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     handle
         .add_actor("sink", move || RestrictedSink {

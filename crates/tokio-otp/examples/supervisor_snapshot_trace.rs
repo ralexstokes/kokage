@@ -10,8 +10,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, StartContext,
-    SupervisionTree,
+    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, OrderedTree,
+    StartContext,
 };
 use tokio_supervisor::{RestartConfig, Strategy};
 
@@ -85,15 +85,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let frontend_actor = graph.actor_for(&frontend)?;
     let worker_actor = graph.actor_for(&worker_ref)?;
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor)
                 .restart_intensity(RestartConfig::new(2, Duration::from_secs(1))),
         )
-        .build()?;
-    let handle = runtime.spawn();
+        .spawn()?;
     let mut events = handle.watch_lifecycle_recursive();
     let mut snapshots = handle.subscribe_snapshots();
 

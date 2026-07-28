@@ -4,10 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::sleep};
 
-use tokio_otp::{
-    ActorSpec, ChildOutline, ChildSpec, ExitStatusView, Graph, ScopeKind, SupervisionTree,
-    prelude::*,
-};
+use tokio_otp::{ActorSpec, ChildOutline, ChildSpec, ExitStatusView, Graph, ScopeKind, prelude::*};
 
 struct Worker;
 
@@ -36,13 +33,10 @@ fn two_actor_graph() -> (Graph, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
 #[test]
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let outline = SupervisionTree::new()
+    let outline = OrderedTree::new()
         .strategy(Strategy::RestForOne)
         .default_restart(RestartPolicy::Always)
-        .subtree(
-            "workers",
-            SupervisionTree::new().strategy(Strategy::OneForAll),
-        )
+        .subtree("workers", OrderedTree::new().strategy(Strategy::OneForAll))
         .task(
             ChildSpec::task("clock", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -99,15 +93,16 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 #[test]
 fn graph_convenience_and_explicit_actors_outline_identically() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let from_graph = SupervisionTree::graph(&graph)
+    let actors = graph.actors().to_vec();
+    let from_graph = OrderedTree::graph(graph)
         .strategy(Strategy::OneForAll)
         .default_restart(RestartPolicy::Never)
         .outline();
-    let from_tree = SupervisionTree::new()
+    let from_tree = OrderedTree::new()
         .strategy(Strategy::OneForAll)
         .default_restart(RestartPolicy::Never)
-        .actor(graph.actors()[0].clone())
-        .actor(graph.actors()[1].clone())
+        .actor(actors[0].clone())
+        .actor(actors[1].clone())
         .outline();
     assert_eq!(from_graph, from_tree);
 }
@@ -116,17 +111,16 @@ fn graph_convenience_and_explicit_actors_outline_identically() {
 async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
     let (graph, ingest, parse) = two_actor_graph();
     let (ingest_actor, parse_actor) = (graph.actors()[0].clone(), graph.actors()[1].clone());
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .actor(ActorSpec::new(ingest_actor).restart(RestartPolicy::Never))
         .subtree(
             "workers",
-            SupervisionTree::new()
+            OrderedTree::new()
                 .strategy(Strategy::OneForAll)
                 .actor(parse_actor),
         )
-        .build()
+        .spawn()
         .expect("tree builds");
-    let handle = runtime.spawn();
 
     assert_eq!(
         ingest
@@ -154,8 +148,8 @@ async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
 
 #[test]
 fn dynamic_outlines_include_future_member_policy_defaults() {
-    let standard = SupervisionTree::dynamic().outline();
-    let customized = SupervisionTree::dynamic()
+    let standard = DynamicTree::new().outline();
+    let customized = DynamicTree::new()
         .default_restart(RestartPolicy::Never)
         .default_shutdown(ShutdownPolicy::abort())
         .outline();
@@ -168,10 +162,10 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
 #[tokio::test]
 async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let tree = SupervisionTree::new().actor_with_scope(
+    let tree = OrderedTree::new().actor_with_scope(
         "owned",
         graph.actors()[0].clone(),
-        SupervisionTree::dynamic(),
+        DynamicTree::new(),
         Strategy::RestForOne,
     );
     let outline = tree.outline();
@@ -188,7 +182,7 @@ async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     assert_eq!(children.kind, ScopeKind::Dynamic);
     assert_eq!(*strategy, Strategy::RestForOne);
 
-    let handle = tree.build().expect("ActorWithScope lowers").spawn();
+    let handle = tree.spawn().expect("ActorWithScope lowers");
     handle.wait_started().await.expect("generated scope starts");
     let snapshot = handle.snapshot();
     let owned = snapshot
@@ -214,7 +208,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
     let (graph, _ingest, _parse) = two_actor_graph();
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
-    let children = SupervisionTree::new()
+    let children = OrderedTree::new()
         .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
         .task(
             ChildSpec::task("fatal", move |_| {
@@ -227,7 +221,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
             RestartPolicy::Always,
             ShutdownPolicy::abort(),
         );
-    let handle = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .default_restart(RestartPolicy::Never)
         .actor_with_scope(
             "owned",
@@ -235,9 +229,8 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
             children,
             Strategy::OneForOne,
         )
-        .build()
-        .expect("ActorWithScope builds")
-        .spawn();
+        .spawn()
+        .expect("ActorWithScope builds");
     handle.wait_started().await.expect("generated scope starts");
 
     fail.notify_one();
@@ -279,11 +272,11 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
 #[test]
 fn an_outline_round_trips_through_serde_with_scope_kinds() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let outline = SupervisionTree::graph(&graph)
+    let outline = OrderedTree::graph(graph)
         .strategy(Strategy::RestForOne)
         .subtree(
             "workers",
-            SupervisionTree::dynamic()
+            DynamicTree::new()
                 .default_restart(RestartPolicy::Never)
                 .default_shutdown(ShutdownPolicy::abort()),
         )

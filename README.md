@@ -52,10 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = builder.build()?;
 
     // Compose the supervision tree, then run it.
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
-        .build()?;
-    let handle = runtime.spawn();
+        .spawn()?;
 
     orders.send("business cards x100".to_owned()).await?;
 
@@ -76,7 +75,7 @@ supervising plain async tasks.
 
 | Crate | Role |
 |-------|------|
-| [`tokio-otp`](crates/tokio-otp) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under one integrated `Runtime` supporting dynamic actors and observability. |
+| [`tokio-otp`](crates/tokio-otp) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under single-use ordered or dynamic trees with actor-aware runtime handles. |
 | [`tokio-supervisor`](crates/tokio-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
 | [`tokio-otp-derive`](crates/tokio-otp-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic actor graphs and their supervision scopes; re-exported by `tokio-otp` under the default `derive` feature. |
 | [`tokio-otp-console`](crates/tokio-otp-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `tokio-otp` feature and dependency surface. |

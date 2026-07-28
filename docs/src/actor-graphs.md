@@ -27,7 +27,7 @@ refs bundle alongside the graph, for use as application entry points:
 
 ```rust,no_run
 use std::time::Duration;
-use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Runtime, Supervision};
+use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
-    let handle = tree.build()?.spawn();
+    let handle = tree.spawn()?;
 
     refs.front_desk
         .send(Order("business cards x100".into()))
@@ -198,7 +198,7 @@ custom synchronous construction rather than `Default`.
 enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
 Rename a node with `#[supervision(label = "...")]`. The generated `tree`
-returns a reserved supervision tree and its cloneable typed refs. `tree_with`
+returns a single-use `OrderedTree` and its cloneable typed refs. `tree_with`
 does the same from an immutable `GraphConfig` carrying the graph name and
 mailbox capacity.
 

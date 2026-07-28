@@ -77,10 +77,7 @@ macro_rules! scope_context_methods {
         /// scope.
         ///
         /// This is `Some` exactly for the leader of an
-        /// [`actor_with_scope`](crate::SupervisionTree::actor_with_scope) node.
-        /// Other actor shapes explicitly
-        /// [`reserve`](crate::SupervisionTree::reserve) a tree when they need a
-        /// pre-spawn scope handle.
+        /// [`actor_with_scope`](crate::OrderedTree::actor_with_scope) node.
         ///
         /// The child scope starts only after its leader's `on_start` returns. A
         /// leader must therefore not await `children().wait_started()` inline
@@ -1648,18 +1645,13 @@ impl RestrictedScope {
 
     /// Inserts a subtree into this scope.
     ///
-    /// The subtree must already be reserved because it carries any handles
-    /// taken before insertion. Call
-    /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) explicitly
-    /// for a plain declaration.
-    ///
     /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
     /// See [`RuntimeHandle::add_subtree`].
-    pub async fn add_subtree<const DYNAMIC: bool>(
+    pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        tree: crate::ReservedSupervisionTree<DYNAMIC>,
-    ) -> Result<RuntimeHandle, crate::AddSubtreeError> {
+        tree: impl Into<crate::TreeNode>,
+    ) -> Result<RuntimeHandle, tokio_supervisor::ControlError> {
         self.handle.add_subtree(id, tree).await
     }
 

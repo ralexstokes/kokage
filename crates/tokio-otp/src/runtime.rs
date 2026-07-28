@@ -7,12 +7,11 @@ use crate::{
     ActorFactory, ActorOptions, ActorRef, ActorStats, RawActor, RunnableActor,
     actor::{ActorOptionsValidationError, RunnableActorBuilder, SupervisorPathSegment},
 };
-use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
     AttachedChildIdentity, ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard,
     CompletionOutcome, ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
-    Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -335,45 +334,6 @@ where
     LifecycleWatchGuard { cancellation }
 }
 
-/// Configured-but-not-yet-running runtime that owns a supervisor and its
-/// actor factory.
-///
-/// Start the runtime with [`spawn`](Self::spawn), which returns the
-/// [`RuntimeHandle`] control surface. To drive the runtime in the foreground
-/// while keeping that control surface, call `spawn()` and then
-/// [`RuntimeHandle::wait`].
-pub struct Runtime {
-    supervisor: Supervisor,
-    actors: Arc<ActorRuntimeState>,
-}
-
-impl Runtime {
-    pub(crate) fn with_actor_tree(supervisor: Supervisor, actors: Arc<ActorRuntimeState>) -> Self {
-        Self { supervisor, actors }
-    }
-
-    pub(crate) fn into_parts(self) -> (Supervisor, Arc<ActorRuntimeState>) {
-        (self.supervisor, self.actors)
-    }
-
-    /// Returns this runtime's stable actor-aware handle before it is spawned.
-    pub fn handle(&self) -> RuntimeHandle {
-        RuntimeHandle::new(self.supervisor.handle(), Arc::clone(&self.actors))
-    }
-
-    /// Spawns the supervisor in the background and returns a combined handle.
-    pub fn spawn(self) -> RuntimeHandle {
-        let supervisor = self.supervisor.spawn();
-        RuntimeHandle::new(supervisor, self.actors)
-    }
-}
-
-impl std::fmt::Debug for Runtime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Runtime").finish_non_exhaustive()
-    }
-}
-
 /// Cheaply cloneable runtime control surface.
 ///
 /// For a spawned root runtime, dropping the last public handle clone requests
@@ -383,20 +343,6 @@ impl std::fmt::Debug for Runtime {
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
-}
-
-/// Errors returned when adding an actor-aware runtime subtree dynamically.
-#[derive(Debug, Error, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum AddSubtreeError {
-    /// The reserved tree itself failed validation before insertion was
-    /// attempted.
-    #[error("failed to build runtime subtree: {0}")]
-    Build(#[from] tokio_supervisor::SupervisorBuildError),
-    /// The tree built successfully, but the parent supervisor rejected or
-    /// could not complete the insertion operation.
-    #[error("failed to add runtime subtree: {0}")]
-    Control(#[from] ControlError),
 }
 
 impl RuntimeHandle {
@@ -442,12 +388,6 @@ impl RuntimeHandle {
     /// retained subtree handles then fail control operations with
     /// [`ControlError::Unavailable`].
     ///
-    /// The subtree must be in its non-cloneable reserved form. Call
-    /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) for a
-    /// plain declaration. Reservation is explicit because accepting a fresh
-    /// plain declaration here could not preserve any
-    /// pre-spawn root or nested handles through insertion.
-    ///
     /// If the subtree itself restarts, its statically declared graph actors
     /// is recreated, while children added later through the returned handle
     /// are lost and must be replayed by the application. If this handle's
@@ -460,13 +400,24 @@ impl RuntimeHandle {
     /// immediately and dynamic siblings stop concurrently under one shared
     /// maximum-grace deadline. Use [`wait_started`](Self::wait_started) when
     /// readiness is needed.
-    pub async fn add_subtree<const DYNAMIC: bool>(
+    ///
+    /// Both failure phases use [`ControlError::Rejected`]: first the supplied
+    /// tree is lowered and validated, then the parent validates insertion of
+    /// the resulting child. For example, a duplicate actor binding fails the
+    /// first phase, while an already-occupied child id fails the second. The
+    /// nested [`SupervisorBuildError`] identifies the validation rule, but a
+    /// caller should not infer the phase solely from an error variant because
+    /// some rules, such as duplicate child ids, can arise in either phase.
+    /// Any error consumes the supplied tree and makes handles previously issued
+    /// from it terminal.
+    pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        tree: crate::ReservedSupervisionTree<DYNAMIC>,
-    ) -> Result<RuntimeHandle, AddSubtreeError> {
+        tree: impl Into<crate::TreeNode>,
+    ) -> Result<RuntimeHandle, ControlError> {
         let id = id.into();
-        let (nested_supervisor, nested_actors) = tree.build()?.into_parts();
+        let parts = tree.into().into_parts();
+        let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
         let lineage = self
             .supervisor
             .add_child(
@@ -476,7 +427,7 @@ impl RuntimeHandle {
             )
             .await?;
         self.subtree_membership(&id, Some(lineage))
-            .ok_or(ControlError::Unavailable.into())
+            .ok_or(ControlError::Unavailable)
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -899,7 +850,7 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 
 #[cfg(test)]
 mod tests {
-    use crate::SupervisionTree;
+    use crate::{DynamicTree, OrderedTree};
 
     #[test]
     fn unavailable_runtime_handle_is_cached() {
@@ -911,11 +862,8 @@ mod tests {
 
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
-        let root = SupervisionTree::dynamic()
-            .build()
-            .expect("runtime builds")
-            .spawn();
-        root.add_subtree("workers", SupervisionTree::new().reserve())
+        let root = DynamicTree::new().spawn().expect("runtime builds");
+        root.add_subtree("workers", OrderedTree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -927,7 +875,7 @@ mod tests {
         root.remove_child("workers")
             .await
             .expect("first subtree removed");
-        root.add_subtree("workers", SupervisionTree::new().reserve())
+        root.add_subtree("workers", OrderedTree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

@@ -13,12 +13,11 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorFactory, ActorRef, ActorResult, BoxError, CancellationHandle, GraphBuilder,
-    LiveContext, MessageContext, RawActor, Runtime, StartContext, SupervisionTree, TimerKey,
-    timers,
+    LiveContext, MessageContext, OrderedTree, RawActor, StartContext, TimerKey, timers,
 };
 use tokio_supervisor::Strategy;
 
-fn build_runtime<F>(factory: F) -> (Runtime, ActorRef<<F::Actor as RawActor>::Msg>)
+fn build_runtime<F>(factory: F) -> (OrderedTree, ActorRef<<F::Actor as RawActor>::Msg>)
 where
     F: ActorFactory,
 {
@@ -26,10 +25,7 @@ where
     let (actor_ref_slot, actor_ref) = builder.slot("timer");
     builder.define(actor_ref_slot, factory);
     let graph = builder.build().expect("valid graph");
-    let runtime = SupervisionTree::graph(&graph)
-        .strategy(Strategy::OneForOne)
-        .build()
-        .expect("runtime builds");
+    let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
     (runtime, actor_ref)
 }
 
@@ -61,7 +57,7 @@ async fn send_after_fires_once_without_using_mailbox_capacity() {
     let (runtime, actor_ref) = build_runtime(move || OneShot {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(
         timeout(Duration::from_secs(1), observed_rx.recv())
@@ -112,7 +108,7 @@ async fn cancelling_send_after_prevents_delivery() {
     let (runtime, _) = build_runtime(move || CancelledTimer {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert!(
         timeout(Duration::from_millis(60), observed_rx.recv())
@@ -159,7 +155,7 @@ async fn setting_a_timeout_replaces_the_previous_entry_at_its_key() {
     let (runtime, _) = build_runtime(move || ReplaceableTimeout {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(
         timeout(Duration::from_secs(1), observed_rx.recv())
@@ -230,7 +226,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
             replace: false,
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
     started_rx.recv().await.expect("actor started");
 
     actor_ref
@@ -265,7 +261,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
             replace: true,
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
     started_rx.recv().await.expect("actor started");
 
     actor_ref
@@ -329,7 +325,7 @@ async fn keyed_timeouts_replace_per_key_and_remain_independent() {
     let (runtime, _) = build_runtime(move || KeyedTimeouts {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("first"));
     assert_eq!(observed_rx.recv().await, Some("second"));
@@ -374,7 +370,7 @@ async fn far_future_delays_saturate_instead_of_panicking() {
         timers: Vec::new(),
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     actor_ref.send("ping").await.expect("actor alive");
     assert_eq!(
@@ -427,7 +423,7 @@ async fn send_after_can_be_cancelled_after_its_deadline_until_delivery() {
             observed: observed_tx.clone(),
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     let timer = timer_rx.recv().await.expect("timer armed");
     advance(Duration::from_millis(20)).await;
@@ -478,7 +474,7 @@ async fn interval_repeats_until_cancelled() {
         timer: None,
         ticks: 0,
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     for expected in 1..=3 {
         assert_eq!(observed_rx.recv().await, Some(expected));
@@ -538,7 +534,7 @@ async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
             timer: None,
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(10)));
     advance(Duration::from_millis(100)).await;
@@ -591,7 +587,7 @@ async fn restart_drops_the_previous_incarnations_timer_table() {
         runs: runs.clone(),
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("new"));
     assert!(
@@ -624,7 +620,7 @@ impl Actor for Sink {
 fn build_cross_runtime<F>(
     scheduler: impl FnOnce(ActorRef<&'static str>) -> F,
 ) -> (
-    Runtime,
+    OrderedTree,
     ActorRef<<F::Actor as RawActor>::Msg>,
     mpsc::UnboundedReceiver<&'static str>,
 )
@@ -640,10 +636,7 @@ where
     let (scheduler_ref_slot, scheduler_ref) = builder.slot("scheduler");
     builder.define(scheduler_ref_slot, scheduler(sink_ref));
     let graph = builder.build().expect("valid graph");
-    let runtime = SupervisionTree::graph(&graph)
-        .strategy(Strategy::OneForOne)
-        .build()
-        .expect("runtime builds");
+    let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
     (runtime, scheduler_ref, observed_rx)
 }
 
@@ -673,7 +666,7 @@ async fn send_after_to_delivers_through_the_public_target_ref() {
             target: target.clone(),
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("cross"));
     assert!(
@@ -721,7 +714,7 @@ async fn restart_ends_cross_actor_timer_lifetime() {
             runs: runs.clone(),
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("new"));
     assert!(
@@ -766,7 +759,7 @@ async fn interval_to_repeats_until_cancelled() {
             timer: None,
         }
     });
-    let handle = runtime.spawn();
+    let handle = runtime.spawn().expect("runtime builds");
 
     for _ in 1..=3 {
         assert_eq!(observed_rx.recv().await, Some("tick"));

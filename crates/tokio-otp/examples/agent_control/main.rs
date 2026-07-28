@@ -248,7 +248,7 @@ async fn build_app() -> Result<App, AnyError> {
     // and the subtree-id allocator must not, or a reborn router could not
     // reach the mount and would re-mint ids that still exist. Both are durable
     // RouterFactory fields instead.
-    let sessions_runtime = SupervisionTree::dynamic().reserve();
+    let sessions_runtime = DynamicTree::new();
     let sessions_mount = sessions_runtime.handle();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
@@ -318,11 +318,10 @@ async fn build_app() -> Result<App, AnyError> {
         router,
     } = refs.core;
 
-    let runtime = tree.build()?;
-    let handle = runtime.spawn();
+    let handle = tree.spawn()?;
     let gateway = handle.subtree("gateway").expect("gateway runtime subtree");
     let core = handle.subtree("core").expect("core runtime subtree");
-    // `sessions_mount` was reserved before the root existed and addresses the
+    // `sessions_mount` was issued before the root existed and addresses the
     // same identity the post-spawn `handle.subtree("sessions")` lookup would
     // return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
@@ -353,7 +352,7 @@ async fn phase_0(app: &App) -> Result<(), AnyError> {
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
-    println!("PHASE 0 OK — RawActor readiness_gated + mark_ready; reserved dynamic subtree mount");
+    println!("PHASE 0 OK — RawActor readiness_gated + mark_ready; pre-spawn dynamic subtree mount");
     Ok(())
 }
 

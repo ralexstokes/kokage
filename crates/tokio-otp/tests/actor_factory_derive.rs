@@ -8,8 +8,8 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorFactory, ActorResult, ChildLifecycleWatch, GraphBuilder, MessageContext, Reply,
-    RestartPolicy, RuntimeHandle, StartContext, SupervisionTree,
+    Actor, ActorFactory, ActorResult, ChildLifecycleWatch, GraphBuilder, MessageContext,
+    OrderedTree, Reply, RestartPolicy, RuntimeHandle, StartContext,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
@@ -84,11 +84,10 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
             starts: starts.clone(),
         },
     );
-    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
+    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
-        .build()
-        .expect("runtime builds")
-        .spawn();
+        .spawn()
+        .expect("runtime builds");
 
     assert_eq!(
         actor_ref

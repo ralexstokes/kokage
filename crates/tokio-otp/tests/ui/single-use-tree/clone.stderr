@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `OrderedTree` in the current scope
+ --> tests/ui/single-use-tree/clone.rs:5:22
+  |
+5 |     let _copy = tree.clone();
+  |                      ^^^^^ method not found in `OrderedTree`

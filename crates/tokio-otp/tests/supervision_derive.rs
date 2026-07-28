@@ -110,7 +110,7 @@ async fn derived_tree_runs_cyclic_pipeline() {
     assert_eq!(refs.frontend.id(), "frontend");
     assert_eq!(cloned_refs.parser.id(), "parser");
     assert_eq!(refs.sink.id(), "sink");
-    let handle = tree.build().expect("tree builds").spawn();
+    let handle = tree.spawn().expect("tree builds");
     handle.wait_started().await.expect("runtime starts");
 
     refs.frontend
@@ -230,7 +230,7 @@ async fn derived_tree_applies_per_actor_options() {
         defaults: || OptionsActor,
     })
     .expect("options tree builds");
-    let handle = tree.build().expect("tree builds").spawn();
+    let handle = tree.spawn().expect("tree builds");
     handle.wait_started().await.expect("runtime starts");
 
     refs.mailbox_only
@@ -277,7 +277,7 @@ async fn tree_with_applies_graph_config() {
     .expect("configured graph builds");
 
     let park = park.expect("wiring closure captured park ref");
-    let handle = tree.build().expect("tree builds").spawn();
+    let handle = tree.spawn().expect("tree builds");
     handle.wait_started().await.expect("runtime starts");
 
     park.send(()).await.expect("first message fits");

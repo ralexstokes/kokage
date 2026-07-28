@@ -352,8 +352,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         ..
     } = venues;
 
-    let runtime = tree.build()?;
-    let handle = runtime.spawn();
+    let handle = tree.spawn()?;
 
     let background_stop = CancellationToken::new();
     let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));

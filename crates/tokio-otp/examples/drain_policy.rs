@@ -62,7 +62,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     });
     let graph = builder.build()?;
 
-    let handle = SupervisionTree::graph(&graph).build()?.spawn();
+    let handle = OrderedTree::graph(graph).spawn()?;
     worker.send(Msg::Hold).await?;
     started_rx.recv().await.expect("worker entered hold");
 

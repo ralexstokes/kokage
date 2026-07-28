@@ -96,7 +96,7 @@ fn actor_refs_are_qualified_by_scope_path() {
 #[tokio::test]
 async fn a_derived_runtime_runs_actors_across_scope_levels() {
     let (tree, refs) = App::tree(app_factories).expect("tree builds");
-    let handle = tree.build().expect("runtime builds").spawn();
+    let handle = tree.spawn().expect("runtime builds");
 
     for actor in [&refs.ingest, &refs.workers.parse, &refs.workers.render] {
         assert_eq!(
@@ -172,9 +172,7 @@ struct WithDynamic {
 fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
     let (tree, _refs) = WithDynamic::tree(|_refs| WithDynamicFactories {
         manager: || Worker,
-        sessions: SupervisionTree::dynamic()
-            .default_restart(RestartPolicy::Never)
-            .reserve(),
+        sessions: DynamicTree::new().default_restart(RestartPolicy::Never),
     })
     .expect("tree builds");
     let outline = tree.outline();
@@ -197,10 +195,10 @@ fn a_dynamic_marker_field_declares_an_empty_runtime_written_scope() {
 async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
     let (tree, _refs) = WithDynamic::tree(|_refs| WithDynamicFactories {
         manager: || Worker,
-        sessions: SupervisionTree::dynamic().reserve(),
+        sessions: DynamicTree::new(),
     })
     .expect("tree builds");
-    let handle = tree.build().expect("runtime builds").spawn();
+    let handle = tree.spawn().expect("runtime builds");
     handle.wait_started().await.expect("runtime starts");
 
     let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
@@ -294,10 +292,10 @@ struct Mounted {
 
 #[tokio::test]
 async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
-    // The reservation is what a `#[supervision(dynamic)]` field buys over
-    // appending the scope afterwards: the handle exists early enough to become
+    // The identity-owning tree is what a `#[supervision(dynamic)]` field buys
+    // over appending the scope afterwards: the handle exists early enough to become
     // a durable factory field, so it survives restarts of the actor holding it.
-    let sessions = SupervisionTree::dynamic().reserve();
+    let sessions = DynamicTree::new();
     let mount = sessions.handle();
 
     let (tree, refs) = Mounted::tree(|_refs| MountedFactories {
@@ -307,7 +305,7 @@ async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
         sessions,
     })
     .expect("tree builds");
-    let handle = tree.build().expect("runtime builds").spawn();
+    let handle = tree.spawn().expect("runtime builds");
     handle.wait_started().await.expect("runtime starts");
 
     // The mounter reaches the declared scope through the handle it was built

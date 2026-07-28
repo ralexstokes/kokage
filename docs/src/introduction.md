@@ -11,15 +11,15 @@ a *supervisor* restart the ones that fail.
 
 `tokio-otp` is the actor product: its prelude imports the day-one surface,
 while observability and advanced configuration remain explicit crate-root
-imports. Wire actors in a `Graph` and compose them with a `SupervisionTree`;
-`SupervisionTree::graph(&graph)` is the concise path when one graph occupies
-one ordered scope. Raw task supervision requires a direct `tokio-supervisor`
+imports. Wire actors in a `Graph` and move it into an `OrderedTree`;
+`OrderedTree::graph(graph)` is the concise path when one graph occupies one
+ordered scope. Raw task supervision requires a direct `tokio-supervisor`
 dependency. The actor crate contains both the typed actor layer and the
 runtime that supervises it, built on that deliberately independent crate:
 
 | Crate | Role |
 |-------|------|
-| [`tokio-otp`](https://stokes.io/tokio-otp/api/tokio_otp/index.html) | Static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under one integrated `Runtime`. |
+| [`tokio-otp`](https://stokes.io/tokio-otp/api/tokio_otp/index.html) | Static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under an ordered or dynamic tree. |
 | [`tokio-supervisor`](https://stokes.io/tokio-otp/api/tokio_supervisor/index.html) | Structured supervision of async tasks: restart policies, restart intensity limits, graceful shutdown, and supervision trees. |
 | [`tokio-otp-console`](https://stokes.io/tokio-otp/api/tokio_otp_console/index.html) | An experimental, git-only web console for watching a running supervision tree. It is separate from the published product crate. |
 
@@ -35,7 +35,7 @@ If you have used Erlang/OTP or Elixir, the mapping is direct:
 
 | OTP concept | tokio-otp equivalent |
 |-------------|----------------------|
-| Supervisor + child specs | [`SupervisionTree`] + [`ActorSpec`] / [`ChildSpec`] |
+| Supervisor + child specs | [`OrderedTree`] / [`DynamicTree`] + [`ActorSpec`] / [`ChildSpec`] |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
 | `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
 | Restart intensity (`MaxR`/`MaxT`) | `RestartConfig::new(max_restarts, within)` |
@@ -72,7 +72,8 @@ binary crate and run it, or explore the closely related examples that ship in
 each crate's `examples/` directory (listed in [Where to go
 next](next-steps.md)).
 
-[`SupervisionTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.SupervisionTree.html
+[`OrderedTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.OrderedTree.html
+[`DynamicTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.DynamicTree.html
 [`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
 [`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
 [`ActorContext`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorContext.html

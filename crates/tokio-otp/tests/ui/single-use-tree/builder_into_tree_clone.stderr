@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `Graph` in the current scope
+ --> tests/ui/single-use-tree/builder_into_tree_clone.rs:4:23
+  |
+4 |     let _copy = graph.clone();
+  |                       ^^^^^ method not found in `Graph`

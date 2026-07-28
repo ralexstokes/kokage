@@ -72,11 +72,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
     });
     let graph = builder.build()?;
 
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .build()?;
-    let handle = runtime.spawn();
+        .spawn()?;
 
     orders.send("business cards x100".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));

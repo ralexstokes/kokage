@@ -9,6 +9,10 @@ pub enum SupervisorBuildError {
     /// Two or more children share the same id string.
     #[error("duplicate child id: {0}")]
     DuplicateChildId(String),
+    /// One runtime actor binding was placed in more than one node of a
+    /// composed supervision tree.
+    #[error("duplicate actor binding: {0}")]
+    DuplicateActorBinding(String),
     /// A configuration value (channel capacity, restart intensity, etc.) is
     /// invalid.
     #[error("invalid configuration: {0}")]
@@ -59,6 +63,10 @@ pub enum ControlError {
     #[error("child removal already in progress: {0}")]
     ChildRemovalInProgress(String),
     /// A requested control-plane change was rejected during validation.
+    ///
+    /// Validation may happen while preparing the request or inside the running
+    /// supervisor. Higher-level APIs that collapse both phases document when
+    /// the nested build error does not uniquely identify a phase.
     #[error("control operation rejected: {0}")]
     Rejected(#[from] SupervisorBuildError),
     /// The supervisor is in the process of shutting down and is no longer
