@@ -7,7 +7,7 @@ ordinary typed message in the observer's mailbox:
 
 ```rust
 use tokio_otp::prelude::Continue;
-use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, MonitorEvent};
+use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, MessageContext, MonitorEvent};
 
 enum CoordinatorMsg {
     Worker(MonitorEvent),
@@ -21,7 +21,7 @@ struct Coordinator {
 impl Actor for Coordinator {
     type Msg = CoordinatorMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.watch(&self.worker, CoordinatorMsg::Worker);
         Ok(Continue)
     }
@@ -29,7 +29,7 @@ impl Actor for Coordinator {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         let CoordinatorMsg::Worker(event) = message;
         match event {

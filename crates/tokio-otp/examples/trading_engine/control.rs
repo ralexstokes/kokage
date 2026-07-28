@@ -36,7 +36,7 @@ impl Actor for Control {
     async fn handle(
         &mut self,
         message: ControlMsg,
-        _ctx: &mut MessageContext<'_, ControlMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             ControlMsg::KillSwitch { reply } => {

@@ -16,7 +16,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: &'static str,
-        ctx: &mut MessageContext<'_, &'static str>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         tracing::info!(message, "worker received message");
         ctx.run_blocking(|_token| ()).await?;

@@ -14,7 +14,7 @@
 //! impl Actor for Echo {
 //!     type Msg = String;
 //!
-//!     async fn handle(&mut self, message: String, _ctx: &mut MessageContext<'_, String>) -> ActorResult {
+//!     async fn handle(&mut self, message: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
 //!         println!("{message}");
 //!         Ok(Continue)
 //!     }
@@ -142,7 +142,7 @@
 //!     async fn handle(
 //!         &mut self,
 //!         message: CounterMsg,
-//!         _ctx: &mut MessageContext<'_, CounterMsg>,
+//!         _ctx: &mut MessageContext<'_, Self>,
 //!     ) -> ActorResult {
 //!         match message {
 //!             CounterMsg::Add(n) => self.total += n,

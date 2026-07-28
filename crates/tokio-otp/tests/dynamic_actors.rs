@@ -73,12 +73,12 @@ struct CleanStop {
 impl Actor for CleanStop {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self::Msg>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Stop)
     }
 }
@@ -462,7 +462,7 @@ impl Actor for RemovalProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             RemovalMsg::Hold => {
@@ -480,7 +480,7 @@ impl Actor for RemovalProbe {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self::Msg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         self.events
             .send(RemovalEvent::OnStopStarted)
             .expect("receiver alive");

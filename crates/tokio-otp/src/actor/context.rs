@@ -25,6 +25,7 @@ use crate::actor::{
     },
     cancellation::{CancellationHandle, Lifetime},
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TryRecvError},
+    handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
 };
@@ -1330,17 +1331,17 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
 
 macro_rules! live_context {
     ($view:ident) => {
-        impl<M> sealed::Sealed<M> for $view<'_, M> {
-            fn cx(&self) -> &ActorContext<M> {
+        impl<A: Actor + ?Sized> sealed::Sealed<A::Msg> for $view<'_, A> {
+            fn cx(&self) -> &ActorContext<A::Msg> {
                 self.cx
             }
 
-            fn cx_mut(&mut self) -> &mut ActorContext<M> {
+            fn cx_mut(&mut self) -> &mut ActorContext<A::Msg> {
                 self.cx
             }
         }
 
-        impl<M: Send + 'static> LiveContext<M> for $view<'_, M> {}
+        impl<A: Actor + ?Sized> LiveContext<A::Msg> for $view<'_, A> {}
     };
 }
 
@@ -1514,29 +1515,39 @@ impl StoppingScope {
 
 /// Context handed to [`Actor::on_start`](crate::Actor::on_start).
 ///
-/// Adds [`continue_with`](Self::continue_with) to the ambient capabilities and
-/// narrows the scope handles to [`StartingScope`], which withholds the
-/// lifecycle waits that would deadlock an actor that has not reported ready.
+/// Adds [`continue_with`](LiveContext::continue_with) to the ambient
+/// capabilities and narrows the scope handles to [`StartingScope`], which
+/// withholds the lifecycle waits that would deadlock an actor that has not
+/// reported ready.
 ///
 /// The mailbox is deliberately absent: the provided receive loop owns it, and
 /// readiness is reported by the framework once this hook returns.
-pub struct StartContext<'a, M> {
-    cx: &'a mut ActorContext<M>,
+///
+/// The parameter is the actor, not its message: a hook signature writes
+/// `&mut StartContext<'_, Self>` and the message type is projected from
+/// [`Actor::Msg`](crate::Actor::Msg).
+pub struct StartContext<'a, A: Actor + ?Sized> {
+    cx: &'a mut ActorContext<A::Msg>,
 }
 
 /// Context handed to [`Actor::handle`](crate::Actor::handle) — the context in
 /// which one message is handled.
 ///
-/// The ambient capabilities plus [`continue_with`](Self::continue_with) and
-/// full scope handles. The mailbox is absent because the provided receive loop
-/// owns it; a handler that reads it directly would bypass drain accounting and
-/// the continuation queue.
+/// The ambient capabilities plus [`continue_with`](LiveContext::continue_with)
+/// and full scope handles. The mailbox is absent because the provided receive
+/// loop owns it; a handler that reads it directly would bypass drain accounting
+/// and the continuation queue.
 ///
 /// This is the only hook the provided loop calls from two different phases, so
 /// it is also the only one that has to say which: see
 /// [`is_draining`](Self::is_draining).
-pub struct MessageContext<'a, M> {
-    cx: &'a mut ActorContext<M>,
+///
+/// The parameter is the actor, not its message: a hook signature writes
+/// `&mut MessageContext<'_, Self>` and the message type is projected from
+/// [`Actor::Msg`](crate::Actor::Msg). A helper shared across actors should
+/// take [`LiveContext`] rather than name this type with a concrete message.
+pub struct MessageContext<'a, A: Actor + ?Sized> {
+    cx: &'a mut ActorContext<A::Msg>,
     draining: bool,
 }
 
@@ -1551,15 +1562,19 @@ pub struct MessageContext<'a, M> {
 ///
 /// The scope handles are narrowed to [`StoppingScope`], which withholds the
 /// lifecycle waits that would block on a detach this hook is itself holding up.
-pub struct StopContext<'a, M> {
-    cx: &'a mut ActorContext<M>,
+///
+/// The parameter is the actor, not its message: a hook signature writes
+/// `&mut StopContext<'_, Self>` and the message type is projected from
+/// [`Actor::Msg`](crate::Actor::Msg).
+pub struct StopContext<'a, A: Actor + ?Sized> {
+    cx: &'a mut ActorContext<A::Msg>,
 }
 
 live_context!(StartContext);
 live_context!(MessageContext);
 
-impl<'a, M: Send + 'static> StartContext<'a, M> {
-    pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
+impl<'a, A: Actor + ?Sized> StartContext<'a, A> {
+    pub(crate) fn new(cx: &'a mut ActorContext<A::Msg>) -> Self {
         Self { cx }
     }
 
@@ -1581,15 +1596,15 @@ impl<'a, M: Send + 'static> StartContext<'a, M> {
     }
 }
 
-impl<'a, M: Send + 'static> MessageContext<'a, M> {
-    pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
+impl<'a, A: Actor + ?Sized> MessageContext<'a, A> {
+    pub(crate) fn new(cx: &'a mut ActorContext<A::Msg>) -> Self {
         Self {
             cx,
             draining: false,
         }
     }
 
-    pub(crate) fn draining(cx: &'a mut ActorContext<M>) -> Self {
+    pub(crate) fn draining(cx: &'a mut ActorContext<A::Msg>) -> Self {
         Self { cx, draining: true }
     }
 
@@ -1634,8 +1649,8 @@ impl<'a, M: Send + 'static> MessageContext<'a, M> {
     }
 }
 
-impl<'a, M: Send + 'static> StopContext<'a, M> {
-    pub(crate) fn new(cx: &'a mut ActorContext<M>) -> Self {
+impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
+    pub(crate) fn new(cx: &'a mut ActorContext<A::Msg>) -> Self {
         Self { cx }
     }
 
@@ -1649,7 +1664,7 @@ impl<'a, M: Send + 'static> StopContext<'a, M> {
     /// The mailbox is no longer being read by this incarnation. This is here
     /// so teardown can hand the ref to something else, not so the actor can
     /// post to itself.
-    pub fn myself(&self) -> ActorRef<M> {
+    pub fn myself(&self) -> ActorRef<A::Msg> {
         self.cx.myself()
     }
 

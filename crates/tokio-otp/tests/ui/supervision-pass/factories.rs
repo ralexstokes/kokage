@@ -13,7 +13,7 @@ impl ConstructorActor {
 impl Actor for ConstructorActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }
@@ -25,7 +25,7 @@ struct CapturingActor {
 impl Actor for CapturingActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

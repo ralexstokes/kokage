@@ -147,7 +147,7 @@ pub trait Actor: Send + Sync + 'static {
     fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> impl Future<Output = ActorResult> + Send;
 
     /// Runs once before the first message of each actor run.
@@ -162,7 +162,7 @@ pub trait Actor: Send + Sync + 'static {
     /// supervision it is an ordinary restartable failure.
     fn on_start(
         &mut self,
-        _ctx: &mut StartContext<'_, Self::Msg>,
+        _ctx: &mut StartContext<'_, Self>,
     ) -> impl Future<Output = ActorResult> + Send {
         async { Ok(Flow::Continue) }
     }
@@ -182,7 +182,7 @@ pub trait Actor: Send + Sync + 'static {
     /// error.
     fn on_stop(
         &mut self,
-        _ctx: &mut StopContext<'_, Self::Msg>,
+        _ctx: &mut StopContext<'_, Self>,
     ) -> impl Future<Output = Result<(), BoxError>> + Send {
         async { Ok(()) }
     }

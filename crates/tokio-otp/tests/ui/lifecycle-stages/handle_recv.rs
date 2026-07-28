@@ -7,7 +7,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         let _ = ctx.recv().await;
         Ok(Continue)
     }

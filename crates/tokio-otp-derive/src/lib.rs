@@ -33,7 +33,7 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 /// }
 /// # impl Actor for Worker {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         let _ = (&self.client, &self.pending);
 /// #         Ok(Continue)
 /// #     }
@@ -235,7 +235,7 @@ fn parse_factory_attributes(
 /// #     async fn handle(
 /// #         &mut self,
 /// #         _: FrontendMsg,
-/// #         _: &mut MessageContext<'_, FrontendMsg>,
+/// #         _: &mut MessageContext<'_, Self>,
 /// #     ) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
@@ -247,7 +247,7 @@ fn parse_factory_attributes(
 /// # }
 /// # impl Actor for Parser {
 /// #     type Msg = ParserMsg;
-/// #     async fn handle(&mut self, _: ParserMsg, _: &mut MessageContext<'_, ParserMsg>) -> ActorResult {
+/// #     async fn handle(&mut self, _: ParserMsg, _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }
@@ -255,7 +255,7 @@ fn parse_factory_attributes(
 /// # struct Sink;
 /// # impl Actor for Sink {
 /// #     type Msg = SinkMsg;
-/// #     async fn handle(&mut self, _: SinkMsg, _: &mut MessageContext<'_, SinkMsg>) -> ActorResult {
+/// #     async fn handle(&mut self, _: SinkMsg, _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         Ok(tokio_otp::prelude::Continue)
 /// #     }
 /// # }
@@ -410,7 +410,7 @@ fn parse_factory_attributes(
 /// # struct Worker;
 /// # impl Actor for Worker {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         Ok(Continue)
 /// #     }
 /// # }

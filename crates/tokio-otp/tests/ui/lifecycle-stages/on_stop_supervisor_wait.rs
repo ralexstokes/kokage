@@ -8,11 +8,11 @@ struct Worker;
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, ctx: &mut StopContext<'_, Self::Msg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         ctx.supervisor().wait().await?;
         Ok(())
     }

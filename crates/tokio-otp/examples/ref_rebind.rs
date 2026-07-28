@@ -40,7 +40,7 @@ impl<M: Send + 'static> Actor for Observe<M> {
     async fn handle(
         &mut self,
         message: Command<M>,
-        _ctx: &mut MessageContext<'_, Command<M>>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             Command::Observe(message) => {

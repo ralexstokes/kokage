@@ -135,7 +135,7 @@ impl AgentRun {
 impl Actor for AgentRun {
     type Msg = RunMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.continue_with(RunMsg::Step);
         Ok(Continue)
     }
@@ -143,7 +143,7 @@ impl Actor for AgentRun {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             RunMsg::Step => self.start_model(ctx),

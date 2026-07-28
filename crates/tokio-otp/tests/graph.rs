@@ -300,7 +300,7 @@ impl Actor for HandlerCounter {
     async fn handle(
         &mut self,
         message: HandlerCounterMsg,
-        _ctx: &mut MessageContext<'_, HandlerCounterMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             HandlerCounterMsg::Add(n) => self.total += n,
@@ -352,21 +352,21 @@ struct LifecycleHandler {
 impl Actor for LifecycleHandler {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, ()>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Started)
             .expect("receiver alive");
         Ok(Continue)
     }
 
-    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Handled)
             .expect("receiver alive");
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, ()>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         self.events
             .send(LifecycleEvent::Stopped)
             .expect("receiver alive");
@@ -410,21 +410,21 @@ struct FailingStartHandler {
 impl Actor for FailingStartHandler {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, ()>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Started)
             .expect("receiver alive");
         Err(io::Error::other("start failed").into())
     }
 
-    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.events
             .send(LifecycleEvent::Handled)
             .expect("receiver alive");
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, ()>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         self.events
             .send(LifecycleEvent::Stopped)
             .expect("receiver alive");
@@ -468,7 +468,7 @@ struct FailingHandler;
 impl Actor for FailingHandler {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Err(io::Error::other("handle failed").into())
     }
 }
@@ -529,7 +529,7 @@ impl Actor for GateHandler {
     async fn handle(
         &mut self,
         message: GateMsg,
-        ctx: &mut MessageContext<'_, GateMsg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             GateMsg::Hold => {
@@ -553,7 +553,7 @@ impl Actor for GateHandler {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, GateMsg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         self.events
             .send(GateEvent::Stopped(self.total))
             .expect("receiver alive");
@@ -2140,7 +2140,7 @@ mod runnable_actor {
     impl Actor for DrainForwarder {
         type Msg = u32;
 
-        async fn on_start(&mut self, _ctx: &mut StartContext<'_, u32>) -> ActorResult {
+        async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;
             Ok(Continue)
@@ -2149,7 +2149,7 @@ mod runnable_actor {
         async fn handle(
             &mut self,
             message: u32,
-            _ctx: &mut MessageContext<'_, u32>,
+            _ctx: &mut MessageContext<'_, Self>,
         ) -> ActorResult {
             // D10: shutdown is concurrent, so a sibling may already be gone.
             // A drain must treat its SendError as skippable, not fatal.
@@ -2230,7 +2230,7 @@ mod runnable_actor {
     impl Actor for StrictDrainForwarder {
         type Msg = u32;
 
-        async fn on_start(&mut self, _ctx: &mut StartContext<'_, u32>) -> ActorResult {
+        async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
             self.started.send(()).expect("receiver alive");
             self.release.notified().await;
             Ok(Continue)
@@ -2239,7 +2239,7 @@ mod runnable_actor {
         async fn handle(
             &mut self,
             message: u32,
-            _ctx: &mut MessageContext<'_, u32>,
+            _ctx: &mut MessageContext<'_, Self>,
         ) -> ActorResult {
             self.sink.send(message).await?;
             Ok(Continue)

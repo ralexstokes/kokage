@@ -41,7 +41,7 @@ use crate::actor::raw::RawActor;
 /// }
 /// # impl Actor for Worker {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         let _ = (&self.ids, &self.pending);
 /// #         Ok(Continue)
 /// #     }

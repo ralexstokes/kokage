@@ -11,7 +11,7 @@ spec structs are useful when durable configuration deserves its own type.
 
 ```rust,no_run
 use tokio_otp::prelude::Continue;
-use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, Runtime};
+use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime};
 
 struct FrontDesk {
     rush: Option<ActorRef<String>>,
@@ -28,7 +28,7 @@ impl Actor for FrontDesk {
     async fn handle(
         &mut self,
         message: FrontDeskMsg,
-        _ctx: &mut MessageContext<'_, FrontDeskMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             FrontDeskMsg::SetRushPress(rush) => self.rush = Some(rush),
@@ -49,7 +49,7 @@ struct RushPress;
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, String>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         println!("RUSH printed {order}");
         Ok(Continue)
     }

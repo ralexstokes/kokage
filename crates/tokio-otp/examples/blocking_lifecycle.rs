@@ -21,7 +21,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         command: Command,
-        ctx: &mut MessageContext<'_, Command>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match command {
             Command::Start(input) => {
