@@ -13,7 +13,7 @@ mod application {
         async fn handle(
             &mut self,
             _: Message,
-            _: &mut MessageContext<'_, Message>,
+            _: &mut MessageContext<'_, Self>,
         ) -> ActorResult {
             Ok(tokio_otp::prelude::Continue)
         }

@@ -33,7 +33,7 @@ impl Actor for Health {
     async fn handle(
         &mut self,
         message: HealthMsg,
-        _ctx: &mut MessageContext<'_, HealthMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             HealthMsg::RestartsObserved { total } => {

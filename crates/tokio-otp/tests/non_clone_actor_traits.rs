@@ -40,7 +40,7 @@ struct HandlerWithNonCloneState {
 impl Actor for HandlerWithNonCloneState {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -53,7 +53,7 @@ impl Actor for HandlerWithSendOnlyMessage {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         let value = ctx.run_blocking(move |_| message.get()).await?;
         ctx.continue_with(Cell::new(value));
@@ -105,7 +105,7 @@ impl Actor for NonCloneHandler {
     async fn handle(
         &mut self,
         message: ProbeMsg,
-        _ctx: &mut MessageContext<'_, ProbeMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {
@@ -281,7 +281,7 @@ struct DefaultActor;
 impl Actor for DefaultActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }

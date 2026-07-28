@@ -37,7 +37,7 @@ struct IdleActor;
 impl Actor for IdleActor {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }

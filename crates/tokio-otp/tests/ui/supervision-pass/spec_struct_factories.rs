@@ -9,7 +9,7 @@ struct SpecActor {
 impl Actor for SpecActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }
@@ -33,7 +33,7 @@ struct ClosureActor;
 impl Actor for ClosureActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(tokio_otp::prelude::Continue)
     }
 }

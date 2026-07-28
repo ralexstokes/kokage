@@ -1117,7 +1117,7 @@ struct ResettingCounter {
 impl Actor for ResettingCounter {
     type Msg = CounterMsg;
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, CounterMsg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.on_starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
@@ -1125,7 +1125,7 @@ impl Actor for ResettingCounter {
     async fn handle(
         &mut self,
         message: CounterMsg,
-        _ctx: &mut MessageContext<'_, CounterMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             CounterMsg::Add(n) => {
@@ -1242,7 +1242,7 @@ impl Actor for StuckDrainActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             StuckDrainMsg::Gate => {

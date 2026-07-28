@@ -280,7 +280,7 @@ impl Router {
 impl Actor for Router {
     type Msg = RouterMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         // Alignment is watch first, snapshot second, then seq filtering in the
         // handler. A restarted router owns no prior slots, so every membership
         // in the snapshot is an orphan to sweep. A concurrently completed old
@@ -296,7 +296,7 @@ impl Actor for Router {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             RouterMsg::MountLifecycle(event) => {

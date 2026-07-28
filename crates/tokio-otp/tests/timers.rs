@@ -40,7 +40,7 @@ struct OneShot {
 impl Actor for OneShot {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let _timer = ctx.send_after("tick", Duration::from_millis(20));
         Ok(Continue)
     }
@@ -48,7 +48,7 @@ impl Actor for OneShot {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
@@ -89,7 +89,7 @@ struct CancelledTimer {
 impl Actor for CancelledTimer {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let timer = ctx.send_after("cancelled", Duration::from_millis(20));
         timer.cancel();
         assert!(timer.is_cancelled());
@@ -99,7 +99,7 @@ impl Actor for CancelledTimer {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
@@ -131,7 +131,7 @@ struct DefaultTimeout {
 impl Actor for DefaultTimeout {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         assert!(!ctx.timeout_armed());
         ctx.clear_timeout();
         ctx.set_timeout("old", Duration::from_millis(20));
@@ -143,7 +143,7 @@ impl Actor for DefaultTimeout {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         assert!(!ctx.timeout_armed());
         self.observed.send(message).expect("observer alive");
@@ -188,7 +188,7 @@ struct OrderedTimeout {
 impl Actor for OrderedTimeout {
     type Msg = OrderedMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.set_timeout(OrderedMsg::Old, Duration::from_millis(20));
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
@@ -198,7 +198,7 @@ impl Actor for OrderedTimeout {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         match message {
@@ -290,7 +290,7 @@ struct KeyedTimeouts {
 impl Actor for KeyedTimeouts {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let first = TimerKey::new("first");
         let second = TimerKey::new("second");
         ctx.set_timeout_keyed(first, "stale", Duration::from_millis(10));
@@ -303,7 +303,7 @@ impl Actor for KeyedTimeouts {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
@@ -333,7 +333,7 @@ struct FarFutureTimers {
 impl Actor for FarFutureTimers {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.set_timeout("never-timeout", Duration::MAX);
         self.timers
             .push(ctx.send_after("never-after", Duration::MAX));
@@ -345,7 +345,7 @@ impl Actor for FarFutureTimers {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
@@ -382,7 +382,7 @@ struct ElapsedCancellation {
 impl Actor for ElapsedCancellation {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let timer = ctx.send_after("stale", Duration::from_millis(20));
         self.timer.send(timer).expect("test receives timer");
         self.release.notified().await;
@@ -392,7 +392,7 @@ impl Actor for ElapsedCancellation {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
@@ -437,16 +437,12 @@ struct IntervalActor {
 impl Actor for IntervalActor {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.timer = Some(ctx.interval((), Duration::from_millis(10)));
         Ok(Continue)
     }
 
-    async fn handle(
-        &mut self,
-        (): Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
-    ) -> ActorResult {
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.ticks += 1;
         self.observed.send(self.ticks).expect("observer alive");
         if self.ticks == 3 {
@@ -490,17 +486,13 @@ struct SlowInterval {
 impl Actor for SlowInterval {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.started = Some(Instant::now());
         self.timer = Some(ctx.interval((), Duration::from_millis(10)));
         Ok(Continue)
     }
 
-    async fn handle(
-        &mut self,
-        (): Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
-    ) -> ActorResult {
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.ticks += 1;
         self.observed
             .send(Instant::now().duration_since(self.started.expect("started")))
@@ -548,7 +540,7 @@ struct RestartingTimer {
 impl Actor for RestartingTimer {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
             ctx.set_timeout("old", Duration::from_millis(150));
             ctx.continue_with("crash");
@@ -561,7 +553,7 @@ impl Actor for RestartingTimer {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         if message == "crash" {
             return Err::<_, BoxError>(Box::new(io::Error::other("restart")));
@@ -602,7 +594,7 @@ impl Actor for Sink {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
@@ -641,18 +633,14 @@ struct CrossScheduler {
 impl Actor for CrossScheduler {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let lifetime = ctx.lifetime();
         let _timer =
             timers::send_after_to(&lifetime, &self.target, "cross", Duration::from_millis(20));
         Ok(Continue)
     }
 
-    async fn handle(
-        &mut self,
-        (): Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
-    ) -> ActorResult {
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -685,7 +673,7 @@ struct RestartingCrossScheduler {
 impl Actor for RestartingCrossScheduler {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let lifetime = ctx.lifetime();
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
             let _old =
@@ -698,11 +686,7 @@ impl Actor for RestartingCrossScheduler {
         Ok(Continue)
     }
 
-    async fn handle(
-        &mut self,
-        (): Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
-    ) -> ActorResult {
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Err::<_, BoxError>(Box::new(io::Error::other("restart")))
     }
 }
@@ -737,7 +721,7 @@ struct CrossInterval {
 impl Actor for CrossInterval {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.timer = Some(timers::interval_to(
             &ctx.lifetime(),
             &self.target,
@@ -747,11 +731,7 @@ impl Actor for CrossInterval {
         Ok(Continue)
     }
 
-    async fn handle(
-        &mut self,
-        (): Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
-    ) -> ActorResult {
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.timer.as_ref().expect("timer armed").cancel();
         Ok(Continue)
     }

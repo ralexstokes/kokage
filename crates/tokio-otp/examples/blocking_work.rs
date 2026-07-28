@@ -21,7 +21,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: WorkMsg,
-        ctx: &mut MessageContext<'_, WorkMsg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             WorkMsg::Process(input) => {

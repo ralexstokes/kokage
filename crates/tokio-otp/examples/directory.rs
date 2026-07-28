@@ -29,7 +29,7 @@ impl<M: Send + 'static> Actor for Directory<M> {
     async fn handle(
         &mut self,
         message: DirectoryMsg<M>,
-        _ctx: &mut MessageContext<'_, DirectoryMsg<M>>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             DirectoryMsg::Insert(name, actor_ref) => {
@@ -52,7 +52,7 @@ impl Actor for Printer {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut MessageContext<'_, String>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.printed.send(message).expect("receiver alive");
         Ok(Continue)

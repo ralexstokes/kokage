@@ -46,7 +46,7 @@ impl Actor for Frontend {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut MessageContext<'_, String>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         self.worker.send(message).await?;
         Ok(Continue)
@@ -62,7 +62,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut MessageContext<'_, String>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         if message.contains("fail") {
             println!("worker failing on `{message}`");
@@ -78,7 +78,7 @@ struct Burst;
 impl Actor for Burst {
     type Msg = u32;
 
-    async fn handle(&mut self, _message: u32, _ctx: &mut MessageContext<'_, u32>) -> ActorResult {
+    async fn handle(&mut self, _message: u32, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }

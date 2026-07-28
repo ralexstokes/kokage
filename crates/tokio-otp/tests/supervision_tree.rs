@@ -12,7 +12,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         reply: Reply<u32>,
-        _ctx: &mut MessageContext<'_, Reply<u32>>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         reply.send(7);
         Ok(Continue)

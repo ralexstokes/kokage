@@ -48,7 +48,7 @@ struct DerivedActor {
 impl Actor for DerivedActor {
     type Msg = ProbeMsg;
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.incarnation = self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
@@ -56,7 +56,7 @@ impl Actor for DerivedActor {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {

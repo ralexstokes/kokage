@@ -33,7 +33,7 @@ impl Actor for Sink {
     async fn handle(
         &mut self,
         message: SinkMsg,
-        _ctx: &mut MessageContext<'_, SinkMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             SinkMsg::Lifecycle(event) => self
@@ -54,7 +54,7 @@ struct Crasher;
 impl Actor for Crasher {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Err(io::Error::other("crash requested").into())
     }
 }

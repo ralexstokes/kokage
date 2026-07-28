@@ -15,7 +15,7 @@ mod actor {
     impl Actor for Worker {
         type Msg = ();
 
-        async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+        async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
             let _ = (&self.durable, &self.local);
             Ok(Continue)
         }

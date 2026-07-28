@@ -19,7 +19,7 @@ impl Actor for ToolHost {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             ToolHostMsg::Execute { key, call, reply } => {

@@ -31,7 +31,7 @@ impl Actor for Outbound {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             OutboundMsg::Reply { chat, text } | OutboundMsg::Notice { chat, text } => {
@@ -63,7 +63,7 @@ impl Actor for Progress {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         let (chat, line) = match message {
             ProgressMsg::Delta { chat, line } => (chat, line),

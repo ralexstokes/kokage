@@ -83,7 +83,7 @@ pub trait SupervisionFactories<T: Supervision> {
 /// # }
 /// # impl Actor for Manager {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, ()>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
 /// #         let _ = &self.sessions;
 /// #         Ok(Continue)
 /// #     }

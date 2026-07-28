@@ -22,7 +22,7 @@ struct Idle;
 impl Actor for Idle {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -44,7 +44,7 @@ struct ScopeProbe {
 impl Actor for ScopeProbe {
     type Msg = LeaderMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         let Some(children) = ctx.children() else {
             let supervisor = ctx.supervisor();
@@ -105,7 +105,7 @@ impl Actor for ScopeProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             LeaderMsg::AddFromHandler => {
@@ -128,7 +128,7 @@ impl Actor for ScopeProbe {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self::Msg>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         if let Some(child_stopped) = &self.child_stopped {
             assert!(
                 child_stopped.load(Ordering::SeqCst),
@@ -144,11 +144,11 @@ struct StopProbe(Arc<AtomicBool>);
 impl Actor for StopProbe {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, ()>) -> Result<(), BoxError> {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
         self.0.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -162,7 +162,7 @@ struct BuilderHandleOwner {
 impl Actor for BuilderHandleOwner {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.mount
             .add_actor("owned", || Idle, DynamicActorOptions::new())
             .await?;
@@ -170,7 +170,7 @@ impl Actor for BuilderHandleOwner {
         Ok(Continue)
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, ()>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(Continue)
     }
 }
@@ -482,7 +482,7 @@ struct RestartProbe {
 impl Actor for RestartProbe {
     type Msg = LeaderMsg;
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(Continue)
     }
@@ -490,7 +490,7 @@ impl Actor for RestartProbe {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         if matches!(message, LeaderMsg::Crash) {
             panic!("scripted crash");

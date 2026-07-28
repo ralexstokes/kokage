@@ -27,7 +27,7 @@ refs bundle alongside the graph, for use as application entry points:
 ```rust,no_run
 use tokio_otp::prelude::Continue;
 use std::time::Duration;
-use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, Reply, Runtime, Supervision};
+use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Runtime, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -44,7 +44,7 @@ struct FrontDesk {
 impl Actor for FrontDesk {
     type Msg = Order;
 
-    async fn handle(&mut self, order: Order, _ctx: &mut MessageContext<'_, Order>) -> ActorResult {
+    async fn handle(&mut self, order: Order, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.press.send(order).await?;
         Ok(Continue)
     }
@@ -57,7 +57,7 @@ struct Press {
 impl Actor for Press {
     type Msg = Order;
 
-    async fn handle(&mut self, Order(order): Order, _ctx: &mut MessageContext<'_, Order>) -> ActorResult {
+    async fn handle(&mut self, Order(order): Order, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         self.shipping
             .send(ShippingMsg::Ship(Parcel(format!("printed[{order}]"))))
             .await?;
@@ -76,7 +76,7 @@ impl Actor for Shipping {
     async fn handle(
         &mut self,
         message: ShippingMsg,
-        _ctx: &mut MessageContext<'_, ShippingMsg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             ShippingMsg::Ship(Parcel(parcel)) => {

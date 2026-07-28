@@ -25,7 +25,7 @@ impl Actor for Journal {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             JournalMsg::Append { chat, entry, reply } => {

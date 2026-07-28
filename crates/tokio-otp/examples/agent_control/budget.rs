@@ -27,7 +27,7 @@ impl Actor for Budget {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self::Msg>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             BudgetMsg::Charge { chat, tokens } => {

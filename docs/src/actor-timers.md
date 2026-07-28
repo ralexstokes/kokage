@@ -36,7 +36,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Message>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.reconnect = Some(ctx.send_after(Message::Reconnect, Duration::from_secs(5)));
         self.reconcile = Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
         Ok(Continue)
@@ -45,7 +45,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: Message,
-        _ctx: &mut MessageContext<'_, Message>,
+        _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
@@ -101,7 +101,7 @@ struct Order {
 impl Actor for Order {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Message>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.set_timeout(Message::FillTimedOut, Duration::from_millis(500));
         Ok(Continue)
     }
@@ -109,7 +109,7 @@ impl Actor for Order {
     async fn handle(
         &mut self,
         message: Message,
-        ctx: &mut MessageContext<'_, Message>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match (&self.phase, message) {
             (Phase::PendingFill, Message::Filled) => {

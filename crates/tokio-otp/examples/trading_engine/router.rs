@@ -80,7 +80,7 @@ impl Actor for OrderRouter {
     async fn handle(
         &mut self,
         message: RouterMsg,
-        ctx: &mut MessageContext<'_, RouterMsg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             RouterMsg::Submit {

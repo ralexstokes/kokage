@@ -85,7 +85,7 @@ impl Session {
         role: Role,
         attempt: u64,
         input: PendingInput,
-        ctx: &mut MessageContext<'_, SessionMsg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         ctx.clear_timeout();
         if self.heartbeat.is_none() {
@@ -153,7 +153,7 @@ impl Session {
     async fn start_input(
         &mut self,
         input: PendingInput,
-        ctx: &mut MessageContext<'_, SessionMsg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
@@ -198,7 +198,7 @@ impl Session {
 impl Actor for Session {
     type Msg = SessionMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self::Msg>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let mut proof = self.proof.lock().expect("proof lock poisoned");
         proof.session_ready_at.insert(self.chat, Instant::now());
         proof.session_generations.insert(self.chat, self.generation);
@@ -217,7 +217,7 @@ impl Actor for Session {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self::Msg>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         match message {
             SessionMsg::Rehydrate => {
