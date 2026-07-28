@@ -314,6 +314,8 @@ impl Actor for KeyedTimeouts {
         message: Self::Msg,
         ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
+        // Delivered payloads intentionally match their timer-key names so this
+        // post-delivery check can reconstruct the key.
         let key = TimerKey::new(message);
         assert!(!ctx.timeout_armed(key));
         self.observed.send(message).expect("observer alive");
