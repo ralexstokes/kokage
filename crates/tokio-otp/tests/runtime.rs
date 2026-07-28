@@ -19,9 +19,8 @@ use tokio_otp::{
     prelude::Continue,
 };
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
-    SupervisorStateView,
+    ChildSpec, ChildStateView, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity,
+    RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy, SupervisorError, SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -121,12 +120,8 @@ async fn runtime_spawn_combines_actor_refs_and_supervisor_control() {
     });
 
     let handle = runtime.spawn();
-    let supervisor_handle = handle.supervisor_handle();
 
-    assert_eq!(
-        supervisor_handle.snapshot().state,
-        SupervisorStateView::Running
-    );
+    assert_eq!(handle.snapshot().state, SupervisorStateView::Running);
     assert_eq!(handle.snapshot().children.len(), 1);
     worker_ref
         .send("hello".to_owned())
@@ -143,6 +138,51 @@ async fn runtime_spawn_combines_actor_refs_and_supervisor_control() {
         .shutdown_and_wait()
         .await
         .expect("supervisor shut down cleanly");
+}
+
+#[tokio::test]
+async fn runtime_handle_waits_for_actor_completion() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn();
+
+    worker_ref
+        .send("done".to_owned())
+        .await
+        .expect("message sent");
+    observed_rx.recv().await.expect("message observed");
+
+    assert_eq!(
+        timeout(Duration::from_secs(1), handle.wait_completed(["worker"]))
+            .await
+            .expect("completion observed within timeout"),
+        CompletionOutcome::Completed
+    );
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn runtime_handle_can_arm_shutdown_on_completion_before_spawn() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
+        observed: observed_tx.clone(),
+    });
+    let pre_spawn = runtime.handle();
+    let _completion = pre_spawn.shutdown_on_completion(["worker"]);
+    let handle = runtime.spawn();
+
+    worker_ref
+        .send("done".to_owned())
+        .await
+        .expect("message sent");
+    observed_rx.recv().await.expect("message observed");
+
+    timeout(Duration::from_secs(1), handle.wait())
+        .await
+        .expect("completion shut the runtime down")
+        .expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -260,16 +300,13 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
         .subtree("raw-members")
         .expect("dynamic raw-members subtree");
     raw_members
-        .supervisor_handle()
-        .add_supervisor(SupervisorSpec::new(
-            "raw",
-            SupervisorBuilder::new()
-                .build()
-                .expect("raw supervisor builds"),
-        ))
+        .add_child(ChildSpec::new("raw", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
         .await
-        .expect("raw supervisor added");
-    assert!(handle.subtree("raw").is_none());
+        .expect("raw task child added");
+    assert!(raw_members.subtree("raw").is_none());
 
     let dynamic_scope = subtree
         .subtree("dynamic")
@@ -296,10 +333,9 @@ async fn runtime_builder_composes_subtrees_with_recursive_actor_stats() {
     );
 
     dynamic_scope
-        .supervisor_handle()
         .remove_child("dynamic-worker")
         .await
-        .expect("nested actor removed through raw handle");
+        .expect("nested actor removed through runtime handle");
     assert!(
         handle
             .actor_stats()
@@ -503,12 +539,10 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     });
 
     handle
-        .supervisor_handle()
         .remove_child("worker")
         .await
-        .expect("tracked actor removed through raw handle");
+        .expect("tracked actor removed through runtime handle");
     handle
-        .supervisor_handle()
         .add_child(ChildSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -615,7 +649,6 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     sampler.await.expect("restart-window sampler completed");
 
     dynamic
-        .supervisor_handle()
         .add_child(ChildSpec::new("dynamic-worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())

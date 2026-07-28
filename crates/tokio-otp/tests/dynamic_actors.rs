@@ -17,12 +17,12 @@ use tokio::{
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
     ChildMembershipView, ChildSpec, ControlError, ControlOperation, DownReason, DrainPolicy,
-    DynamicActorOptions, DynamicSupervisorBuilder, GraphBuilder, MailboxMode, MessageContext,
-    MessageSize, MonitorEvent, RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind,
-    SendError, ShutdownMode, ShutdownPolicy, StartContext, StopContext, SupervisionTree,
-    SupervisorBuilder,
+    DynamicActorOptions, GraphBuilder, MailboxMode, MessageContext, MessageSize, MonitorEvent,
+    RawActor, RestartPolicy, Runtime, RuntimeHandle, ScopeKind, SendError, ShutdownMode,
+    ShutdownPolicy, StartContext, StopContext, SupervisionTree,
     prelude::{Continue, Stop},
 };
+use tokio_supervisor::{DynamicSupervisorBuilder, SupervisorBuilder};
 
 struct Drain<M>(PhantomData<fn(M)>);
 

@@ -1346,9 +1346,9 @@ macro_rules! live_context {
 /// The restriction is closed under navigation: [`subtree`](Self::subtree)
 /// hands back another `RestrictedScope`. During startup, a sibling scope
 /// declared after this actor starts after it reports ready. During shutdown, a
-/// nested scope's shutdown is sequenced with this one's. The raw
-/// `SupervisorHandle` — one method call away from the same waits — is not
-/// reachable from here at all.
+/// nested scope's shutdown is sequenced with this one's. The full
+/// [`RuntimeHandle`] — which carries those waits — is not reachable without
+/// an explicit [`release`](Self::release).
 ///
 /// The shutdown-stage restriction has a different cause but the same shape. A
 /// stopping child is still attached to its supervisor: cooperative removal
@@ -1411,6 +1411,17 @@ impl RestrictedScope {
         self.handle.add_actor(label, factory, options).await
     }
 
+    /// Inserts an arbitrary supervised task child into this scope.
+    ///
+    /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
+    /// See [`RuntimeHandle::add_child`].
+    pub async fn add_child(
+        &self,
+        child: tokio_supervisor::ChildSpec,
+    ) -> Result<u64, tokio_supervisor::ControlError> {
+        self.handle.add_child(child).await
+    }
+
     /// Inserts a subtree into this scope.
     ///
     /// The subtree must already be reserved because reservation is fallible
@@ -1454,6 +1465,19 @@ impl RestrictedScope {
         F: FnMut(tokio_supervisor::LifecycleEvent) -> M + Send + 'static,
     {
         self.handle.watch_lifecycle_to(target, map)
+    }
+
+    /// Shuts this scope down once every named child has completed.
+    ///
+    /// Registering the completion watch is fire-and-forget and does not wait
+    /// for a lifecycle transition, so it is safe from a lifecycle hook. The
+    /// returned guard must be retained; dropping it cancels the watch.
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> tokio_supervisor::CompletionGuard
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.handle.shutdown_on_completion(ids)
     }
 
     /// Requests shutdown of this scope without waiting for it.

@@ -42,8 +42,9 @@
 //! See [`SupervisionTree`] for recursive composition and per-actor policy
 //! examples. [`RuntimeBuilder`] remains thin graph-in-one-scope sugar. The
 //! [`prelude`] re-exports the common composition and actor surface plus the
-//! usual `tokio-supervisor` types; that crate remains independently usable for
-//! supervision without actors.
+//! shared `tokio-supervisor` policies, views, and [`ChildSpec`]. Raw supervisor
+//! construction and control types stay in `tokio-supervisor`; depend on that
+//! crate directly for supervision without actors.
 //!
 //! # Core types
 //!
@@ -51,7 +52,7 @@
 //! |------|------|
 //! | [`SupervisionTree`] / [`ReservedSupervisionTree`] | Primary recursive declaration; reserve the non-cloneable form when a scope handle is needed before build. |
 //! | [`Runtime`] / [`RuntimeBuilder`] | Configured executable runtime, plus thin graph-in-one-scope sugar. |
-//! | [`RuntimeHandle`] | Control surface for shutdown and observability; dynamic-scope handles also mutate membership. |
+//! | [`RuntimeHandle`] | Control surface for shutdown, completion, and observability; dynamic-scope handles also add actors, task children, and subtrees. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -323,11 +324,10 @@ pub use supervision_derive::{
 #[doc(hidden)]
 pub use tokio_supervisor::{AttachedChild, AttachedChildIdentity};
 pub use tokio_supervisor::{
-    BackoffPolicy, BoxError, ChildContext, ChildMembershipView, ChildResult, ChildSnapshot,
-    ChildSpec, ChildStateView, CompletionGuard, CompletionOutcome, ControlError, ControlOperation,
-    DynamicSupervisorBuilder, ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
-    RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-    SupervisorSpec, SupervisorStateView,
+    BackoffPolicy, BoxError, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
+    CompletionGuard, CompletionOutcome, ControlError, ControlOperation, ExitStatusView,
+    LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
+    ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
+    SupervisorSnapshot, SupervisorStateView,
 };
 pub use tokio_util::sync::CancellationToken;

@@ -19,11 +19,9 @@ cannot read the mailbox the provided loop owns, and a `RawActor` cannot queue
 a continuation nothing drains. Each was legal code — deadlocking or silently
 doing nothing — when all four hooks shared one context type.
 
-The restricted scope handles must also stay restricted under navigation, so
-two cases pin the escapes that would otherwise hand the withheld waits back:
-`subtree()` returns another restricted handle rather than a `RuntimeHandle`,
-and the raw `SupervisorHandle` — which carries the same waits — is reachable
-only past `release()`.
+Restricted scope handles must also stay restricted under navigation, so
+`on_start_subtree_wait_started.rs` pins that `subtree()` returns another
+restricted handle rather than handing the withheld waits back.
 
 ## Updating snapshots on a toolchain bump
 

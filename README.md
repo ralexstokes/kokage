@@ -8,8 +8,9 @@ The core idea is the one that has kept telecom switches running for decades:
 organize your program into small, isolated tasks and let a *supervisor*
 restart the ones that fail.
 
-One dependency is all you need — `tokio-otp` exports everything through
-its prelude:
+The actor product needs one dependency. Its prelude covers the day-one actor
+surface; advanced APIs are available from the crate root. Applications using
+raw task supervision directly should also depend on `tokio-supervisor`:
 
 ```toml
 [dependencies]

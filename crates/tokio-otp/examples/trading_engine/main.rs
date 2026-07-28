@@ -466,8 +466,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     let venues = app
         .handle
         .subtree("venues")
-        .expect("venues runtime subtree")
-        .supervisor_handle();
+        .expect("venues runtime subtree");
     let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
     app.venue_a_feed.send(FeedMsg::Crash).await?;
     tokio::time::timeout(
@@ -684,8 +683,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     let venues = app
         .handle
         .subtree("venues")
-        .expect("venues runtime subtree")
-        .supervisor_handle();
+        .expect("venues runtime subtree");
     for (id, feed) in [
         ("venue-a-feed", &app.venue_a_feed),
         ("venue-b-feed", &app.venue_b_feed),
@@ -783,7 +781,7 @@ where
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
 }
 
-fn restart_observer(handle: &tokio_otp::SupervisorHandle, id: &str) -> (LifecycleWatch, u64) {
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
     let lifecycle = handle.watch_lifecycle();
     let generation = handle
         .snapshot()

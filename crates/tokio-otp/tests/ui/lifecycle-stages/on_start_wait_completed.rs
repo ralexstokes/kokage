@@ -1,5 +1,6 @@
-//! The raw supervisor handle carries the same lifecycle waits, so `on_start`
-//! cannot reach it directly; `release()` is the way through.
+//! `wait_completed` is withheld during startup because the current actor
+//! cannot complete startup until this hook returns.
+
 use tokio_otp::{Actor, ActorResult, MessageContext, StartContext, prelude::Continue};
 
 struct Leader;
@@ -8,7 +9,7 @@ impl Actor for Leader {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        ctx.supervisor().supervisor_handle().wait_started().await?;
+        let _ = ctx.supervisor().wait_completed(["worker"]).await;
         Ok(Continue)
     }
 

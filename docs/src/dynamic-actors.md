@@ -127,7 +127,7 @@ another actor with the same id returns a fresh ref; the old one never silently
 rebinds to the new occupant. The add reply means the membership was inserted
 and startup was scheduled. In sequential mode the actor may still be queued
 behind another child's readiness gate; the ref is usable immediately, while
-`supervisor_handle().wait_started()` waits for readiness.
+`RuntimeHandle::wait_started()` waits for readiness.
 
 Removal is sequenced supervisor child removal. `remove_child(label)` marks the
 membership `Removing` and starts its configured shutdown. When cooperative
@@ -275,12 +275,11 @@ returns a `RestrictedScope` rather than a `RuntimeHandle`: an actor cannot repor
 ready until `on_start` returns, so awaiting `wait_started()`, `wait()`, or
 `shutdown_and_wait()` there waits on the current actor's own readiness and
 deadlocks. Those methods are simply absent from
-`RestrictedScope`, as is `supervisor_handle()`, which would hand the same waits
-back one call later. Insertion (`add_actor`, `add_subtree`) schedules startup
-rather than waiting for it, so it stays available, and `subtree()` returns
-another `RestrictedScope` so navigating to a nested scope does not widen the
-surface. When a wait must happen, call `RestrictedScope::release()` for the full
-handle and move it into the pipelined work:
+`RestrictedScope`. Insertion (`add_actor`, `add_child`, `add_subtree`) schedules
+startup rather than waiting for it, so it stays available, and `subtree()`
+returns another `RestrictedScope` so navigating to a nested scope does not
+widen the surface. When a wait must happen, call `RestrictedScope::release()`
+for the full handle and move it into the pipelined work:
 
 ```rust,ignore
 let children = ctx.children().expect("leader has a child scope").release();
@@ -372,14 +371,12 @@ membership receives a later lineage and starts again at generation zero. For
 recursive stats, also compare `ActorStats::supervisor_path`; it distinguishes
 otherwise identical local ids and lineages in sibling or restarted subtrees.
 
-For a raw nested `Supervisor` that does not need actor-aware behavior, start
-from `RuntimeHandle::supervisor_handle` and use
-`SupervisorHandle::add_supervisor`, `SupervisorHandle::supervisor`, and the
-ordinary `tokio-supervisor` child APIs as the lower-level escape hatch. Raw
-children are not part of runtime actor stats. Raw removals also bypass the
-runtime registry's immediate bookkeeping; the next `actor_stats()` sample
-reconciles tracked entries against the supervisor snapshot and prunes removed
-children.
+Use `RuntimeHandle::add_child(ChildSpec)` for a non-actor task in a dynamic
+scope and `add_subtree` for a nested actor-aware scope. Task children are not
+part of runtime actor stats, but they remain visible in snapshots and lifecycle
+watches. Applications that need raw `Supervisor`, `SupervisorBuilder`, or
+`SupervisorHandle` APIs should depend on `tokio-supervisor` directly; those
+low-level construction and control types are not re-exported by `tokio-otp`.
 
 ## Name-based discovery, when you want it
 
