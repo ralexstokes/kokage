@@ -1,0 +1,11 @@
+error[E0451]: field `node` of struct `SupervisionTree` is private
+ --> tests/ui/reserved-supervision-tree/opaque_fields.rs:4:27
+  |
+4 |     let SupervisionTree { node: _ } = SupervisionTree::dynamic();
+  |                           ^^^^ private field
+
+error: type `tokio_otp::supervision::ScopeNode` is private
+ --> tests/ui/reserved-supervision-tree/opaque_fields.rs:4:33
+  |
+4 |     let SupervisionTree { node: _ } = SupervisionTree::dynamic();
+  |                                 ^ private type

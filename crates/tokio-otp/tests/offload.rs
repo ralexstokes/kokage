@@ -99,8 +99,7 @@ async fn offload_and_offload_or_deliver_total_and_fallback_outcomes() {
     graph.define(actor_slot, move || Outcomes {
         observed: observed.clone(),
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -244,8 +243,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
             done: done.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .default_restart(RestartPolicy::OnFailure)
         .build()
         .unwrap()
@@ -326,8 +324,7 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
             done: done.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -400,8 +397,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
             observed: observed.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -481,8 +477,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
             shutdown_seen: shutdown_seen.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -569,8 +564,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
             observed: observed.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -670,8 +664,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
             observed: observed.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -719,8 +712,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
             observed: observed.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -802,8 +794,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
             observed: observed.clone(),
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -847,8 +838,7 @@ async fn raw_actor_recv_reaps_offload_completions() {
     graph.define(actor_slot, move || RawCompletion {
         observed: observed.clone(),
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .build()
         .unwrap()
         .spawn();
@@ -894,8 +884,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
             PanicActor
         }
     });
-    let runtime = Runtime::builder()
-        .graph(graph.build().unwrap())
+    let runtime = SupervisionTree::graph(&graph.build().unwrap())
         .default_restart(RestartPolicy::OnFailure)
         .build()
         .unwrap()

@@ -170,8 +170,7 @@ impl Router {
                                 SupervisionTree::dynamic(),
                                 Strategy::OneForAll,
                             )
-                            .reserve()
-                            .expect("session subtree identity reserves"),
+                            .reserve(),
                     )
                     .await;
                 subtree.is_ok()

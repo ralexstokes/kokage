@@ -21,7 +21,7 @@ pub(crate) use context::deadline_after;
 pub(crate) use binding::SupervisorPathSegment;
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment as ActorSupervisorPathSegment};
 pub(crate) use builder::ActorOptionsValidationError;
-pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
+pub use builder::{ActorOptions, ActorSlot, GraphBuilder, GraphConfig, MessageSize};
 pub use cancellation::{CancellationHandle, Lifetime};
 pub use context::{
     ActorContext, ActorRef, AmbientContext, LiveContext, MessageContext, OffloadHandle, Reply,

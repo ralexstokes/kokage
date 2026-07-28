@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_otp::{Actor, MessageContext, ActorFactory, ActorResult, Supervision};
+use tokio_otp::{Actor, ActorFactory, ActorResult, MessageContext, Supervision};
 
 struct SpecActor {
     _configuration: Arc<str>,
@@ -45,11 +45,11 @@ struct Application {
 }
 
 fn main() {
-    Application::graph(|_| ApplicationFactories {
+    Application::tree(|_| ApplicationFactories {
         spec: SpecActorFactory {
             configuration: Arc::from("durable"),
         },
         closure: || ClosureActor,
     })
-    .expect("factory graph builds");
+    .expect("factory tree builds");
 }

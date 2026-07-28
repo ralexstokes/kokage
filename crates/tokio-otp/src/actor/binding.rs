@@ -675,6 +675,7 @@ impl<M> Clone for BindingState<M> {
 }
 
 pub(crate) trait BindingLifecycle: Send + Sync {
+    fn identity(&self) -> &Arc<()>;
     fn unbind(&self);
     fn terminate(&self);
     fn stats(&self) -> ActorStats;
@@ -685,6 +686,7 @@ pub(crate) trait BindingLifecycle: Send + Sync {
 /// [`ActorRef`](crate::ActorRef)s subscribe to this slot, so they
 /// transparently follow the current mailbox across per-actor restarts.
 pub(crate) struct BindingCore<M> {
+    identity: Arc<()>,
     actor_id: Arc<str>,
     current: watch::Sender<BindingState<M>>,
     stats: Arc<ActorStatsCounters>,
@@ -714,6 +716,7 @@ impl<M> BindingCore<M> {
         let monitors = Arc::new(MonitorHub::new(&actor_id));
         let outbound_monitors = Arc::new(ActorMonitors::new());
         Self {
+            identity: Arc::new(()),
             actor_id,
             current,
             stats: Arc::new(ActorStatsCounters::new(false)),
@@ -732,6 +735,7 @@ impl<M> BindingCore<M> {
             metrics: MessageSizeMetrics::new(&actor_id),
         };
         Self {
+            identity: Arc::new(()),
             actor_id,
             current,
             stats: Arc::new(ActorStatsCounters::new(true)),
@@ -743,6 +747,10 @@ impl<M> BindingCore<M> {
 
     pub(crate) fn actor_id(&self) -> &Arc<str> {
         &self.actor_id
+    }
+
+    pub(crate) fn identity(&self) -> &Arc<()> {
+        &self.identity
     }
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<BindingState<M>> {
@@ -801,6 +809,10 @@ impl<M> BindingCore<M> {
 }
 
 impl<M: Send + 'static> BindingLifecycle for BindingCore<M> {
+    fn identity(&self) -> &Arc<()> {
+        BindingCore::identity(self)
+    }
+
     fn unbind(&self) {
         BindingCore::unbind(self);
     }

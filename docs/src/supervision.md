@@ -135,7 +135,7 @@ implicit readiness timeout.
 
 Ordered startup latency is cumulative: the scope becomes ready after the sum
 of its declared readiness gates' `on_start` times. This is now the default for
-`SupervisorBuilder` and `Runtime::builder()`; use a dynamic scope when members
+`SupervisorBuilder` and `SupervisionTree::new()`; use a dynamic scope when members
 should start independently and immediate runtime insertion is the right
 ownership model.
 

@@ -1,4 +1,4 @@
-use tokio_otp::{Actor, MessageContext, ActorResult, Supervision};
+use tokio_otp::{Actor, ActorResult, MessageContext, Supervision};
 
 struct Worker;
 
@@ -26,5 +26,5 @@ struct Application {
 }
 
 fn main() {
-    Application::graph(|_| ApplicationFactories { worker: || Other }).unwrap();
+    Application::tree(|_| ApplicationFactories { worker: || Other }).unwrap();
 }

@@ -2,8 +2,8 @@
 //! marker scope all wire from one factories literal.
 
 use tokio_otp::{
-    ActorContext, ActorResult, DynamicScope, RestartPolicy, Runtime, Strategy, Supervision,
-    SupervisionBuildError,
+    ActorContext, ActorResult, DynamicScope, GraphBuildError, RestartPolicy, Strategy, Supervision,
+    SupervisionTree,
 };
 
 struct Worker;
@@ -42,8 +42,8 @@ struct App {
     pool: Pool,
 }
 
-fn main() -> Result<(), SupervisionBuildError> {
-    let (runtime, refs) = App::runtime(|_refs| AppFactories {
+fn main() -> Result<(), GraphBuildError> {
+    let (tree, refs) = App::tree(|_refs| AppFactories {
         ingest: || Worker,
         workers: WorkersFactories {
             parse: || Worker,
@@ -51,10 +51,12 @@ fn main() -> Result<(), SupervisionBuildError> {
         },
         pool: PoolFactories {
             manager: || Worker,
-            sessions: Runtime::dynamic().default_restart(RestartPolicy::Never),
+            sessions: SupervisionTree::dynamic()
+                .default_restart(RestartPolicy::Never)
+                .reserve(),
         },
     })?;
 
-    let _ = (runtime, refs.ingest, refs.workers.parse, refs.pool.manager);
+    let _ = (tree, refs.ingest, refs.workers.parse, refs.pool.manager);
     Ok(())
 }

@@ -258,10 +258,10 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // Core and venue actors share one graph, so the cycle between them — feeds
     // hold the reconciler's ref, the reconciler holds every feed's — is wired in
     // a single closure with no slots to open and fill by hand.
-    let mut builder = GraphBuilder::new();
-    builder.name("trading-engine");
-    builder.mailbox_capacity(32);
-    let (tree, refs) = TradingEngine::tree_with(builder, |refs| {
+    let config = tokio_otp::GraphConfig::new()
+        .name("trading-engine")
+        .mailbox_capacity(32);
+    let (tree, refs) = TradingEngine::tree_with(config, |refs| {
         let venues = &refs.venues;
         let feed_refs = HashMap::from([
             (VENUE_A, venues.venue_a_feed.clone()),

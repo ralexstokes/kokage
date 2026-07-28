@@ -3,9 +3,7 @@
 //! `#[derive(Supervision)]` generates implementations of the traits declared
 //! here. They are public because a nested scope in one crate can be declared by
 //! a supervision struct in another, but application code normally touches only
-//! the generated `graph`, `tree`, and `runtime` constructors.
-
-use tokio_supervisor::SupervisorBuildError;
+//! the generated `tree` and `tree_with` constructors.
 
 use crate::{Graph, GraphBuildError, GraphBuilder, ReservedSupervisionTree};
 
@@ -25,9 +23,9 @@ pub trait Supervision: Sized {
     /// Reserved dynamic scopes, one per `#[supervision(dynamic)]` field, plus
     /// one nested bundle per nested scope.
     ///
-    /// A dynamic scope is supplied as a [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) through the
-    /// factories bundle, so its mount handle can be taken with
-    /// [`handle`](crate::DynamicRuntimeBuilder::handle) before wiring — early enough
+    /// A dynamic scope is supplied as a [`ReservedSupervisionTree<true>`]
+    /// through the factories bundle, so its mount handle can be taken with
+    /// [`handle`](ReservedSupervisionTree::handle) before wiring — early enough
     /// for an actor factory to capture it.
     type Scopes;
 
@@ -38,17 +36,17 @@ pub trait Supervision: Sized {
     /// prefix extended by the nested scope's own name.
     fn open(builder: &mut GraphBuilder, prefix: &str) -> (Self::Slots, Self::Refs);
 
-    /// Builds this struct's supervision node, named `id` in its parent scope.
+    /// Builds this struct's reserved supervision node for attachment to its parent scope.
     ///
-    /// `graph` must be the graph [`open`](Self::open) populated, and `prefix`
-    /// the same value passed to it, so that the node resolves the actors it was
-    /// built with. A node handed some other graph cannot find them; it records
-    /// the mismatch on the scope rather than failing here, so
-    /// [`ReservedSupervisionTree::build`] and
-    /// [`outline`](ReservedSupervisionTree::outline) report it as
-    /// [`InvalidConfig`](tokio_supervisor::SupervisorBuildError::InvalidConfig).
-    fn node(graph: &Graph, scopes: Self::Scopes, id: &str, prefix: &str)
-    -> ReservedSupervisionTree;
+    /// `graph` must be the graph [`open`](Self::open) populated, so that the
+    /// node resolves the actors it was built with. A node handed some other
+    /// graph cannot find them and returns
+    /// [`GraphBuildError::ForeignActorRef`].
+    fn node(
+        graph: &Graph,
+        refs: &Self::Refs,
+        scopes: Self::Scopes,
+    ) -> Result<ReservedSupervisionTree, GraphBuildError>;
 }
 
 /// A bundle of factories filling every slot a supervision struct declares.
@@ -57,7 +55,7 @@ pub trait Supervision: Sized {
 /// per actor, per nested scope, and per dynamic scope. A nested scope's field
 /// holds that scope's own factories bundle, so wiring nests the same way the
 /// declaration does; a dynamic scope's field holds a
-/// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder).
+/// [`ReservedSupervisionTree<true>`].
 pub trait SupervisionFactories<T: Supervision> {
     /// Fills every slot returned by [`Supervision::open`], yielding the dynamic
     /// scopes this bundle carried.
@@ -70,15 +68,15 @@ pub trait SupervisionFactories<T: Supervision> {
 /// a [`SupervisionTree::dynamic`](crate::SupervisionTree::dynamic) scope whose
 /// membership is written at runtime.
 /// The field must be marked `#[supervision(dynamic)]`, and its wiring entry is a
-/// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) rather than an actor
-/// factory — which is what makes
+/// [`ReservedSupervisionTree<true>`] rather than an actor factory — which is
+/// what makes
 /// the scope's mount handle available before any actor is constructed, so a
 /// factory can capture it:
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     Actor, ActorResult, DynamicScope, MessageContext, RestartPolicy, Runtime,
-/// #     RuntimeHandle, SupervisionBuildError,
+/// #     Actor, ActorResult, DynamicScope, GraphBuildError, MessageContext, RestartPolicy,
+/// #     RuntimeHandle, SupervisionTree,
 /// # };
 /// # struct Manager {
 /// #     sessions: RuntimeHandle,
@@ -97,42 +95,28 @@ pub trait SupervisionFactories<T: Supervision> {
 ///     sessions: DynamicScope,
 /// }
 ///
-/// # fn main() -> Result<(), SupervisionBuildError> {
-/// let sessions = Runtime::dynamic().default_restart(RestartPolicy::Never);
+/// # fn main() -> Result<(), GraphBuildError> {
+/// let sessions = SupervisionTree::dynamic()
+///     .default_restart(RestartPolicy::Never)
+///     .reserve();
 /// // Reserved before wiring, so the manager can hold it across restarts.
 /// let mount = sessions.handle();
 ///
-/// let (runtime, _refs) = App::runtime(|_refs| AppFactories {
+/// let (tree, _refs) = App::tree(|_refs| AppFactories {
 ///     manager: move || Manager {
 ///         sessions: mount.clone(),
 ///     },
 ///     sessions,
 /// })?;
-/// # drop(runtime);
+/// # drop(tree);
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// Policy for the scope comes from the builder —
-/// `Runtime::dynamic().default_restart(..)` and friends — rather than from
-/// attributes on the field.
+/// Policy for the scope comes from the reserved tree —
+/// `SupervisionTree::dynamic().default_restart(..).reserve()` and friends —
+/// rather than from attributes on the field.
 pub enum DynamicScope {}
-
-/// Errors returned when building a runtime from a derived supervision struct.
-///
-/// This is the derive's own error union; the
-/// [`SupervisorBuildError`] it wraps is the lower-level supervisor validation
-/// error from `tokio-supervisor`.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum SupervisionBuildError {
-    /// The actor graph failed validation.
-    #[error(transparent)]
-    Graph(#[from] GraphBuildError),
-    /// The supervision tree failed validation.
-    #[error(transparent)]
-    Supervision(#[from] SupervisorBuildError),
-}
 
 /// Joins a scope prefix and a node name into a qualified label.
 ///

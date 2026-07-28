@@ -1,6 +1,6 @@
 # Dynamic Actors
 
-A dynamic runtime does not need a graph: `Runtime::dynamic().build()` starts
+A dynamic runtime does not need a graph: `SupervisionTree::dynamic().build()` starts
 empty and idles until `RuntimeHandle::add_actor` adds a typed actor. Each
 added actor becomes a supervised child whose id is the actor's label, and
 `add_actor` returns the typed `ActorRef<M>` directly — there is no registry
@@ -11,7 +11,8 @@ spec structs are useful when durable configuration deserves its own type.
 
 ```rust,no_run
 use tokio_otp::{
-    Actor, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, MessageContext, Runtime,
+    Actor, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, MessageContext,
+    SupervisionTree,
 };
 
 struct FrontDesk {
@@ -58,7 +59,7 @@ impl Actor for RushPress {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = Runtime::dynamic().build()?;
+    let runtime = SupervisionTree::dynamic().build()?;
     let handle = runtime.spawn();
 
     let orders = handle
@@ -173,12 +174,12 @@ Subtrees can also be added dynamically. `add_subtree` takes a
 
 ```rust,ignore
 let sessions = handle
-    .add_subtree("sessions", SupervisionTree::dynamic().reserve()?)
+    .add_subtree("sessions", SupervisionTree::dynamic().reserve())
     .await?;
 let session = sessions
     .add_subtree(
         session_id,
-        SupervisionTree::graph(&session_graph).reserve()?,
+        SupervisionTree::graph(&session_graph).reserve(),
     )
     .await?;
 session
@@ -211,19 +212,19 @@ reconcile:
 ```rust,ignore
 let sessions_tree = SupervisionTree::dynamic()
     .default_restart(RestartPolicy::OnFailure)
-    .reserve()?;
+    .reserve();
 let sessions = sessions_tree.handle();
 
 let mut graph = GraphBuilder::new();
-let (router_slot, _) = graph.slot("router");
+let (router_slot, router) = graph.slot("router");
 graph.define(router_slot, move || Router::new(sessions.clone()));
 let graph = graph.build()?;
 
 let app_tree = SupervisionTree::new()
-    .reserve()?
+    .reserve()
     // Declaration order makes sessions ready before Router::on_start.
     .reserved_subtree("sessions", sessions_tree)
-    .actor(graph.actor("router").unwrap().clone());
+    .actor(graph.actor_for(&router)?);
 let app_handle = app_tree.handle();
 let app = app_tree.build()?;
 # drop((app_handle, app));
@@ -242,8 +243,7 @@ subscriptions are already valid. `wait_started()` waits for a real bound
 incarnation, including an empty dynamic scope. Dropping a reserved declaration,
 failing `build()`, dropping a built scope before it is spawned or inserted, or
 having an insertion rejected makes the identity terminal and closes retained
-streams. `RuntimeBuilder` and `DynamicRuntimeBuilder` perform this reservation
-automatically for their one-scope convenience cases.
+streams.
 
 The same rule applies to `SupervisorBuilder` and
 `DynamicSupervisorBuilder`, whose `handle()` returns a raw

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_otp::{Actor, MessageContext, ActorResult, Supervision};
+use tokio_otp::{Actor, ActorResult, MessageContext, Supervision};
 
 struct ConstructorActor;
 
@@ -38,11 +38,11 @@ struct Application {
 
 fn main() {
     let configuration: Arc<str> = Arc::from("durable");
-    Application::graph(move |_| ApplicationFactories {
+    Application::tree(move |_| ApplicationFactories {
         constructor: ConstructorActor::new,
         capturing: move || CapturingActor {
             _configuration: configuration.clone(),
         },
     })
-    .expect("factory graph builds");
+    .expect("factory tree builds");
 }

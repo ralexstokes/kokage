@@ -1,4 +1,4 @@
-use tokio_otp::{Actor, MessageContext, ActorResult, Supervision};
+use tokio_otp::{Actor, ActorResult, GraphConfig, MessageContext, Supervision};
 
 mod application {
     use super::*;
@@ -10,11 +10,7 @@ mod application {
     impl Actor for Worker {
         type Msg = Message;
 
-        async fn handle(
-            &mut self,
-            _: Message,
-            _: &mut MessageContext<'_, Self>,
-        ) -> ActorResult {
+        async fn handle(&mut self, _: Message, _: &mut MessageContext<'_, Self>) -> ActorResult {
             Ok(())
         }
     }
@@ -28,14 +24,15 @@ mod application {
 fn assert_clone<T: Clone>(_: &T) {}
 
 fn main() {
-    let (graph, refs) = application::Application::graph(|_| {
-        application::ApplicationFactories {
+    let (tree, refs) = application::Application::tree_with(
+        GraphConfig::new().name("application").mailbox_capacity(8),
+        |_| application::ApplicationFactories {
             worker: || application::Worker,
-        }
-    })
-    .expect("derived graph with refs builds");
+        },
+    )
+    .expect("derived tree with refs builds");
 
     assert_clone(&refs);
     assert_eq!(refs.worker.id(), "worker");
-    drop(graph);
+    drop(tree);
 }

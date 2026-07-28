@@ -364,70 +364,6 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Starts building a supervised actor runtime.
-    ///
-    /// Provide a graph to run every graph actor as its own supervised child in
-    /// one ordered scope. Use [`SupervisionTree`](crate::SupervisionTree) for
-    /// recursive composition, arbitrary task children, actor-owned scopes, or
-    /// per-actor policy overrides. Use [`Runtime::dynamic`] when actors or
-    /// subtrees will be added at runtime.
-    ///
-    /// See [`RuntimeBuilder`](crate::RuntimeBuilder) for an example.
-    pub fn builder() -> crate::RuntimeBuilder {
-        crate::RuntimeBuilder::new()
-    }
-
-    /// Starts building a graph-less runtime with dynamic membership.
-    pub fn dynamic() -> crate::DynamicRuntimeBuilder {
-        crate::DynamicRuntimeBuilder::new()
-    }
-
-    /// Creates an actor-aware runtime around an arbitrary supervisor.
-    ///
-    /// The supplied supervisor keeps its immutable scope kind and starts with
-    /// no actor metadata. Actors added through [`RuntimeHandle::add_actor`] are
-    /// tracked normally when it is a dynamic supervisor; an ordered supervisor
-    /// remains observation-only through this actor-aware wrapper.
-    /// `Supervisor` is intentionally not re-exported by `tokio-otp`, so this
-    /// raw adoption path requires a direct `tokio-supervisor` dependency.
-    ///
-    /// ```no_run
-    /// use tokio_otp::{Actor, ActorResult, DynamicActorOptions, MessageContext, Runtime};
-    /// use tokio_supervisor::DynamicSupervisorBuilder;
-    ///
-    /// struct Worker;
-    ///
-    /// impl Actor for Worker {
-    ///     type Msg = ();
-    ///
-    ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-    ///         Ok(())
-    ///     }
-    /// }
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let supervisor = DynamicSupervisorBuilder::new().build()?;
-    /// let handle = Runtime::new(supervisor).spawn();
-    /// handle
-    ///     .add_actor_with("worker", || Worker, DynamicActorOptions::new())
-    ///     .await?;
-    /// handle.shutdown_and_wait().await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new(supervisor: Supervisor) -> Self {
-        let default_restart = supervisor.default_restart_policy();
-        let default_shutdown = supervisor.default_shutdown_policy();
-        Self {
-            supervisor,
-            actors: Arc::new(ActorRuntimeState::new(
-                RunnableActorBuilder::new(),
-                default_restart,
-                default_shutdown,
-            )),
-        }
-    }
-
     pub(crate) fn with_actor_tree(supervisor: Supervisor, actors: Arc<ActorRuntimeState>) -> Self {
         Self { supervisor, actors }
     }
@@ -443,15 +379,16 @@ impl Runtime {
 
     /// Returns the underlying [`Supervisor`] for first-class nesting.
     ///
-    /// This discards the actor factories and recursive actor metadata, so
-    /// [`RuntimeHandle::add_actor`] and recursive actor stats are not available
-    /// after converting to a raw supervisor. Keep the full runtime and use
-    /// [`spawn`](Self::spawn) if you need actor-aware runtime behavior.
-    /// `Supervisor` is intentionally not re-exported by `tokio-otp`, so using
-    /// this raw escape hatch requires a direct `tokio-supervisor` dependency.
+    /// This is a one-way escape hatch to the lower-level supervisor API.
+    /// Declared actors keep running and restarting, but actor-aware control,
+    /// dynamic actor insertion, and recursive actor stats are no longer
+    /// available. Keep the full runtime and use [`spawn`](Self::spawn) when
+    /// those capabilities are required. Because `Supervisor` is intentionally
+    /// not re-exported, using this escape hatch requires a direct
+    /// `tokio-supervisor` dependency.
     ///
     /// ```no_run
-    /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, Runtime};
+    /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, SupervisionTree};
     /// use tokio_supervisor::{SupervisorBuilder, SupervisorSpec};
     ///
     /// struct Worker;
@@ -468,8 +405,8 @@ impl Runtime {
     /// let mut graph = GraphBuilder::new();
     /// let (actor_slot, _) = graph.slot("worker");
     /// graph.define(actor_slot, || Worker);
-    /// let actor_subtree = Runtime::builder()
-    ///     .graph(graph.build()?)
+    /// let graph = graph.build()?;
+    /// let actor_subtree = SupervisionTree::graph(&graph)
     ///     .build()?
     ///     .into_supervisor();
     /// let root = SupervisorBuilder::new()
@@ -479,6 +416,14 @@ impl Runtime {
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// This conversion is intentionally one-way. Already-declared actors keep
+    /// their factories and continue to execute and restart, but spawning the
+    /// returned value yields only a raw `SupervisorHandle`. The actor-aware
+    /// access path — including dynamic `add_actor` configuration, recursive
+    /// actor statistics, and actor-aware subtree attachment — is no longer
+    /// available. Use it only when handing ownership to APIs that explicitly
+    /// require the lower-level `tokio-supervisor` type.
     pub fn into_supervisor(self) -> Supervisor {
         self.supervisor
     }
@@ -511,7 +456,7 @@ pub struct RuntimeHandle {
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AddSubtreeError {
-    /// The runtime builder contains an invalid supervisor configuration.
+    /// The reserved tree contains an invalid supervisor configuration.
     #[error("failed to build runtime subtree: {0}")]
     Build(#[from] tokio_supervisor::SupervisorBuildError),
     /// The parent supervisor rejected the dynamic child operation.
@@ -564,10 +509,8 @@ impl RuntimeHandle {
     ///
     /// The subtree must be in its non-cloneable reserved form. Call
     /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) for a
-    /// plain declaration; [`RuntimeBuilder`](crate::RuntimeBuilder) and
-    /// [`DynamicRuntimeBuilder`](crate::DynamicRuntimeBuilder) convert into
-    /// that form directly. Reservation is explicit because it can fail, and
-    /// because accepting a fresh plain declaration here could not preserve any
+    /// plain declaration. Reservation is explicit because accepting a fresh
+    /// plain declaration here could not preserve any
     /// pre-spawn root or nested handles through insertion.
     ///
     /// If the subtree itself restarts, its statically declared graph actors
@@ -582,13 +525,13 @@ impl RuntimeHandle {
     /// immediately and dynamic siblings stop concurrently under one shared
     /// maximum-grace deadline. Use [`wait_started`](Self::wait_started) when
     /// readiness is needed.
-    pub async fn add_subtree(
+    pub async fn add_subtree<const DYNAMIC: bool>(
         &self,
         id: impl Into<String>,
-        tree: impl Into<crate::ReservedSupervisionTree>,
+        tree: crate::ReservedSupervisionTree<DYNAMIC>,
     ) -> Result<RuntimeHandle, AddSubtreeError> {
         let id = id.into();
-        let (nested_supervisor, nested_actors) = tree.into().build()?.into_parts();
+        let (nested_supervisor, nested_actors) = tree.build()?.into_parts();
         let lineage = self
             .supervisor
             .add_supervisor(
@@ -1022,6 +965,8 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 
 #[cfg(test)]
 mod tests {
+    use crate::SupervisionTree;
+
     #[test]
     fn unavailable_runtime_handle_is_cached() {
         let first = super::RuntimeHandle::unavailable();
@@ -1032,11 +977,11 @@ mod tests {
 
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
-        let root = crate::Runtime::dynamic()
+        let root = SupervisionTree::dynamic()
             .build()
             .expect("runtime builds")
             .spawn();
-        root.add_subtree("workers", crate::Runtime::builder())
+        root.add_subtree("workers", SupervisionTree::new().reserve())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -1048,7 +993,7 @@ mod tests {
         root.remove_child("workers")
             .await
             .expect("first subtree removed");
-        root.add_subtree("workers", crate::Runtime::builder())
+        root.add_subtree("workers", SupervisionTree::new().reserve())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

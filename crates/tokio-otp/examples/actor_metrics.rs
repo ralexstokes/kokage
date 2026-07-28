@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     graph.define(worker_slot, move || Worker {
         completed: completed_tx.clone(),
     });
-    let runtime = Runtime::builder().graph(graph.build()?).build()?;
+    let runtime = SupervisionTree::graph(&graph.build()?).build()?;
     let handle = runtime.spawn();
 
     let sampler_stop = CancellationToken::new();

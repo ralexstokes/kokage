@@ -248,7 +248,7 @@ async fn build_app() -> Result<App, AnyError> {
     // and the subtree-id allocator must not, or a reborn router could not
     // reach the mount and would re-mint ids that still exist. Both are durable
     // RouterFactory fields instead.
-    let sessions_runtime = Runtime::dynamic();
+    let sessions_runtime = SupervisionTree::dynamic().reserve();
     let sessions_mount = sessions_runtime.handle();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
@@ -256,9 +256,8 @@ async fn build_app() -> Result<App, AnyError> {
     // refs together: the bridge captures `core.router` and the router captures
     // `gateway.outbound` in the same literal, with no slot/define split and no
     // ordering between the two scopes.
-    let mut builder = GraphBuilder::new();
-    builder.name("agent-control");
-    let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
+    let config = tokio_otp::GraphConfig::new().name("agent-control");
+    let (tree, refs) = AgentControl::tree_with(config, |refs| AgentControlFactories {
         gateway: GatewayFactories {
             outbound: {
                 let chat = chat.clone();
@@ -354,9 +353,7 @@ async fn phase_0(app: &App) -> Result<(), AnyError> {
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
-    println!(
-        "PHASE 0 OK — RawActor readiness_gated + mark_ready; empty RuntimeBuilder::subtree mount"
-    );
+    println!("PHASE 0 OK — RawActor readiness_gated + mark_ready; reserved dynamic subtree mount");
     Ok(())
 }
 

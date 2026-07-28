@@ -46,8 +46,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
         }))
         .actor(ActorSpec::new(graph.actors()[0].clone()).restart(RestartPolicy::Never))
         .actor(graph.actors()[1].clone())
-        .outline()
-        .expect("valid tree has an outline");
+        .outline();
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::RestForOne);
@@ -77,21 +76,19 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 }
 
 #[test]
-fn a_hand_built_tree_and_the_equivalent_builder_outline_identically() {
+fn graph_convenience_and_explicit_actors_outline_identically() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let from_builder = Runtime::builder()
-        .graph(graph.clone())
+    let from_graph = SupervisionTree::graph(&graph)
         .strategy(Strategy::OneForAll)
         .default_restart(RestartPolicy::Never)
-        .into_tree()
-        .outline()
-        .expect("valid builder tree has an outline");
-    let from_tree = SupervisionTree::graph(&graph)
+        .outline();
+    let from_tree = SupervisionTree::new()
         .strategy(Strategy::OneForAll)
         .default_restart(RestartPolicy::Never)
-        .outline()
-        .expect("valid hand-built tree has an outline");
-    assert_eq!(from_builder, from_tree);
+        .actor(graph.actors()[0].clone())
+        .actor(graph.actors()[1].clone())
+        .outline();
+    assert_eq!(from_graph, from_tree);
 }
 
 #[tokio::test]
@@ -135,104 +132,12 @@ async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
 }
 
 #[test]
-fn dynamic_scope_rejects_strategy_and_declared_children() {
-    let strategy = SupervisionTree::dynamic()
-        .strategy(Strategy::OneForAll)
-        .build()
-        .expect_err("dynamic scopes reject group strategies");
-    assert!(strategy.to_string().contains("Strategy::OneForOne"));
-
-    let child = SupervisionTree::dynamic()
-        .task(ChildSpec::new("declared", |_| async { Ok(()) }))
-        .build()
-        .expect_err("dynamic scopes reject declared children");
-    assert!(child.to_string().contains("cannot have declared children"));
-}
-
-#[test]
-fn child_nodes_report_invalid_root_configuration_without_panicking() {
-    let (graph, _ingest, _parse) = two_actor_graph();
-    let actor = ActorSpec::new(graph.actors()[0].clone());
-    let leaf = SupervisionTree::Actor(actor.clone());
-
-    assert_eq!(leaf.kind(), None);
-    assert!(leaf.children().is_empty());
-    let outline_error = leaf
-        .outline()
-        .expect_err("a child node cannot be an outline root");
-    assert!(
-        outline_error
-            .to_string()
-            .contains("root must be an ordered or dynamic scope")
-    );
-
-    let build_error = leaf
-        .strategy(Strategy::OneForAll)
-        .restart_intensity(RestartIntensity::default())
-        .default_restart(RestartPolicy::Never)
-        .default_shutdown(ShutdownPolicy::abort())
-        .actor(actor.clone())
-        .task(ChildSpec::new("ignored", |_| async { Ok(()) }))
-        .child(SupervisionTree::Actor(actor.clone()))
-        .subtree("ignored-scope", SupervisionTree::new())
-        .actor_with_scope(
-            "ignored-owned",
-            actor,
-            SupervisionTree::new(),
-            Strategy::RestForOne,
-        )
-        .build()
-        .expect_err("a child node cannot be built as a root");
-    assert!(
-        build_error
-            .to_string()
-            .contains("root must be an ordered or dynamic scope")
-    );
-}
-
-#[test]
-fn invalid_nested_scopes_are_deferred_to_outline_and_build() {
-    let (graph, _ingest, _parse) = two_actor_graph();
-    let actor = ActorSpec::new(graph.actors()[0].clone());
-    let invalid_subtree =
-        SupervisionTree::new().subtree("workers", SupervisionTree::Actor(actor.clone()));
-    let outline_error = invalid_subtree
-        .outline()
-        .expect_err("a subtree must be a scope");
-    assert!(outline_error.to_string().contains("nested subtree"));
-    let build_error = invalid_subtree
-        .build()
-        .expect_err("a subtree must be a scope");
-    assert!(build_error.to_string().contains("nested subtree"));
-
-    let invalid_owned_scope = SupervisionTree::new().actor_with_scope(
-        "owned",
-        actor.clone(),
-        SupervisionTree::Actor(actor),
-        Strategy::RestForOne,
-    );
-    let debug = format!("{invalid_owned_scope:?}");
-    assert!(debug.contains("InvalidSupervisionTree"), "{debug}");
-    let build_error = invalid_owned_scope
-        .build()
-        .expect_err("actor-owned children must be a scope");
-    assert!(
-        build_error
-            .to_string()
-            .contains("root must be an ordered or dynamic scope")
-    );
-}
-
-#[test]
 fn dynamic_outlines_include_future_member_policy_defaults() {
-    let standard = SupervisionTree::dynamic()
-        .outline()
-        .expect("valid dynamic tree has an outline");
+    let standard = SupervisionTree::dynamic().outline();
     let customized = SupervisionTree::dynamic()
         .default_restart(RestartPolicy::Never)
         .default_shutdown(ShutdownPolicy::abort())
-        .outline()
-        .expect("valid dynamic tree has an outline");
+        .outline();
 
     assert_ne!(standard, customized);
     assert_eq!(customized.default_restart, RestartPolicy::Never);
@@ -248,7 +153,7 @@ async fn actor_with_scope_lowers_to_leader_then_children_scope() {
         SupervisionTree::dynamic(),
         Strategy::RestForOne,
     );
-    let outline = tree.outline().expect("valid tree has an outline");
+    let outline = tree.outline();
     let ChildOutline::ActorWithScope {
         leader,
         children,
@@ -295,8 +200,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
                 .default_restart(RestartPolicy::Never)
                 .default_shutdown(ShutdownPolicy::abort()),
         )
-        .outline()
-        .expect("valid tree has an outline");
+        .outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     let decoded: tokio_otp::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");

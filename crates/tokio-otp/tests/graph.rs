@@ -1648,7 +1648,6 @@ mod runnable_actor {
         let graph = builder.build().expect("valid graph");
         let handle = SupervisionTree::dynamic()
             .reserve()
-            .expect("dynamic identity reserves")
             .derived_defaults(&graph)
             .build()
             .expect("dynamic runtime builds")

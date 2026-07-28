@@ -1,4 +1,4 @@
-error[E0599]: no method named `clone` found for struct `ReservedSupervisionTree` in the current scope
+error[E0599]: no method named `clone` found for struct `ReservedSupervisionTree<DYNAMIC>` in the current scope
  --> tests/ui/reserved-supervision-tree/clone.rs:5:22
   |
 5 |     let _copy = tree.clone();

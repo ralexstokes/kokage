@@ -200,23 +200,15 @@ fn parse_factory_attributes(
 /// * a `PipelineSlots` struct holding the unfilled graph slots;
 /// * a `PipelineScopes` struct holding the reserved dynamic scopes;
 /// * an implementation of the `tokio_otp::Supervision` trait; and
-/// * three families of constructors, each in a plain and a `_with`
-///   (preconfigured `GraphBuilder`) form:
-///   * `Pipeline::graph(wire)` — the actor graph alone;
-///   * `Pipeline::tree(wire)` — a non-cloneable `ReservedSupervisionTree`
-///     declaration over that graph, including any pre-wired dynamic-scope
-///     identities; and
-///   * `Pipeline::runtime(wire)` — a built `Runtime`, ready to `spawn`.
+/// * `Pipeline::tree(wire)` and `Pipeline::tree_with(config, wire)`
+///   constructors, producing a non-cloneable `ReservedSupervisionTree`
+///   declaration over the graph, including any pre-wired dynamic-scope
+///   identities.
 ///
-/// Every constructor returns its value paired with the `PipelineRefs` bundle,
-/// for use as application entry points; write `let (graph, _) = ...` when the
-/// refs are not needed.
-///
-/// The `GraphBuilder` a `_with` form takes is for graph-wide configuration —
-/// name and mailbox capacity — and must not have actors registered on it
-/// already: `tree_with` and `runtime_with` place only this struct's own
-/// actors in the supervision tree, so a pre-registered actor joins the graph
-/// but is never started. Use `graph_with` when composing a graph by hand.
+/// Both constructors return the tree paired with the `PipelineRefs` bundle,
+/// for use as application entry points; write `let (tree, _) = ...` when the
+/// refs are not needed. `tree_with` takes a `GraphConfig` for the generated
+/// graph's name and mailbox capacity.
 ///
 /// The `wire` closure receives `&PipelineRefs` before any actor incarnation is
 /// constructed, so factories can capture each other's refs even when the graph
@@ -270,7 +262,7 @@ fn parse_factory_attributes(
 /// }
 ///
 /// # fn main() -> Result<(), tokio_otp::GraphBuildError> {
-/// let (graph, refs) = Pipeline::graph(|refs| {
+/// let (tree, refs) = Pipeline::tree(|refs| {
 ///     PipelineFactories {
 ///         frontend: {
 ///             let refs = refs.clone();
@@ -288,7 +280,7 @@ fn parse_factory_attributes(
 ///         sink: || Sink,
 ///     }
 /// })?;
-/// # let _ = (graph, refs.frontend);
+/// # let _ = (tree, refs.frontend);
 /// # Ok(())
 /// # }
 /// ```
@@ -352,18 +344,20 @@ fn parse_factory_attributes(
 /// * two nodes sharing a name — whether from field names or `label`
 ///   overrides — are rejected.
 ///
-/// `SupervisionBuildError`, returned by `runtime` and `runtime_with`, is this
-/// derive's own error union; the `SupervisorBuildError` it wraps is the
-/// lower-level validation error from `tokio-supervisor`.
-///
 /// # Errors
 ///
-/// `graph` and `graph_with` return `GraphBuildError` for the runtime
-/// configuration checks that remain, such as passing `graph_with` a builder
-/// that already has an actor registered under the same id as a declared field.
+/// `tree` and `tree_with` return `GraphBuildError` for graph configuration and
+/// generated wiring errors. Building the returned declaration separately with
+/// `ReservedSupervisionTree::build` returns `SupervisorBuildError` for invalid
+/// supervision policy.
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
+/// If a derived declaration needs the built `Graph` as well as a tree, use
+/// the public lower-level derive contract: call `Supervision::open`, fill the
+/// returned slots with `SupervisionFactories::define`, and then call
+/// `GraphBuilder::build`. `Supervision::node` can build the matching tree
+/// separately.
 ///
 /// # Per-actor options
 ///
@@ -406,8 +400,8 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     Actor, ActorResult, DynamicScope, MessageContext, RestartPolicy, Runtime, Strategy,
-/// #     SupervisionBuildError,
+/// #     Actor, ActorResult, DynamicScope, GraphBuildError, MessageContext, RestartPolicy,
+/// #     Strategy, SupervisionTree,
 /// # };
 /// # struct Worker;
 /// # impl Actor for Worker {
@@ -434,16 +428,18 @@ fn parse_factory_attributes(
 ///     sessions: DynamicScope,
 /// }
 ///
-/// # fn main() -> Result<(), SupervisionBuildError> {
-/// let (runtime, refs) = App::runtime(|_refs| AppFactories {
+/// # fn main() -> Result<(), GraphBuildError> {
+/// let (tree, refs) = App::tree(|_refs| AppFactories {
 ///     ingest: || Worker,
 ///     workers: WorkersFactories {
 ///         parse: || Worker,
 ///         render: || Worker,
 ///     },
-///     sessions: Runtime::dynamic().default_restart(RestartPolicy::Never),
+///     sessions: SupervisionTree::dynamic()
+///         .default_restart(RestartPolicy::Never)
+///         .reserve(),
 /// })?;
-/// # let _ = (runtime, refs.ingest, refs.workers.parse);
+/// # let _ = (tree, refs.ingest, refs.workers.parse);
 /// # Ok(())
 /// # }
 /// ```
@@ -473,10 +469,10 @@ fn parse_factory_attributes(
 /// * `scope` — a nested derived struct, contributing a named child scope.
 /// * `dynamic` — an empty scope whose membership is written at runtime. The
 ///   field type must be `DynamicScope`, a marker that is never constructed.
-///   Its wiring entry is a `DynamicRuntimeBuilder` rather than an actor
-///   factory, which both configures the scope
-///   (`Runtime::dynamic().default_restart(..)`) and makes its mount handle available
-///   before any actor is built, so a factory can capture it.
+///   Its wiring entry is a `ReservedSupervisionTree<true>` rather than an actor
+///   factory. Construct one with `SupervisionTree::dynamic().reserve()`; it
+///   configures the scope and makes its mount handle available before any actor
+///   is built, so a factory can capture it.
 ///
 #[proc_macro_derive(Supervision, attributes(supervision))]
 pub fn derive_supervision(input: TokenStream) -> TokenStream {
@@ -655,8 +651,8 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
     {
         return Err(syn::Error::new_spanned(
             field,
-            "a dynamic scope takes its policy from the `DynamicRuntimeBuilder` wired for \
-             this field, as in `Runtime::dynamic().default_restart(..)`",
+            "a dynamic scope takes its policy from the `ReservedSupervisionTree<true>` wired for \
+             this field, as in `SupervisionTree::dynamic().default_restart(..).reserve()`",
         ));
     }
 
@@ -872,10 +868,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 });
                 factory_fields.push(quote! {
                     #[allow(dead_code)]
-                    #field_vis #ident: ::tokio_otp::DynamicRuntimeBuilder
+                    #field_vis #ident: ::tokio_otp::ReservedSupervisionTree<true>
                 });
                 scope_fields.push(quote! {
-                    #field_vis #ident: ::tokio_otp::DynamicRuntimeBuilder
+                    #field_vis #ident: ::tokio_otp::ReservedSupervisionTree<true>
                 });
                 scope_ctor.push(ident);
                 define_stmts.push(quote! {
@@ -907,24 +903,18 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         match attrs.kind {
             FieldKind::Actor => {
                 let spec = actor_spec_expr(name, attrs);
-                // A graph other than the one `open` populated cannot supply
-                // this actor. Record the mismatch on the scope instead of
-                // panicking: `build` and `outline` report it.
                 scope_stmts.push(quote! {
-                    let tree = match graph.actor(&::tokio_otp::qualified_label(prefix, #name)) {
-                        ::core::option::Option::Some(actor) => tree.actor(#spec),
-                        ::core::option::Option::None => tree.missing_actor(),
-                    };
+                    let actor = graph.actor_for(&refs.#ident)?;
+                    let tree = tree.actor(#spec);
                 });
             }
             FieldKind::Scope => {
                 scope_stmts.push(quote! {
-                    let tree = tree.reserved_child(<#ty as ::tokio_otp::Supervision>::node(
+                    let tree = tree.reserved_subtree(#name, <#ty as ::tokio_otp::Supervision>::node(
                         graph,
+                        &refs.#ident,
                         scopes.#ident,
-                        #name,
-                        &::tokio_otp::qualified_label(prefix, #name),
-                    ));
+                    )?);
                 });
             }
             FieldKind::Dynamic => {
@@ -932,11 +922,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 // identity behind any handle already handed out; the graph only
                 // supplies execution defaults for actors added later.
                 scope_stmts.push(quote! {
-                    let tree = tree.reserved_child(
+                    let tree = tree.reserved_subtree(
+                        #name,
                         scopes.#ident
-                            .into_tree()
-                            .derived_defaults(graph)
-                            .id(#name),
+                            .derived_defaults(graph),
                     );
                 });
             }
@@ -945,8 +934,6 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
     let mut scope_root = quote! {
         ::tokio_otp::SupervisionTree::derived_scope(graph)
-            .reserve()
-            .expect("generated supervision roots are scope nodes")
     };
     if let Some(strategy) = &scope_attrs.strategy {
         scope_root = quote! { #scope_root.strategy(#strategy) };
@@ -960,36 +947,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     if let Some(intensity) = &scope_attrs.restart_intensity {
         scope_root = quote! { #scope_root.restart_intensity(#intensity) };
     }
-
-    let node_body = quote! { Self::__supervision_scope(graph, scopes, prefix).id(id) };
+    scope_root = quote! { #scope_root.reserve() };
 
     let root_constructors = quote! {
         impl #declared {
-            #vis fn graph<#(#all_params),*>(
-                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-            ) -> ::core::result::Result<
-                (::tokio_otp::Graph, #refs),
-                ::tokio_otp::GraphBuildError,
-            >
-            where
-                #(#factory_bounds,)*
-            {
-                Self::graph_with(::tokio_otp::GraphBuilder::new(), wire)
-            }
-
-            #vis fn graph_with<#(#all_params),*>(
-                builder: ::tokio_otp::GraphBuilder,
-                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-            ) -> ::core::result::Result<
-                (::tokio_otp::Graph, #refs),
-                ::tokio_otp::GraphBuildError,
-            >
-            where
-                #(#factory_bounds,)*
-            {
-                Self::__supervision_graph(builder, wire).map(|(graph, refs, _scopes)| (graph, refs))
-            }
-
             #vis fn tree<#(#all_params),*>(
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
@@ -999,11 +960,11 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             where
                 #(#factory_bounds,)*
             {
-                Self::tree_with(::tokio_otp::GraphBuilder::new(), wire)
+                Self::tree_with(::tokio_otp::GraphConfig::new(), wire)
             }
 
             #vis fn tree_with<#(#all_params),*>(
-                builder: ::tokio_otp::GraphBuilder,
+                config: ::tokio_otp::GraphConfig,
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
                 (::tokio_otp::ReservedSupervisionTree, #refs),
@@ -1012,35 +973,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             where
                 #(#factory_bounds,)*
             {
+                let builder: ::tokio_otp::GraphBuilder = config.into();
                 let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
-                let tree = Self::__supervision_scope(&graph, scopes, "");
+                let tree = Self::__supervision_scope(&graph, &refs, scopes)?;
                 ::core::result::Result::Ok((tree, refs))
-            }
-
-            #vis fn runtime<#(#all_params),*>(
-                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-            ) -> ::core::result::Result<
-                (::tokio_otp::Runtime, #refs),
-                ::tokio_otp::SupervisionBuildError,
-            >
-            where
-                #(#factory_bounds,)*
-            {
-                Self::runtime_with(::tokio_otp::GraphBuilder::new(), wire)
-            }
-
-            #vis fn runtime_with<#(#all_params),*>(
-                builder: ::tokio_otp::GraphBuilder,
-                wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
-            ) -> ::core::result::Result<
-                (::tokio_otp::Runtime, #refs),
-                ::tokio_otp::SupervisionBuildError,
-            >
-            where
-                #(#factory_bounds,)*
-            {
-                let (tree, refs) = Self::tree_with(builder, wire)?;
-                ::core::result::Result::Ok((tree.build()?, refs))
             }
         }
     };
@@ -1112,11 +1048,13 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
             fn node(
                 graph: &::tokio_otp::Graph,
+                refs: &Self::Refs,
                 scopes: Self::Scopes,
-                id: &str,
-                prefix: &str,
-            ) -> ::tokio_otp::ReservedSupervisionTree {
-                #node_body
+            ) -> ::core::result::Result<
+                ::tokio_otp::ReservedSupervisionTree,
+                ::tokio_otp::GraphBuildError,
+            > {
+                Self::__supervision_scope(graph, refs, scopes)
             }
         }
 
@@ -1124,12 +1062,15 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             #[doc(hidden)]
             fn __supervision_scope(
                 graph: &::tokio_otp::Graph,
+                refs: &#refs,
                 scopes: #scopes,
-                prefix: &str,
-            ) -> ::tokio_otp::ReservedSupervisionTree {
+            ) -> ::core::result::Result<
+                ::tokio_otp::ReservedSupervisionTree,
+                ::tokio_otp::GraphBuildError,
+            > {
                 let tree = #scope_root;
                 #(#scope_stmts)*
-                tree
+                ::core::result::Result::Ok(tree)
             }
 
             #[doc(hidden)]
@@ -1160,10 +1101,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 /// Builds the `ActorSpec` expression placing one actor field in its scope.
 ///
 /// The expression reads an `actor` binding holding the resolved
-/// `&RunnableActor`, which the caller matches out of the graph.
+/// owned `RunnableActor`, resolved from the matching typed ref.
 fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
     let mut spec = quote! {
-        ::tokio_otp::ActorSpec::new(::core::clone::Clone::clone(actor)).child_id(#name)
+        ::tokio_otp::ActorSpec::new(actor).child_id(#name)
     };
     if let Some(restart) = &attrs.restart {
         spec = quote! { #spec.restart(#restart) };

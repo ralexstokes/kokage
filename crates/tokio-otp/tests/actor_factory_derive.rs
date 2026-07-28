@@ -9,7 +9,7 @@ use std::{
 
 use tokio_otp::{
     Actor, ActorFactory, ActorResult, GraphBuilder, LifecycleWatch, MessageContext, Reply,
-    RestartPolicy, Runtime, RuntimeHandle, StartContext,
+    RestartPolicy, RuntimeHandle, StartContext, SupervisionTree,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -84,8 +84,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
             starts: starts.clone(),
         },
     );
-    let handle = Runtime::builder()
-        .graph(builder.build().expect("graph builds"))
+    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds")

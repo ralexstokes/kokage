@@ -7,12 +7,12 @@
 //! # Usage
 //!
 //! ```no_run
-//! use tokio_otp::{Runtime, prelude::*};
+//! use tokio_otp::prelude::*;
 //! use tokio_otp_console::Console;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let handle = Runtime::builder().build()?.spawn();
+//! # let handle = SupervisionTree::new().build()?.spawn();
 //! let console = Console::for_runtime(&handle)
 //!     .build()?
 //!     .spawn()

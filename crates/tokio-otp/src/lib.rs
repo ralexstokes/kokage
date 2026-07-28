@@ -40,17 +40,16 @@
 //! ```
 //!
 //! See [`SupervisionTree`] for recursive composition and per-actor policy
-//! examples. [`RuntimeBuilder`] remains thin graph-in-one-scope sugar. The
-//! [`prelude`] re-exports the day-one composition and actor surface plus the
-//! core `tokio-supervisor` policies. Observability, advanced configuration,
-//! and raw supervisor construction stay at their crate roots.
+//! examples. The [`prelude`] re-exports the day-one composition and actor
+//! surface plus the core `tokio-supervisor` policies. Observability, advanced
+//! configuration, and raw supervisor construction stay at their crate roots.
 //!
 //! # Core types
 //!
 //! | Type | Role |
 //! |------|------|
 //! | [`SupervisionTree`] / [`ReservedSupervisionTree`] | Primary recursive declaration; reserve the non-cloneable form when a scope handle is needed before build. |
-//! | [`Runtime`] / [`RuntimeBuilder`] | Configured executable runtime, plus thin graph-in-one-scope sugar. |
+//! | [`Runtime`] | Configured executable runtime produced by a supervision tree. |
 //! | [`RuntimeHandle`] | Control surface for shutdown, completion, and observability; dynamic-scope handles also add actors, task children, and subtrees. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
@@ -72,7 +71,7 @@
 //!   subtrees, arbitrary task children, and actor-owned scopes.
 //! - **Dynamic actor membership** via [`SupervisionTree::dynamic`]: an
 //!   initially empty `OneForOne` scope that accepts actors and subtrees at
-//!   runtime. [`Runtime::dynamic`] is its pre-reserved convenience builder.
+//!   runtime. Reserve it before build when its handle is needed during wiring.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.
@@ -260,7 +259,6 @@
 //! | `serde` | no | Serialization support for supervision outlines and view types. |
 
 mod actor;
-mod builder;
 mod runtime;
 mod supervision;
 mod supervision_derive;
@@ -277,9 +275,10 @@ pub mod prelude {
     // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-        AmbientContext, BoxError, CallError, GraphBuilder, LiveContext, MessageContext, RawActor,
-        Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
-        StartContext, StopContext, Strategy, Supervision, SupervisionTree,
+        AmbientContext, BoxError, CallError, GraphBuilder, GraphConfig, LiveContext,
+        MessageContext, RawActor, Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
+        SendError, ShutdownPolicy, StartContext, StopContext, Strategy, Supervision,
+        SupervisionTree,
     };
 }
 
@@ -290,23 +289,19 @@ pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
     ActorSlot, ActorStats, ActorSupervisorPathSegment, AmbientContext, BlockingCancelled,
     CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize,
-    MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor,
-    SendError, StartContext, StopContext, TimerKey, TryRecvError,
+    GraphBuildError, GraphBuilder, GraphConfig, Lifetime, LiveContext, MailboxMode, MessageContext,
+    MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope,
+    RunnableActor, SendError, StartContext, StopContext, TimerKey, TryRecvError,
 };
-pub use builder::{DynamicRuntimeBuilder, RuntimeBuilder};
 pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
 };
 pub use supervision::{
-    ActorSpec, ChildOutline, ReservedSupervisionTree, SupervisionOutline, SupervisionScope,
-    SupervisionTree,
+    ActorSpec, ChildOutline, ReservedSupervisionTree, SupervisionOutline, SupervisionTree,
 };
 #[doc(hidden)]
 pub use supervision_derive::qualified_label;
-pub use supervision_derive::{
-    DynamicScope, Supervision, SupervisionBuildError, SupervisionFactories,
-};
+pub use supervision_derive::{DynamicScope, Supervision, SupervisionFactories};
 #[doc(hidden)]
 pub use tokio_supervisor::{AttachedChild, AttachedChildIdentity};
 pub use tokio_supervisor::{

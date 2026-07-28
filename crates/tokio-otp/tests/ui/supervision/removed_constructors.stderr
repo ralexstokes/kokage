@@ -1,0 +1,41 @@
+error[E0599]: no associated function or constant named `graph` found for struct `Application` in the current scope
+  --> tests/ui/supervision/removed_constructors.rs:19:18
+   |
+14 | struct Application {
+   | ------------------ associated function or constant `graph` not found for this struct
+...
+19 |     Application::graph(|_| ApplicationFactories { worker: || Worker });
+   |                  ^^^^^ associated function or constant not found in `Application`
+
+error[E0599]: no associated function or constant named `graph_with` found for struct `Application` in the current scope
+  --> tests/ui/supervision/removed_constructors.rs:20:18
+   |
+14 | struct Application {
+   | ------------------ associated function or constant `graph_with` not found for this struct
+...
+20 |     Application::graph_with(GraphConfig::new(), |_| ApplicationFactories {
+   |                  ^^^^^^^^^^ associated function or constant not found in `Application`
+
+error[E0599]: no associated function or constant named `runtime` found for struct `Application` in the current scope
+  --> tests/ui/supervision/removed_constructors.rs:23:18
+   |
+14 | struct Application {
+   | ------------------ associated function or constant `runtime` not found for this struct
+...
+23 |     Application::runtime(|_| ApplicationFactories { worker: || Worker });
+   |                  ^^^^^^^ associated function or constant not found in `Application`
+
+error[E0599]: no associated function or constant named `runtime_with` found for struct `Application` in the current scope
+  --> tests/ui/supervision/removed_constructors.rs:24:18
+   |
+14 | struct Application {
+   | ------------------ associated function or constant `runtime_with` not found for this struct
+...
+24 |     Application::runtime_with(GraphConfig::new(), |_| ApplicationFactories {
+   |                  ^^^^^^^^^^^^ associated function or constant not found in `Application`
+   |
+help: there is an associated function `tree_with` with a similar name
+   |
+24 -     Application::runtime_with(GraphConfig::new(), |_| ApplicationFactories {
+24 +     Application::tree_with(GraphConfig::new(), |_| ApplicationFactories {
+   |

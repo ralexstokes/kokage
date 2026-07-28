@@ -40,6 +40,7 @@ use crate::actor::{
 /// adding another actor under the same id mints a fresh binding. A stale ref
 /// therefore never delivers to the replacement membership.
 pub struct ActorRef<M> {
+    identity: Arc<()>,
     actor_id: Arc<str>,
     binding: watch::Receiver<BindingState<M>>,
     stats: Arc<ActorStatsCounters>,
@@ -51,6 +52,7 @@ pub struct ActorRef<M> {
 impl<M> Clone for ActorRef<M> {
     fn clone(&self) -> Self {
         Self {
+            identity: Arc::clone(&self.identity),
             actor_id: Arc::clone(&self.actor_id),
             binding: self.binding.clone(),
             stats: Arc::clone(&self.stats),
@@ -72,6 +74,7 @@ impl<M> fmt::Debug for ActorRef<M> {
 impl<M> ActorRef<M> {
     pub(crate) fn from_core(core: &Arc<BindingCore<M>>, source_actor_id: Option<Arc<str>>) -> Self {
         Self::from_parts(
+            Arc::clone(core.identity()),
             core.actor_id().clone(),
             core.subscribe(),
             core.stats_counters(),
@@ -82,6 +85,7 @@ impl<M> ActorRef<M> {
     }
 
     pub(crate) fn from_parts(
+        identity: Arc<()>,
         actor_id: Arc<str>,
         binding: watch::Receiver<BindingState<M>>,
         stats: Arc<ActorStatsCounters>,
@@ -90,6 +94,7 @@ impl<M> ActorRef<M> {
         monitors: Arc<MonitorHub>,
     ) -> Self {
         Self {
+            identity,
             actor_id,
             binding,
             stats,
@@ -107,6 +112,10 @@ impl<M> ActorRef<M> {
     pub(crate) fn detached_with_size_hint(actor_id: Arc<str>, size_hint: fn(&M) -> usize) -> Self {
         let core = Arc::new(BindingCore::<M>::with_message_size(actor_id, size_hint));
         Self::from_core(&core, None)
+    }
+
+    pub(crate) fn binding_identity(&self) -> &Arc<()> {
+        &self.identity
     }
 
     /// Returns the target actor id.
@@ -900,9 +909,9 @@ impl<M: Send + 'static> ActorContext<M> {
     /// Returns the actor-aware handle for this leader's declared child scope.
     ///
     /// This is `Some` exactly for the leader of an
-    /// [`ActorWithScope`](crate::SupervisionTree::ActorWithScope) node. Other
-    /// actor shapes use ordinary builder-handle plumbing when they need a
-    /// pre-spawn scope handle.
+    /// [`actor_with_scope`](crate::SupervisionTree::actor_with_scope) node.
+    /// Other actor shapes explicitly [`reserve`](crate::SupervisionTree::reserve)
+    /// a tree when they need a pre-spawn scope handle.
     ///
     /// The child scope starts only after its leader's `on_start` returns. A
     /// leader must therefore not await `children().wait_started()` inline from
@@ -1511,17 +1520,17 @@ impl RestrictedScope {
 
     /// Inserts a subtree into this scope.
     ///
-    /// The subtree must already be reserved because reservation is fallible
-    /// and carries any handles taken before insertion. Call
+    /// The subtree must already be reserved because it carries any handles
+    /// taken before insertion. Call
     /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) explicitly
     /// for a plain declaration.
     ///
     /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
     /// See [`RuntimeHandle::add_subtree`].
-    pub async fn add_subtree(
+    pub async fn add_subtree<const DYNAMIC: bool>(
         &self,
         id: impl Into<String>,
-        tree: impl Into<crate::ReservedSupervisionTree>,
+        tree: crate::ReservedSupervisionTree<DYNAMIC>,
     ) -> Result<RuntimeHandle, crate::AddSubtreeError> {
         self.handle.add_subtree(id, tree).await
     }

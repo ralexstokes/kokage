@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorResult, AmbientContext, DEFAULT_SHUTDOWN_BOUND,
     GraphBuilder, LifecycleWatch, LiveContext, MessageContext, RawActor, Reply, RestartPolicy,
-    Runtime, RuntimeHandle,
+    RuntimeHandle, SupervisionTree,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
@@ -149,8 +149,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
             constructions: constructions.clone(),
         },
     );
-    let handle = Runtime::builder()
-        .graph(builder.build().expect("graph builds"))
+    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds")
@@ -224,8 +223,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
             observed: observed_tx.clone(),
         }
     });
-    let handle = Runtime::builder()
-        .graph(builder.build().expect("graph builds"))
+    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
         .build()
         .expect("runtime builds")
@@ -298,8 +296,7 @@ async fn default_constructor_path_is_an_actor_factory() {
     let mut builder = GraphBuilder::new();
     let (actor_ref_slot, actor_ref) = builder.slot("DefaultActor");
     builder.define(actor_ref_slot, DefaultActor::default);
-    let handle = Runtime::builder()
-        .graph(builder.build().expect("graph builds"))
+    let handle = SupervisionTree::graph(&builder.build().expect("graph builds"))
         .build()
         .expect("runtime builds")
         .spawn();
