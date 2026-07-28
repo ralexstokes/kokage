@@ -132,7 +132,9 @@ use std::{
 
 use metrics_util::debugging::Snapshotter;
 use tokio::time::Instant;
-use tokio_otp::prelude::*;
+use tokio_otp::{
+    CancellationToken, DownReason, LifecycleWatch, LifecycleWatchGuard, MailboxMode, prelude::*,
+};
 
 use control::Control;
 use health::Health;

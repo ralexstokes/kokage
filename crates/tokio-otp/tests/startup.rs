@@ -1,7 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{Mutex, Notify, watch};
-use tokio_otp::{ChildSpec, DynamicActorOptions, LiveContext, SupervisorError, prelude::*};
+use tokio_otp::{
+    ChildSpec, DrainPolicy, DynamicActorOptions, ExitStatusView, LiveContext, SupervisorError,
+    prelude::*,
+};
 
 #[derive(Clone)]
 struct Probe {

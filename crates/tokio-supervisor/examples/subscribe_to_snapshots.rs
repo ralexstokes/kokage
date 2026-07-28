@@ -1,5 +1,8 @@
 use tokio::time::{Duration, sleep};
-use tokio_supervisor::prelude::*;
+use tokio_supervisor::{
+    ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
+    prelude::*,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

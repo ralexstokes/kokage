@@ -1,10 +1,31 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_supervisor::prelude::*;
+use tokio_supervisor::{BackoffPolicy, ChildStateView, ShutdownMode, prelude::*};
 
 mod common;
 use common::ObservedEvent;
+
+#[allow(unused_imports)]
+mod coverage_probe {
+    mod expected {
+        use tokio_supervisor::prelude::{
+            BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
+            RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
+            SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle,
+            SupervisorSpec,
+        };
+    }
+
+    mod advanced_root {
+        use tokio_supervisor::{
+            BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard,
+            CompletionOutcome, ControlOperation, ExitStatusView, LifecycleEvent,
+            LifecyclePathSegment, LifecycleWatch, ScopeKind, ShutdownMode, SupervisorSnapshot,
+            SupervisorStateView,
+        };
+    }
+}
 
 #[tokio::test]
 async fn prelude_supports_handle_event_and_snapshot_helpers() {

@@ -1,15 +1,11 @@
-//! Common imports for `tokio-supervisor` consumers.
+//! Day-one construction and control imports for `tokio-supervisor` consumers.
 //!
 //! ```
 //! use tokio_supervisor::prelude::*;
 //! ```
 
-// Keep this list mirrored by tokio_otp::prelude; its prelude test guards drift.
 pub use crate::{
-    BackoffPolicy, BoxError, ChildContext, ChildMembershipView, ChildResult, ChildSnapshot,
-    ChildSpec, ChildStateView, CompletionOutcome, ControlError, DynamicSupervisorBuilder,
-    ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity,
-    RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-    SupervisorSpec, SupervisorStateView,
+    BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
+    RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
+    SupervisorBuilder, SupervisorError, SupervisorHandle, SupervisorSpec,
 };

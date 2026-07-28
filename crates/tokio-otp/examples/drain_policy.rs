@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use tokio::sync::{Notify, mpsc};
-use tokio_otp::prelude::*;
+use tokio_otp::{DrainPolicy, prelude::*};
 
 const JOBS: usize = 5;
 

@@ -1,37 +1,31 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_otp::prelude::*;
+use tokio_otp::{ChildStateView, LifecycleEvent, prelude::*};
 
 #[allow(unused_imports)]
 mod coverage_probe {
-    mod actor {
+    mod expected {
         use tokio_otp::prelude::{
-            Actor, ActorOptions, ActorRef, ActorResult, AmbientContext, BoxError, CallError,
-            CancellationHandle, CancellationToken, DEFAULT_SHUTDOWN_BOUND, Down, DownReason,
-            DrainPolicy, Graph, GraphBuilder, Lifetime, MailboxMode, MessageContext, MessageSize,
-            MonitorEvent, RawActor, Reply, SendError, Supervision, TimerKey,
+            Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
+            AmbientContext, BoxError, CallError, GraphBuilder, LiveContext, MessageContext,
+            RawActor, Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, SendError,
+            ShutdownPolicy, StartContext, StopContext, Strategy, Supervision, SupervisionTree,
         };
-    }
-
-    mod supervisor {
-        use tokio_otp::prelude::{
-            BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionOutcome,
-            ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity,
-            RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorSnapshot,
-            SupervisorStateView,
-        };
-    }
-
-    mod otp {
-        use tokio_otp::prelude::{LifecycleWatchGuard, Runtime, RuntimeBuilder, RuntimeHandle};
     }
 
     mod advanced_root {
         use tokio_otp::{
-            ActorSupervisorPathSegment, ChildSpec, ControlError, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, LiveContext, SupervisorBuildError,
-            SupervisorError,
+            ActorSupervisorPathSegment, AddSubtreeError, BackoffPolicy, BlockingCancelled,
+            CancellationHandle, CancellationToken, ChildMembershipView, ChildOutline,
+            ChildSnapshot, ChildSpec, ChildStateView, CompletionOutcome, ControlError,
+            DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicRuntimeBuilder,
+            DynamicScope, ExitStatusView, Graph, GraphBuildError, LifecycleEvent,
+            LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard, Lifetime, MailboxMode,
+            MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, ReservedSupervisionTree,
+            RestrictedScope, RuntimeBuilder, ScopeKind, ShutdownMode, SupervisionBuildError,
+            SupervisionFactories, SupervisionOutline, SupervisorBuildError, SupervisorError,
+            SupervisorSnapshot, SupervisorStateView, TimerKey, TryRecvError,
         };
         use tokio_supervisor::{
             ChildContext, ChildResult, DynamicSupervisorBuilder, Supervisor, SupervisorBuilder,

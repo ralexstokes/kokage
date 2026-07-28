@@ -133,7 +133,9 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::prelude::*;
+use tokio_otp::{
+    DownReason, DynamicScope, LifecycleWatchGuard, MailboxMode, MonitorEvent, prelude::*,
+};
 
 use budget::Budget;
 use chat::ChatSim;

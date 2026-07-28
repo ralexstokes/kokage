@@ -1,5 +1,5 @@
 use tokio::time::{Duration, sleep, timeout};
-use tokio_supervisor::prelude::*;
+use tokio_supervisor::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

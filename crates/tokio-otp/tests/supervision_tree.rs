@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use tokio_otp::{ActorSpec, ChildOutline, ChildSpec, ScopeKind, SupervisionTree, prelude::*};
+use tokio_otp::{
+    ActorSpec, ChildOutline, ChildSpec, Graph, ScopeKind, SupervisionTree, prelude::*,
+};
 
 struct Worker;
 

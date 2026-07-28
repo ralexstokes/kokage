@@ -19,7 +19,7 @@ Handler-style actors have one loop-owned timer table. `send_after` and
 ```rust,ignore
 use std::time::Duration;
 
-use tokio_otp::prelude::*;
+use tokio_otp::{CancellationHandle, prelude::*};
 
 #[derive(Clone)]
 enum Message {
@@ -80,7 +80,7 @@ whether it exists. Other keys remain independent:
 ```rust,ignore
 use std::time::Duration;
 
-use tokio_otp::prelude::*;
+use tokio_otp::{TimerKey, prelude::*};
 
 enum Message {
     Filled,

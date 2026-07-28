@@ -1,5 +1,5 @@
 use tokio::time::Instant;
-use tokio_otp::prelude::*;
+use tokio_otp::{DrainPolicy, prelude::*};
 
 use crate::{
     messages::{LedgerMsg, LedgerReport},

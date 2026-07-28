@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use tokio_otp::{ChildOutline, DynamicScope, ScopeKind, SupervisorBuildError, prelude::*};
+use tokio_otp::{
+    ChildOutline, DynamicScope, ScopeKind, SupervisionFactories, SupervisorBuildError, prelude::*,
+};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 

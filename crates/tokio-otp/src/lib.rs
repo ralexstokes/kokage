@@ -41,10 +41,9 @@
 //!
 //! See [`SupervisionTree`] for recursive composition and per-actor policy
 //! examples. [`RuntimeBuilder`] remains thin graph-in-one-scope sugar. The
-//! [`prelude`] re-exports the common composition and actor surface plus the
-//! shared `tokio-supervisor` policies, views, and [`ChildSpec`]. Raw supervisor
-//! construction and control types stay in `tokio-supervisor`; depend on that
-//! crate directly for supervision without actors.
+//! [`prelude`] re-exports the day-one composition and actor surface plus the
+//! core `tokio-supervisor` policies. Observability, advanced configuration,
+//! and raw supervisor construction stay at their crate roots.
 //!
 //! # Core types
 //!
@@ -218,8 +217,8 @@
 //! [`RunnableActor::run_until`] compose directly with that exact
 //! `tokio_util::sync::CancellationToken` type. Applications can therefore
 //! connect actor shutdown to existing cancellation trees without adapters. The
-//! token is re-exported here (and in [`prelude`]) so common local
-//! examples and small applications do not need an additional import path.
+//! token is re-exported at this crate's root so applications do not need an
+//! additional dependency path.
 //!
 //! Snapshot subscriptions deliberately expose Tokio's
 //! [`watch::Receiver`](tokio::sync::watch::Receiver). Both
@@ -269,30 +268,18 @@ pub mod timers;
 
 /// Common imports for `tokio-otp` consumers.
 ///
-/// This prelude is intentionally limited to the traits, declarations,
-/// builders, policies, and observation types used by the primary
-/// [`SupervisionTree`] composition path. Common send/call errors are included;
-/// other error types and advanced surfaces remain available at the crate root
-/// without being injected by a glob import.
+/// This prelude is intentionally limited to the actor traits and contexts,
+/// primary [`SupervisionTree`] composition path, core policies, and common
+/// send/call errors. Observability and advanced surfaces remain available at
+/// the crate root without being injected by a glob import.
 pub mod prelude {
     // Resolves the `Supervision` trait, and additionally the derive macro of
     // the same name when the `derive` feature is on.
     pub use crate::{
         Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-        AddSubtreeError, AmbientContext, BlockingCancelled, BoxError, CallError,
-        CancellationHandle, CancellationToken, ChildOutline, DEFAULT_SHUTDOWN_BOUND, Down,
-        DownReason, DrainPolicy, DynamicRuntimeBuilder, DynamicScope, Graph, GraphBuilder,
-        LifecycleWatchGuard, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize,
-        MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, ReservedSupervisionTree,
-        RestrictedScope, Runtime, RuntimeBuilder, RuntimeHandle, SendError, StartContext,
-        StopContext, Supervision, SupervisionBuildError, SupervisionFactories, SupervisionOutline,
-        SupervisionTree, TimerKey,
-    };
-    pub use tokio_supervisor::{
-        BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
-        CompletionOutcome, ExitStatusView, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
-        RestartIntensity, RestartPolicy, ScopeKind, ShutdownMode, ShutdownPolicy, Strategy,
-        SupervisorSnapshot, SupervisorStateView,
+        AmbientContext, BoxError, CallError, GraphBuilder, LiveContext, MessageContext, RawActor,
+        Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
+        StartContext, StopContext, Strategy, Supervision, SupervisionTree,
     };
 }
 
