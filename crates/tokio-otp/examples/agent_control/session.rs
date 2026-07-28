@@ -11,7 +11,7 @@ use std::{
 use tokio::time::Instant;
 use tokio_otp::{
     Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext,
+    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
     prelude::Continue, timers,
 };
 
@@ -24,6 +24,8 @@ use crate::{
     model::ModelClient,
     run::AgentRunFactory,
 };
+
+const IDLE_SWEEP_TIMER: TimerKey = TimerKey::new("idle-sweep");
 
 struct ActiveRun {
     task: TaskId,
@@ -76,7 +78,7 @@ impl Session {
     }
 
     fn arm_idle(&mut self, ctx: &mut impl LiveContext<SessionMsg>) {
-        ctx.set_timeout(SessionMsg::IdleSweep, IDLE_TIMEOUT);
+        ctx.set_timeout(IDLE_SWEEP_TIMER, SessionMsg::IdleSweep, IDLE_TIMEOUT);
     }
 
     async fn start_run(
@@ -87,7 +89,7 @@ impl Session {
         input: PendingInput,
         ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
-        ctx.clear_timeout();
+        ctx.clear_timeout(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
             self.heartbeat = Some(timers::interval_to(
                 &ctx.lifetime(),
@@ -257,7 +259,7 @@ impl Actor for Session {
                     return Ok(Continue);
                 }
                 self.transcript_len += 1;
-                ctx.clear_timeout();
+                ctx.clear_timeout(IDLE_SWEEP_TIMER);
                 let input = PendingInput { envelope, text };
                 if self.active.is_some() || !self.gate.load(Ordering::Acquire) {
                     self.pending.push_back(input);

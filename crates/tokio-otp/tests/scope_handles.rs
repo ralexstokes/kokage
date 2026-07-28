@@ -62,12 +62,12 @@ impl Actor for ScopeProbe {
             return Ok(Continue);
         };
         self.reports.send("some").expect("test receiver open");
-        // The raw supervisor handle is reachable only past `after_start`,
-        // since its own waits are the ones `StartingScope` withholds. Adding a
-        // child through it does not wait, so it is safe here.
+        // The raw supervisor handle is reachable only past `release`,
+        // since its own waits are the ones `RestrictedScope` withholds.
+        // Adding a child through it does not wait, so it is safe here.
         let before_ready = children
             .clone()
-            .after_start()
+            .release()
             .supervisor_handle()
             .add_child(ChildSpec::new("too-early", |_| async { Ok(()) }))
             .await;
@@ -83,9 +83,9 @@ impl Actor for ScopeProbe {
         // The factory signature remains `|| ScopeProbe { .. }`: the runtime
         // injects `children`. Work launched from on_start waits for the inner
         // scope to bind, then mutates it without blocking leader readiness.
-        // `after_start` is where the lifecycle waits become reachable again —
+        // `release` is where the lifecycle waits become reachable again —
         // taking it here names the handoff that used to be a doc comment.
-        let children = children.after_start();
+        let children = children.release();
         let myself = ctx.myself();
         tokio::spawn(async move {
             let result = async {

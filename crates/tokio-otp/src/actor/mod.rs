@@ -22,8 +22,8 @@ pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, MessageSize};
 pub use cancellation::{CancellationHandle, Lifetime};
 pub use context::{
-    ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, StartContext,
-    StartingScope, StopContext, StoppingScope, TimerKey,
+    ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, RestrictedScope,
+    StartContext, StopContext, TimerKey,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, OffloadDeadline, SendError, TryRecvError,

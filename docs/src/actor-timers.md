@@ -73,9 +73,9 @@ spawned per self timer.
 
 ## Replaceable timeouts
 
-`set_timeout` is the default one-at-a-time timeout slot. Setting it replaces
-the prior entry, `clear_timeout` retracts it, and `timeout_armed` reports
-whether it exists:
+Replaceable timeouts are keyed with `TimerKey`. `set_timeout` replaces the
+entry at that key, `clear_timeout` retracts it, and `timeout_armed` reports
+whether it exists. Other keys remain independent:
 
 ```rust,ignore
 use std::time::Duration;
@@ -98,11 +98,14 @@ struct Order {
     phase: Phase,
 }
 
+const FILL: TimerKey = TimerKey::new("fill");
+const CANCEL: TimerKey = TimerKey::new("cancel");
+
 impl Actor for Order {
     type Msg = Message;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        ctx.set_timeout(Message::FillTimedOut, Duration::from_millis(500));
+        ctx.set_timeout(FILL, Message::FillTimedOut, Duration::from_millis(500));
         Ok(Continue)
     }
 
@@ -113,15 +116,15 @@ impl Actor for Order {
     ) -> ActorResult {
         match (&self.phase, message) {
             (Phase::PendingFill, Message::Filled) => {
-                ctx.clear_timeout();
+                ctx.clear_timeout(FILL);
                 self.phase = Phase::Complete;
             }
             (Phase::PendingFill, Message::FillTimedOut) => {
                 self.phase = Phase::Cancelling;
-                ctx.set_timeout(Message::Cancelled, Duration::from_secs(2));
+                ctx.set_timeout(CANCEL, Message::Cancelled, Duration::from_secs(2));
             }
             (Phase::Cancelling, Message::Cancelled) => {
-                ctx.clear_timeout();
+                ctx.clear_timeout(CANCEL);
                 self.phase = Phase::Complete;
             }
             _ => {}
@@ -135,15 +138,15 @@ This is the Rust counterpart of Erlang `gen_statem`'s `state_timeout`, without
 the prefix: retraction is explicit and is also useful to actors that do not
 model named states.
 
-Independent named slots use `TimerKey`:
+For independent protocol deadlines, use one key per deadline:
 
 ```rust,ignore
 const LEASE: TimerKey = TimerKey::new("lease");
 const HEARTBEAT: TimerKey = TimerKey::new("heartbeat");
 
-ctx.set_timeout_keyed(LEASE, Message::LeaseExpired, Duration::from_secs(30));
-ctx.set_timeout_keyed(HEARTBEAT, Message::PeerSilent, Duration::from_secs(5));
-ctx.clear_timeout_keyed(LEASE);
+ctx.set_timeout(LEASE, Message::LeaseExpired, Duration::from_secs(30));
+ctx.set_timeout(HEARTBEAT, Message::PeerSilent, Duration::from_secs(5));
+ctx.clear_timeout(LEASE);
 ```
 
 Keys are static strings because they name protocol vocabulary and remain easy

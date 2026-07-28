@@ -1,4 +1,4 @@
-//! Navigating to a nested scope must not hand back the waits `StartingScope`
+//! Navigating to a nested scope must not hand back the waits `RestrictedScope`
 //! withholds: an ordered sibling's start is sequenced after this actor reports
 //! ready, so awaiting it from `on_start` deadlocks.
 use tokio_otp::{Actor, ActorResult, MessageContext, StartContext, prelude::Continue};

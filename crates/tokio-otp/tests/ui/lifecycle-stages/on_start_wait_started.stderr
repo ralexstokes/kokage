@@ -1,5 +1,5 @@
-error[E0599]: no method named `wait_started` found for struct `StartingScope` in the current scope
+error[E0599]: no method named `wait_started` found for struct `RestrictedScope` in the current scope
   --> tests/ui/lifecycle-stages/on_start_wait_started.rs:11:26
    |
 11 |         ctx.supervisor().wait_started().await?;
-   |                          ^^^^^^^^^^^^ method not found in `StartingScope`
+   |                          ^^^^^^^^^^^^ method not found in `RestrictedScope`

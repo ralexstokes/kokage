@@ -124,19 +124,21 @@ async fn cancelling_send_after_prevents_delivery() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
-struct DefaultTimeout {
+const REPLACEABLE: TimerKey = TimerKey::new("replaceable");
+
+struct ReplaceableTimeout {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
-impl Actor for DefaultTimeout {
+impl Actor for ReplaceableTimeout {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        assert!(!ctx.timeout_armed());
-        ctx.clear_timeout();
-        ctx.set_timeout("old", Duration::from_millis(20));
-        assert!(ctx.timeout_armed());
-        ctx.set_timeout("new", Duration::from_millis(40));
+        assert!(!ctx.timeout_armed(REPLACEABLE));
+        ctx.clear_timeout(REPLACEABLE);
+        ctx.set_timeout(REPLACEABLE, "old", Duration::from_millis(20));
+        assert!(ctx.timeout_armed(REPLACEABLE));
+        ctx.set_timeout(REPLACEABLE, "new", Duration::from_millis(40));
         Ok(Continue)
     }
 
@@ -145,16 +147,16 @@ impl Actor for DefaultTimeout {
         message: Self::Msg,
         ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
-        assert!(!ctx.timeout_armed());
+        assert!(!ctx.timeout_armed(REPLACEABLE));
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn setting_default_timeout_replaces_the_previous_entry() {
+async fn setting_a_timeout_replaces_the_previous_entry_at_its_key() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || DefaultTimeout {
+    let (runtime, _) = build_runtime(move || ReplaceableTimeout {
         observed: observed_tx.clone(),
     });
     let handle = runtime.spawn();
@@ -178,6 +180,8 @@ enum OrderedMsg {
     New,
 }
 
+const ORDERED: TimerKey = TimerKey::new("ordered");
+
 struct OrderedTimeout {
     started: mpsc::UnboundedSender<()>,
     release: Arc<Notify>,
@@ -189,7 +193,7 @@ impl Actor for OrderedTimeout {
     type Msg = OrderedMsg;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        ctx.set_timeout(OrderedMsg::Old, Duration::from_millis(20));
+        ctx.set_timeout(ORDERED, OrderedMsg::Old, Duration::from_millis(20));
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         Ok(Continue)
@@ -202,9 +206,9 @@ impl Actor for OrderedTimeout {
     ) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         match message {
-            OrderedMsg::Clear => ctx.clear_timeout(),
+            OrderedMsg::Clear => ctx.clear_timeout(ORDERED),
             OrderedMsg::Replace if self.replace => {
-                ctx.set_timeout(OrderedMsg::New, Duration::from_millis(40));
+                ctx.set_timeout(ORDERED, OrderedMsg::New, Duration::from_millis(40));
             }
             _ => {}
         }
@@ -293,18 +297,27 @@ impl Actor for KeyedTimeouts {
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         let first = TimerKey::new("first");
         let second = TimerKey::new("second");
-        ctx.set_timeout_keyed(first, "stale", Duration::from_millis(10));
-        ctx.set_timeout_keyed(first, "first", Duration::from_millis(20));
-        ctx.set_timeout_keyed(second, "second", Duration::from_millis(40));
-        ctx.clear_timeout_keyed(TimerKey::new("absent"));
+        assert!(!ctx.timeout_armed(first));
+        ctx.set_timeout(first, "stale", Duration::from_millis(10));
+        ctx.set_timeout(first, "first", Duration::from_millis(20));
+        ctx.set_timeout(second, "second", Duration::from_millis(40));
+        assert!(ctx.timeout_armed(first));
+        assert!(ctx.timeout_armed(second));
+        let absent = TimerKey::new("absent");
+        ctx.clear_timeout(absent);
+        assert!(!ctx.timeout_armed(absent));
         Ok(Continue)
     }
 
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
+        // Delivered payloads intentionally match their timer-key names so this
+        // post-delivery check can reconstruct the key.
+        let key = TimerKey::new(message);
+        assert!(!ctx.timeout_armed(key));
         self.observed.send(message).expect("observer alive");
         Ok(Continue)
     }
@@ -330,11 +343,13 @@ struct FarFutureTimers {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
+const FAR_FUTURE_TIMEOUT: TimerKey = TimerKey::new("far-future");
+
 impl Actor for FarFutureTimers {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        ctx.set_timeout("never-timeout", Duration::MAX);
+        ctx.set_timeout(FAR_FUTURE_TIMEOUT, "never-timeout", Duration::MAX);
         self.timers
             .push(ctx.send_after("never-after", Duration::MAX));
         self.timers
@@ -537,15 +552,17 @@ struct RestartingTimer {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
+const RESTART_TIMEOUT: TimerKey = TimerKey::new("restart");
+
 impl Actor for RestartingTimer {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            ctx.set_timeout("old", Duration::from_millis(150));
+            ctx.set_timeout(RESTART_TIMEOUT, "old", Duration::from_millis(150));
             ctx.continue_with("crash");
         } else {
-            ctx.set_timeout("new", Duration::from_millis(10));
+            ctx.set_timeout(RESTART_TIMEOUT, "new", Duration::from_millis(10));
         }
         Ok(Continue)
     }
