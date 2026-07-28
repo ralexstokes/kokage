@@ -9,6 +9,7 @@ use std::{
 
 use tokio::sync::{Notify, mpsc, watch};
 use tokio_supervisor::RestartPolicy;
+use tokio_util::sync::CancellationToken;
 
 use crate::actor::{
     error::TrySendError,
@@ -21,8 +22,9 @@ use crate::actor::{
 /// Sample these stats either through [`ActorRef::stats`](crate::ActorRef::stats)
 /// or [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
 /// Message counters accumulate for the lifetime of the actor binding and
-/// therefore survive restarts. Mailbox fields describe the currently bound
-/// incarnation and are zero while no mailbox is bound.
+/// therefore survive restarts. Outstanding-work gauges and mailbox fields
+/// describe the currently bound incarnation and are zero while no mailbox is
+/// bound.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ActorStats {
@@ -54,7 +56,8 @@ pub struct ActorStats {
     /// [`messages_accepted`](Self::messages_accepted): accepted messages may be
     /// conflated before receipt or discarded when an incarnation stops.
     pub messages_received: u64,
-    /// External messages accepted into the mailbox by `send` or `try_send`.
+    /// Messages accepted into the mailbox by `send` or `try_send`, including
+    /// mapped lifecycle-wait results delivered through the ordinary mailbox.
     ///
     /// Acceptance does not mean the actor handled the message. In particular,
     /// a conflating mailbox counts every successful send here and separately
@@ -69,13 +72,22 @@ pub struct ActorStats {
     /// `None` means the actor did not opt in. The total accumulates across
     /// actor restarts, like the message counters.
     pub message_bytes_accepted: Option<u64>,
-    /// `send` or `try_send` calls that returned an error.
+    /// Mailbox sends rejected before acceptance.
+    ///
+    /// This includes `send` or `try_send` calls that returned an error and a
+    /// mapped lifecycle-wait result rejected because its captured incarnation
+    /// mailbox had closed.
     pub sends_rejected: u64,
     /// Offloads currently owned by this actor incarnation.
     ///
     /// This is a gauge rather than a lifetime counter. It returns to zero
     /// when offloads finish, time out, or are aborted.
     pub outstanding_offloads: u64,
+    /// Lifecycle waits currently owned by this actor incarnation.
+    ///
+    /// This is a gauge rather than a lifetime counter. It returns to zero
+    /// when waits finish, are cancelled, or the incarnation ends.
+    pub outstanding_scope_waits: u64,
     /// Messages currently occupying the bound mailbox, or zero when sampled
     /// while the actor has no bound incarnation.
     pub mailbox_depth: usize,
@@ -104,6 +116,7 @@ pub(crate) struct ActorStatsCounters {
     sends_rejected: AtomicU64,
     message_bytes_accepted: Option<AtomicU64>,
     outstanding_offloads: AtomicU64,
+    outstanding_scope_waits: AtomicU64,
 }
 
 impl ActorStatsCounters {
@@ -115,6 +128,7 @@ impl ActorStatsCounters {
             sends_rejected: AtomicU64::new(0),
             message_bytes_accepted: observe_message_size.then(|| AtomicU64::new(0)),
             outstanding_offloads: AtomicU64::new(0),
+            outstanding_scope_waits: AtomicU64::new(0),
         }
     }
 
@@ -148,6 +162,11 @@ impl ActorStatsCounters {
             .store(outstanding as u64, Ordering::Relaxed);
     }
 
+    pub(crate) fn set_outstanding_scope_waits(&self, outstanding: usize) {
+        self.outstanding_scope_waits
+            .store(outstanding as u64, Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(
         &self,
         actor_id: &str,
@@ -167,6 +186,7 @@ impl ActorStatsCounters {
                 .map(|total| total.load(Ordering::Relaxed)),
             sends_rejected: self.sends_rejected.load(Ordering::Relaxed),
             outstanding_offloads: self.outstanding_offloads.load(Ordering::Relaxed),
+            outstanding_scope_waits: self.outstanding_scope_waits.load(Ordering::Relaxed),
             mailbox_depth,
             mailbox_capacity,
         }
@@ -346,6 +366,86 @@ pub(crate) enum SendOutcome<M> {
     Closed(M),
 }
 
+pub(crate) enum GatedSendOutcome<M> {
+    Accepted { conflated: u64 },
+    Closed(M),
+    Cancelled(M),
+}
+
+#[derive(Debug)]
+pub(crate) struct SendGate {
+    cancellation: CancellationToken,
+    state: Mutex<SendGateState>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SendGateState {
+    Pending,
+    Accepted,
+    Cancelled,
+    Finished,
+}
+
+impl SendGate {
+    pub(crate) fn new() -> Self {
+        Self {
+            cancellation: CancellationToken::new(),
+            state: Mutex::new(SendGateState::Pending),
+        }
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        self.cancellation.cancelled().await;
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+
+    /// Cancels delivery if mailbox acceptance has not already committed.
+    ///
+    /// Returns whether aborting the task is still safe. Once acceptance wins,
+    /// the task must finish its send accounting rather than be aborted between
+    /// mailbox commit and counter updates.
+    pub(crate) fn cancel(&self) -> bool {
+        let should_abort = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            match *state {
+                SendGateState::Pending => {
+                    *state = SendGateState::Cancelled;
+                    true
+                }
+                SendGateState::Cancelled => true,
+                SendGateState::Accepted | SendGateState::Finished => false,
+            }
+        };
+        if should_abort {
+            self.cancellation.cancel();
+        }
+        should_abort
+    }
+
+    fn commit<M>(&self, message: M, send: impl FnOnce(M) -> SendOutcome<M>) -> GatedSendOutcome<M> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        match *state {
+            SendGateState::Pending => match send(message) {
+                SendOutcome::Accepted { conflated } => {
+                    *state = SendGateState::Accepted;
+                    GatedSendOutcome::Accepted { conflated }
+                }
+                SendOutcome::Closed(message) => {
+                    *state = SendGateState::Finished;
+                    GatedSendOutcome::Closed(message)
+                }
+            },
+            SendGateState::Cancelled => GatedSendOutcome::Cancelled(message),
+            SendGateState::Accepted | SendGateState::Finished => {
+                unreachable!("a scope-wait send gate commits at most once")
+            }
+        }
+    }
+}
+
 /// Sender for one bound mailbox instance of an actor.
 pub(crate) struct MailboxRef<M> {
     actor_id: Arc<str>,
@@ -394,6 +494,48 @@ impl<M> MailboxRef<M> {
                 // cancellation contract.
                 tokio::task::coop::consume_budget().await;
                 sender.send(message)
+            }
+        }
+    }
+
+    /// Sends only if `gate` has not been cancelled at the acceptance point.
+    pub(crate) async fn send_retaining_gated(
+        &self,
+        message: M,
+        gate: &SendGate,
+    ) -> GatedSendOutcome<M> {
+        if gate.is_cancelled() {
+            return GatedSendOutcome::Cancelled(message);
+        }
+        match &self.sender {
+            MailboxSender::Queue {
+                sender,
+                accepting_external,
+            } => {
+                if !accepting_external.load(Ordering::Acquire) {
+                    return GatedSendOutcome::Closed(message);
+                }
+                let reserved = tokio::select! {
+                    biased;
+                    () = gate.cancelled() => return GatedSendOutcome::Cancelled(message),
+                    reserved = sender.reserve() => reserved,
+                };
+                match reserved {
+                    Ok(permit) => gate.commit(message, |message| {
+                        if accepting_external.load(Ordering::Acquire) {
+                            permit.send(message);
+                            SendOutcome::Accepted { conflated: 0 }
+                        } else {
+                            SendOutcome::Closed(message)
+                        }
+                    }),
+                    Err(_) if gate.is_cancelled() => GatedSendOutcome::Cancelled(message),
+                    Err(_) => GatedSendOutcome::Closed(message),
+                }
+            }
+            MailboxSender::Conflating(sender) => {
+                tokio::task::coop::consume_budget().await;
+                sender.send_gated(message, gate)
             }
         }
     }
@@ -546,6 +688,49 @@ impl<M> ConflatingSender<M> {
         drop(state);
         self.shared.notify.notify_one();
         SendOutcome::Accepted { conflated }
+    }
+
+    fn send_gated(&self, message: M, gate: &SendGate) -> GatedSendOutcome<M> {
+        let mut state = self.shared.lock();
+        if state.receiver_closed || !state.accepting_external {
+            return GatedSendOutcome::Closed(message);
+        }
+
+        // Key extraction is user code. Run it before entering the acceptance
+        // gate so a slow or panicking matcher cannot hold up cancellation.
+        // The conflating-state lock keeps the computed position stable.
+        let matched = state.key_matches.as_ref().and_then(|key_matches| {
+            state
+                .messages
+                .iter()
+                .position(|queued| key_matches(queued, &message))
+        });
+        let keyed = state.key_matches.is_some();
+        let outcome = gate.commit(message, |message| {
+            let conflated = if let Some(index) = matched {
+                state.messages[index] = message;
+                1
+            } else if keyed {
+                let evicted = u64::from(state.messages.len() == state.capacity);
+                if evicted == 1 {
+                    state.messages.pop_front();
+                }
+                state.messages.push_back(message);
+                evicted
+            } else if state.messages.is_empty() {
+                state.messages.push_back(message);
+                0
+            } else {
+                state.messages[0] = message;
+                1
+            };
+            SendOutcome::Accepted { conflated }
+        });
+        drop(state);
+        if matches!(outcome, GatedSendOutcome::Accepted { .. }) {
+            self.shared.notify.notify_one();
+        }
+        outcome
     }
 
     fn same_channel(&self, other: &Self) -> bool {

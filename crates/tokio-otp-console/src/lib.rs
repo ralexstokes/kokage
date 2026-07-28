@@ -58,6 +58,7 @@ pub struct ActorStatsView {
     pub message_bytes_accepted: Option<u64>,
     pub sends_rejected: u64,
     pub outstanding_offloads: u64,
+    pub outstanding_scope_waits: u64,
     pub mailbox_depth: usize,
     pub mailbox_capacity: usize,
 }
@@ -90,6 +91,7 @@ impl From<ActorStats> for ActorStatsView {
             message_bytes_accepted: stats.message_bytes_accepted,
             sends_rejected: stats.sends_rejected,
             outstanding_offloads: stats.outstanding_offloads,
+            outstanding_scope_waits: stats.outstanding_scope_waits,
             mailbox_depth: stats.mailbox_depth,
             mailbox_capacity: stats.mailbox_capacity,
         }

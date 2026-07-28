@@ -77,25 +77,20 @@ impl Actor for ScopeProbe {
             return Ok(());
         }
 
-        // The factory signature remains `|| ScopeProbe { .. }`: the runtime
-        // injects `children`. Work launched from on_start waits for the inner
-        // scope to bind, then mutates it without blocking leader readiness.
-        // `release` is where the lifecycle waits become reachable again —
-        // taking it here names the handoff that used to be a doc comment.
-        let children = children.release();
-        let myself = ctx.myself();
-        tokio::spawn(async move {
-            let result = async {
+        // The wait is detached from startup but remains owned by this actor
+        // incarnation. Its mapped result returns through the actor mailbox.
+        ctx.spawn_scope_wait(
+            &children,
+            |children| async move {
                 children.wait_started().await.map_err(|_| ())?;
                 children
                     .add_actor("from-on-start", || Idle)
                     .await
                     .map_err(|_| ())?;
                 Ok::<_, ()>(())
-            }
-            .await;
-            let _ = myself.send(LeaderMsg::OnStartAdded(result.is_ok())).await;
-        });
+            },
+            |result| LeaderMsg::OnStartAdded(result.is_ok()),
+        );
         Ok(())
     }
 

@@ -97,6 +97,8 @@ where
                 continuations: Default::default(),
                 stop_requested: false,
                 offloads: Default::default(),
+                scope_waits: Default::default(),
+                scope_wait_gates: Default::default(),
                 supervisor: start.supervisor,
                 children: start.children,
             };

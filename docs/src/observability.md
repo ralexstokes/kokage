@@ -262,6 +262,12 @@ starts work and falls when the actor loop reaps its completion or observes its
 abort, making actors with in-flight requests visible without inspecting
 anonymous Tokio tasks.
 
+`ActorStats::outstanding_scope_waits` is the corresponding point-in-time gauge
+for lifecycle waits started with `LiveContext::spawn_scope_wait`. It returns to
+zero when the actor loop reaps a result, an explicit `ScopeWaitHandle::abort`
+is observed, or the incarnation ends. This makes message-driven code that
+accumulates never-ending lifecycle waits visible.
+
 `ActorStats::message_bytes_accepted` is then `Some(total)`; ordinary actors
 report `None` and do not sample message sizes. With the `metrics` feature,
 each accepted sized message also updates the `actor.message.size` histogram

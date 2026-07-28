@@ -287,7 +287,8 @@ pub use actor::{
     DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph, GraphBuildError, GraphBuilder,
     GraphConfig, GraphLookupError, Lifetime, LiveContext, MailboxMode, MessageContext,
     MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor,
-    SendError, StartContext, StopContext, SupervisorPathSegment, TimerKey, TrySendError,
+    ScopeWaitHandle, SendError, StartContext, StopContext, SupervisorPathSegment, TimerKey,
+    TrySendError,
 };
 pub use runtime::{DynamicActorOptions, LifecycleWatchGuard, RuntimeHandle};
 pub use supervision::{

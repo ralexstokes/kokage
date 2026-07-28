@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fmt,
     future::Future,
     sync::{
@@ -11,7 +11,7 @@ use std::{
 
 use tokio::{
     sync::{oneshot, watch},
-    task::{AbortHandle, JoinError, JoinSet},
+    task::{AbortHandle, Id as TaskId, JoinError, JoinSet},
     time::{Instant, timeout},
 };
 use tokio_util::sync::CancellationToken;
@@ -20,8 +20,8 @@ use crate::RuntimeHandle;
 
 use crate::actor::{
     binding::{
-        ActorStats, ActorStatsCounters, BindingCore, BindingState, MailboxReceiver, MailboxRef,
-        MessageSizeObserver, SendOutcome,
+        ActorStats, ActorStatsCounters, BindingCore, BindingState, GatedSendOutcome,
+        MailboxReceiver, MailboxRef, MessageSizeObserver, SendGate, SendOutcome,
     },
     cancellation::{CancellationHandle, Lifetime},
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
@@ -66,9 +66,18 @@ macro_rules! scope_context_methods {
     (actor) => {
         /// Returns this actor's enclosing scope with lifecycle waits withheld.
         ///
+        /// Awaiting scope or child lifecycle progress can deadlock when that
+        /// progress depends on this actor returning from its current work.
+        /// During live stages, use [`LiveContext::spawn_scope_wait`] to run a
+        /// lifecycle wait as incarnation-owned work and map its result back
+        /// through the mailbox.
+        ///
         /// Actors run directly through
         /// [`RunnableActor::run_until`](crate::RunnableActor::run_until),
-        /// outside a supervisor, receive a terminal handle here.
+        /// outside a supervisor, receive a terminal handle here. Its control
+        /// operations return
+        /// [`ControlError::Unavailable`](crate::ControlError::Unavailable)
+        /// and its observation streams are closed.
         pub fn supervisor(&self) -> RestrictedScope {
             RestrictedScope::new(self.supervisor.clone())
         }
@@ -78,11 +87,9 @@ macro_rules! scope_context_methods {
         ///
         /// This is `Some` exactly for the leader of an
         /// [`actor_with_scope`](crate::OrderedTree::actor_with_scope) node.
-        ///
-        /// The child scope starts only after its leader's `on_start` returns. A
-        /// leader must therefore not await `children().wait_started()` inline
-        /// from `on_start`; launch that wait as pipelined work, return from
-        /// `on_start`, and consume the result after the child scope binds.
+        /// The child scope starts only after its leader's `on_start` returns,
+        /// so pipeline readiness waits with
+        /// [`LiveContext::spawn_scope_wait`] instead of awaiting them inline.
         pub fn children(&self) -> Option<RestrictedScope> {
             self.children.clone().map(RestrictedScope::new)
         }
@@ -338,6 +345,28 @@ impl<M> ActorRef<M> {
         }
     }
 
+    /// Sends to one captured incarnation without following a later rebind.
+    async fn send_to_mailbox(&self, mailbox: MailboxRef<M>, message: M, gate: &SendGate) {
+        let message_size = self
+            .message_size
+            .as_ref()
+            .map(|observer| observer.size_hint(&message));
+
+        match mailbox.send_retaining_gated(message, gate).await {
+            GatedSendOutcome::Accepted { conflated } => {
+                self.observe_send(MessageOperation::Send, None);
+                self.stats.record_send(true);
+                self.stats.record_conflated(conflated);
+                self.record_message_size(message_size);
+            }
+            GatedSendOutcome::Closed(_) => {
+                self.observe_send(MessageOperation::Send, Some(SendRejection::MailboxClosed));
+                self.stats.record_send(false);
+            }
+            GatedSendOutcome::Cancelled(_) => {}
+        }
+    }
+
     /// Attempts to send a message without waiting for mailbox capacity.
     ///
     /// A full FIFO queue returns [`TrySendError::Full`]. A conflating
@@ -525,6 +554,10 @@ impl<M> ActorRef<M> {
     fn set_outstanding_offloads(&self, outstanding: usize) {
         self.stats.set_outstanding_offloads(outstanding);
     }
+
+    fn set_outstanding_scope_waits(&self, outstanding: usize) {
+        self.stats.set_outstanding_scope_waits(outstanding);
+    }
 }
 
 /// One-shot reply channel carried inside a request message.
@@ -546,6 +579,36 @@ pub struct Reply<T> {
 pub struct OffloadHandle {
     abort: AbortHandle,
     cancelled: Arc<AtomicBool>,
+}
+
+/// Handle for one lifecycle wait started by [`LiveContext::spawn_scope_wait`].
+///
+/// Dropping the handle does not affect the wait. [`abort`](Self::abort)
+/// cancels the wait and suppresses its mapped mailbox message when cancellation
+/// wins before mailbox acceptance. An already accepted message cannot be
+/// retracted. The actor also aborts every outstanding wait when its current
+/// incarnation ends.
+#[derive(Clone, Debug)]
+pub struct ScopeWaitHandle {
+    abort: AbortHandle,
+    gate: Arc<SendGate>,
+}
+
+impl ScopeWaitHandle {
+    /// Aborts the lifecycle wait.
+    ///
+    /// If its mapped message was already accepted by the mailbox, aborting
+    /// cannot retract it.
+    pub fn abort(&self) {
+        if self.gate.cancel() {
+            self.abort.abort();
+        }
+    }
+
+    /// Returns whether the wait has finished or its abort has been observed.
+    pub fn is_finished(&self) -> bool {
+        self.abort.is_finished()
+    }
 }
 
 impl OffloadHandle {
@@ -616,6 +679,7 @@ enum TimerSlot {
 enum Delivery<M> {
     Mailbox(Option<M>),
     Offload(Result<OffloadCompletion<M>, JoinError>),
+    ScopeWait(Result<(TaskId, ()), JoinError>),
 }
 
 pub(crate) struct OffloadCompletion<M> {
@@ -793,6 +857,8 @@ pub struct ActorContext<M> {
     pub(crate) continuations: VecDeque<M>,
     pub(crate) stop_requested: bool,
     pub(crate) offloads: JoinSet<OffloadCompletion<M>>,
+    pub(crate) scope_waits: JoinSet<()>,
+    pub(crate) scope_wait_gates: HashMap<TaskId, Arc<SendGate>>,
     pub(crate) supervisor: RuntimeHandle,
     pub(crate) children: Option<RuntimeHandle>,
 }
@@ -847,6 +913,11 @@ impl<M: Send + 'static> ActorContext<M> {
         self.myself.set_outstanding_offloads(self.offloads.len());
     }
 
+    fn sync_scope_wait_gauge(&self) {
+        self.myself
+            .set_outstanding_scope_waits(self.scope_waits.len());
+    }
+
     fn joined_offload(&mut self, joined: Result<OffloadCompletion<M>, JoinError>) -> Option<M> {
         self.sync_offload_gauge();
         match joined {
@@ -859,13 +930,31 @@ impl<M: Send + 'static> ActorContext<M> {
         }
     }
 
+    fn joined_scope_wait(&mut self, joined: Result<(TaskId, ()), JoinError>) {
+        let task_id = match &joined {
+            Ok((task_id, ())) => *task_id,
+            Err(error) => error.id(),
+        };
+        self.scope_wait_gates.remove(&task_id);
+        self.sync_scope_wait_gauge();
+        match joined {
+            Ok((_task_id, ())) => {}
+            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(_) => {}
+        }
+    }
+
     pub(crate) async fn next_delivery(&mut self) -> Option<M> {
         loop {
             let has_offloads = !self.offloads.is_empty();
+            let has_scope_waits = !self.scope_waits.is_empty();
             let delivery = tokio::select! {
                 message = self.mailbox.recv() => Delivery::Mailbox(message),
                 joined = self.offloads.join_next(), if has_offloads => {
                     Delivery::Offload(joined.expect("non-empty offload set returned no task"))
+                }
+                joined = self.scope_waits.join_next_with_id(), if has_scope_waits => {
+                    Delivery::ScopeWait(joined.expect("non-empty scope-wait set returned no task"))
                 }
             };
             match delivery {
@@ -875,11 +964,15 @@ impl<M: Send + 'static> ActorContext<M> {
                         return Some(message);
                     }
                 }
+                Delivery::ScopeWait(joined) => self.joined_scope_wait(joined),
             }
         }
     }
 
     pub(crate) fn try_delivery(&mut self) -> Result<M, tokio::sync::mpsc::error::TryRecvError> {
+        while let Some(joined) = self.scope_waits.try_join_next_with_id() {
+            self.joined_scope_wait(joined);
+        }
         while let Some(joined) = self.offloads.try_join_next() {
             if let Some(message) = self.joined_offload(joined) {
                 return Ok(message);
@@ -911,8 +1004,47 @@ impl<M: Send + 'static> ActorContext<M> {
                         return Some(message);
                     }
                 }
+                Delivery::ScopeWait(_) => {
+                    unreachable!("scope waits are excluded from the drain delivery set")
+                }
             }
         }
+    }
+
+    fn spawn_scope_wait<W, F, T, Map>(
+        &mut self,
+        scope: &RestrictedScope,
+        wait: W,
+        map: Map,
+    ) -> ScopeWaitHandle
+    where
+        W: FnOnce(RuntimeHandle) -> F + Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        Map: FnOnce(T) -> M + Send + 'static,
+    {
+        let handle = scope.handle.clone();
+        let myself = self.myself();
+        let mailbox = myself
+            .current_mailbox()
+            .expect("a live actor context must have a bound mailbox");
+        let gate = Arc::new(SendGate::new());
+        let task_gate = Arc::clone(&gate);
+        let abort = self.scope_waits.spawn(async move {
+            let output = tokio::select! {
+                biased;
+                () = task_gate.cancelled() => return,
+                output = wait(handle) => output,
+            };
+            if task_gate.is_cancelled() {
+                return;
+            }
+            let message = map(output);
+            myself.send_to_mailbox(mailbox, message, &task_gate).await;
+        });
+        self.scope_wait_gates.insert(abort.id(), Arc::clone(&gate));
+        self.sync_scope_wait_gauge();
+        ScopeWaitHandle { abort, gate }
     }
 
     /// Runs a bounded future and substitutes `fallback` when its deadline
@@ -995,6 +1127,16 @@ impl<M: Send + 'static> ActorContext<M> {
 
     pub(crate) fn abort_offloads(&mut self) {
         self.offloads.abort_all();
+    }
+
+    pub(crate) fn abort_scope_waits(&mut self) {
+        for gate in self.scope_wait_gates.values() {
+            gate.cancel();
+        }
+        self.scope_wait_gates.clear();
+        self.scope_waits.abort_all();
+        self.scope_waits = JoinSet::new();
+        self.sync_scope_wait_gauge();
     }
 
     /// Returns the actor's unique identifier within the graph.
@@ -1209,7 +1351,11 @@ impl<M: Send + 'static> ActorContext<M> {
 
 impl<M> Drop for ActorContext<M> {
     fn drop(&mut self) {
+        for gate in self.scope_wait_gates.values() {
+            gate.cancel();
+        }
         self.myself.set_outstanding_offloads(0);
+        self.myself.set_outstanding_scope_waits(0);
     }
 }
 
@@ -1373,6 +1519,50 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         F: FnMut(MonitorEvent) -> M + Send + 'static,
     {
         self.cx().watch(target, map)
+    }
+
+    /// Runs a lifecycle wait outside the actor task and maps its result back
+    /// into the actor's ordinary mailbox.
+    ///
+    /// The `wait` closure receives the full handle for `scope`, so it may use
+    /// lifecycle operations intentionally withheld from [`RestrictedScope`].
+    /// It runs outside the actor task, allowing the current hook to return and
+    /// avoiding a deadlock when progress depends on that return.
+    ///
+    /// The task belongs to this actor incarnation. It is aborted when the
+    /// incarnation stops or restarts and is never awaited by
+    /// [`DrainPolicy::Drain`](crate::DrainPolicy). A mapped result is sent only
+    /// to the incarnation that started the wait, through its ordinary mailbox,
+    /// so capacity, FIFO ordering, and conflation apply normally. It cannot
+    /// follow this actor's stable ref into a later incarnation.
+    ///
+    /// The returned [`ScopeWaitHandle`] is optional: dropping it leaves the
+    /// actor-owned wait running, while [`ScopeWaitHandle::abort`] cancels it
+    /// explicitly. Lifecycle waits need not have a natural deadline, but code
+    /// that starts them from ordinary messages should retain a handle or apply
+    /// its own bound rather than accumulating one never-ending wait per
+    /// message. [`ActorStats::outstanding_scope_waits`] exposes the current
+    /// number for operational accounting.
+    ///
+    /// A panic in `wait`, its future, or `map` that is observed while the
+    /// incarnation is live resumes on the actor task, matching
+    /// [`offload`](Self::offload), so supervision observes an ordinary actor
+    /// panic. Also like an offload, a scope wait is aborted when shutdown or a
+    /// restart wins the race; an unobserved task result, including a panic, may
+    /// then be discarded with the ending incarnation.
+    fn spawn_scope_wait<W, F, T, Map>(
+        &mut self,
+        scope: &RestrictedScope,
+        wait: W,
+        map: Map,
+    ) -> ScopeWaitHandle
+    where
+        W: FnOnce(RuntimeHandle) -> F + Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        Map: FnOnce(T) -> M + Send + 'static,
+    {
+        self.cx_mut().spawn_scope_wait(scope, wait, map)
     }
 
     /// Arms a keyed one-shot timeout, replacing the timeout at the same key.
@@ -1549,9 +1739,12 @@ macro_rules! stage_context_methods {
 /// The restriction is closed under navigation: [`subtree`](Self::subtree)
 /// hands back another `RestrictedScope`. During startup, a sibling scope
 /// declared after this actor starts after it reports ready. During shutdown, a
-/// nested scope's shutdown is sequenced with this one's. The full
-/// [`RuntimeHandle`] — which carries those waits — is not reachable without
-/// an explicit [`release`](Self::release).
+/// nested scope's shutdown is sequenced with this one's. No method on
+/// `RestrictedScope` exposes the full [`RuntimeHandle`] directly.
+/// [`LiveContext::spawn_scope_wait`] is the explicit escape hatch: its closure
+/// receives a full handle, but runs in a separate incarnation-owned task rather
+/// than inside the actor callback. Code in that closure can still export the
+/// handle if it deliberately chooses to do so.
 ///
 /// During ordinary message handling or a raw receive loop, lifecycle waits can
 /// likewise depend on the current actor draining work or returning from the
@@ -1567,12 +1760,144 @@ macro_rules! stage_context_methods {
 /// the actor, turning a clean stop into a timed-out one.
 ///
 /// Fire-and-forget control is kept: [`shutdown`](Self::shutdown) requests and
-/// returns, and insertion schedules rather than waits. When a lifecycle wait
-/// must happen, take the full handle with [`release`](Self::release) and move
-/// it into work that runs after startup or outlives the stopping incarnation.
+/// returns, and insertion schedules rather than waits. Live actor stages can
+/// run a lifecycle wait safely with [`LiveContext::spawn_scope_wait`]; the
+/// shutdown stage cannot start future work.
 #[derive(Clone, Debug)]
 pub struct RestrictedScope {
     handle: RuntimeHandle,
+}
+
+macro_rules! restricted_scope_forwards {
+    () => {
+        /// Returns a point-in-time snapshot of the scope.
+        pub fn snapshot(&self) -> tokio_supervisor::SupervisorSnapshot {
+            self.handle.snapshot()
+        }
+
+        /// Returns per-actor message counters for this scope.
+        pub fn actor_stats(&self) -> Vec<ActorStats> {
+            self.handle.actor_stats()
+        }
+
+        /// Subscribes to scope snapshots.
+        pub fn subscribe_snapshots(&self) -> watch::Receiver<tokio_supervisor::SupervisorSnapshot> {
+            self.handle.subscribe_snapshots()
+        }
+
+        /// Returns a handle to a nested subtree by id, restricted the same way
+        /// as this one.
+        pub fn subtree(&self, id: &str) -> Option<Self> {
+            self.handle.subtree(id).map(Self::new)
+        }
+
+        /// Inserts an actor with default options into this scope.
+        ///
+        /// This is safe to await from an actor callback: success means the
+        /// membership was inserted and startup was scheduled, not that the
+        /// actor reported ready. See [`RuntimeHandle::add_actor`].
+        pub async fn add_actor<F>(
+            &self,
+            label: impl Into<String>,
+            factory: F,
+        ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
+        where
+            F: crate::ActorFactory,
+        {
+            self.handle.add_actor(label, factory).await
+        }
+
+        /// Inserts an actor with explicit options into this scope.
+        ///
+        /// This is safe to await from an actor callback because insertion only
+        /// schedules startup. See [`RuntimeHandle::add_actor_with`].
+        pub async fn add_actor_with<F>(
+            &self,
+            label: impl Into<String>,
+            factory: F,
+            options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
+        ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
+        where
+            F: crate::ActorFactory,
+        {
+            self.handle.add_actor_with(label, factory, options).await
+        }
+
+        /// Inserts an arbitrary supervised task child into this scope.
+        ///
+        /// This is safe to await from an actor callback because insertion only
+        /// schedules startup. See [`RuntimeHandle::add_child`].
+        pub async fn add_child(
+            &self,
+            child: tokio_supervisor::ChildSpec,
+        ) -> Result<u64, tokio_supervisor::ControlError> {
+            self.handle.add_child(child).await
+        }
+
+        /// Inserts an identity-owning subtree into this scope.
+        ///
+        /// This is safe to await from an actor callback because insertion only
+        /// schedules startup. Unlike [`RuntimeHandle::add_subtree`], this
+        /// restricted form returns `()` so a full handle cannot escape. Keep
+        /// the id and call [`subtree`](Self::subtree) after successful insertion
+        /// when a restricted handle is needed.
+        pub async fn add_subtree(
+            &self,
+            id: impl Into<String>,
+            tree: impl Into<crate::TreeNode>,
+        ) -> Result<(), tokio_supervisor::ControlError> {
+            self.handle.add_subtree(id, tree).await.map(drop)
+        }
+
+        /// Observes lifecycle transitions of this scope's direct children.
+        pub fn watch_lifecycle(&self) -> tokio_supervisor::ChildLifecycleWatch {
+            self.handle.watch_lifecycle()
+        }
+
+        /// Observes lifecycle transitions of this scope and everything beneath
+        /// it.
+        pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::LifecycleWatch {
+            self.handle.watch_lifecycle_recursive()
+        }
+
+        /// Pumps direct-child lifecycle events into `target` using its ordinary
+        /// mailbox policy.
+        ///
+        /// The pump runs in a detached task, so starting it from a lifecycle
+        /// hook does not block that hook. Retain the returned guard for as long
+        /// as delivery is wanted; dropping or cancelling it stops the pump.
+        /// See [`RuntimeHandle::watch_lifecycle_to`].
+        pub fn watch_lifecycle_to<M, F>(
+            &self,
+            target: &ActorRef<M>,
+            map: F,
+        ) -> crate::LifecycleWatchGuard
+        where
+            M: Send + 'static,
+            F: FnMut(tokio_supervisor::ChildLifecycleEvent) -> M + Send + 'static,
+        {
+            self.handle.watch_lifecycle_to(target, map)
+        }
+
+        /// Shuts this scope down once every named child has completed.
+        ///
+        /// The returned guard must be retained; dropping it cancels the watch
+        /// and leaves the scope running. See
+        /// [`RuntimeHandle::shutdown_on_completion`] for child-id and runtime
+        /// requirements.
+        pub fn shutdown_on_completion<I, S>(&self, ids: I) -> tokio_supervisor::CompletionGuard
+        where
+            I: IntoIterator<Item = S>,
+            S: Into<String>,
+        {
+            self.handle.shutdown_on_completion(ids)
+        }
+
+        /// Requests shutdown of this scope without waiting for it.
+        pub fn shutdown(&self) {
+            self.handle.shutdown()
+        }
+    };
 }
 
 impl RestrictedScope {
@@ -1580,137 +1905,7 @@ impl RestrictedScope {
         Self { handle }
     }
 
-    /// Returns a point-in-time snapshot of the scope.
-    pub fn snapshot(&self) -> tokio_supervisor::SupervisorSnapshot {
-        self.handle.snapshot()
-    }
-
-    /// Returns per-actor message counters for this scope.
-    pub fn actor_stats(&self) -> Vec<ActorStats> {
-        self.handle.actor_stats()
-    }
-
-    /// Subscribes to scope snapshots.
-    pub fn subscribe_snapshots(&self) -> watch::Receiver<tokio_supervisor::SupervisorSnapshot> {
-        self.handle.subscribe_snapshots()
-    }
-
-    /// Returns a handle to a nested subtree by id, restricted the same way as
-    /// this one.
-    pub fn subtree(&self, id: &str) -> Option<Self> {
-        self.handle.subtree(id).map(Self::new)
-    }
-
-    /// Inserts an actor with default options into this scope.
-    ///
-    /// Safe to await here: insertion schedules startup rather than waiting for
-    /// it, so it does not block on another child's lifecycle. See
-    /// [`RuntimeHandle::add_actor`].
-    pub async fn add_actor<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-    ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
-    where
-        F: crate::ActorFactory,
-    {
-        self.handle.add_actor(label, factory).await
-    }
-
-    /// Inserts an actor with explicit options into this scope.
-    ///
-    /// Safe to await for the same reason as [`add_actor`](Self::add_actor).
-    pub async fn add_actor_with<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-        options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
-    ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
-    where
-        F: crate::ActorFactory,
-    {
-        self.handle.add_actor_with(label, factory, options).await
-    }
-
-    /// Inserts an arbitrary supervised task child into this scope.
-    ///
-    /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
-    /// See [`RuntimeHandle::add_child`].
-    pub async fn add_child(
-        &self,
-        child: tokio_supervisor::ChildSpec,
-    ) -> Result<u64, tokio_supervisor::ControlError> {
-        self.handle.add_child(child).await
-    }
-
-    /// Inserts a subtree into this scope.
-    ///
-    /// Safe to await here for the same reason as [`add_actor`](Self::add_actor).
-    /// See [`RuntimeHandle::add_subtree`].
-    pub async fn add_subtree(
-        &self,
-        id: impl Into<String>,
-        tree: impl Into<crate::TreeNode>,
-    ) -> Result<RuntimeHandle, tokio_supervisor::ControlError> {
-        self.handle.add_subtree(id, tree).await
-    }
-
-    /// Observes lifecycle transitions of this scope's direct children.
-    pub fn watch_lifecycle(&self) -> tokio_supervisor::ChildLifecycleWatch {
-        self.handle.watch_lifecycle()
-    }
-
-    /// Observes lifecycle transitions of this scope and everything beneath it.
-    pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::LifecycleWatch {
-        self.handle.watch_lifecycle_recursive()
-    }
-
-    /// Pumps direct-child lifecycle events into `target` using its ordinary
-    /// mailbox policy.
-    ///
-    /// The detached pump is safe to start from a lifecycle hook: it does not
-    /// wait for this scope or any child to transition. See
-    /// [`RuntimeHandle::watch_lifecycle_to`].
-    pub fn watch_lifecycle_to<M, F>(
-        &self,
-        target: &ActorRef<M>,
-        map: F,
-    ) -> crate::LifecycleWatchGuard
-    where
-        M: Send + 'static,
-        F: FnMut(tokio_supervisor::ChildLifecycleEvent) -> M + Send + 'static,
-    {
-        self.handle.watch_lifecycle_to(target, map)
-    }
-
-    /// Shuts this scope down once every named child has completed.
-    ///
-    /// Registering the completion watch is fire-and-forget and does not wait
-    /// for a lifecycle transition, so it is safe from a lifecycle hook. The
-    /// returned guard must be retained; dropping it cancels the watch.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> tokio_supervisor::CompletionGuard
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.handle.shutdown_on_completion(ids)
-    }
-
-    /// Requests shutdown of this scope without waiting for it.
-    pub fn shutdown(&self) {
-        self.handle.shutdown()
-    }
-
-    /// Releases the full [`RuntimeHandle`] for work outside the current
-    /// lifecycle hook.
-    ///
-    /// During `on_start`, move the returned handle into a spawned or offloaded
-    /// future that runs after startup. During `on_stop`, move it into work that
-    /// outlives the incarnation. Awaiting lifecycle operations inline is the
-    /// deadlock this type exists to make explicit.
-    pub fn release(self) -> RuntimeHandle {
-        self.handle
-    }
+    restricted_scope_forwards!();
 }
 
 /// Context handed to [`Actor::on_start`](crate::Actor::on_start).

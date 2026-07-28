@@ -36,6 +36,9 @@ enum LoopEvent<M> {
 /// [offloads](crate::ActorContext::offload) instead of waiting for them — so it
 /// is the right answer for an actor holding long-running work that shutdown
 /// should cut short rather than see through.
+/// Actor-owned [scope waits](crate::LiveContext::spawn_scope_wait) are always
+/// aborted before either policy is applied; lifecycle waits are not accepted
+/// actor work for `Drain` to finish.
 ///
 /// Neither policy is a delivery guarantee. A message dropped by `Discard` and a
 /// message handled by `Drain` are equally invisible to the sender, which
@@ -58,9 +61,10 @@ pub enum DrainPolicy {
     ///
     /// Queued messages are dropped and queued [`call`](crate::ActorRef::call)s
     /// observe [`ReplyDropped`](crate::CallError::ReplyDropped). Outstanding
-    /// [offloads](crate::ActorContext::offload) are aborted rather than awaited. This
-    /// matches the behavior of a hand-written `while let Some(message) =
-    /// ctx.recv().await` loop.
+    /// [offloads](crate::ActorContext::offload) are aborted rather than awaited.
+    /// Actor-owned [scope waits](crate::LiveContext::spawn_scope_wait) are
+    /// aborted under both policies. This matches the behavior of a hand-written
+    /// `while let Some(message) = ctx.recv().await` loop.
     Discard,
     /// Close the mailbox to new sends, handle every message already queued,
     /// then stop.
@@ -123,8 +127,9 @@ pub enum DrainPolicy {
 /// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
 /// hook a stage-specific view instead. In return, the live startup and message
 /// stages implement [`LiveContext`](crate::LiveContext), which provides
-/// loop-owned timers and continuations that a custom raw loop must express
-/// directly. Watches and offloads remain available on [`ActorContext`].
+/// loop-owned timers, continuations, and actor-owned scope waits that a custom
+/// raw loop must express directly. Watches and offloads remain available on
+/// [`ActorContext`].
 ///
 /// A [`LiveContext::stop`](crate::LiveContext::stop) exit is normal for
 /// monitoring and supervision. An
@@ -318,6 +323,9 @@ impl<H: Actor> RawActor for H {
             }
         }
 
+        // Detached scope waits are incarnation-owned but are not actor work to
+        // drain. Stop them before applying the mailbox/offload drain policy.
+        ctx.abort_scope_waits();
         ctx.close_external_intake();
         if self.drain_policy() == DrainPolicy::Drain {
             // Completions and the mailbox are independent loop-owned sources.

@@ -255,18 +255,37 @@ another `RestrictedScope`, so navigation cannot widen the surface.
 
 Lifecycle waits and membership removal are withheld because their progress may
 depend on the current actor returning from startup, its receive loop, a handler,
-or teardown. When a wait must happen, call `RestrictedScope::release()` for the
-full `RuntimeHandle` and move it into independent work:
+or teardown. During `on_start` or `handle`, use
+`LiveContext::spawn_scope_wait` when a lifecycle wait must happen. The wait
+runs outside the actor task and its result returns through the actor's ordinary
+mailbox:
 
 ```rust,ignore
-let children = ctx.children().expect("leader has a child scope").release();
-let myself = ctx.myself();
-tokio::spawn(async move {
-    children.wait_started().await?;
-    children.add_actor("worker", || Worker).await?;
-    myself.send(Msg::ScopeReady).await
-});
+let children = ctx.children().expect("leader has a child scope");
+ctx.spawn_scope_wait(
+    &children,
+    |children| async move {
+        children.wait_started().await.map_err(|_| ())?;
+        children
+            .add_actor("worker", || Worker)
+            .await
+            .map_err(|_| ())?;
+        Ok::<_, ()>(())
+    },
+    |result| Msg::ScopeReady(result),
+);
 ```
+
+The task belongs to the current actor incarnation: stop or restart cancels it,
+and `DrainPolicy::Drain` does not wait for it. Its mapped result goes through
+the starting incarnation's ordinary mailbox, so mailbox capacity, FIFO order,
+and conflation still apply; it cannot leak into a later restart. Retain the
+returned `ScopeWaitHandle` when a message-driven wait needs explicit
+cancellation, and monitor `ActorStats::outstanding_scope_waits` for waits that
+do not finish. A panic in the wait or mapper that the receive loop observes
+while the incarnation is live fails the actor normally under supervision. As
+with an offload, shutdown or restart can instead win the race and abort the
+task; an unobserved result or panic is then discarded with that incarnation.
 
 Shutdown has the mirror-image restriction, so `StopContext::supervisor()` and
 `StopContext::children()` return the same `RestrictedScope`. A stopping child
@@ -276,9 +295,9 @@ detaching it. Awaiting `wait()`, `shutdown_and_wait()`, or
 is waiting on `on_stop`, and the cycle breaks only when the shutdown grace
 period expires and aborts the actor — a clean stop reported as a timed-out
 one. Fire-and-forget `shutdown()`, observation, and insertion remain. Teardown
-that really must observe another child belongs in work that outlives the
-incarnation: take `RestrictedScope::release()` and move it into a spawned
-future rather than awaiting it inline.
+cannot start a new scope wait because `StopContext` does not implement
+`LiveContext`. Work that must observe another child's teardown belongs in a
+separate, explicitly owned actor or task whose lifetime is not already ending.
 
 For the common leader-and-workers shape, declare an actor-owned scope:
 
@@ -299,7 +318,7 @@ Consequently, work launched during `on_start` must be pipelined: let `on_start`
 return, wait for `children.wait_started()` in the pipelined work, then add
 members. Every stage yields a `RestrictedScope`; insertion itself is available
 directly because it only schedules startup, while lifecycle waits require
-`release()` and independent work.
+`spawn_scope_wait` during the live stages. Shutdown cannot start such work.
 
 `actor_with_scope` takes the restart relationship explicitly. `RestForOne`
 means leader failure recycles the leader and owned scope, while a worker
