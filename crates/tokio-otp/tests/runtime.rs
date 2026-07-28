@@ -14,13 +14,13 @@ use tokio::{
 };
 use tokio_otp::{
     Actor, ActorContext, ActorFactory, ActorRef, ActorResult, AddSubtreeError, BoxError,
-    DrainPolicy, DynamicActorOptions, GraphBuilder, LifecycleEvent, LifecycleWatch, MessageContext,
-    RawActor, Reply, Runtime, RuntimeHandle, SendError, StartContext, SupervisionTree,
+    ChildLifecycleEventKind, ChildLifecycleWatch, DrainPolicy, DynamicActorOptions, GraphBuilder,
+    MessageContext, RawActor, Reply, Runtime, RuntimeHandle, SendError, StartContext,
+    SupervisionTree,
 };
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity,
-    RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
-    SupervisorStateView,
+    ChildSpec, CompletionOutcome, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
+    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorStateView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -94,7 +94,7 @@ where
     (runtime, actor_ref)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
     let lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
@@ -104,9 +104,9 @@ fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
     (lifecycle, baseline)
 }
 
-async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) -> u64 {
+async fn await_restart(mut lifecycle: ChildLifecycleWatch, id: &str, baseline: u64) -> u64 {
     lifecycle
-        .started_after(&[], id, baseline)
+        .started_after(id, baseline)
         .await
         .expect("runtime remains live")
 }
@@ -887,7 +887,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
             snapshot
                 .children
                 .iter()
-                .all(|child| child.state == ChildStateView::Running)
+                .all(|child| child.state.is_running())
         })
         .await
         .expect("runtime reported running");
@@ -904,7 +904,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         .wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         })
         .await
         .expect("completion snapshot remains available")
@@ -913,9 +913,8 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit
-            .as_ref(),
-        Some(ExitStatusView::Completed)
+            .last_exit(),
+        Some(&ExitStatusView::Completed)
     ));
 
     let observed = timeout(Duration::from_secs(1), observed_rx.recv())
@@ -993,10 +992,10 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
         handle.subscribe_snapshots().wait_for(|snapshot| {
             snapshot
                 .child("actor")
-                .is_some_and(|child| child.state == ChildStateView::Running)
+                .is_some_and(|child| child.state.is_running())
                 && snapshot
                     .child("sidecar")
-                    .is_some_and(|child| child.state == ChildStateView::Running)
+                    .is_some_and(|child| child.state.is_running())
         }),
     )
     .await
@@ -1030,7 +1029,7 @@ async fn snapshot_wait_reports_all_children_running_after_spawn() {
             && snapshot
                 .children
                 .iter()
-                .all(|child| child.state == ChildStateView::Running)
+                .all(|child| child.state.is_running())
     });
     timeout(Duration::from_secs(1), all_running)
         .await
@@ -1319,8 +1318,8 @@ async fn child_grace_bounds_the_whole_actor_drain() {
             .snapshot()
             .child("worker")
             .expect("static membership remains")
-            .last_exit,
-        Some(ExitStatusView::ShutdownTimedOut)
+            .last_exit(),
+        Some(&ExitStatusView::Aborted { after_grace: true })
     );
 }
 
@@ -1363,12 +1362,12 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
             .snapshot()
             .child("worker")
             .expect("actor remains in static membership")
-            .last_exit,
-        Some(ExitStatusView::ShutdownTimedOut)
+            .last_exit(),
+        Some(&ExitStatusView::Aborted { after_grace: true })
     );
     while let Some(event) = lifecycle.next().await {
-        if let LifecycleEvent::Exited { reason, .. } = event {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+        if let ChildLifecycleEventKind::Exited { reason, .. } = event.kind {
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             return;
         }
     }

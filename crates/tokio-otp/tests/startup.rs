@@ -197,7 +197,7 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
         Err(SupervisorError::StartupAborted(_))
     ));
     let child = handle.snapshot().children.into_iter().next().unwrap();
-    assert!(matches!(child.last_exit, Some(ExitStatusView::Failed(_))));
+    assert!(matches!(child.last_exit(), Some(ExitStatusView::Failed(_))));
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -577,8 +577,8 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
         .unwrap()
         .unwrap();
     assert!(matches!(
-        handle.snapshot().children[0].last_exit,
-        Some(ExitStatusView::Completed)
+        handle.snapshot().children[0].last_exit(),
+        Some(&ExitStatusView::Completed)
     ));
     handle.shutdown_and_wait().await.unwrap();
 }

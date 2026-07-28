@@ -18,8 +18,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    ChildSpec, CompletionOutcome, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
-    Strategy, Supervisor, SupervisorError,
+    ChildSpec, ChildStateView, CompletionOutcome, ExitStatusView, RestartIntensity, RestartPolicy,
+    ShutdownPolicy, Strategy, Supervisor, SupervisorError,
 };
 
 mod common;
@@ -180,6 +180,45 @@ async fn an_empty_completion_set_is_already_satisfied() {
         .shutdown_and_wait()
         .await
         .expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
+    let handle = Supervisor::ordered()
+        .child(
+            ChildSpec::task("worker", |_| async { Ok(()) })
+                .restart(RestartPolicy::Never)
+                .wait_for_ready(),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    assert!(matches!(
+        timeout(common::EVENT_TIMEOUT, handle.wait_started())
+            .await
+            .expect("startup result arrives"),
+        Err(SupervisorError::StartupAborted(_))
+    ));
+    assert!(matches!(
+        handle
+            .snapshot()
+            .child("worker")
+            .expect("worker remains in the snapshot")
+            .state,
+        ChildStateView::StartupAborted { .. }
+    ));
+
+    let outcome = timeout(common::EVENT_TIMEOUT, handle.wait_completed(["worker"]))
+        .await
+        .expect("snapshot realignment recognizes the completed exit");
+    assert_eq!(outcome, CompletionOutcome::Completed);
+
+    let _finished = handle.shutdown_on_completion(["worker"]);
+    timeout(common::EVENT_TIMEOUT, handle.wait())
+        .await
+        .expect("the completion guard also realigns and requests shutdown")
+        .expect("completion-driven shutdown succeeds");
 }
 
 #[tokio::test]

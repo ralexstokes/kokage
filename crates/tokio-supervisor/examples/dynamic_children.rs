@@ -1,5 +1,8 @@
 use tokio::time::{Duration, sleep, timeout};
-use tokio_supervisor::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch, prelude::*};
+use tokio_supervisor::{
+    ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind,
+    LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent, prelude::*,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -108,9 +111,12 @@ async fn wait_for_child_started(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event,
-            LifecycleEvent::Started { supervisor_path, child_id: id, .. }
-                if supervisor_path.is_empty() && id == child_id
+            &event.kind,
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                child_id: id,
+                kind: ChildLifecycleEventKind::Started { .. },
+                ..
+            }) if event.supervisor_path.is_empty() && id == child_id
         )
     })
     .await?;
@@ -124,9 +130,12 @@ async fn wait_for_child_removed(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event,
-            LifecycleEvent::Removed { supervisor_path, child_id: id, .. }
-                if supervisor_path.is_empty() && id == child_id
+            &event.kind,
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                child_id: id,
+                kind: ChildLifecycleEventKind::Removed,
+                ..
+            }) if event.supervisor_path.is_empty() && id == child_id
         )
     })
     .await?;
@@ -140,9 +149,12 @@ async fn wait_for_nested_supervisor_started(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event.supervisor_path().unwrap_or_default(),
+            event.supervisor_path.as_slice(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
-        ) && matches!(event, LifecycleEvent::SupervisorStarted { .. })
+        ) && matches!(
+            event.kind,
+            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started)
+        )
     })
     .await?;
     println!("event: {event:?}");
@@ -156,11 +168,15 @@ async fn wait_for_nested_child_started(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event.supervisor_path().unwrap_or_default(),
+            event.supervisor_path.as_slice(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
         ) && matches!(
-            event,
-            LifecycleEvent::Started { child_id: id, generation: 0, .. } if id == child_id
+            &event.kind,
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                child_id: id,
+                kind: ChildLifecycleEventKind::Started { generation: 0 },
+                ..
+            }) if id == child_id
         )
     })
     .await?;
@@ -175,11 +191,15 @@ async fn wait_for_nested_child_removed(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event = wait_for_event(events, |event| {
         matches!(
-            event.supervisor_path().unwrap_or_default(),
+            event.supervisor_path.as_slice(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
         ) && matches!(
-            event,
-            LifecycleEvent::Removed { child_id: id, .. } if id == child_id
+            &event.kind,
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                child_id: id,
+                kind: ChildLifecycleEventKind::Removed,
+                ..
+            }) if id == child_id
         )
     })
     .await?;

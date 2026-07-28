@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
-    ChildSpec, ChildStateView, ControlError, LifecycleEvent, LifecycleWatch, RestartIntensity,
+    ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec, ControlError, RestartIntensity,
     Strategy, Supervisor, SupervisorError,
 };
 
@@ -17,7 +17,7 @@ fn waiting_child(id: &str) -> ChildSpec {
     })
 }
 
-async fn wait_for_lifecycle_end(watch: &mut LifecycleWatch, message: &str) {
+async fn wait_for_lifecycle_end(watch: &mut ChildLifecycleWatch, message: &str) {
     timeout(EVENT_TIMEOUT, async {
         while watch.next().await.is_some() {}
     })
@@ -35,8 +35,8 @@ async fn retained_builder_handle_is_unavailable_then_binds_to_the_spawned_root()
     ));
     let declared = handle.snapshot();
     let worker = declared.child("worker").expect("worker is declared");
-    assert_eq!(worker.state, ChildStateView::Starting);
-    assert!(!worker.started);
+    assert!(worker.state.is_starting());
+    assert!(!worker.started());
 
     let supervisor = builder.build().expect("builder is valid");
     let spawned = supervisor.spawn();
@@ -97,14 +97,14 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
         .await
         .expect("Started arrives")
         .expect("watch remains open");
-    assert!(matches!(&added, LifecycleEvent::Added { .. }));
+    assert!(matches!(added.kind, ChildLifecycleEventKind::Added));
     assert!(matches!(
-        &started,
-        LifecycleEvent::Started { generation: 0, .. }
+        started.kind,
+        ChildLifecycleEventKind::Started { generation: 0 }
     ));
-    assert_eq!(added.seq(), Some(baseline.lifecycle_seq + 1));
-    assert_eq!(added.lineage(), Some(declared.lineage));
-    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
+    assert_eq!(added.seq, baseline.lifecycle_seq + 1);
+    assert_eq!(added.lineage, declared.lineage);
+    assert_eq!(started.seq, added.seq + 1);
 
     spawned
         .shutdown_and_wait()
@@ -221,7 +221,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
             .expect("nested scope remains attached")
             .snapshot()
             .child("worker")
-            .is_some_and(|worker| worker.started)
+            .is_some_and(|worker| worker.started())
     );
 
     parent

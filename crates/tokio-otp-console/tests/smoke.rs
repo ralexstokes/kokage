@@ -41,13 +41,24 @@ impl Actor for IdleActor {
 }
 
 fn snapshot(child_state: ChildStateView) -> SupervisorSnapshot {
-    let mut worker = ChildSnapshot::new("worker", 0, child_state);
-    worker.started = child_state == ChildStateView::Running;
     SupervisorSnapshot::new(
         SupervisorStateView::Running,
         Strategy::OneForOne,
-        vec![worker],
+        vec![ChildSnapshot::new("worker", 0, child_state)],
     )
+}
+
+fn running_state() -> ChildStateView {
+    ChildStateView::Running {
+        previous_exit: None,
+    }
+}
+
+fn stopped_state() -> ChildStateView {
+    ChildStateView::Stopped {
+        started: false,
+        exit: None,
+    }
 }
 
 fn actor_stats() -> Vec<ActorStatsView> {
@@ -73,7 +84,7 @@ async fn spawn_console_with_stats(
     watch::Sender<SupervisorSnapshot>,
     SupervisorHandle,
 ) {
-    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
+    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(running_state()));
     let lifecycle = Supervisor::dynamic()
         .build()
         .expect("test lifecycle supervisor builds")
@@ -221,7 +232,7 @@ async fn accepts_matching_browser_websocket_origin() {
 
 #[tokio::test]
 async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
-    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
+    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(running_state()));
     let lifecycle = Supervisor::dynamic()
         .build()
         .expect("test lifecycle supervisor builds")
@@ -311,7 +322,7 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
 
 #[tokio::test]
 async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
-    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
+    let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(running_state()));
     let lifecycle = Supervisor::dynamic()
         .build()
         .expect("test lifecycle supervisor builds")
@@ -335,7 +346,7 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 
 #[test]
 fn non_loopback_bind_requires_token() {
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(running_state()));
     let lifecycle = Supervisor::dynamic();
     let lifecycle_handle = lifecycle.handle();
     let error = Console::builder()
@@ -356,7 +367,7 @@ fn builder_reports_missing_observability_sources() {
         .expect("snapshots must be required");
     assert_eq!(missing_snapshots, ConsoleBuildError::MissingSnapshots);
 
-    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(ChildStateView::Running));
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot(running_state()));
     let missing_lifecycle = Console::builder()
         .snapshots(snapshot_rx)
         .build()
@@ -444,12 +455,15 @@ async fn ws_streams_snapshot_updates() {
     read_handshake(&mut socket).await;
 
     snapshot_tx
-        .send(snapshot(ChildStateView::Stopped))
+        .send(snapshot(stopped_state()))
         .expect("failed to send snapshot update");
 
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "snapshot");
-    assert_eq!(frame["data"]["children"][0]["state"], "Stopped");
+    assert_eq!(
+        frame["data"]["children"][0]["state"],
+        json!({ "Stopped": { "started": false, "exit": null } })
+    );
 }
 
 #[tokio::test]
@@ -469,9 +483,12 @@ async fn ws_streams_events() {
     let _added = read_non_stats_json(&mut socket).await;
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
-    assert_eq!(frame["data"]["Started"]["supervisor_path"], json!([]));
-    assert_eq!(frame["data"]["Started"]["child_id"], "worker");
-    assert_eq!(frame["data"]["Started"]["generation"], 0);
+    assert_eq!(frame["data"]["supervisor_path"], json!([]));
+    assert_eq!(frame["data"]["kind"]["Child"]["child_id"], "worker");
+    assert_eq!(
+        frame["data"]["kind"]["Child"]["kind"]["Started"]["generation"],
+        0
+    );
 }
 
 #[tokio::test]

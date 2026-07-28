@@ -5,8 +5,8 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time::sleep};
 
 use tokio_otp::{
-    ActorSpec, ChildOutline, ChildSpec, ChildStateView, ExitStatusView, Graph, ScopeKind,
-    SupervisionTree, prelude::*,
+    ActorSpec, ChildOutline, ChildSpec, ExitStatusView, Graph, ScopeKind, SupervisionTree,
+    prelude::*,
 };
 
 struct Worker;
@@ -245,8 +245,8 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
                 .and_then(|child| child.supervisor.as_ref())
                 .and_then(|owned| owned.child("children"))
                 .is_some_and(|children| {
-                    children.state == ChildStateView::Stopped
-                        && matches!(children.last_exit.as_ref(), Some(ExitStatusView::Failed(_)))
+                    children.state.is_stopped()
+                        && matches!(children.last_exit(), Some(ExitStatusView::Failed(_)))
                 })
         })
         .await
@@ -258,7 +258,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
     sleep(Duration::from_millis(50)).await;
     let snapshot = handle.snapshot();
     let owned_edge = snapshot.child("owned").expect("owned edge remains visible");
-    assert_eq!(owned_edge.state, ChildStateView::Running);
+    assert!(owned_edge.state.is_running());
     let children_edge = owned_edge
         .supervisor
         .as_ref()
@@ -266,7 +266,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
         .expect("generated children edge remains visible");
     assert_eq!(children_edge.generation, 0);
     assert_eq!(children_edge.restart_count, 0);
-    assert_eq!(children_edge.state, ChildStateView::Stopped);
+    assert!(children_edge.state.is_stopped());
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

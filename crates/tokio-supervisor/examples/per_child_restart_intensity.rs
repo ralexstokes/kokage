@@ -4,7 +4,9 @@ use std::sync::{
 };
 
 use tokio::time::{Duration, sleep, timeout};
-use tokio_supervisor::{BackoffPolicy, LifecycleEvent, prelude::*};
+use tokio_supervisor::{
+    BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEventKind, prelude::*,
+};
 
 fn example_error(message: &'static str) -> BoxError {
     Box::new(std::io::Error::other(message))
@@ -67,26 +69,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        match event {
-            LifecycleEvent::RestartScheduled {
+        match event.kind {
+            LifecycleEventKind::Child(ChildLifecycleEvent {
                 child_id,
-                generation,
-                delay,
+                kind:
+                    ChildLifecycleEventKind::RestartScheduled {
+                        generation, delay, ..
+                    },
                 ..
-            } if child_id == "warm-cache" => {
+            }) if child_id == "warm-cache" => {
                 println!(
                     "warm-cache generation {} is allowed one delayed restart: {delay:?}",
                     generation
                 );
             }
-            LifecycleEvent::Started {
+            LifecycleEventKind::Child(ChildLifecycleEvent {
                 child_id,
-                generation: 1,
+                kind: ChildLifecycleEventKind::Started { generation: 1 },
                 ..
-            } if child_id == "warm-cache" => {
+            }) if child_id == "warm-cache" => {
                 break;
             }
-            LifecycleEvent::RestartIntensityExceeded { .. } => {
+            LifecycleEventKind::RestartIntensityExceeded { .. } => {
                 return Err(std::io::Error::other(
                     "unexpected restart intensity failure in example",
                 )

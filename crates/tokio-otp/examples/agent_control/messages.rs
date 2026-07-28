@@ -188,7 +188,7 @@ pub struct GuardReport {
 pub enum GuardMsg {
     RunFailureObserved { chat: ChatId, task: TaskId },
     BudgetExceeded,
-    BridgeRestarts { total: Option<u64> },
+    BridgeRestarts { total: u64 },
     Probe,
     Paused { reply: Reply<bool> },
     Report { reply: Reply<GuardReport> },
@@ -236,7 +236,7 @@ pub enum ToolHostMsg {
 #[derive(Debug)]
 pub enum RouterMsg {
     /// Ordered membership transition from the sessions mount alignment watch.
-    MountLifecycle(tokio_otp::LifecycleEvent),
+    MountLifecycle(tokio_otp::ChildLifecycleEvent),
     UserMessage {
         envelope: EnvelopeId,
         chat: ChatId,

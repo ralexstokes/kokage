@@ -92,7 +92,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .generation;
     orders.send("jam".to_owned()).await?;
     lifecycle
-        .started_after(&[], "worker", baseline)
+        .started_after("worker", baseline)
         .await
         .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
 

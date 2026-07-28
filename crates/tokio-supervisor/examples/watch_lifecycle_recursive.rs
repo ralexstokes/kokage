@@ -1,5 +1,8 @@
 use tokio::time::{Duration, sleep};
-use tokio_supervisor::{LifecycleEvent, prelude::*};
+use tokio_supervisor::{
+    ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind,
+    SupervisorLifecycleEvent, prelude::*,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,7 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
-            let stopped = matches!(event, LifecycleEvent::SupervisorStopped { .. });
+            let stopped = matches!(
+                event.kind,
+                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped)
+            );
             print_event(&event);
             if stopped {
                 break;
@@ -36,8 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_event(event: &LifecycleEvent) {
     let path = event
-        .supervisor_path()
-        .unwrap_or_default()
+        .supervisor_path
         .iter()
         .map(|segment| {
             format!(
@@ -49,48 +54,60 @@ fn print_event(event: &LifecycleEvent) {
         .join("/");
     let scope = if path.is_empty() { "root" } else { &path };
 
-    match event {
-        LifecycleEvent::SupervisorStarted { .. } => {
+    match &event.kind {
+        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started) => {
             println!("{scope}: supervisor started");
         }
-        LifecycleEvent::SupervisorStopping { .. } => {
+        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopping) => {
             println!("{scope}: supervisor stopping");
         }
-        LifecycleEvent::SupervisorStopped { .. } => {
+        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped) => {
             println!("{scope}: supervisor stopped");
         }
-        LifecycleEvent::Added { child_id, .. } => println!("{scope}: child added: {child_id}"),
-        LifecycleEvent::Started {
+        LifecycleEventKind::Child(ChildLifecycleEvent {
             child_id,
-            generation,
+            kind: ChildLifecycleEventKind::Added,
             ..
-        } => println!("{scope}: child started: {child_id} generation={generation}"),
-        LifecycleEvent::Exited {
+        }) => println!("{scope}: child added: {child_id}"),
+        LifecycleEventKind::Child(ChildLifecycleEvent {
             child_id,
-            generation,
-            reason,
+            kind: ChildLifecycleEventKind::Started { generation },
             ..
-        } => {
+        }) => println!("{scope}: child started: {child_id} generation={generation}"),
+        LifecycleEventKind::Child(ChildLifecycleEvent {
+            child_id,
+            kind:
+                ChildLifecycleEventKind::Exited {
+                    generation, reason, ..
+                },
+            ..
+        }) => {
             println!("{scope}: child exited: {child_id} generation={generation} reason={reason:?}")
         }
-        LifecycleEvent::Removed { child_id, .. } => {
+        LifecycleEventKind::Child(ChildLifecycleEvent {
+            child_id,
+            kind: ChildLifecycleEventKind::Removed,
+            ..
+        }) => {
             println!("{scope}: child removed: {child_id}");
         }
-        LifecycleEvent::RestartScheduled {
+        LifecycleEventKind::Child(ChildLifecycleEvent {
             child_id,
-            generation,
-            delay,
+            kind:
+                ChildLifecycleEventKind::RestartScheduled {
+                    generation, delay, ..
+                },
             ..
-        } => {
+        }) => {
             println!(
                 "{scope}: child restart scheduled: {child_id} generation={generation} delay={delay:?}"
             );
         }
-        LifecycleEvent::RestartIntensityExceeded { total_restarts, .. } => {
+        LifecycleEventKind::RestartIntensityExceeded { total_restarts, .. } => {
             println!("{scope}: restart intensity exceeded after {total_restarts} restarts");
         }
-        LifecycleEvent::Lagged { dropped } => {
-            println!("{scope}: recursive lifecycle dropped {dropped} events; resync snapshots");
+        LifecycleEventKind::Lagged { dropped } => {
+            println!("recursive lifecycle dropped {dropped} tree events; resync snapshots");
         }
         _ => println!("{scope}: unknown lifecycle event"),
     }

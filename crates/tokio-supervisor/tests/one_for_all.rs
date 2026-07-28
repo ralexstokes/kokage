@@ -8,8 +8,8 @@ use tokio::{
     time::{Duration, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-    ShutdownPolicy, Strategy, Supervisor,
+    BackoffPolicy, ChildSpec, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy,
+    Strategy, Supervisor,
 };
 
 mod common;
@@ -525,7 +525,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
             snapshot
                 .children
                 .iter()
-                .all(|child| child.state == ChildStateView::Stopped)
+                .all(|child| child.state.is_stopped())
         }),
     )
     .await
@@ -536,7 +536,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
         completed
             .children
             .iter()
-            .all(|child| { matches!(child.last_exit.as_ref(), Some(ExitStatusView::Completed)) })
+            .all(|child| { matches!(child.last_exit(), Some(ExitStatusView::Completed)) })
     );
 
     handle.shutdown();

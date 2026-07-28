@@ -11,8 +11,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ChildStateView, ControlError, ExitStatusView, RestartIntensity,
-    RestartPolicy, ScopeKind, ShutdownPolicy, Supervisor, SupervisorError, SupervisorStateView,
+    BackoffPolicy, ChildSpec, ControlError, ExitStatusView, RestartIntensity, RestartPolicy,
+    ScopeKind, ShutdownPolicy, Supervisor, SupervisorError, SupervisorStateView,
 };
 
 mod common;
@@ -36,7 +36,7 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         .wait_for(|snapshot| {
             snapshot
                 .descendant(["nested", "leaf"])
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         })
         .await
         .expect("nested completion snapshot should remain available")
@@ -46,8 +46,7 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         completed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .last_exit
-            .as_ref(),
+            .last_exit(),
         Some(ExitStatusView::Completed)
     ));
 
@@ -93,7 +92,7 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         .wait_for(|snapshot| {
             snapshot
                 .descendant(["nested", "leaf"])
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         })
         .await
         .expect("nested failure snapshot should remain available")
@@ -102,8 +101,7 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         failed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .last_exit
-            .as_ref(),
+            .last_exit(),
         Some(ExitStatusView::Failed(message)) if message.contains("nested failure")
     ));
 
@@ -561,7 +559,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .generation;
     fail_first.notify_one();
     let restarted_generation = lifecycle
-        .started_after(&[], "nested", baseline)
+        .started_after("nested", baseline)
         .await
         .expect("outer supervisor remains live");
     assert_eq!(restarted_generation, baseline + 1);
@@ -805,7 +803,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
             && snapshot.lifecycle_seq > baseline_seq
             && snapshot
                 .child("worker")
-                .is_some_and(|worker| worker.started)
+                .is_some_and(|worker| worker.started())
     })
     .await;
     assert_eq!(

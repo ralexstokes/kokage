@@ -15,7 +15,8 @@ use tokio::{
     sync::Notify,
 };
 use tokio_supervisor::{
-    BoxError, ChildSpec, LifecycleEvent, LifecycleWatch, RestartPolicy, Strategy, Supervisor,
+    BoxError, ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec, RestartPolicy, Strategy,
+    Supervisor,
 };
 
 const DEFAULT_WARMUP_ITERS: usize = 10;
@@ -164,7 +165,7 @@ async fn one_for_one_restart_flow() {
         .generation;
     trigger_failure.notify_one();
     let generation = lifecycle
-        .started_after(&[], "flaky", baseline)
+        .started_after("flaky", baseline)
         .await
         .expect("supervisor remains live during benchmark");
     black_box(generation);
@@ -251,41 +252,44 @@ async fn dynamic_add_remove_flow() {
     handle.wait().await.expect("shutdown should succeed");
 }
 
-async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize) -> usize {
+async fn wait_for_child_start_count(events: &mut ChildLifecycleWatch, expected: usize) -> usize {
     let mut started = 0;
     while started < expected {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event, LifecycleEvent::Started { .. }) {
+        if matches!(event.kind, ChildLifecycleEventKind::Started { .. }) {
             started += 1;
         }
     }
     started
 }
 
-async fn wait_for_restart_count(events: &mut LifecycleWatch, expected: usize) -> usize {
+async fn wait_for_restart_count(events: &mut ChildLifecycleWatch, expected: usize) -> usize {
     let mut restarted = 0;
     while restarted < expected {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event, LifecycleEvent::Started { generation: 1, .. }) {
+        if matches!(
+            event.kind,
+            ChildLifecycleEventKind::Started { generation: 1 }
+        ) {
             restarted += 1;
         }
     }
     restarted
 }
 
-async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
+async fn wait_for_named_child_started(events: &mut ChildLifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if event.child_id() == Some(id) && matches!(event, LifecycleEvent::Started { .. }) {
+        if event.child_id == id && matches!(event.kind, ChildLifecycleEventKind::Started { .. }) {
             return;
         }
     }
 }
 
-async fn wait_for_named_child_removed(events: &mut LifecycleWatch, id: &str) {
+async fn wait_for_named_child_removed(events: &mut ChildLifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if event.child_id() == Some(id) && matches!(event, LifecycleEvent::Removed { .. }) {
+        if event.child_id == id && matches!(event.kind, ChildLifecycleEventKind::Removed) {
             return;
         }
     }

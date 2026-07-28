@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use tokio::time::{Duration, sleep, timeout};
-use tokio_supervisor::{LifecycleEvent, prelude::*};
+use tokio_supervisor::{ChildLifecycleEventKind, prelude::*};
 
 fn example_error(message: &'static str) -> BoxError {
     Box::new(std::io::Error::other(message))
@@ -62,8 +62,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .ok_or_else(|| std::io::Error::other("nested lifecycle stream closed"))?;
         println!("nested event: {event:?}");
-        if event.child_id() == Some("nested-worker")
-            && matches!(event, LifecycleEvent::Started { generation: 1, .. })
+        if event.child_id == "nested-worker"
+            && matches!(
+                event.kind,
+                ChildLifecycleEventKind::Started { generation: 1 }
+            )
         {
             break;
         }

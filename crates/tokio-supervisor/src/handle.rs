@@ -16,7 +16,7 @@ use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
-    lifecycle::{LifecycleHub, LifecycleWatch},
+    lifecycle::{ChildLifecycleWatch, LifecycleHub, LifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
     },
@@ -375,12 +375,10 @@ impl StableSupervisorChannels {
                     id,
                     lineage: lineage as u64,
                     generation: 0,
-                    started: false,
-                    startup_aborted: false,
-                    state: ChildStateView::Starting,
+                    state: ChildStateView::Starting {
+                        previous_exit: None,
+                    },
                     membership: ChildMembershipView::Active,
-                    last_exit: None,
-                    last_exit_cancelled: false,
                     restart_count: 0,
                     next_restart_in: None,
                     supervisor: None,
@@ -841,7 +839,9 @@ mod tests {
             vec![ChildSnapshot::new(
                 "dynamic-worker",
                 0,
-                ChildStateView::Running,
+                ChildStateView::Running {
+                    previous_exit: None,
+                },
             )],
         );
         stale_snapshot.total_restarts = 7;
@@ -851,7 +851,9 @@ mod tests {
             vec![ChildSnapshot::new(
                 "static-worker",
                 0,
-                ChildStateView::Starting,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
             )],
         );
         let mut expected_snapshot = initial_snapshot.clone();
@@ -885,7 +887,9 @@ mod tests {
             vec![ChildSnapshot::new(
                 "static-worker",
                 0,
-                ChildStateView::Starting,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
             )],
         );
         let channels = StableSupervisorChannels::new(
@@ -1004,7 +1008,9 @@ mod tests {
             vec![ChildSnapshot::new(
                 "gated-worker",
                 0,
-                ChildStateView::Starting,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
             )],
         );
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -1025,7 +1031,7 @@ mod tests {
             panic!("replacement binding must be observable");
         };
         assert_eq!(observed.children.len(), 1);
-        assert!(!observed.children[0].started);
+        assert!(!observed.children[0].started());
     }
 
     #[test]
@@ -1052,7 +1058,13 @@ mod tests {
         let ancestor_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
-            vec![ChildSnapshot::new("dynamic", 0, ChildStateView::Starting)],
+            vec![ChildSnapshot::new(
+                "dynamic",
+                0,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
+            )],
         );
         let ancestor = StableSupervisorChannels::new(
             ancestor_snapshot.clone(),
@@ -1713,14 +1725,14 @@ impl SupervisorHandle {
                 .children
                 .iter()
                 .filter(|child| child.membership == ChildMembershipView::Active)
-                .all(|child| child.started)
+                .all(|child| child.state.started())
             {
                 return Ok(());
             }
             if let Some(child) = snapshot.children.iter().find(|child| {
                 child.membership == ChildMembershipView::Active
-                    && !child.started
-                    && child.startup_aborted
+                    && !child.state.started()
+                    && child.state.startup_aborted()
             }) {
                 return Err(SupervisorError::StartupAborted(format!(
                     "child `{}` exited before reporting readiness",
@@ -1749,8 +1761,7 @@ impl SupervisorHandle {
     }
 
     /// Returns an ordered, reliable stream of lifecycle transitions among
-    /// this supervisor's direct children, including restart scheduling and
-    /// restart-intensity failure.
+    /// this supervisor's direct children, including restart scheduling.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
     /// To obtain a gap-free state-plus-stream view, create the watch first,
@@ -1763,11 +1774,15 @@ impl SupervisorHandle {
     /// incarnations of this stable supervisor identity.
     ///
     /// Each watch owns a bounded buffer. Sustained overflow is represented by
-    /// [`LifecycleEvent::Lagged`](crate::LifecycleEvent::Lagged), never
-    /// silent loss. This scope does not aggregate nested supervisors; obtain a
-    /// nested handle with [`supervisor`](Self::supervisor) and watch it
-    /// separately.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    /// [`ChildLifecycleEventKind::Lagged`](crate::ChildLifecycleEventKind::Lagged), never
+    /// silent loss. Restart-intensity failure is a scope transition rather
+    /// than a direct-child transition: the direct watch drains already-staged
+    /// child events and closes without an in-band intensity marker. Use
+    /// [`watch_lifecycle_recursive`](Self::watch_lifecycle_recursive) when
+    /// that signal is required. This scope does not aggregate nested
+    /// supervisors; obtain a nested handle with [`supervisor`](Self::supervisor)
+    /// and watch it separately.
+    pub fn watch_lifecycle(&self) -> ChildLifecycleWatch {
         self.lifecycle_hub().watch()
     }
 
@@ -1775,15 +1790,16 @@ impl SupervisorHandle {
     ///
     /// Each event carries a path relative to this handle. Direct-child
     /// transitions retain the source scope's monotonic lifecycle sequence;
-    /// supervisor start/stop transitions and pending restart delays are also
+    /// scheduled restarts use the same child-event vocabulary. Supervisor
+    /// start/stop transitions and restart-intensity failures are also
     /// represented. A nested supervisor's stable identity remains attached
     /// across its own restarts and ancestor-driven recreation.
     ///
     /// Each watch owns one bounded buffer for the whole tree. Sustained
     /// overflow is represented by a tree-wide
-    /// [`LifecycleEvent::Lagged`](crate::LifecycleEvent::Lagged)
-    /// marker. Consumers maintaining derived state should then resynchronize
-    /// from [`snapshot`](Self::snapshot).
+    /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged)
+    /// marker with an empty supervisor path. Consumers maintaining derived
+    /// state should then resynchronize from [`snapshot`](Self::snapshot).
     pub fn watch_lifecycle_recursive(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch_recursive()
     }
@@ -1817,7 +1833,7 @@ impl SupervisorHandle {
     ///         snapshot
     ///             .children
     ///             .iter()
-    ///             .all(|child| child.state == ChildStateView::Running)
+    ///             .all(|child| child.state.is_running())
     ///     })
     ///     .await?;
     /// # handle.shutdown();

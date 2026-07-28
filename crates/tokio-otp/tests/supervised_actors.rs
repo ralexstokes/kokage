@@ -15,9 +15,7 @@ use tokio_otp::{
     ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
     SendError, SupervisionTree,
 };
-use tokio_supervisor::{
-    BackoffPolicy, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy, Strategy,
-};
+use tokio_supervisor::{BackoffPolicy, ExitStatusView, RestartIntensity, RestartPolicy, Strategy};
 
 fn oneshot_slot<T>(tx: oneshot::Sender<T>) -> Arc<Mutex<Option<oneshot::Sender<T>>>> {
     Arc::new(Mutex::new(Some(tx)))
@@ -279,7 +277,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         snapshots.wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         }),
     )
     .await
@@ -290,9 +288,8 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit
-            .as_ref(),
-        Some(ExitStatusView::Completed)
+            .last_exit(),
+        Some(&ExitStatusView::Completed)
     ));
 
     handle.shutdown();

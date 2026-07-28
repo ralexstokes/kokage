@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_otp::{ChildStateView, LifecycleEvent, prelude::*};
+use tokio_otp::{
+    ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind, prelude::*,
+};
 
 #[allow(unused_imports)]
 mod coverage_probe {
@@ -18,14 +20,16 @@ mod coverage_probe {
     mod advanced_root {
         use tokio_otp::{
             AddSubtreeError, BackoffPolicy, BlockingCancelled, CancellationHandle,
-            CancellationToken, ChildMembershipView, ChildOutline, ChildSnapshot, ChildSpec,
+            CancellationToken, ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind,
+            ChildLifecycleWatch, ChildMembershipView, ChildOutline, ChildSnapshot, ChildSpec,
             ChildStateView, CompletionOutcome, ControlError, DEFAULT_SHUTDOWN_BOUND, Down,
             DownReason, DrainPolicy, DynamicScope, ExitStatusView, Graph, GraphBuildError,
-            GraphLookupError, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
-            LifecycleWatchGuard, Lifetime, MailboxMode, MessageSize, MonitorEvent, OffloadDeadline,
-            OffloadHandle, ReservedSupervisionTree, RestrictedScope, ScopeKind,
+            GraphLookupError, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
+            LifecycleWatch, LifecycleWatchGuard, Lifetime, MailboxMode, MessageSize, MonitorEvent,
+            OffloadDeadline, OffloadHandle, ReservedSupervisionTree, RestrictedScope, ScopeKind,
             SupervisionFactories, SupervisionOutline, SupervisorBuildError, SupervisorError,
-            SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView, TimerKey, TrySendError,
+            SupervisorLifecycleEvent, SupervisorPathSegment, SupervisorSnapshot,
+            SupervisorStateView, TimerKey, TrySendError,
         };
         use tokio_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
@@ -128,9 +132,12 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event,
-                LifecycleEvent::Started {
-                    ref child_id,
-                    generation: 0,
+                LifecycleEvent {
+                    kind: LifecycleEventKind::Child(ChildLifecycleEvent {
+                        ref child_id,
+                        kind: ChildLifecycleEventKind::Started { generation: 0 },
+                        ..
+                    }),
                     ..
                 } if child_id == "worker"
             ) {
@@ -142,20 +149,23 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     .expect("timed out waiting for started event");
     assert!(matches!(
         started,
-        LifecycleEvent::Started {
-            ref child_id,
-            generation: 0,
+        LifecycleEvent {
+            kind: LifecycleEventKind::Child(ChildLifecycleEvent {
+                ref child_id,
+                kind: ChildLifecycleEventKind::Started { generation: 0 },
+                ..
+            }),
             ..
         } if child_id == "worker"
     ));
 
     let snapshot = handle.snapshot();
-    assert_eq!(
+    assert!(
         snapshot
             .child("worker")
             .expect("worker child should exist")
-            .state,
-        ChildStateView::Running
+            .state
+            .is_running()
     );
 
     handle

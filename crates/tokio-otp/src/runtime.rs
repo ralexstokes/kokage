@@ -10,9 +10,10 @@ use crate::{
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
-    AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
-    LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
-    SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    AttachedChildIdentity, ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard,
+    CompletionOutcome, ControlError, LifecycleWatch, RestartIntensity, RestartPolicy,
+    ShutdownPolicy, Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -311,13 +312,13 @@ impl Drop for LifecycleWatchGuard {
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
-    mut lifecycle: LifecycleWatch,
+    mut lifecycle: ChildLifecycleWatch,
     target: ActorRef<M>,
     mut map: F,
 ) -> LifecycleWatchGuard
 where
     M: Send + 'static,
-    F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
 {
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
@@ -677,7 +678,7 @@ impl RuntimeHandle {
     }
 
     /// Returns the ordered lifecycle stream for this runtime's direct
-    /// children, including restart scheduling and restart-intensity failure.
+    /// children, including restart scheduling.
     ///
     /// Create the watch before reading [`snapshot`](Self::snapshot), then
     /// discard child transitions whose `seq` is at most the snapshot's
@@ -685,7 +686,7 @@ impl RuntimeHandle {
     /// already project configured children, so reducers should apply their
     /// later `Added` events as idempotent membership upserts. Use a
     /// [`subtree`](Self::subtree) handle for nested scopes.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    pub fn watch_lifecycle(&self) -> ChildLifecycleWatch {
         self.supervisor.watch_lifecycle()
     }
 
@@ -714,7 +715,7 @@ impl RuntimeHandle {
     pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> LifecycleWatchGuard
     where
         M: Send + 'static,
-        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+        F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
     {
         spawn_lifecycle_watch_to(self.watch_lifecycle(), target.clone(), map)
     }

@@ -171,9 +171,10 @@ its [`ShutdownPolicy`] governs how:
 - **`ShutdownPolicy::cooperative(grace)`** (default, 5 s grace) — cancel
   the child's token and wait up to `grace` for a voluntary exit. On shutdown
   or removal, abort *and report a timeout error* otherwise; callers that only
-  need best-effort cleanup may explicitly ignore that error. During a group
-  restart, grace expiry escalates the old generation to abort and the restart
-  continues once the old task exits.
+  need best-effort cleanup may explicitly ignore that error. The child's
+  lifecycle exit is `Aborted { after_grace: true }`. During a group restart,
+  grace expiry escalates the old generation to abort and the restart continues
+  once the old task exits.
 - **`ShutdownPolicy::abort()`** — abort immediately.
 
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
@@ -202,16 +203,16 @@ A supervised actor has one user-facing shutdown deadline: its child
 queued messages, outstanding offloads, and `on_stop`. Offload deadlines remain
 independent bounds on individual offloads; they do not extend the child grace.
 
-When a cooperative grace expires, the supervisor records a
-`ShutdownTimedOut` exit and signals the actor wrapper's tidy-abort path. The
+When a cooperative grace expires, the supervisor records an
+`Aborted { after_grace: true }` exit and signals the actor wrapper's tidy-abort path. The
 wrapper aborts and joins the inner actor task, terminates its mailbox binding,
 and publishes actor observability before returning. If the wrapper does not
 finish within a short accounting beat — a tenth of the child's own grace,
 clamped to between 1 ms and 10 ms — the supervisor hard-aborts it.
 The enclosing shutdown or removal reports the timeout, and snapshots and
-lifecycle streams expose the same truthful `ShutdownTimedOut` reason. A group
-restart records that exit reason too, but treats the expiry as successful
-escalation once the old task has actually terminated.
+lifecycle streams expose the same truthful `Aborted { after_grace: true }`
+reason. A group restart records that exit reason too, but treats the expiry as
+successful escalation once the old task has actually terminated.
 
 Ordered scopes stop children in reverse declaration order and give each child
 its complete grace, plus that child's accounting beat if it times out. Dynamic
@@ -259,7 +260,7 @@ of its own accord and no restart is pending for it. Three consequences follow:
   new generation.
 - A child cancelled by shutdown, removal, or a group restart can still return
   `Ok(())`. That is not finished work, and it does not count.
-  [`LifecycleEvent::Exited`] reports it as `cancelled`.
+  [`ChildLifecycleEventKind::Exited`] reports it as `cancelled`.
 
 Nested supervisors need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
@@ -325,5 +326,5 @@ actors](dynamic-actors.md) chapter.
 [`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ShutdownPolicy.html
 [`shutdown_on_completion`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
 [`wait_completed`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.wait_completed
-[`LifecycleEvent::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.LifecycleEvent.html#variant.Exited
+[`ChildLifecycleEventKind::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ChildLifecycleEventKind.html#variant.Exited
 [`agent_control` example]: https://github.com/ralexstokes/tokio-otp/tree/main/crates/tokio-otp/examples/agent_control

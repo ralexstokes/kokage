@@ -73,11 +73,11 @@ fn print_child_snapshot(child: &ChildSnapshot, depth: usize) {
         "{indent}child id={} generation={} state={} membership={} restarts={} next_restart_in={:?} last_exit={:?}",
         child.id,
         child.generation,
-        child_state(child.state),
+        child_state(&child.state),
         child_membership(child.membership),
         child.restart_count,
         child.next_restart_in,
-        child.last_exit
+        child.last_exit()
     );
 
     if let Some(snapshot) = child.supervisor.as_ref() {
@@ -85,12 +85,13 @@ fn print_child_snapshot(child: &ChildSnapshot, depth: usize) {
     }
 }
 
-fn child_state(state: ChildStateView) -> &'static str {
+fn child_state(state: &ChildStateView) -> &'static str {
     match state {
-        ChildStateView::Starting => "starting",
-        ChildStateView::Running => "running",
-        ChildStateView::Stopping => "stopping",
-        ChildStateView::Stopped => "stopped",
+        ChildStateView::Starting { .. } => "starting",
+        ChildStateView::Running { .. } => "running",
+        ChildStateView::Stopping { .. } => "stopping",
+        ChildStateView::Stopped { .. } => "stopped",
+        ChildStateView::StartupAborted { .. } => "startup-aborted",
         _ => "unknown",
     }
 }

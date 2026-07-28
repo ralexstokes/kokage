@@ -40,14 +40,14 @@ async fn transient_child_panic_causes_restart() {
     let handle = supervisor.spawn();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
-    assert_eq!(
+    assert!(matches!(
         handle
             .snapshot()
             .child("panic-worker")
             .expect("panic worker remains visible")
-            .last_exit,
+            .last_exit(),
         Some(ExitStatusView::Panicked)
-    );
+    ));
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -101,7 +101,10 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     trigger_failure.notify_one();
     assert_eq!(common::recv_event(&mut peer_starts_rx).await, 1);
     let peer = common::wait_for_child_running(&mut snapshots, "abort-peer", 1).await;
-    assert_eq!(peer.last_exit, Some(ExitStatusView::Aborted));
+    assert!(matches!(
+        peer.last_exit(),
+        Some(ExitStatusView::Aborted { after_grace: false })
+    ));
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");

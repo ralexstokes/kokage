@@ -1539,7 +1539,7 @@ impl RestrictedScope {
     }
 
     /// Observes lifecycle transitions of this scope's direct children.
-    pub fn watch_lifecycle(&self) -> tokio_supervisor::LifecycleWatch {
+    pub fn watch_lifecycle(&self) -> tokio_supervisor::ChildLifecycleWatch {
         self.handle.watch_lifecycle()
     }
 
@@ -1561,7 +1561,7 @@ impl RestrictedScope {
     ) -> crate::LifecycleWatchGuard
     where
         M: Send + 'static,
-        F: FnMut(tokio_supervisor::LifecycleEvent) -> M + Send + 'static,
+        F: FnMut(tokio_supervisor::ChildLifecycleEvent) -> M + Send + 'static,
     {
         self.handle.watch_lifecycle_to(target, map)
     }

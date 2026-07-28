@@ -8,17 +8,18 @@ use tokio::{
     time::{Duration, Instant, sleep, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ControlError, ExitStatusView, LifecycleEvent, LifecycleWatch,
-    RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor, SupervisorError,
+    BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec,
+    ControlError, ExitStatusView, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
+    SupervisorError,
 };
 
 mod common;
 use common::ObservedEvent;
 
 async fn next_lifecycle_event(
-    lifecycle: &mut LifecycleWatch,
+    lifecycle: &mut ChildLifecycleWatch,
     phase: &str,
-) -> Option<LifecycleEvent> {
+) -> Option<ChildLifecycleEvent> {
     timeout(common::EVENT_TIMEOUT, lifecycle.next())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -387,8 +388,8 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     );
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "wrapper timeout exit").await {
-        if let LifecycleEvent::Exited { reason, .. } = event {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+        if let ChildLifecycleEventKind::Exited { reason, .. } = event.kind {
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             return;
         }
     }
@@ -450,10 +451,10 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "dynamic child timeout exit").await
     {
-        if event.child_id() == Some("short")
-            && let LifecycleEvent::Exited { reason, .. } = event
+        if event.child_id == "short"
+            && let ChildLifecycleEventKind::Exited { reason, .. } = event.kind
         {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             return;
         }
     }
@@ -513,10 +514,10 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         let event = next_lifecycle_event(&mut lifecycle, "drop-triggered child exit")
             .await
             .expect("keeper keeps scope live");
-        if event.child_id() == Some("stubborn")
-            && let LifecycleEvent::Exited { reason, .. } = event
+        if event.child_id == "stubborn"
+            && let ChildLifecycleEventKind::Exited { reason, .. } = event.kind
         {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             break;
         }
     }
@@ -749,8 +750,8 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
             .next()
             .await
             .expect("staged lifecycle exits remain available");
-        if let LifecycleEvent::Exited { child_id, .. } = event {
-            exited.push(child_id);
+        if matches!(event.kind, ChildLifecycleEventKind::Exited { .. }) {
+            exited.push(event.child_id);
         }
     }
     assert_eq!(exited, ["third", "second", "first"]);

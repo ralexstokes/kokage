@@ -327,7 +327,7 @@ async fn build_app() -> Result<App, AnyError> {
     // return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, |event| GuardMsg::BridgeRestarts {
-        total: event.total_restarts(),
+        total: event.total_restarts,
     });
 
     Ok(App {

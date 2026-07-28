@@ -77,26 +77,11 @@ pub struct ChildSnapshot {
     pub lineage: u64,
     /// Current generation counter. Incremented on each restart.
     pub generation: u64,
-    /// Whether this child has reported readiness in its current generation.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub started: bool,
-    /// Whether this generation exited permanently before reporting readiness.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub startup_aborted: bool,
-    /// Current lifecycle state.
+    /// Current lifecycle state, including readiness and prior-exit details
+    /// that are meaningful for that state.
     pub state: ChildStateView,
     /// Whether the child is active or being removed.
     pub membership: ChildMembershipView,
-    /// How the child last exited, if it has exited at least once.
-    pub last_exit: Option<ExitStatusView>,
-    /// Whether [`last_exit`](Self::last_exit) was the supervisor stopping the
-    /// child rather than the child reaching its own conclusion.
-    ///
-    /// See [`LifecycleEvent::Exited`](crate::LifecycleEvent::Exited)
-    /// for why a cancelled child can still report
-    /// [`ExitStatusView::Completed`].
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub last_exit_cancelled: bool,
     /// Total number of times this child has been restarted.
     pub restart_count: u64,
     /// Time remaining until the next scheduled restart, if a backoff delay is
@@ -163,16 +148,27 @@ impl ChildSnapshot {
             id: id.into(),
             lineage: 0,
             generation,
-            started: false,
-            startup_aborted: false,
             state,
             membership: ChildMembershipView::Active,
-            last_exit: None,
-            last_exit_cancelled: false,
             restart_count: 0,
             next_restart_in: None,
             supervisor: None,
         }
+    }
+    /// Returns whether the current generation reported readiness.
+    pub fn started(&self) -> bool {
+        self.state.started()
+    }
+
+    /// Returns the newest observed exit status, if any.
+    pub fn last_exit(&self) -> Option<&ExitStatusView> {
+        self.state.last_exit().map(|exit| &exit.status)
+    }
+
+    /// Returns whether the newest observed exit was initiated by the
+    /// supervisor.
+    pub fn last_exit_cancelled(&self) -> Option<bool> {
+        self.state.last_exit().map(|exit| exit.cancelled)
     }
 }
 
@@ -189,20 +185,116 @@ pub enum SupervisorStateView {
     Stopped,
 }
 
+/// Public details of a child generation's exit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ChildExitView {
+    /// Public classification of the exit.
+    pub status: ExitStatusView,
+    /// Whether the supervisor stopped the generation instead of the child
+    /// reaching its own conclusion.
+    pub cancelled: bool,
+}
+
+impl ChildExitView {
+    /// Creates public details for one child generation's exit.
+    ///
+    /// This is primarily useful for adapters and tests that construct
+    /// [`ChildSnapshot`] values outside this crate.
+    pub fn new(status: ExitStatusView, cancelled: bool) -> Self {
+        Self { status, cancelled }
+    }
+}
+
 /// Lifecycle state of a child task.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// State-specific data is nested here so snapshots cannot encode impossible
+/// combinations such as a running child whose startup was aborted.
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum ChildStateView {
     /// The child has been created but its task has not yet started running.
-    Starting,
+    Starting {
+        /// Exit of the preceding generation, when this is a restart.
+        previous_exit: Option<ChildExitView>,
+    },
     /// The child task is running.
-    Running,
+    Running {
+        /// Exit of the preceding generation, when this is a restart.
+        previous_exit: Option<ChildExitView>,
+    },
     /// The child is in the process of being stopped (token cancelled, waiting
     /// for exit).
-    Stopping,
+    Stopping {
+        /// Whether this generation reported readiness before stopping began.
+        started: bool,
+        /// Exit of the preceding generation, when this generation is a restart.
+        previous_exit: Option<ChildExitView>,
+    },
     /// The child has exited.
-    Stopped,
+    Stopped {
+        /// Whether this generation reported readiness before it stopped.
+        started: bool,
+        /// Exit of this generation, or `None` if it was never spawned.
+        exit: Option<ChildExitView>,
+    },
+    /// The child stopped permanently before reporting readiness.
+    StartupAborted {
+        /// Exit of this generation.
+        exit: ChildExitView,
+    },
+}
+
+impl ChildStateView {
+    /// Returns whether the child is waiting to report readiness.
+    pub fn is_starting(&self) -> bool {
+        matches!(self, Self::Starting { .. })
+    }
+
+    /// Returns whether the child is running.
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    /// Returns whether the child is stopping.
+    pub fn is_stopping(&self) -> bool {
+        matches!(self, Self::Stopping { .. })
+    }
+
+    /// Returns whether the child is stopped.
+    pub fn is_stopped(&self) -> bool {
+        matches!(self, Self::Stopped { .. } | Self::StartupAborted { .. })
+    }
+
+    /// Returns whether the current generation reported readiness.
+    pub fn started(&self) -> bool {
+        match self {
+            Self::Starting { .. } => false,
+            Self::Running { .. } => true,
+            Self::Stopping { started, .. } => *started,
+            Self::Stopped { started, .. } => *started,
+            Self::StartupAborted { .. } => false,
+        }
+    }
+
+    /// Returns whether the current generation ended permanently before
+    /// reporting readiness.
+    pub fn startup_aborted(&self) -> bool {
+        matches!(self, Self::StartupAborted { .. })
+    }
+
+    /// Returns the newest observed exit, if any.
+    pub fn last_exit(&self) -> Option<&ChildExitView> {
+        match self {
+            Self::Starting { previous_exit }
+            | Self::Running { previous_exit }
+            | Self::Stopping { previous_exit, .. } => previous_exit.as_ref(),
+            Self::Stopped { exit, .. } => exit.as_ref(),
+            Self::StartupAborted { exit } => Some(exit),
+        }
+    }
 }
 
 /// Whether a child is a permanent member of the supervisor or is being removed.
@@ -340,9 +432,14 @@ mod tests {
     fn lineage_is_required_when_deserializing() {
         use super::{ChildSnapshot, ChildStateView};
 
-        let mut value =
-            serde_json::to_value(ChildSnapshot::new("worker", 0, ChildStateView::Running))
-                .expect("child snapshot serializes");
+        let mut value = serde_json::to_value(ChildSnapshot::new(
+            "worker",
+            0,
+            ChildStateView::Running {
+                previous_exit: None,
+            },
+        ))
+        .expect("child snapshot serializes");
         value
             .as_object_mut()
             .expect("child snapshot serializes as an object")

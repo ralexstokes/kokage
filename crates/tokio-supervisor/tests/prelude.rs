@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_supervisor::{BackoffPolicy, ChildStateView, prelude::*};
+use tokio_supervisor::{BackoffPolicy, prelude::*};
 
 mod common;
 use common::ObservedEvent;
@@ -102,12 +102,12 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
     ));
 
     let snapshot = handle.snapshot();
-    assert_eq!(
+    assert!(
         snapshot
             .child("worker")
             .expect("worker child should exist")
-            .state,
-        ChildStateView::Running
+            .state
+            .is_running()
     );
 
     handle

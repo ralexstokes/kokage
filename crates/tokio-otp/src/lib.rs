@@ -305,10 +305,11 @@ pub use supervision_derive::{DynamicScope, Supervision, SupervisionFactories};
 #[doc(hidden)]
 pub use tokio_supervisor::{AttachedChild, AttachedChildIdentity};
 pub use tokio_supervisor::{
-    BackoffPolicy, BoxError, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
+    BackoffPolicy, BoxError, ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind,
+    ChildLifecycleWatch, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
     CompletionGuard, CompletionOutcome, ControlError, ExitStatusView, LifecycleEvent,
-    LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorSnapshot,
-    SupervisorStateView,
+    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
+    ScopeKind, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
+    SupervisorLifecycleEvent, SupervisorSnapshot, SupervisorStateView,
 };
 pub use tokio_util::sync::CancellationToken;

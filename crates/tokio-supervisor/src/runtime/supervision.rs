@@ -23,16 +23,17 @@ use crate::{
         StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
     },
     lifecycle::{
-        ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft, LifecycleHub,
-        LifecyclePathSegment, LifecycleTreeSink,
+        ChildLifecycleEventKind as ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft,
+        LifecycleEventKind, LifecycleHub, LifecyclePathSegment, LifecycleTreeSink,
+        SupervisorLifecycleEvent,
     },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartIntensity, RestartPolicy},
     scope::ScopeKind,
     shutdown::ShutdownPolicy,
     snapshot::{
-        ChildMembershipView, ChildSnapshot, ChildStateView, NestedSnapshotNotification,
-        NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
+        ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,
+        NestedSnapshotNotification, NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
     },
     strategy::Strategy,
     supervisor::{ParentLink, SupervisorConfig},
@@ -1394,6 +1395,13 @@ impl SupervisorRuntime {
                 total_restarts: self.total_restarts,
                 child_restart_count: entry.runtime.restart_tracker.total_restarts(),
             });
+            self.send_lifecycle(
+                classified.key,
+                ChildLifecycleEvent::RestartScheduled {
+                    generation: previous_generation,
+                    delay,
+                },
+            );
         } else if allow_restart {
             let lineage = self.children[classified.key].lineage;
             let startup_aborted = !self.children[classified.key].runtime.has_reported_ready;
@@ -1867,40 +1875,24 @@ impl SupervisorRuntime {
             .observability
             .emit_event(&event, self.running_child_count(), child_path);
         let lifecycle = match &event {
-            RuntimeEvent::SupervisorStarted => Some(LifecycleEvent::SupervisorStarted {
-                supervisor_path: Vec::new(),
-            }),
-            RuntimeEvent::SupervisorStopping => Some(LifecycleEvent::SupervisorStopping {
-                supervisor_path: Vec::new(),
-            }),
-            RuntimeEvent::SupervisorStopped => Some(LifecycleEvent::SupervisorStopped {
-                supervisor_path: Vec::new(),
-            }),
-            RuntimeEvent::ChildRestartScheduled {
-                id,
-                lineage,
-                generation,
-                delay,
-                total_restarts,
-                child_restart_count,
-            } => Some(LifecycleEvent::RestartScheduled {
-                supervisor_path: Vec::new(),
-                child_id: id.clone(),
-                lineage: *lineage,
-                generation: *generation,
-                delay: *delay,
-                total_restarts: *total_restarts,
-                child_restart_count: *child_restart_count,
-            }),
-            RuntimeEvent::RestartIntensityExceeded => {
-                Some(LifecycleEvent::RestartIntensityExceeded {
-                    supervisor_path: Vec::new(),
+            RuntimeEvent::SupervisorStarted => Some(LifecycleEvent::local(
+                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started),
+            )),
+            RuntimeEvent::SupervisorStopping => Some(LifecycleEvent::local(
+                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopping),
+            )),
+            RuntimeEvent::SupervisorStopped => Some(LifecycleEvent::local(
+                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped),
+            )),
+            RuntimeEvent::RestartIntensityExceeded => Some(LifecycleEvent::local(
+                LifecycleEventKind::RestartIntensityExceeded {
                     total_restarts: self.total_restarts,
-                })
-            }
+                },
+            )),
             RuntimeEvent::ChildStarted { .. }
             | RuntimeEvent::ChildRemoved { .. }
             | RuntimeEvent::ChildExited { .. }
+            | RuntimeEvent::ChildRestartScheduled { .. }
             | RuntimeEvent::ChildRestarted { .. } => None,
         };
         if let Some(lifecycle) = lifecycle {
@@ -1967,27 +1959,46 @@ impl SupervisorRuntime {
                 continue;
             };
 
+            let last_exit = entry
+                .last_exit
+                .clone()
+                .map(|status| ChildExitView::new(status, entry.last_exit_cancelled));
             children.push(ChildSnapshot {
                 id: entry.id.clone(),
                 lineage: entry.lineage,
                 generation: entry.runtime.generation,
-                started: entry.runtime.has_reported_ready,
-                startup_aborted: entry.runtime.startup_aborted,
                 state: match entry.runtime.state {
                     RuntimeChildState::StartQueued | RuntimeChildState::Starting => {
-                        ChildStateView::Starting
+                        ChildStateView::Starting {
+                            previous_exit: last_exit,
+                        }
                     }
-                    RuntimeChildState::Running => ChildStateView::Running,
-                    RuntimeChildState::Stopping => ChildStateView::Stopping,
-                    RuntimeChildState::Stopped => ChildStateView::Stopped,
+                    RuntimeChildState::Running => ChildStateView::Running {
+                        previous_exit: last_exit,
+                    },
+                    RuntimeChildState::Stopping => ChildStateView::Stopping {
+                        started: entry.runtime.has_reported_ready,
+                        previous_exit: last_exit,
+                    },
+                    RuntimeChildState::Stopped if entry.runtime.startup_aborted => {
+                        match last_exit {
+                            Some(exit) => ChildStateView::StartupAborted { exit },
+                            None => ChildStateView::Stopped {
+                                started: false,
+                                exit: None,
+                            },
+                        }
+                    }
+                    RuntimeChildState::Stopped => ChildStateView::Stopped {
+                        started: entry.runtime.has_reported_ready,
+                        exit: last_exit,
+                    },
                 },
                 membership: match entry.membership {
                     MembershipState::Active => ChildMembershipView::Active,
                     MembershipState::Removing => ChildMembershipView::Removing,
                     MembershipState::Removed => unreachable!("removed children filtered"),
                 },
-                last_exit: entry.last_exit.clone(),
-                last_exit_cancelled: entry.last_exit_cancelled,
                 restart_count: entry.runtime.restart_tracker.total_restarts(),
                 next_restart_in: entry
                     .runtime
@@ -2090,9 +2101,17 @@ fn counts_as_running(membership: MembershipState, state: RuntimeChildState) -> b
 }
 
 fn event_updates_snapshot(event: &RuntimeEvent) -> bool {
+    // `ChildRestartScheduled` is published by the immediately following
+    // sequenced lifecycle emission, after that emission assigns its sequence.
+    // Scheduling runs only for a live child in a running, non-terminal scope,
+    // so `send_lifecycle` must have both a draft and an open hub. Keeping that
+    // single aligned publication avoids exposing an intermediate snapshot
+    // whose restart deadline is set but whose `lifecycle_seq` is stale.
     !matches!(
         event,
-        RuntimeEvent::SupervisorStarted | RuntimeEvent::ChildRestarted { .. }
+        RuntimeEvent::SupervisorStarted
+            | RuntimeEvent::ChildRestartScheduled { .. }
+            | RuntimeEvent::ChildRestarted { .. }
     )
 }
 
@@ -2460,8 +2479,8 @@ mod tests {
             .expect("started event arrives")
             .expect("lifecycle remains open");
         assert!(matches!(
-            started,
-            LifecycleEvent::Started { generation: 2, .. }
+            started.kind,
+            ChildLifecycleEvent::Started { generation: 2 }
         ));
     }
 

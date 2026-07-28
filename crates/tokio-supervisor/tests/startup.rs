@@ -671,7 +671,14 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
             .unwrap(),
         Err(tokio_supervisor::SupervisorError::StartupAborted(_))
     ));
-    assert!(handle.snapshot().child("never").unwrap().startup_aborted);
+    assert!(
+        handle
+            .snapshot()
+            .child("never")
+            .unwrap()
+            .state
+            .startup_aborted()
+    );
     common::shutdown_and_wait(&handle, "drained pre-ready child test shutdown")
         .await
         .unwrap();

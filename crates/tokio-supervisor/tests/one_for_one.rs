@@ -8,8 +8,7 @@ use tokio::{
     time::{Duration, sleep, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy,
-    Strategy, Supervisor,
+    BackoffPolicy, ChildSpec, ExitStatusView, RestartIntensity, RestartPolicy, Strategy, Supervisor,
 };
 
 mod common;
@@ -239,7 +238,7 @@ async fn temporary_child_does_not_restart() {
         snapshots.wait_for(|snapshot| {
             snapshot
                 .child("temporary")
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         }),
     )
     .await
@@ -250,8 +249,7 @@ async fn temporary_child_does_not_restart() {
         stopped
             .child("temporary")
             .expect("temporary child remains visible")
-            .last_exit
-            .as_ref(),
+            .last_exit(),
         Some(ExitStatusView::Failed(message)) if message.contains("no restart")
     ));
 

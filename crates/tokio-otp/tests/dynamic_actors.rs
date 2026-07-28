@@ -161,7 +161,7 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
             if snapshots
                 .borrow()
                 .child(id)
-                .is_some_and(|child| child.last_exit.is_some())
+                .is_some_and(|child| child.last_exit().is_some())
             {
                 return;
             }
@@ -188,7 +188,7 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
         handle
             .snapshot()
             .child(id)
-            .is_some_and(|child| child.last_exit.is_some()),
+            .is_some_and(|child| child.last_exit().is_some()),
         "terminal child stays retained once the control loop has settled"
     );
 }

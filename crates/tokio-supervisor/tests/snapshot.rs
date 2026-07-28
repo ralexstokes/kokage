@@ -11,14 +11,29 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView,
-    RestartIntensity, RestartPolicy, ScopeKind, Supervisor, SupervisorSnapshot,
+    BackoffPolicy, ChildExitView, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
+    ExitStatusView, RestartIntensity, RestartPolicy, ScopeKind, Supervisor, SupervisorSnapshot,
     SupervisorStateView,
 };
 
 mod common;
 
 use common::{ObservedEvent, wait_for_snapshot};
+
+#[test]
+fn public_exit_constructor_builds_an_external_stopped_snapshot() {
+    let child = ChildSnapshot::new(
+        "worker",
+        4,
+        ChildStateView::Stopped {
+            started: true,
+            exit: Some(ChildExitView::new(ExitStatusView::Completed, false)),
+        },
+    );
+
+    assert_eq!(child.last_exit(), Some(&ExitStatusView::Completed));
+    assert_eq!(child.last_exit_cancelled(), Some(false));
+}
 
 #[tokio::test]
 async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
@@ -44,7 +59,7 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
     assert_eq!(snapshot.children[1].lineage, 1);
     for entry in &snapshot.children {
         assert_eq!(entry.membership, ChildMembershipView::Active);
-        assert_eq!(entry.last_exit, None);
+        assert_eq!(entry.last_exit(), None);
         assert_eq!(entry.restart_count, 0);
         assert_eq!(entry.next_restart_in, None);
     }
@@ -158,10 +173,10 @@ async fn snapshot_shows_restart_state_and_last_exit() {
 
     let restarting = wait_for_snapshot(&mut snapshots, |snapshot| {
         child(snapshot, "flaky").is_some_and(|child| {
-            child.state == ChildStateView::Stopped
+            child.state.is_stopped()
                 && child.restart_count == 1
                 && matches!(
-                    child.last_exit.as_ref(),
+                    child.last_exit(),
                     Some(ExitStatusView::Failed(message)) if message.contains("boom")
                 )
                 && child.next_restart_in.is_some()
@@ -181,7 +196,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     let running_again = wait_for_snapshot(&mut snapshots, |snapshot| {
         child(snapshot, "flaky").is_some_and(|child| {
             child.generation == 1
-                && child.state == ChildStateView::Running
+                && child.state.is_running()
                 && child.restart_count == 1
                 && child.next_restart_in.is_none()
         })
@@ -190,8 +205,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     assert!(matches!(
         child(&running_again, "flaky")
             .expect("flaky child should exist")
-            .last_exit
-            .as_ref(),
+            .last_exit(),
         Some(ExitStatusView::Failed(message)) if message.contains("boom")
     ));
     assert_eq!(
@@ -251,14 +265,13 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
 
     let removing = wait_for_snapshot(&mut snapshots, |snapshot| {
         child(snapshot, "removable").is_some_and(|entry| {
-            entry.membership == ChildMembershipView::Removing
-                && entry.state == ChildStateView::Stopping
+            entry.membership == ChildMembershipView::Removing && entry.state.is_stopping()
         })
     })
     .await;
     let removable = child(&removing, "removable").expect("removable child should exist");
     assert_eq!(removable.membership, ChildMembershipView::Removing);
-    assert_eq!(removable.state, ChildStateView::Stopping);
+    assert!(removable.state.is_stopping());
 
     release.notify_one();
     remove_task
@@ -308,11 +321,11 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
 
     let snapshot = wait_for_snapshot(&mut snapshots, |snapshot| {
         child(snapshot, "nested").is_some_and(|entry| {
-            entry.state == ChildStateView::Running
+            entry.state.is_running()
                 && entry.supervisor.as_ref().is_some_and(|nested| {
                     nested.state == SupervisorStateView::Running
                         && child(nested, "leaf").is_some_and(|leaf| {
-                            leaf.state == ChildStateView::Running
+                            leaf.state.is_running()
                                 && leaf.membership == ChildMembershipView::Active
                         })
                 })
@@ -345,7 +358,7 @@ async fn stopped_snapshot_remains_available_after_shutdown() {
     let mut snapshots = handle.subscribe_snapshots();
 
     let _ = wait_for_snapshot(&mut snapshots, |snapshot| {
-        child(snapshot, "worker").is_some_and(|child| child.state == ChildStateView::Running)
+        child(snapshot, "worker").is_some_and(|child| child.state.is_running())
     })
     .await;
 
@@ -354,11 +367,11 @@ async fn stopped_snapshot_remains_available_after_shutdown() {
 
     let snapshot = handle.snapshot();
     assert_eq!(snapshot.state, SupervisorStateView::Stopped);
-    assert_eq!(
+    assert!(
         child(&snapshot, "worker")
             .expect("worker child should remain visible")
-            .state,
-        ChildStateView::Stopped
+            .state
+            .is_stopped()
     );
 }
 
@@ -384,7 +397,7 @@ async fn snapshot_reports_stopping_while_shutdown_drains_children() {
     let handle = supervisor.spawn();
     let mut snapshots = handle.subscribe_snapshots();
     let _ = wait_for_snapshot(&mut snapshots, |snapshot| {
-        child(snapshot, "worker").is_some_and(|child| child.state == ChildStateView::Running)
+        child(snapshot, "worker").is_some_and(|child| child.state.is_running())
     })
     .await;
 
@@ -416,15 +429,14 @@ async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
         snapshot
             .children
             .iter()
-            .all(|child| child.state == ChildStateView::Stopped)
+            .all(|child| child.state.is_stopped())
     })
     .await;
     assert_eq!(snapshot.state, SupervisorStateView::Running);
     assert!(matches!(
         child(&snapshot, "temporary")
             .expect("temporary child should remain visible")
-            .last_exit
-            .as_ref(),
+            .last_exit(),
         Some(ExitStatusView::Completed)
     ));
 
@@ -459,7 +471,7 @@ async fn events_observe_already_published_snapshot_state() {
                 let worker = child(&snapshot, "worker").expect("worker child should exist");
                 assert_eq!(snapshot.state, SupervisorStateView::Running);
                 assert_eq!(worker.generation, 0);
-                assert_eq!(worker.state, ChildStateView::Running);
+                assert!(worker.state.is_running());
                 break;
             }
             _ => {}
@@ -477,11 +489,11 @@ async fn events_observe_already_published_snapshot_state() {
         {
             let snapshot = handle.snapshot();
             assert_eq!(snapshot.state, SupervisorStateView::Stopped);
-            assert_eq!(
+            assert!(
                 child(&snapshot, "worker")
                     .expect("worker child should remain visible")
-                    .state,
-                ChildStateView::Stopped
+                    .state
+                    .is_stopped()
             );
             break;
         }

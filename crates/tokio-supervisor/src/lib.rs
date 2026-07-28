@@ -126,12 +126,12 @@
 //!
 //! - **[`SupervisorSnapshot`] state** — current state and cumulative counters,
 //!   read directly or through [`SupervisorHandle::subscribe_snapshots`].
-//! - **Lifecycle streams** — ordered direct-child and restart-decision
-//!   [`LifecycleEvent`]s from
-//!   [`SupervisorHandle::watch_lifecycle`], or the whole tree (including
-//!   supervisor transitions and scheduled restarts) from
-//!   [`SupervisorHandle::watch_lifecycle_recursive`]. Both report overflow
-//!   explicitly rather than losing events silently.
+//! - **Lifecycle streams** — ordered direct-child
+//!   [`ChildLifecycleEvent`]s from
+//!   [`SupervisorHandle::watch_lifecycle`] (including scheduled restarts), or
+//!   the whole tree (adding supervisor transitions and restart-intensity
+//!   failures) from [`SupervisorHandle::watch_lifecycle_recursive`]. Both
+//!   report overflow explicitly rather than losing events silently.
 //! - **`tracing` spans and logs** — automatic structured output for every
 //!   lifecycle event. The supervisor runs inside an `info_span!("supervisor")`
 //!   and each child inside an `info_span!("child")`, both carrying
@@ -148,8 +148,8 @@
 //! Create a lifecycle watch first, then read a snapshot, then discard watched
 //! child transition events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
 //! state-plus-stream view without replay. Direct lifecycle overflow is
-//! explicit as [`LifecycleEvent::Lagged`]; recursive stream overflow uses the
-//! same tree-wide marker shape.
+//! explicit as [`ChildLifecycleEventKind::Lagged`]; recursive stream overflow
+//! uses [`LifecycleEventKind::Lagged`] as a tree-wide marker.
 //!
 //! # Deliberate dependency coupling
 //!
@@ -244,12 +244,16 @@ pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::ExitStatusView;
 pub use handle::SupervisorHandle;
-pub use lifecycle::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch};
+pub use lifecycle::{
+    ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, LifecycleEvent,
+    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent,
+};
 pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
 pub use scope::ScopeKind;
 pub use shutdown::ShutdownPolicy;
 pub use snapshot::{
-    ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
+    ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
+    SupervisorStateView,
 };
 pub use strategy::Strategy;
 pub use supervisor::Supervisor;

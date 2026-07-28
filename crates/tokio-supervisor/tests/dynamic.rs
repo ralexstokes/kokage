@@ -569,8 +569,7 @@ async fn terminal_failure_remains_visible_while_idle() {
             .snapshot()
             .child("fails")
             .expect("failed child remains visible")
-            .last_exit
-            .as_ref(),
+            .last_exit(),
         Some(ExitStatusView::Failed(message)) if message.contains("terminal failure")
     ));
 
@@ -1063,7 +1062,7 @@ async fn control_plane_remains_available_after_all_children_exit() {
         .wait_for(|snapshot| {
             snapshot
                 .child("done")
-                .is_some_and(|child| child.state == tokio_supervisor::ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         })
         .await
         .expect("completion snapshot remains available");
