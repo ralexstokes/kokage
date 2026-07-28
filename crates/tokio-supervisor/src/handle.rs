@@ -833,7 +833,7 @@ mod tests {
 
     #[test]
     fn binding_a_new_incarnation_resets_the_stable_snapshot() {
-        let stale_snapshot = SupervisorSnapshot::new(
+        let mut stale_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
             vec![ChildSnapshot::new(
@@ -841,8 +841,8 @@ mod tests {
                 0,
                 ChildStateView::Running,
             )],
-        )
-        .total_restarts(7);
+        );
+        stale_snapshot.total_restarts = 7;
         let initial_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
@@ -852,7 +852,8 @@ mod tests {
                 ChildStateView::Starting,
             )],
         );
-        let expected_snapshot = initial_snapshot.clone().total_restarts(7);
+        let mut expected_snapshot = initial_snapshot.clone();
+        expected_snapshot.total_restarts = 7;
         let channels =
             StableSupervisorChannels::new(stale_snapshot, 8, empty_nested_channels(), Vec::new());
         let handle = channels.handle();

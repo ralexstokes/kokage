@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::{sync::mpsc, time::timeout};
 use tokio_supervisor::{
     ChildSpec, ChildStateView, ControlError, DynamicSupervisorBuilder, LifecycleEvent,
-    RestartIntensity, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
+    LifecycleWatch, RestartIntensity, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
 };
 
 mod common;
@@ -15,6 +15,14 @@ fn waiting_child(id: &str) -> ChildSpec {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
+}
+
+async fn wait_for_lifecycle_end(watch: &mut LifecycleWatch, message: &str) {
+    timeout(EVENT_TIMEOUT, async {
+        while watch.next().await.is_some() {}
+    })
+    .await
+    .expect(message);
 }
 
 #[tokio::test]
@@ -69,9 +77,7 @@ async fn fluent_reconfiguration_updates_snapshot_without_pre_spawn_lifecycle_eve
     );
 
     drop(builder);
-    timeout(EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("dropped builder closes lifecycle");
+    wait_for_lifecycle_end(&mut lifecycle, "dropped builder closes lifecycle").await;
 }
 
 #[tokio::test]
@@ -113,7 +119,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
         let handle = builder.handle();
         let mut snapshots = handle.subscribe_snapshots();
         let mut events = common::event_watch(&handle);
-        let lifecycle = handle.watch_lifecycle();
+        let mut lifecycle = handle.watch_lifecycle();
 
         match abandonment {
             "builder" => drop(builder),
@@ -143,9 +149,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
         ));
         assert!(snapshots.changed().await.is_err());
         assert!(events.recv().await.is_err());
-        timeout(EVENT_TIMEOUT, lifecycle.closed())
-            .await
-            .expect("lifecycle closes permanently");
+        wait_for_lifecycle_end(&mut lifecycle, "lifecycle closes permanently").await;
     }
 }
 
@@ -158,7 +162,7 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
     let nested_builder = SupervisorBuilder::new().child(waiting_child("worker"));
     let nested_handle = nested_builder.handle();
     let mut snapshots = nested_handle.subscribe_snapshots();
-    let lifecycle = nested_handle.watch_lifecycle();
+    let mut lifecycle = nested_handle.watch_lifecycle();
     let nested = nested_builder.build().expect("nested scope builds");
 
     assert!(matches!(
@@ -168,9 +172,7 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
         Err(ControlError::UnsupportedByScopeKind { .. })
     ));
     assert!(snapshots.changed().await.is_err());
-    timeout(EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("rejected nested scope closes");
+    wait_for_lifecycle_end(&mut lifecycle, "rejected nested scope closes").await;
     assert!(matches!(
         nested_handle.add_child(waiting_child("late")).await,
         Err(ControlError::Unavailable)

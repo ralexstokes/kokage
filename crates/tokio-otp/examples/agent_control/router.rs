@@ -474,7 +474,7 @@ mod tests {
         let mut already_removing =
             ChildSnapshot::new("already-removing", 0, ChildStateView::Stopping);
         already_removing.membership = ChildMembershipView::Removing;
-        let snapshot = SupervisorSnapshot::new(
+        let mut snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
             vec![
@@ -482,8 +482,8 @@ mod tests {
                 ChildSnapshot::new("orphan", 0, ChildStateView::Running),
                 already_removing,
             ],
-        )
-        .lifecycle_seq(73);
+        );
+        snapshot.lifecycle_seq = 73;
 
         let (alignment_seq, orphaned) = mount_reconciliation(snapshot, |id| id == "routed");
 

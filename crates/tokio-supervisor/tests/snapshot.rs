@@ -20,18 +20,6 @@ mod common;
 
 use common::{ObservedEvent, wait_for_snapshot};
 
-#[test]
-fn snapshot_builder_sets_total_restarts() {
-    let snapshot = SupervisorSnapshot::new(
-        SupervisorStateView::Running,
-        tokio_supervisor::Strategy::OneForOne,
-        Vec::new(),
-    )
-    .total_restarts(7);
-
-    assert_eq!(snapshot.total_restarts, 7);
-}
-
 #[tokio::test]
 async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
     let supervisor = SupervisorBuilder::new()

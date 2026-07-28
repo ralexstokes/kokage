@@ -17,15 +17,15 @@ mod coverage_probe {
 
     mod advanced_root {
         use tokio_otp::{
-            ActorSupervisorPathSegment, AddSubtreeError, BackoffPolicy, BlockingCancelled,
-            CancellationHandle, CancellationToken, ChildMembershipView, ChildOutline,
-            ChildSnapshot, ChildSpec, ChildStateView, CompletionOutcome, ControlError,
-            DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicScope, ExitStatusView,
-            Graph, GraphBuildError, LifecycleEvent, LifecyclePathSegment, LifecycleWatch,
-            LifecycleWatchGuard, Lifetime, MailboxMode, MessageSize, MonitorEvent, OffloadDeadline,
-            OffloadHandle, ReservedSupervisionTree, RestrictedScope, ScopeKind, ShutdownMode,
+            AddSubtreeError, BackoffPolicy, BlockingCancelled, CancellationHandle,
+            CancellationToken, ChildMembershipView, ChildOutline, ChildSnapshot, ChildSpec,
+            ChildStateView, CompletionOutcome, ControlError, DEFAULT_SHUTDOWN_BOUND, Down,
+            DownReason, DrainPolicy, DynamicScope, ExitStatusView, Graph, GraphBuildError,
+            LifecycleEvent, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard, Lifetime,
+            MailboxMode, MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle,
+            ReservedSupervisionTree, RestrictedScope, ScopeKind, ShutdownMode,
             SupervisionFactories, SupervisionOutline, SupervisorBuildError, SupervisorError,
-            SupervisorSnapshot, SupervisorStateView, TimerKey, TryRecvError,
+            SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView, TimerKey, TryRecvError,
         };
         use tokio_supervisor::{
             ChildContext, ChildResult, DynamicSupervisorBuilder, Supervisor, SupervisorBuilder,
@@ -35,6 +35,54 @@ mod coverage_probe {
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[test]
+fn actor_supervisor_path_segments_are_nameable() {
+    fn path_len(path: &[tokio_otp::SupervisorPathSegment]) -> usize {
+        path.len()
+    }
+
+    let path: Vec<tokio_otp::SupervisorPathSegment> = Vec::new();
+    assert_eq!(path_len(&path), 0);
+}
+
+#[test]
+fn closed_policy_sets_can_be_matched_exhaustively() {
+    fn strategy_name(strategy: Strategy) -> &'static str {
+        match strategy {
+            Strategy::OneForOne => "one-for-one",
+            Strategy::OneForAll => "one-for-all",
+            Strategy::RestForOne => "rest-for-one",
+        }
+    }
+
+    fn restart_name(policy: RestartPolicy) -> &'static str {
+        match policy {
+            RestartPolicy::Always => "always",
+            RestartPolicy::OnFailure => "on-failure",
+            RestartPolicy::Never => "never",
+        }
+    }
+
+    fn drain_name(policy: tokio_otp::DrainPolicy) -> &'static str {
+        match policy {
+            tokio_otp::DrainPolicy::Discard => "discard",
+            tokio_otp::DrainPolicy::Drain => "drain",
+        }
+    }
+
+    fn scope_name(kind: tokio_otp::ScopeKind) -> &'static str {
+        match kind {
+            tokio_otp::ScopeKind::Ordered => "ordered",
+            tokio_otp::ScopeKind::Dynamic => "dynamic",
+        }
+    }
+
+    assert_eq!(strategy_name(Strategy::default()), "one-for-one");
+    assert_eq!(restart_name(RestartPolicy::default()), "on-failure");
+    assert_eq!(drain_name(tokio_otp::DrainPolicy::default()), "drain");
+    assert_eq!(scope_name(tokio_otp::ScopeKind::default()), "ordered");
+}
 
 #[derive(Clone)]
 struct BlockingWorker {

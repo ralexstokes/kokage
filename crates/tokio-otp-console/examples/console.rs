@@ -29,7 +29,9 @@ use tokio_otp::{
     SupervisionTree,
 };
 use tokio_otp_console::Console;
-use tokio_supervisor::{BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, Strategy};
+use tokio_supervisor::{
+    BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy,
+};
 
 fn example_error(message: &'static str) -> BoxError {
     Box::new(io::Error::other(message))
@@ -108,8 +110,12 @@ fn pipeline_runtime() -> SupervisionTree {
     SupervisionTree::new()
         .strategy(Strategy::OneForAll)
         .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
-        .task(source)
-        .task(transform)
+        .task(source, RestartPolicy::default(), ShutdownPolicy::default())
+        .task(
+            transform,
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
 }
 
 /// A OneForOne group demonstrating the other restart policies, with a further
@@ -123,28 +129,30 @@ fn telemetry_runtime() -> SupervisionTree {
             _ = sleep(Duration::from_secs(7)) => {}
         }
         Ok(())
-    })
-    .restart(RestartPolicy::Always);
+    });
 
     // `Never` runs at most once: this child completes after 3 seconds and
     // stays Stopped for the rest of the run.
     let migration = ChildSpec::new("schema-migration", |_ctx| async move {
         sleep(Duration::from_secs(3)).await;
         Ok(())
-    })
-    .restart(RestartPolicy::Never);
+    });
 
     let exporter = ChildSpec::new("stdout-exporter", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let exporters = SupervisionTree::new().task(exporter);
+    let exporters = SupervisionTree::new().task(
+        exporter,
+        RestartPolicy::default(),
+        ShutdownPolicy::default(),
+    );
 
     SupervisionTree::new()
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
-        .task(heartbeat)
-        .task(migration)
+        .task(heartbeat, RestartPolicy::Always, ShutdownPolicy::default())
+        .task(migration, RestartPolicy::Never, ShutdownPolicy::default())
         .subtree("exporters", exporters)
 }
 

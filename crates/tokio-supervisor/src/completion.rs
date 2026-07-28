@@ -53,17 +53,12 @@ impl CompletionGuard {
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }
-
-    /// Returns whether the completion watch has been cancelled or stopped.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
-    }
 }
 
 impl fmt::Debug for CompletionGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CompletionGuard")
-            .field("is_cancelled", &self.is_cancelled())
+            .field("is_cancelled", &self.cancellation.is_cancelled())
             .finish()
     }
 }

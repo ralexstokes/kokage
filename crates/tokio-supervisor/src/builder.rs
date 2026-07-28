@@ -55,7 +55,6 @@ pub struct DynamicSupervisorBuilder {
 /// The immutable membership and ordering model of a supervisor scope.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
 pub enum ScopeKind {
     /// A declared sequence with readiness-gated startup and reverse-order
     /// teardown. Runtime membership operations are unsupported.

@@ -56,6 +56,22 @@ async fn next_recursive_for(
     }
 }
 
+async fn wait_for_end(watch: &mut LifecycleWatch) {
+    timeout(common::EVENT_TIMEOUT, async {
+        while watch.next().await.is_some() {}
+    })
+    .await
+    .expect("timed out waiting for lifecycle watch to end");
+}
+
+async fn assert_stays_open(watch: &mut LifecycleWatch, message: &str) {
+    let ended = timeout(common::QUIET_TIMEOUT, async {
+        while watch.next().await.is_some() {}
+    })
+    .await;
+    assert!(ended.is_err(), "{message}");
+}
+
 fn path(event: &LifecycleEvent) -> &[LifecyclePathSegment] {
     event.supervisor_path().unwrap_or_default()
 }
@@ -886,7 +902,7 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
 }
 
 #[tokio::test]
-async fn closure_drains_staged_events_and_closed_does_not_consume() {
+async fn lifecycle_watch_drains_staged_events_before_ending() {
     let handle = SupervisorBuilder::new()
         .child(ChildSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -900,9 +916,6 @@ async fn closure_drains_staged_events_and_closed_does_not_consume() {
     handle.shutdown();
     handle.wait().await.expect("shutdown succeeds");
 
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("closed resolves at root terminality");
     let exited = next_for(&mut lifecycle, "worker", |kind| {
         matches!(kind, LifecycleEvent::Exited { .. })
     })
@@ -942,10 +955,6 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
         .await
         .expect("nested removal succeeds");
     while lifecycle.next().await.is_some() {}
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("nested lifecycle closes eagerly on removal");
-
     shutdown(handle).await;
 }
 
@@ -994,9 +1003,11 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
         matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    timeout(common::QUIET_TIMEOUT, lifecycle.closed())
-        .await
-        .expect_err("group-revivable stable identity remains open");
+    assert_stays_open(
+        &mut lifecycle,
+        "group-revivable stable identity should remain open",
+    )
+    .await;
 
     crash_sibling.notify_one();
     let added = next_for(&mut lifecycle, "worker", |kind| {
@@ -1010,9 +1021,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     assert_eq!(seq(&started), seq(&added) + 1);
 
     shutdown(handle).await;
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("root shutdown closes revived nested watch");
+    wait_for_end(&mut lifecycle).await;
 }
 
 #[tokio::test]
@@ -1047,9 +1056,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
         matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("non-restarted nested identity closes");
+    wait_for_end(&mut lifecycle).await;
 
     shutdown(handle).await;
 }
@@ -1063,12 +1070,10 @@ async fn parent_stop_closes_watch_while_stable_handle_is_retained() {
         .spawn();
     handle.wait_started().await.expect("startup succeeds");
     let nested = handle.supervisor("nested").expect("nested handle");
-    let lifecycle = nested.watch_lifecycle();
+    let mut lifecycle = nested.watch_lifecycle();
 
     shutdown(handle).await;
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("root terminality closes descendant watch");
+    wait_for_end(&mut lifecycle).await;
     assert_eq!(nested.snapshot().total_restarts, 0);
 }
 
@@ -1095,9 +1100,11 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
         matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    timeout(common::QUIET_TIMEOUT, lifecycle.closed())
-        .await
-        .expect_err("restartable ancestor keeps provisional identity open");
+    assert_stays_open(
+        &mut lifecycle,
+        "restartable ancestor should keep provisional identity open",
+    )
+    .await;
 
     crash_middle.notify_one();
     let added = next_for(&mut lifecycle, "worker", |kind| {
@@ -1120,9 +1127,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
     assert_eq!(total_restarts(&second_exit), 1);
 
     shutdown(handle).await;
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("root terminality closes revived descendant watch");
+    wait_for_end(&mut lifecycle).await;
 }
 
 #[tokio::test]
@@ -1163,13 +1168,11 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .await
         .expect("dynamic descendant added");
     let orphan = middle.supervisor("orphan").expect("orphan handle");
-    let lifecycle = orphan.watch_lifecycle();
+    let mut lifecycle = orphan.watch_lifecycle();
     let mut middle_snapshots = middle.subscribe_snapshots();
 
     crash_middle.notify_one();
-    timeout(common::EVENT_TIMEOUT, lifecycle.closed())
-        .await
-        .expect("orphaned lifecycle watch closes after ancestor reincarnation");
+    wait_for_end(&mut lifecycle).await;
     wait_for_snapshot(&mut middle_snapshots, |snapshot| {
         snapshot.total_restarts == 1 && snapshot.child("orphan").is_none()
     })
@@ -1202,9 +1205,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
         matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    timeout(common::EVENT_TIMEOUT, head_lifecycle.closed())
-        .await
-        .expect("first RestForOne position cannot be revived");
+    wait_for_end(&mut head_lifecycle).await;
     assert_eq!(
         handle.snapshot().state,
         tokio_supervisor::SupervisorStateView::Running
@@ -1215,14 +1216,14 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
         matches!(kind, LifecycleEvent::Exited { .. })
     })
     .await;
-    timeout(common::QUIET_TIMEOUT, tail_lifecycle.closed())
-        .await
-        .expect_err("later RestForOne position remains provisionally revivable");
+    assert_stays_open(
+        &mut tail_lifecycle,
+        "later RestForOne position should remain provisionally revivable",
+    )
+    .await;
 
     shutdown(handle).await;
-    timeout(common::EVENT_TIMEOUT, tail_lifecycle.closed())
-        .await
-        .expect("root terminality closes deferred tail identity");
+    wait_for_end(&mut tail_lifecycle).await;
 }
 
 fn idle_supervisor() -> tokio_supervisor::Supervisor {

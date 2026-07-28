@@ -356,8 +356,7 @@ where
 /// Start the runtime with [`spawn`](Self::spawn), which returns the
 /// [`RuntimeHandle`] control surface. To drive the runtime in the foreground
 /// while keeping that control surface, call `spawn()` and then
-/// [`RuntimeHandle::wait`]. Use [`into_supervisor`](Self::into_supervisor)
-/// as the explicit escape hatch to the raw [`Supervisor`].
+/// [`RuntimeHandle::wait`].
 pub struct Runtime {
     supervisor: Supervisor,
     actors: Arc<ActorRuntimeState>,
@@ -375,57 +374,6 @@ impl Runtime {
     /// Returns this runtime's stable actor-aware handle before it is spawned.
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle::new(self.supervisor.handle(), Arc::clone(&self.actors))
-    }
-
-    /// Returns the underlying [`Supervisor`] for first-class nesting.
-    ///
-    /// This is a one-way escape hatch to the lower-level supervisor API.
-    /// Declared actors keep running and restarting, but actor-aware control,
-    /// dynamic actor insertion, and recursive actor stats are no longer
-    /// available. Keep the full runtime and use [`spawn`](Self::spawn) when
-    /// those capabilities are required. Because `Supervisor` is intentionally
-    /// not re-exported, using this escape hatch requires a direct
-    /// `tokio-supervisor` dependency.
-    ///
-    /// ```no_run
-    /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, SupervisionTree};
-    /// use tokio_supervisor::{SupervisorBuilder, SupervisorSpec};
-    ///
-    /// struct Worker;
-    ///
-    /// impl Actor for Worker {
-    ///     type Msg = ();
-    ///
-    ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-    ///         Ok(())
-    ///     }
-    /// }
-    ///
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut graph = GraphBuilder::new();
-    /// let (actor_slot, _) = graph.slot("worker");
-    /// graph.define(actor_slot, || Worker);
-    /// let graph = graph.build()?;
-    /// let actor_subtree = SupervisionTree::graph(&graph)
-    ///     .build()?
-    ///     .into_supervisor();
-    /// let root = SupervisorBuilder::new()
-    ///     .supervisor(SupervisorSpec::new("actors", actor_subtree))
-    ///     .build()?;
-    /// # let _ = root;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// This conversion is intentionally one-way. Already-declared actors keep
-    /// their factories and continue to execute and restart, but spawning the
-    /// returned value yields only a raw `SupervisorHandle`. The actor-aware
-    /// access path — including dynamic `add_actor` configuration, recursive
-    /// actor statistics, and actor-aware subtree attachment — is no longer
-    /// available. Use it only when handing ownership to APIs that explicitly
-    /// require the lower-level `tokio-supervisor` type.
-    pub fn into_supervisor(self) -> Supervisor {
-        self.supervisor
     }
 
     /// Spawns the supervisor in the background and returns a combined handle.

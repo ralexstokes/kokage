@@ -1,10 +1,12 @@
 use tokio_util::sync::CancellationToken;
 
-/// Observe-only view of one actor incarnation's lifetime.
+/// Opaque token identifying one actor incarnation's lifetime.
 ///
 /// A lifetime ends when the incarnation stops or restarts. It grants no
-/// authority to stop the actor; use it to bind background work to the actor
-/// that scheduled it.
+/// authority to stop the actor and has no direct observation methods. Pass it
+/// to [`timers::send_after_to`](crate::timers::send_after_to) or
+/// [`timers::interval_to`](crate::timers::interval_to) to bind cross-actor
+/// timer work to the actor that scheduled it.
 #[derive(Clone, Debug)]
 pub struct Lifetime {
     cancellation: CancellationToken,
@@ -15,14 +17,8 @@ impl Lifetime {
         Self { cancellation }
     }
 
-    /// Returns whether the actor incarnation has ended.
-    pub fn is_ended(&self) -> bool {
-        self.cancellation.is_cancelled()
-    }
-
-    /// Waits until the actor incarnation ends.
-    pub async fn ended(&self) {
-        self.cancellation.cancelled().await;
+    pub(crate) fn token(&self) -> CancellationToken {
+        self.cancellation.clone()
     }
 }
 

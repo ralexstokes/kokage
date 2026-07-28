@@ -136,18 +136,6 @@ impl Supervisor {
         }
     }
 
-    /// Returns the restart policy inherited by runtime-added children.
-    #[doc(hidden)]
-    pub fn default_restart_policy(&self) -> RestartPolicy {
-        self.config.default_restart
-    }
-
-    /// Returns the shutdown policy inherited by runtime-added children.
-    #[doc(hidden)]
-    pub fn default_shutdown_policy(&self) -> ShutdownPolicy {
-        self.config.default_shutdown
-    }
-
     /// Returns this supervisor's stable control and observation handle.
     ///
     /// Before [`spawn`](Self::spawn), control operations return

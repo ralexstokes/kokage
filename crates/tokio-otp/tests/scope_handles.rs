@@ -9,8 +9,8 @@ use std::{
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
     Actor, ActorResult, AddSubtreeError, AmbientContext, BoxError, ControlError, GraphBuilder,
-    LiveContext, MessageContext, ReservedSupervisionTree, RestartIntensity, RuntimeHandle,
-    ScopeKind, StartContext, StopContext, Strategy, SupervisionTree,
+    LiveContext, MessageContext, ReservedSupervisionTree, RestartIntensity, RestartPolicy,
+    RuntimeHandle, ScopeKind, ShutdownPolicy, StartContext, StopContext, Strategy, SupervisionTree,
 };
 use tokio_supervisor::ChildSpec;
 
@@ -283,7 +283,11 @@ fn reserved_tree_strategy_preserves_declared_pre_spawn_snapshot() {
     graph.define(actor_slot, || Idle);
     let graph = graph.build().expect("graph builds");
     let tree = SupervisionTree::new()
-        .task(ChildSpec::new("task", |_| async { Ok(()) }))
+        .task(
+            ChildSpec::new("task", |_| async { Ok(()) }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
         .actor(graph.actors()[0].clone())
         .reserve();
     let handle = tree.handle();
@@ -313,8 +317,16 @@ fn reserved_tree_strategy_preserves_declared_pre_spawn_snapshot() {
 #[tokio::test]
 async fn runtime_build_errors_and_rejected_subtrees_terminalize_reserved_handles() {
     let tree = SupervisionTree::new()
-        .task(ChildSpec::new("duplicate", |_| async { Ok(()) }))
-        .task(ChildSpec::new("duplicate", |_| async { Ok(()) }))
+        .task(
+            ChildSpec::new("duplicate", |_| async { Ok(()) }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
+        .task(
+            ChildSpec::new("duplicate", |_| async { Ok(()) }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
         .reserve();
     let failed_ordered = tree.handle();
     assert!(tree.build().is_err());
@@ -699,10 +711,14 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 
 #[tokio::test]
 async fn cloning_a_plain_tree_reserves_a_fresh_identity_for_each_copy() {
-    let tree = SupervisionTree::new().task(ChildSpec::new("task", |ctx| async move {
-        ctx.shutdown_token().cancelled().await;
-        Ok(())
-    }));
+    let tree = SupervisionTree::new().task(
+        ChildSpec::new("task", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }),
+        RestartPolicy::default(),
+        ShutdownPolicy::default(),
+    );
     let reserved_tree = tree.clone().reserve();
     let reserved = reserved_tree.handle();
 

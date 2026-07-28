@@ -933,7 +933,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     }
 
     let mut scope_root = quote! {
-        ::tokio_otp::SupervisionTree::derived_scope(graph)
+        ::tokio_otp::SupervisionTree::new().derived_defaults(graph)
     };
     if let Some(strategy) = &scope_attrs.strategy {
         scope_root = quote! { #scope_root.strategy(#strategy) };

@@ -127,20 +127,6 @@ impl SupervisorSnapshot {
         }
     }
 
-    /// Sets the cumulative restart count recorded by this supervisor.
-    #[must_use]
-    pub fn total_restarts(mut self, total_restarts: u64) -> Self {
-        self.total_restarts = total_restarts;
-        self
-    }
-
-    /// Sets the sequence of the last emitted lifecycle event.
-    #[must_use]
-    pub fn lifecycle_seq(mut self, lifecycle_seq: u64) -> Self {
-        self.lifecycle_seq = lifecycle_seq;
-        self
-    }
-
     /// Looks up a direct child by id.
     pub fn child(&self, id: &str) -> Option<&ChildSnapshot> {
         self.children.iter().find(|child| child.id == id)
@@ -160,7 +146,7 @@ impl SupervisorSnapshot {
         let mut child = self.child(path.next()?.as_ref())?;
 
         for segment in path {
-            child = child.child(segment.as_ref())?;
+            child = child.supervisor.as_deref()?.child(segment.as_ref())?;
         }
 
         Some(child)
@@ -187,23 +173,6 @@ impl ChildSnapshot {
             next_restart_in: None,
             supervisor: None,
         }
-    }
-
-    /// Looks up a grandchild by id within this child's nested supervisor
-    /// snapshot. Returns `None` if this child is not a nested supervisor or
-    /// has no child with the given id.
-    pub fn child(&self, id: &str) -> Option<&ChildSnapshot> {
-        self.supervisor.as_deref()?.child(id)
-    }
-
-    /// Walks a path through nested supervisor snapshots starting from this
-    /// child. See [`SupervisorSnapshot::descendant`] for details.
-    pub fn descendant<I, S>(&self, path: I) -> Option<&ChildSnapshot>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        self.supervisor.as_deref()?.descendant(path)
     }
 }
 

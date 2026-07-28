@@ -27,6 +27,39 @@ mod coverage_probe {
     }
 }
 
+#[test]
+fn closed_policy_sets_can_be_matched_exhaustively_in_the_supervisor_crate() {
+    fn strategy_name(strategy: Strategy) -> &'static str {
+        match strategy {
+            Strategy::OneForOne => "one-for-one",
+            Strategy::OneForAll => "one-for-all",
+            Strategy::RestForOne => "rest-for-one",
+        }
+    }
+
+    fn restart_name(policy: RestartPolicy) -> &'static str {
+        match policy {
+            RestartPolicy::Always => "always",
+            RestartPolicy::OnFailure => "on-failure",
+            RestartPolicy::Never => "never",
+        }
+    }
+
+    fn scope_name(kind: tokio_supervisor::ScopeKind) -> &'static str {
+        match kind {
+            tokio_supervisor::ScopeKind::Ordered => "ordered",
+            tokio_supervisor::ScopeKind::Dynamic => "dynamic",
+        }
+    }
+
+    assert_eq!(strategy_name(Strategy::default()), "one-for-one");
+    assert_eq!(restart_name(RestartPolicy::default()), "on-failure");
+    assert_eq!(
+        scope_name(tokio_supervisor::ScopeKind::default()),
+        "ordered"
+    );
+}
+
 #[tokio::test]
 async fn prelude_supports_handle_event_and_snapshot_helpers() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -121,7 +154,13 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 
     let snapshot = handle.snapshot();
     let nested = snapshot.child("nested").expect("nested child should exist");
-    assert!(nested.child("leaf").is_some());
+    assert!(
+        nested
+            .supervisor
+            .as_deref()
+            .and_then(|snapshot| snapshot.child("leaf"))
+            .is_some()
+    );
     assert!(snapshot.descendant(["nested", "leaf"]).is_some());
 
     handle

@@ -53,7 +53,6 @@ enum LoopEvent<M> {
 /// stopped; drain handlers must tolerate that (skip or log the failed send)
 /// rather than propagate it, or the error fails the draining actor itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
 pub enum DrainPolicy {
     /// Stop immediately.
     ///

@@ -200,9 +200,10 @@ the target permanently terminates. A target that merely restarts receives
 later deliveries through its restart-stable ref. Messages should carry a key
 or generation when the target must reject stale cross-actor work.
 
-`Lifetime` cannot stop its actor; it only exposes `is_ended` and the awaitable
-`ended`. `CancellationHandle` owns the separate authority to stop the timer
-operation and exposes the awaitable `cancelled`.
+`Lifetime` is an opaque token passed to the cross-actor timer constructors. It
+cannot stop its actor and exposes no direct cancellation or waiting API.
+`CancellationHandle` owns the separate authority to stop the timer operation
+and exposes the awaitable `cancelled`.
 
 ## `RawActor` deadlines
 

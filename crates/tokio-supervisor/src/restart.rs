@@ -7,7 +7,6 @@ use crate::error::SupervisorBuildError;
 /// The default is [`OnFailure`](RestartPolicy::OnFailure).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
 pub enum RestartPolicy {
     /// Always restart the child, regardless of exit status. Equivalent to
     /// OTP's `permanent`.

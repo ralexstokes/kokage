@@ -387,18 +387,6 @@ impl LifecycleWatch {
             }
         }
     }
-
-    /// Waits until the watched stable supervisor identity becomes terminal
-    /// without consuming staged events.
-    pub async fn closed(&self) {
-        loop {
-            let notified = self.queue.waiter();
-            if self.queue.is_terminal() {
-                return;
-            }
-            notified.await;
-        }
-    }
 }
 
 impl Drop for LifecycleWatch {

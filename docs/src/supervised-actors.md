@@ -150,10 +150,13 @@ let runtime = tree.build()?;
 ```
 
 Use `SupervisionTree::task` to mix an arbitrary non-actor `ChildSpec` into an
-ordered scope, and `SupervisionTree::subtree` for recursive actor-aware or
-graph-less scopes. A dynamic `RuntimeHandle::add_child` adds the same task
-shape at runtime; task children appear in snapshots and lifecycle watches but
-not actor stats.
+ordered scope. Its explicit restart and shutdown arguments are authoritative
+for both the tree outline and the running child, so set those policies on the
+`task` call rather than on the `ChildSpec`; readiness and restart-intensity
+settings on the spec are preserved. Use `SupervisionTree::subtree` for
+recursive actor-aware or graph-less scopes. A dynamic
+`RuntimeHandle::add_child` adds the same task shape at runtime; task children
+appear in snapshots and lifecycle watches but not actor stats.
 
 There are no string lookups anywhere on this path: every ref you need is
 minted at wiring time (or returned by `add_actor` for runtime-added actors)

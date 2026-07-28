@@ -287,11 +287,11 @@ pub use tokio_otp_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, ActorSupervisorPathSegment, AmbientContext, BlockingCancelled,
-    CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, GraphConfig, Lifetime, LiveContext, MailboxMode, MessageContext,
-    MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope,
-    RunnableActor, SendError, StartContext, StopContext, TimerKey, TryRecvError,
+    ActorSlot, ActorStats, AmbientContext, BlockingCancelled, CallError, CancellationHandle,
+    DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph, GraphBuildError, GraphBuilder,
+    GraphConfig, Lifetime, LiveContext, MailboxMode, MessageContext, MessageSize, MonitorEvent,
+    OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope, RunnableActor, SendError,
+    StartContext, StopContext, SupervisorPathSegment, TimerKey, TryRecvError,
 };
 pub use runtime::{
     AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,

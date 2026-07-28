@@ -560,18 +560,6 @@ fn run_disposition(
         (RestartPolicy::Never, _)
         | (RestartPolicy::OnFailure, ActorExitStatus::Stopped)
         | (_, ActorExitStatus::Shutdown) => RunDisposition::Terminate,
-        // `RestartPolicy` is intentionally extensible. A future policy must
-        // opt in to more precise binding behavior when this crate adopts it.
-        _ => {
-            tracing::warn!(
-                "unknown restart policy; defaulting actor rebind behavior to on-failure"
-            );
-            if status == ActorExitStatus::Stopped {
-                RunDisposition::Terminate
-            } else {
-                RunDisposition::ExpectRebind
-            }
-        }
     }
 }
 

@@ -296,20 +296,8 @@ impl ChildSpec {
         &self.inner.id
     }
 
-    /// Returns the child's restart policy.
-    #[doc(hidden)]
-    pub fn restart_policy(&self) -> RestartPolicy {
-        self.inner.restart
-    }
-
     pub(crate) fn restart_intensity_override(&self) -> Option<RestartIntensity> {
         self.inner.restart_intensity
-    }
-
-    /// Returns the child's shutdown policy.
-    #[doc(hidden)]
-    pub fn shutdown_policy(&self) -> ShutdownPolicy {
-        self.inner.shutdown_policy
     }
 }
 

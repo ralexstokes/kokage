@@ -853,51 +853,6 @@ async fn actor_stats_accumulate_across_supervised_restarts() {
 }
 
 #[tokio::test]
-async fn runtime_into_supervisor_spawn_accepts_ref_cloned_before_startup() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
-        observed: observed_tx.clone(),
-    });
-
-    let handle = runtime.into_supervisor().spawn();
-    let mut snapshots = handle.subscribe_snapshots();
-    let sender = tokio::spawn(async move {
-        worker_ref
-            .send("run-path".to_owned())
-            .await
-            .expect("message sent through cloned ref");
-    });
-
-    sender.await.expect("sender task joined");
-
-    let completed = snapshots
-        .wait_for(|snapshot| {
-            snapshot
-                .child("worker")
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
-        })
-        .await
-        .expect("completion snapshot remains available")
-        .clone();
-    assert!(matches!(
-        completed
-            .child("worker")
-            .expect("worker remains visible")
-            .last_exit
-            .as_ref(),
-        Some(ExitStatusView::Completed)
-    ));
-
-    let observed = timeout(Duration::from_secs(1), observed_rx.recv())
-        .await
-        .expect("worker observed the message")
-        .expect("worker is still running");
-    assert_eq!(observed, "run-path");
-    handle.shutdown();
-    handle.wait().await.expect("shutdown should succeed");
-}
-
-#[tokio::test]
 async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
@@ -1006,7 +961,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
         }
     });
     let runtime = SupervisionTree::graph(&graph)
-        .task(sidecar)
+        .task(sidecar, RestartPolicy::default(), ShutdownPolicy::default())
         .build()
         .expect("runtime builds");
     let handle = runtime.spawn();
@@ -1258,19 +1213,6 @@ fn dynamic_tree_allows_an_empty_runtime() {
     SupervisionTree::dynamic()
         .build()
         .expect("empty runtime builds");
-}
-
-#[tokio::test]
-async fn runtime_into_supervisor_is_a_one_way_raw_escape_hatch() {
-    let (runtime, _worker_ref) = build_runtime(Drain::<()>::new);
-
-    let supervisor = runtime.into_supervisor();
-    let handle = supervisor.spawn();
-
-    timeout(Duration::from_secs(1), handle.shutdown_and_wait())
-        .await
-        .expect("shutdown completed")
-        .expect("supervisor shut down cleanly");
 }
 
 #[derive(Clone)]

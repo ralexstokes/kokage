@@ -35,8 +35,8 @@ pub struct ActorStats {
     /// segment includes the supervisor child's lineage and generation
     /// so identical actor ids and local lineages in sibling or restarted
     /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
-    /// have no supervisor context and report `None`. The segment type is
-    /// exported as [`ActorSupervisorPathSegment`](crate::ActorSupervisorPathSegment).
+    /// have no supervisor context and report `None`. The element type is the
+    /// public [`SupervisorPathSegment`].
     pub supervisor_path: Option<Vec<SupervisorPathSegment>>,
     /// Identity of the actor's current supervisor membership, when sampled
     /// through [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).

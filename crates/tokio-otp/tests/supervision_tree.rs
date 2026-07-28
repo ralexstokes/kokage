@@ -40,10 +40,15 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
             "workers",
             SupervisionTree::new().strategy(Strategy::OneForAll),
         )
-        .task(ChildSpec::new("clock", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+        .task(
+            ChildSpec::new("clock", |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            })
+            .restart(RestartPolicy::Always),
+            RestartPolicy::Never,
+            ShutdownPolicy::abort(),
+        )
         .actor(ActorSpec::new(graph.actors()[0].clone()).restart(RestartPolicy::Never))
         .actor(graph.actors()[1].clone())
         .outline();
@@ -62,6 +67,15 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     };
     assert_eq!(nested.kind, ScopeKind::Ordered);
     assert_eq!(nested.strategy, Strategy::OneForAll);
+
+    let ChildOutline::Child {
+        restart, shutdown, ..
+    } = outline.child("clock").expect("task is present")
+    else {
+        panic!("expected a task");
+    };
+    assert_eq!(*restart, RestartPolicy::Never);
+    assert_eq!(*shutdown, ShutdownPolicy::abort());
 
     let ChildOutline::Actor { restart, .. } = outline.child("ingest").expect("ingest is present")
     else {

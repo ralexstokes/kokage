@@ -1378,10 +1378,14 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 #[tokio::test]
 async fn ordered_tree_rejects_runtime_membership_changes() {
     let handle = SupervisionTree::new()
-        .task(ChildSpec::new("seed", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
+        .task(
+            ChildSpec::new("seed", |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }),
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
         .build()
         .expect("valid tree")
         .spawn();

@@ -53,7 +53,11 @@ enum ScopeNode {
 #[derive(Clone)]
 enum SupervisionChild {
     Actor(ActorSpec),
-    Task(ChildSpec),
+    Task {
+        child: ChildSpec,
+        restart: RestartPolicy,
+        shutdown: ShutdownPolicy,
+    },
     Scope {
         id: String,
         node: ScopeNode,
@@ -217,19 +221,14 @@ impl ActorSpec {
         self
     }
 
-    /// Returns the actor label, which is unique across the graph.
-    pub fn label(&self) -> &str {
+    fn actor_label(&self) -> &str {
         self.actor.label()
     }
 
-    /// Returns this actor's id within its enclosing scope.
-    ///
-    /// This defaults to [`label`](Self::label) unless
-    /// [`child_id`](Self::child_id) overrode it. For example, an actor whose
-    /// graph label is `workers.parse` can have local child id `parse` inside
-    /// the `workers` supervisor.
-    pub fn id(&self) -> &str {
-        self.child_id.as_deref().unwrap_or_else(|| self.label())
+    fn resolved_id(&self) -> &str {
+        self.child_id
+            .as_deref()
+            .unwrap_or_else(|| self.actor_label())
     }
 }
 
@@ -242,8 +241,8 @@ impl From<RunnableActor> for ActorSpec {
 impl std::fmt::Debug for ActorSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActorSpec")
-            .field("id", &self.id())
-            .field("label", &self.label())
+            .field("id", &self.resolved_id())
+            .field("label", &self.actor_label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
             .field("restart_intensity", &self.restart_intensity)
@@ -270,18 +269,10 @@ impl SupervisionTree<false> {
 
     /// Creates an ordered scope containing every actor in a graph.
     pub fn graph(graph: &Graph) -> Self {
-        let mut tree = Self::derived_scope(graph);
+        let mut tree = Self::new().derived_defaults(graph);
         for actor in graph.actors() {
             tree = tree.actor(actor.clone());
         }
-        tree
-    }
-
-    /// Creates an empty graph-backed scope for generated supervision code.
-    #[doc(hidden)]
-    pub fn derived_scope(graph: &Graph) -> Self {
-        let mut tree = Self::new();
-        tree.config_mut().dynamic_builder = Some(graph.dynamic_builder());
         tree
     }
 
@@ -300,10 +291,26 @@ impl SupervisionTree<false> {
         self
     }
 
-    /// Appends an arbitrary task node.
+    /// Appends an arbitrary task node with its resolved policies.
+    ///
+    /// `restart` and `shutdown` are the single source of truth for both the
+    /// tree outline and the lowered runtime child. They deliberately replace
+    /// values previously set through `ChildSpec::restart` or
+    /// `ChildSpec::shutdown`; configure those two policies here instead.
+    /// Other `ChildSpec` settings, including readiness and restart intensity,
+    /// are preserved.
     #[must_use]
-    pub fn task(mut self, child: ChildSpec) -> Self {
-        self.children_mut().push(SupervisionChild::Task(child));
+    pub fn task(
+        mut self,
+        child: ChildSpec,
+        restart: RestartPolicy,
+        shutdown: ShutdownPolicy,
+    ) -> Self {
+        self.children_mut().push(SupervisionChild::Task {
+            child,
+            restart,
+            shutdown,
+        });
         self
     }
 
@@ -376,11 +383,6 @@ impl<const DYNAMIC: bool> SupervisionTree<DYNAMIC> {
         match &mut self.node {
             ScopeNode::Ordered { config, .. } | ScopeNode::Dynamic { config } => config,
         }
-    }
-
-    /// Returns this scope's immutable kind.
-    pub fn kind(&self) -> ScopeKind {
-        self.node.kind()
     }
 
     /// Sets this scope's default restart intensity.
@@ -538,8 +540,8 @@ impl ScopeNode {
 impl SupervisionChild {
     fn declared_id(&self) -> &str {
         match self {
-            Self::Actor(actor) => actor.id(),
-            Self::Task(child) => child.id(),
+            Self::Actor(actor) => actor.resolved_id(),
+            Self::Task { child, .. } => child.id(),
             Self::Scope { id, .. } | Self::ActorWithScope { id, .. } => id,
         }
     }
@@ -551,15 +553,19 @@ impl SupervisionChild {
     ) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
-                id: actor.id().to_owned(),
+                id: actor.resolved_id().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
                 restart_intensity: actor.restart_intensity,
             },
-            Self::Task(spec) => ChildOutline::Child {
-                id: spec.id().to_owned(),
-                restart: spec.restart_policy(),
-                shutdown: spec.shutdown_policy(),
+            Self::Task {
+                child,
+                restart,
+                shutdown,
+            } => ChildOutline::Child {
+                id: child.id().to_owned(),
+                restart: *restart,
+                shutdown: *shutdown,
             },
             Self::Scope { id, node } => ChildOutline::Scope {
                 id: id.clone(),
@@ -573,7 +579,7 @@ impl SupervisionChild {
             } => ChildOutline::ActorWithScope {
                 id: id.clone(),
                 leader: Box::new(ChildOutline::Actor {
-                    id: actor.id().to_owned(),
+                    id: actor.resolved_id().to_owned(),
                     restart: actor.restart.unwrap_or(default_restart),
                     shutdown: actor.shutdown.unwrap_or(default_shutdown),
                     restart_intensity: actor.restart_intensity,
@@ -609,7 +615,11 @@ impl SupervisionChild {
                 .restart_intensity(restart_intensity)
                 .child_id(child_id),
             )),
-            Self::Task(spec) => builder.child(spec),
+            Self::Task {
+                child,
+                restart,
+                shutdown,
+            } => builder.child(child.restart(restart).shutdown(shutdown)),
             Self::Scope { id, node } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
                 builder.supervisor(
@@ -765,11 +775,6 @@ impl<const DYNAMIC: bool> ReservedSupervisionTree<DYNAMIC> {
         crate::RuntimeHandle::new(supervisor, Arc::clone(&reservation.actors))
     }
 
-    /// Returns this scope's immutable kind.
-    pub fn kind(&self) -> ScopeKind {
-        self.tree.kind()
-    }
-
     /// Sets this scope's default restart intensity.
     #[must_use]
     pub fn restart_intensity(self, intensity: RestartIntensity) -> Self {
@@ -829,10 +834,13 @@ impl ReservedSupervisionTree<false> {
         self.map_tree(|tree| tree.actor(actor))
     }
 
-    /// Appends an arbitrary task node.
+    /// Appends an arbitrary task node with its resolved policies.
+    ///
+    /// The supplied policies are applied to `child` during lowering. See
+    /// [`SupervisionTree::task`].
     #[must_use]
-    pub fn task(self, child: ChildSpec) -> Self {
-        self.map_tree(|tree| tree.task(child))
+    pub fn task(self, child: ChildSpec, restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
+        self.map_tree(|tree| tree.task(child, restart, shutdown))
     }
 
     /// Appends a named unreserved nested scope.
