@@ -211,9 +211,10 @@ wrapper aborts and joins the inner actor task, terminates its mailbox binding,
 and publishes actor observability before returning. If the wrapper does not
 finish within a short accounting beat — a tenth of the child's own grace,
 clamped to between 1 ms and 10 ms — the supervisor hard-aborts it.
-`cooperative_then_abort` still lets the enclosing shutdown operation succeed;
-`cooperative_strict` also returns a timeout error. Both modes expose the same
-truthful `ShutdownTimedOut` reason in snapshots and lifecycle streams.
+`ShutdownMode::CooperativeThenAbort` still lets the enclosing shutdown
+operation succeed; `ShutdownMode::CooperativeStrict` also returns a timeout
+error. Both modes expose the same truthful `ShutdownTimedOut` reason in
+snapshots and lifecycle streams.
 
 Ordered scopes stop children in reverse declaration order and give each child
 its complete grace, plus that child's accounting beat if it times out. Dynamic

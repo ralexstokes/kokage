@@ -122,7 +122,6 @@ impl Actor for Order {
             (Phase::PendingFill, Message::FillTimedOut) => {
                 self.phase = Phase::Cancelling;
                 ctx.set_timeout(CANCEL, Message::Cancelled, Duration::from_secs(2));
-                assert!(ctx.timeout_armed(CANCEL));
             }
             (Phase::Cancelling, Message::Cancelled) => {
                 ctx.clear_timeout(CANCEL);

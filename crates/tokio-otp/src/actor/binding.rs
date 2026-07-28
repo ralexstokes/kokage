@@ -175,12 +175,30 @@ type KeyMatcher<M> = Arc<dyn Fn(&M, &M) -> bool + Send + Sync>;
 /// FIFO [`Queue`](Self::Queue) mailboxes apply backpressure at the configured
 /// capacity. Conflating mailboxes never wait for capacity: they replace stale
 /// unread state and are intended for idempotent snapshots, not commands.
-#[derive(Default)]
 #[non_exhaustive]
-pub enum MailboxMode<M> {
-    /// A bounded FIFO queue. This is the default.
-    #[default]
+pub struct MailboxMode<M> {
+    kind: MailboxKind<M>,
+}
+
+enum MailboxKind<M> {
     Queue,
+    Conflate,
+    ConflateByKey { key_matches: KeyMatcher<M> },
+}
+
+impl<M> Default for MailboxMode<M> {
+    fn default() -> Self {
+        Self::Queue
+    }
+}
+
+impl<M> MailboxMode<M> {
+    /// A bounded FIFO queue. This is the default.
+    #[allow(non_upper_case_globals)]
+    pub const Queue: Self = Self {
+        kind: MailboxKind::Queue,
+    };
+
     /// One latest-wins slot for the whole mailbox.
     ///
     /// This mode always has capacity 1; the graph's mailbox capacity setting
@@ -189,25 +207,17 @@ pub enum MailboxMode<M> {
     /// Sending never waits for capacity. Awaited
     /// [`ActorRef::send`](crate::ActorRef::send) calls consume Tokio's
     /// cooperative task budget so tight producer loops remain fair.
-    Conflate,
-    /// One latest-wins slot per key, bounded by the mailbox capacity.
-    ///
-    /// When the capacity is already occupied by distinct keys, a message for
-    /// a new key evicts the oldest unread key. Construct this variant with
-    /// [`conflate_by_key`](Self::conflate_by_key).
-    ///
-    /// Sending never waits for capacity. Awaited
-    /// [`ActorRef::send`](crate::ActorRef::send) calls consume Tokio's
-    /// cooperative task budget so tight producer loops remain fair.
-    #[non_exhaustive]
-    ConflateByKey {
-        #[doc(hidden)]
-        key_matches: KeyMatcher<M>,
-    },
-}
+    #[allow(non_upper_case_globals)]
+    pub const Conflate: Self = Self {
+        kind: MailboxKind::Conflate,
+    };
 
-impl<M> MailboxMode<M> {
     /// Creates a keyed latest-wins mailbox using `key` to group messages.
+    ///
+    /// The mailbox stores one latest unread message per key, bounded by its
+    /// configured capacity. When that capacity is already occupied by
+    /// distinct keys, a message for a new key evicts the oldest unread key.
+    /// Sending never waits for capacity.
     ///
     /// Each send scans at most the configured mailbox capacity and may call
     /// `key` for both the incoming and each queued message. Keep extraction
@@ -217,30 +227,33 @@ impl<M> MailboxMode<M> {
         K: Eq,
         F: Fn(&M) -> K + Send + Sync + 'static,
     {
-        Self::ConflateByKey {
-            key_matches: Arc::new(move |left, right| key(left) == key(right)),
+        Self {
+            kind: MailboxKind::ConflateByKey {
+                key_matches: Arc::new(move |left, right| key(left) == key(right)),
+            },
         }
     }
 }
 
 impl<M> Clone for MailboxMode<M> {
     fn clone(&self) -> Self {
-        match self {
-            Self::Queue => Self::Queue,
-            Self::Conflate => Self::Conflate,
-            Self::ConflateByKey { key_matches } => Self::ConflateByKey {
+        let kind = match &self.kind {
+            MailboxKind::Queue => MailboxKind::Queue,
+            MailboxKind::Conflate => MailboxKind::Conflate,
+            MailboxKind::ConflateByKey { key_matches } => MailboxKind::ConflateByKey {
                 key_matches: Arc::clone(key_matches),
             },
-        }
+        };
+        Self { kind }
     }
 }
 
 impl<M> fmt::Debug for MailboxMode<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Queue => f.write_str("Queue"),
-            Self::Conflate => f.write_str("Conflate"),
-            Self::ConflateByKey { .. } => f.write_str("ConflateByKey"),
+        match &self.kind {
+            MailboxKind::Queue => f.write_str("Queue"),
+            MailboxKind::Conflate => f.write_str("Conflate"),
+            MailboxKind::ConflateByKey { .. } => f.write_str("ConflateByKey"),
         }
     }
 }
@@ -289,8 +302,8 @@ pub(crate) fn mailbox<M>(
     mode: &MailboxMode<M>,
     capacity: usize,
 ) -> (MailboxSender<M>, MailboxReceiver<M>) {
-    match mode {
-        MailboxMode::Queue => {
+    match &mode.kind {
+        MailboxKind::Queue => {
             let (sender, receiver) = mpsc::channel(capacity);
             let accepting_external = Arc::new(AtomicBool::new(true));
             (
@@ -304,14 +317,14 @@ pub(crate) fn mailbox<M>(
                 },
             )
         }
-        MailboxMode::Conflate => {
+        MailboxKind::Conflate => {
             let (sender, receiver) = conflating_channel(1, None);
             (
                 MailboxSender::Conflating(sender),
                 MailboxReceiver::Conflating(receiver),
             )
         }
-        MailboxMode::ConflateByKey { key_matches } => {
+        MailboxKind::ConflateByKey { key_matches } => {
             let (sender, receiver) = conflating_channel(capacity, Some(Arc::clone(key_matches)));
             (
                 MailboxSender::Conflating(sender),

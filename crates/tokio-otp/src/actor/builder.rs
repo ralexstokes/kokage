@@ -83,6 +83,13 @@ impl<M> ActorOptions<M> {
         }
     }
 
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.mailbox_capacity == Some(0) {
+            return Err("actor mailbox capacity must be non-zero");
+        }
+        Ok(())
+    }
+
     /// Overrides the hosting scope's mailbox capacity for this actor alone.
     ///
     /// Graph actors otherwise inherit [`GraphBuilder::mailbox_capacity`], while
@@ -235,6 +242,7 @@ impl GraphBuilder {
         actor_id: &str,
         options: ActorOptions<M>,
     ) -> (ActorSlot<M>, ActorRef<M>) {
+        let options_validation = options.validate();
         let ActorOptions {
             mailbox_mode,
             size_hint,
@@ -247,8 +255,15 @@ impl GraphBuilder {
             }
             None => BindingCore::<M>::new(Arc::clone(&actor_id)),
         });
-        let registration =
-            self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core), mailbox_capacity);
+        let registration = match options_validation {
+            Ok(()) => {
+                self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core), mailbox_capacity)
+            }
+            Err(message) => {
+                self.errors.push(GraphBuildError::InvalidConfig(message));
+                None
+            }
+        };
         let (index, actor_ref) = match registration {
             Some((index, actor_ref)) => (Some(index), actor_ref),
             None => (None, Self::detached_ref(&actor_id, size_hint)),
@@ -361,12 +376,6 @@ impl GraphBuilder {
         core: Arc<BindingCore<M>>,
         mailbox_capacity: Option<usize>,
     ) -> Option<(usize, ActorRef<M>)> {
-        if mailbox_capacity == Some(0) {
-            self.errors.push(GraphBuildError::InvalidConfig(
-                "actor mailbox capacity must be non-zero",
-            ));
-            return None;
-        }
         if actor_id.is_empty() {
             self.errors
                 .push(GraphBuildError::InvalidConfig("actor id must not be empty"));

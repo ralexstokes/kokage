@@ -483,8 +483,8 @@ Big shapes that neither application covers, roughly in priority order:
    tasks, mixed trees of raw children and actor subtrees, and meaningful use
    of `ShutdownMode` variants (`Abort`, `CooperativeStrict`) and
    `ShutdownPolicy` grace tuning have no real-application proof.
-3. **Restart backoff as a load-bearing design.** `BackoffPolicy::Fixed` /
-   `Exponential` / `JitteredExponential` appear only in unit examples. A
+3. **Restart backoff as a load-bearing design.** `BackoffPolicy::Fixed` and
+   `Exponential` (with and without jitter) appear only in unit examples. A
    flaky-external-dependency scenario should pin how backoff, the restart
    intensity window, and lifecycle counter envelopes interact.
 4. **Overload where conflation does not apply.** Both applications absorb

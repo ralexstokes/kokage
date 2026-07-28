@@ -642,6 +642,10 @@ impl RunnableActorBuilder {
     where
         F: ActorFactory,
     {
+        debug_assert!(
+            options.validate().is_ok(),
+            "actor options must be validated before actor construction"
+        );
         let actor_id: Arc<str> = label.into().into();
         let mailbox_capacity = options.mailbox_capacity.unwrap_or(self.mailbox_capacity);
         let binding = Arc::new(match options.size_hint {

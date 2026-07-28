@@ -241,7 +241,7 @@ actor message.
 ## Dynamic and Advanced Builder Wiring
 
 Use `GraphBuilder` directly when actors are dynamic, generated in a loop, or
-need explicit observability names. Registration has one primitive:
+require hand-written wiring. Registration has one primitive:
 `builder.slot::<M>(id, options)` reserves the typed ref and
 `builder.define(slot, factory)` fills that token-protected slot. Reserve all
 slots before defining actors when wiring cycles.
