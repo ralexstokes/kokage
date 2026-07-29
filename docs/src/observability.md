@@ -280,7 +280,7 @@ anonymous Tokio tasks.
 
 `observe::ActorStats::outstanding_scope_waits` is the corresponding
 point-in-time gauge for lifecycle waits started with
-`LiveContext::spawn_scope_wait`. It returns to zero when the actor loop reaps a
+`Context::spawn_scope_wait`. It returns to zero when the actor loop reaps a
 result, an explicit `TaskHandle::abort` is observed, or the incarnation
 ends. This makes message-driven code that accumulates never-ending lifecycle
 waits visible.

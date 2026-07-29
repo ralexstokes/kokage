@@ -1,5 +1,5 @@
-error[E0599]: no method named `recv` found for mutable reference `&mut MessageContext<'_, Worker>` in the current scope
+error[E0599]: no method named `recv` found for mutable reference `&mut kokage::Context<'_, Worker>` in the current scope
   --> tests/ui/lifecycle-stages/handle_recv.rs:11:21
    |
 11 |         let _ = ctx.recv().await;
-   |                     ^^^^ method not found in `&mut MessageContext<'_, Worker>`
+   |                     ^^^^ method not found in `&mut kokage::Context<'_, Worker>`

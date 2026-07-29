@@ -24,8 +24,7 @@
 use std::{error::Error, io, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, MessageContext, OrderedTree,
-    host::BoxError,
+    Actor, ActorRef, ActorResult, ActorSpec, Context, DynamicTree, OrderedTree, host::BoxError,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
 use kokage_supervisor::{Backoff, ChildSpec, Restart, Strategy};
@@ -43,11 +42,7 @@ struct Frontend {
 impl Actor for Frontend {
     type Msg = String;
 
-    async fn handle(
-        &mut self,
-        message: String,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.worker.send(message).await?;
         Ok(())
     }
@@ -59,11 +54,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = String;
 
-    async fn handle(
-        &mut self,
-        message: String,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
         if message.contains("fail") {
             println!("worker failing on `{message}`");
             return Err::<_, BoxError>(example_error("simulated worker failure"));
@@ -78,7 +69,7 @@ struct Burst;
 impl Actor for Burst {
     type Msg = u32;
 
-    async fn handle(&mut self, _message: u32, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: u32, _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }

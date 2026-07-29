@@ -6,7 +6,7 @@ identity an `ActorRef` points at — and turns each lifecycle transition into an
 ordinary typed message in the observer's mailbox:
 
 ```rust
-use kokage::{Actor, ActorRef, ActorResult, LiveContext, MessageContext, MonitorEvent, StartContext};
+use kokage::{Actor, ActorRef, ActorResult, Context, MonitorEvent};
 
 enum CoordinatorMsg {
     Worker(MonitorEvent),
@@ -20,7 +20,7 @@ struct Coordinator {
 impl Actor for Coordinator {
     type Msg = CoordinatorMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.watch(&self.worker, CoordinatorMsg::Worker);
         Ok(())
     }
@@ -28,7 +28,7 @@ impl Actor for Coordinator {
     async fn handle(
         &mut self,
         message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
+        _ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         let CoordinatorMsg::Worker(event) = message;
         match event {

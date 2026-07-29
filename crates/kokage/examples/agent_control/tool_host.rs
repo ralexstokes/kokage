@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{Actor, ActorResult, LiveContext, MessageContext};
+use kokage::{Actor, ActorResult, Context};
 
 use crate::messages::{EffectStatus, ToolHostMsg, ToolOutcome, ToolReport};
 
@@ -16,11 +16,7 @@ pub struct ToolHost {
 impl Actor for ToolHost {
     type Msg = ToolHostMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             ToolHostMsg::Execute { key, call, reply } => {
                 if let Some(outcome) = self.effects.get(&key).cloned() {

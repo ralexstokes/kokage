@@ -15,11 +15,11 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, ControlError,
-    DownReason, DynamicRuntime, DynamicTree, LiveContext, MailboxMode, MessageContext,
-    MonitorEvent, OrderedTree, Restart, RuntimeHandle, SendError, Shutdown, StartContext,
-    StopContext, SupervisorBuildError, SupervisorError, TrySendError,
-    host::{ActorContext, BoxError, ChildSpec, RawActor},
+    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, Context, ControlError,
+    DownReason, DynamicRuntime, DynamicTree, MailboxMode, MonitorEvent, OrderedTree, Restart,
+    RuntimeHandle, SendError, Shutdown, StopContext, SupervisorBuildError, SupervisorError,
+    TrySendError,
+    host::{BoxError, ChildSpec, RawActor, RawContext},
     observe::ChildMembershipView,
 };
 use tokio::{
@@ -44,7 +44,7 @@ impl<M> Clone for Drain<M> {
 impl<M: Send + 'static> RawActor for Drain<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -59,7 +59,7 @@ struct GatedExit {
 impl RawActor for GatedExit {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
         self.release.notified().await;
         if self.fail {
             Err(io::Error::other("dynamic actor failed").into())
@@ -77,12 +77,12 @@ struct CleanStop {
 impl Actor for CleanStop {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.stop();
         Ok(())
     }
@@ -96,7 +96,7 @@ struct RestartOnce {
 impl RawActor for RestartOnce {
     type Msg = ();
 
-    async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<()>) -> ActorResult {
         if self.starts.fetch_add(1, Ordering::SeqCst) == 0 {
             Err(io::Error::other("restart me").into())
         } else {
@@ -119,7 +119,7 @@ struct Watcher {
 impl RawActor for Watcher {
     type Msg = WatchMsg;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let mut watch: Option<CancellationHandle> = None;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -256,7 +256,7 @@ struct ObserveOrder {
 impl RawActor for ObserveOrder {
     type Msg = (u8, u32);
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -267,7 +267,7 @@ impl RawActor for ObserveOrder {
 impl RawActor for Observe {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -286,7 +286,7 @@ struct Forwarder;
 impl RawActor for Forwarder {
     type Msg = ForwardMsg;
 
-    async fn run(&mut self, mut ctx: ActorContext<ForwardMsg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<ForwardMsg>) -> ActorResult {
         let mut target = None;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -468,11 +468,7 @@ struct RemovalProbe {
 impl Actor for RemovalProbe {
     type Msg = RemovalMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             RemovalMsg::Hold => {
                 self.events
@@ -772,7 +768,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
 }
 
 #[tokio::test]
-async fn message_context_stop_applies_restart_policy_before_explicit_removal() {
+async fn context_stop_applies_restart_policy_before_explicit_removal() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -1113,7 +1109,7 @@ struct GatedDrain {
 impl RawActor for GatedDrain {
     type Msg = u64;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         self.release.notified().await;
         while ctx.recv().await.is_some() {}
         Ok(())
@@ -1262,7 +1258,7 @@ struct ForwardTo {
 impl RawActor for ForwardTo {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         while let Some(message) = ctx.recv().await {
             self.target.send(message).await?;
         }
@@ -1320,7 +1316,7 @@ struct PendingActor;
 impl RawActor for PendingActor {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
         pending::<()>().await;
         Ok(())
     }

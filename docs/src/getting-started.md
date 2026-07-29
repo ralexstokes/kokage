@@ -31,7 +31,7 @@ impl Actor for Greeter {
     async fn handle(
         &mut self,
         name: String,
-        _ctx: &mut MessageContext<'_, Self>,
+        _ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         println!("hello, {name}");
         Ok(())

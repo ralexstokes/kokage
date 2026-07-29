@@ -8,7 +8,7 @@ use std::{
 
 use kokage::{
     ActorResult, ActorSpec, CallError, Reply, Restart, Shutdown,
-    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -54,7 +54,7 @@ struct ReplyImmediately;
 impl RawActor for ReplyImmediately {
     type Msg = Request;
 
-    async fn run(&mut self, mut ctx: ActorContext<Request>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Request>) -> ActorResult {
         while let Some(Request::Get(reply)) = ctx.recv().await {
             reply.send("ok");
         }
@@ -100,7 +100,7 @@ struct GatedMailbox {
 impl RawActor for GatedMailbox {
     type Msg = BackpressuredRequest;
 
-    async fn run(&mut self, mut ctx: ActorContext<BackpressuredRequest>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<BackpressuredRequest>) -> ActorResult {
         self.started.send(()).expect("test receiver alive");
         self.release.notified().await;
         while let Some(message) = ctx.recv().await {
@@ -170,7 +170,7 @@ struct DelayedReply {
 impl RawActor for DelayedReply {
     type Msg = Request;
 
-    async fn run(&mut self, mut ctx: ActorContext<Request>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Request>) -> ActorResult {
         while let Some(Request::Get(reply)) = ctx.recv().await {
             self.accepted.send(()).expect("test receiver alive");
             self.release.notified().await;
@@ -233,7 +233,7 @@ struct ExitWithoutReceiving {
 impl RawActor for ExitWithoutReceiving {
     type Msg = Request;
 
-    async fn run(&mut self, _ctx: ActorContext<Request>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<Request>) -> ActorResult {
         self.started.send(()).expect("test receiver alive");
         self.exit.notified().await;
         Ok(())

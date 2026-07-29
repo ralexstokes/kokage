@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, LiveContext, MessageContext,
-    OrderedTree, Restart, Runtime, RuntimeHandle, StartContext,
+    Actor, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree, OrderedTree, Restart, Runtime,
+    RuntimeHandle,
     observe::{LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard},
 };
 use tokio::{
@@ -35,11 +35,7 @@ struct Sink {
 impl Actor for Sink {
     type Msg = SinkMsg;
 
-    async fn handle(
-        &mut self,
-        message: SinkMsg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: SinkMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             SinkMsg::Lifecycle(event) => self
                 .observed
@@ -59,7 +55,7 @@ struct Crasher;
 impl Actor for Crasher {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Err(io::Error::other("crash requested").into())
     }
 }
@@ -76,7 +72,7 @@ struct RestrictedSink {
 impl Actor for RestrictedSink {
     type Msg = RestrictedSinkMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         self.watch = Some(
             ctx.supervisor()
                 .watch_lifecycle_to(&ctx.myself(), RestrictedSinkMsg::Lifecycle),
@@ -84,11 +80,7 @@ impl Actor for RestrictedSink {
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         let RestrictedSinkMsg::Lifecycle(event) = message;
         self.observed
             .send(event)

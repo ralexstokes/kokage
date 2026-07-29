@@ -14,14 +14,12 @@ arguments. Each
 spans included. The corresponding `*-pass/` directories cover supported
 derive attributes and visibility.
 
-`lifecycle-stages/` covers the guarantees bought by splitting `ActorContext`
-into per-stage views: `on_start` cannot await its own readiness through
-`RestrictedScope`, `on_stop` cannot await a scope lifecycle through the same
-restricted type, queue a continuation that would be dropped, or start an
-actor-owned scope wait after the receive loop has ended; a handler cannot read
-the mailbox the provided loop owns, and a `RawActor` cannot queue a continuation
-nothing drains. Each was legal code — deadlocking or silently doing nothing —
-when all four hooks shared one context type.
+`lifecycle-stages/` covers the capabilities withheld from actor callbacks.
+The shared live `Context` cannot await its own readiness through
+`RestrictedScope`, while `StopContext` cannot await a scope lifecycle, queue a
+continuation that would be dropped, or start an actor-owned scope wait after
+the receive loop has ended. A handler cannot read the mailbox the provided
+loop owns, and a `RawActor` cannot queue a continuation nothing drains.
 
 Restricted scope handles must also stay restricted under navigation, so
 `on_start_subtree_wait_started.rs` pins that `subtree()` returns another

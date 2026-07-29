@@ -9,14 +9,13 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    task::{Context, Poll},
+    task::{Context as TaskContext, Poll},
     time::Duration,
 };
 
 use kokage::{
-    ActorSlot, LiveContext, MailboxMode, OffloadDeadline, Restart, RuntimeHandle, Shutdown,
-    TaskHandle,
-    host::{ActorContext, RawActor},
+    ActorSlot, MailboxMode, OffloadDeadline, Restart, RuntimeHandle, Shutdown, TaskHandle,
+    host::{RawActor, RawContext},
     prelude::*,
 };
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -66,7 +65,7 @@ struct Outcomes {
 impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
         ctx.offload(
             Duration::from_millis(10),
@@ -82,11 +81,7 @@ impl Actor for Outcomes {
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.observed.send(message).unwrap();
         Ok(())
     }
@@ -159,7 +154,7 @@ struct SlowDropFuture {
 impl std::future::Future for SlowDropFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         Poll::Pending
     }
 }
@@ -187,11 +182,7 @@ impl Drop for ReleaseOnDrop {
 impl Actor for StaleActor {
     type Msg = StaleMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             StaleMsg::Start => {
                 assert_eq!(self.incarnation, 0);
@@ -290,11 +281,7 @@ struct AbortActor {
 impl Actor for AbortActor {
     type Msg = AbortMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             AbortMsg::Start => {
                 let handle =
@@ -362,11 +349,7 @@ struct ReadyAbortActor {
 impl Actor for ReadyAbortActor {
     type Msg = ReadyAbortMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             ReadyAbortMsg::Start => {
                 let handle = ctx.offload(Duration::from_secs(1), async {}, |_| ReadyAbortMsg::Done);
@@ -429,11 +412,7 @@ struct DrainAbortActor {
 impl Actor for DrainAbortActor {
     type Msg = DrainAbortMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             DrainAbortMsg::Start => {
                 let shutdown = ctx.shutdown_token().clone();
@@ -502,11 +481,7 @@ struct ShutdownActor {
 impl Actor for ShutdownActor {
     type Msg = DrainMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             DrainMsg::Start => {
                 let release = self.release.clone();
@@ -608,11 +583,7 @@ struct BackpressureActor {
 impl Actor for BackpressureActor {
     type Msg = BackpressureMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             BackpressureMsg::Start => {
                 let release = self.offload_release.clone();
@@ -737,11 +708,7 @@ struct DeadlineDrainActor {
 impl Actor for DeadlineDrainActor {
     type Msg = DeadlineDrainMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             DeadlineDrainMsg::Start => {
                 ctx.offload(
@@ -795,7 +762,7 @@ struct RawCompletion {
 impl RawActor for RawCompletion {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         ctx.offload(Duration::from_secs(1), async {}, |_| "done");
         let message = ctx.recv().await.expect("offload completion");
         self.observed.send(message).unwrap();
@@ -829,11 +796,7 @@ struct PanicActor;
 impl Actor for PanicActor {
     type Msg = PanicMsg;
 
-    async fn handle(
-        &mut self,
-        _message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, _message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.offload(
             Duration::from_secs(1),
             async { panic!("offload panic") },

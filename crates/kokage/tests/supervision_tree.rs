@@ -13,7 +13,7 @@ use tokio::{sync::Notify, time::sleep};
 use kokage::{
     ActorSpec, DynamicTree, MailboxMode, Restart, ScopeKind, Shutdown, Strategy,
     SupervisorBuildError,
-    host::{ActorContext, ChildSpec, RawActor},
+    host::{ChildSpec, RawActor, RawContext},
     observe::ChildOutline,
     prelude::*,
 };
@@ -23,11 +23,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = Reply<u32>;
 
-    async fn handle(
-        &mut self,
-        reply: Reply<u32>,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, reply: Reply<u32>, _ctx: &mut Context<'_, Self>) -> ActorResult {
         reply.send(7);
         Ok(())
     }
@@ -38,7 +34,7 @@ struct Finite;
 impl RawActor for Finite {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ActorResult {
         Ok(())
     }
 }
@@ -48,7 +44,7 @@ struct Parked;
 impl RawActor for Parked {
     type Msg = Vec<u8>;
 
-    async fn run(&mut self, ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ActorResult {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }

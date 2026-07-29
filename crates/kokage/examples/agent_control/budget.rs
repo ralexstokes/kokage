@@ -1,6 +1,6 @@
 //! Token-spend metering with a global cap and guard notification.
 
-use kokage::{Actor, ActorRef, ActorResult, MessageContext};
+use kokage::{Actor, ActorRef, ActorResult, Context};
 
 use crate::messages::{BudgetMsg, BudgetReport, GuardMsg};
 
@@ -24,11 +24,7 @@ impl Budget {
 impl Actor for Budget {
     type Msg = BudgetMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             BudgetMsg::Charge { chat, tokens } => {
                 *self.report.by_chat.entry(chat).or_default() += tokens;

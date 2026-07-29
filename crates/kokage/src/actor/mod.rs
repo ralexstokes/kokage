@@ -22,8 +22,8 @@ pub use builder::{ActorSlot, ActorSpec, SealedActorSlot, SealedActorSpec};
 pub(crate) use cancellation::CancelOnDrop;
 pub use cancellation::CancellationHandle;
 pub use context::{
-    ActorContext, ActorRef, ActorStatus, DynamicRestrictedScope, LiveContext, MessageContext,
-    Reply, RestrictedScope, StartContext, StopContext, TaskHandle, TimerKey,
+    ActorRef, ActorStatus, Context, DynamicRestrictedScope, RawContext, Reply, RestrictedScope,
+    StopContext, TaskHandle, TimerKey,
 };
 pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError};
 pub use factory::ActorFactory;

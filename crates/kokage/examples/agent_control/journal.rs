@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use kokage::{Actor, ActorResult, MessageContext};
+use kokage::{Actor, ActorResult, Context};
 
 use crate::messages::{AppendAck, JournalEntry, JournalMsg, JournalReport, StoredEntry};
 
@@ -22,11 +22,7 @@ pub struct Journal {
 impl Actor for Journal {
     type Msg = JournalMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             JournalMsg::Append { chat, entry, reply } => {
                 let duplicate = matches!(

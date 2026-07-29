@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, CancellationHandle, CancellationToken, LiveContext,
-    MessageContext, Restart, StartContext, TimerKey,
+    Actor, ActorRef, ActorResult, ActorSpec, CancellationHandle, CancellationToken, Context,
+    Restart, TimerKey,
 };
 use tokio::time::Instant;
 
@@ -76,7 +76,7 @@ impl Session {
         Ok(())
     }
 
-    fn arm_idle(&mut self, ctx: &mut impl LiveContext<SessionMsg>) {
+    fn arm_idle(&mut self, ctx: &mut Context<'_, Self>) {
         ctx.set_timeout(IDLE_SWEEP_TIMER, SessionMsg::IdleSweep, IDLE_TIMEOUT);
     }
 
@@ -86,7 +86,7 @@ impl Session {
         role: Role,
         attempt: u64,
         input: PendingInput,
-        ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         ctx.clear_timeout(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
@@ -158,7 +158,7 @@ impl Session {
     async fn start_input(
         &mut self,
         input: PendingInput,
-        ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
@@ -168,7 +168,7 @@ impl Session {
         &mut self,
         task: TaskId,
         approved: bool,
-        ctx: &mut impl LiveContext<SessionMsg>,
+        ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         let text = format!(
             "task {task} complete (approved={approved}, prior-context={})",
@@ -202,7 +202,7 @@ impl Session {
 impl Actor for Session {
     type Msg = SessionMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         let mut proof = self.proof.lock().expect("proof lock poisoned");
         proof.session_ready_at.insert(self.chat, Instant::now());
         proof.session_generations.insert(self.chat, self.generation);
@@ -211,11 +211,7 @@ impl Actor for Session {
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             SessionMsg::Rehydrate => {
                 let replay = self

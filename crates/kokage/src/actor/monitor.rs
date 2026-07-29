@@ -34,7 +34,7 @@ pub enum DownReason {
 
 /// Lifecycle transition of a watched logical actor.
 ///
-/// Delivered by [`ActorContext::watch`](crate::host::ActorContext::watch). Events
+/// Delivered by [`RawContext::watch`](crate::host::RawContext::watch). Events
 /// for one watch arrive in lifecycle order: every [`Up`](Self::Up) for a
 /// generation precedes its [`Down`](Self::Down), and
 /// [`Terminated`](Self::Terminated) is final.

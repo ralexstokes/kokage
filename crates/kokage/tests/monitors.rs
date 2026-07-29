@@ -7,7 +7,7 @@ use std::{future::pending, sync::Arc, time::Duration};
 use kokage::{
     ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, DownReason,
     DynamicTree, MonitorEvent, Restart,
-    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use kokage_supervisor::Shutdown;
 use tokio::{
@@ -30,7 +30,7 @@ struct Peer {
 impl RawActor for Peer {
     type Msg = PeerMessage;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         self.started.send(()).expect("start receiver alive");
         match ctx.recv().await {
             Some(PeerMessage::Stop) | None => Ok(()),
@@ -56,7 +56,7 @@ struct Observer {
 impl RawActor for Observer {
     type Msg = ObserverMessage;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let watch = ctx.watch(&self.peer, ObserverMessage::Event);
         if self.cancel_watch {
             watch.cancel();
@@ -463,7 +463,7 @@ struct TaggedObserver {
 impl RawActor for TaggedObserver {
     type Msg = TaggedObserverMessage;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let registration = self
             .registrations
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -614,7 +614,7 @@ struct AliasedObserver {
 impl RawActor for AliasedObserver {
     type Msg = AliasedObserverMessage;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         for registration in 0..2 {
             let watch = ctx.watch(&self.peer, move |event| AliasedObserverMessage::Event {
                 registration,
@@ -738,7 +738,7 @@ struct ManagedObserver {
 impl RawActor for ManagedObserver {
     type Msg = ManagedObserverMessage;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let watch = ctx.watch(&self.peer, ManagedObserverMessage::Event);
         self.watch.send(watch).expect("watch receiver alive");
         while let Some(message) = ctx.recv().await {
@@ -1218,7 +1218,7 @@ struct GatedObserver {
 impl RawActor for GatedObserver {
     type Msg = MonitorEvent;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let watch = ctx.watch(&self.peer, |event| event);
         self.watch.send(watch).expect("watch receiver alive");
         self.gate.notified().await;
@@ -1312,7 +1312,7 @@ struct StubbornPeer {
 impl RawActor for StubbornPeer {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ActorResult {
         self.started.send(()).expect("start receiver alive");
         pending().await
     }
@@ -1328,7 +1328,7 @@ struct UnitObserver {
 impl RawActor for UnitObserver {
     type Msg = MonitorEvent;
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         ctx.watch(&self.peer, |event| event);
         self.started.send(()).expect("start receiver alive");
         while let Some(event) = ctx.recv().await {
@@ -1400,7 +1400,7 @@ struct PanickingMapper {
 impl RawActor for PanickingMapper {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let mapped = self.mapped.clone();
         ctx.watch(&self.peer, move |_event| {
             mapped.send(()).expect("mapping receiver alive");

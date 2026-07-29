@@ -5,7 +5,7 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use kokage::{Actor, ActorResult, ActorSpec, DynamicTree, MessageContext, observe::ActorStats};
+use kokage::{Actor, ActorResult, ActorSpec, Context, DynamicTree, observe::ActorStats};
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
 use kokage_supervisor::{ChildSpec, RunningSupervisor, Supervisor};
 use serde_json::{Value, json};
@@ -31,7 +31,7 @@ struct IdleActor;
 impl Actor for IdleActor {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }

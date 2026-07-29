@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, MessageContext, Reply, Restart, RuntimeHandle,
-    StartContext, observe::SupervisorSnapshotReceiver,
+    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, RuntimeHandle,
+    observe::SupervisorSnapshotReceiver,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
@@ -54,16 +54,12 @@ struct DerivedActor {
 impl Actor for DerivedActor {
     type Msg = ProbeMsg;
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.incarnation = self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {
                 self.local += 1;

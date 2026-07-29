@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, ControlError, DynamicTree, LiveContext,
-    MessageContext, OrderedTree, RuntimeHandle, Shutdown, StartContext, Strategy, SupervisorError,
+    Actor, ActorRef, ActorResult, ActorSlot, Context, ControlError, DynamicTree, OrderedTree,
+    RuntimeHandle, Shutdown, Strategy, SupervisorError,
     observe::{
         ChildMembershipView, LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard,
         SupervisorSnapshot,
@@ -144,12 +144,7 @@ impl Router {
     /// allocator outlives this router), so a replacement never contends with
     /// a predecessor whose removal is still draining, and an `Evict` naming
     /// an id can never be misread as targeting a successor.
-    fn mint(
-        &mut self,
-        chat: ChatId,
-        buffered: Vec<PendingInput>,
-        ctx: &mut impl LiveContext<RouterMsg>,
-    ) {
+    fn mint(&mut self, chat: ChatId, buffered: Vec<PendingInput>, ctx: &mut Context<'_, Self>) {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
         let actor_slot = ActorSlot::new("session");
@@ -216,12 +211,7 @@ impl Router {
         );
     }
 
-    fn pipeline_remove(
-        &self,
-        chat: ChatId,
-        subtree_id: String,
-        ctx: &mut impl LiveContext<RouterMsg>,
-    ) {
+    fn pipeline_remove(&self, chat: ChatId, subtree_id: String, ctx: &mut Context<'_, Self>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
         ctx.offload(
@@ -248,7 +238,7 @@ impl Router {
 
     /// Removes a subtree that no live slot routes to: an orphan minted by a
     /// previous router incarnation, or a stale duplicate retirement request.
-    fn pipeline_sweep(&self, subtree_id: String, ctx: &mut impl LiveContext<RouterMsg>) {
+    fn pipeline_sweep(&self, subtree_id: String, ctx: &mut Context<'_, Self>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
         ctx.offload(
@@ -302,7 +292,7 @@ impl Router {
     /// This is shared by initial watch alignment and lifecycle overflow. A
     /// removal already in progress needs no second request; every active
     /// membership not owned by this router incarnation is swept.
-    fn reconcile_mount_snapshot(&mut self, ctx: &mut impl LiveContext<RouterMsg>) {
+    fn reconcile_mount_snapshot(&mut self, ctx: &mut Context<'_, Self>) {
         let (alignment_seq, orphaned) =
             mount_reconciliation(self.mount.snapshot(), |id| self.routes_subtree(id));
         self.alignment_seq = alignment_seq;
@@ -315,7 +305,7 @@ impl Router {
 impl Actor for Router {
     type Msg = RouterMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         // Alignment is watch first, snapshot second, then seq filtering in the
         // handler. A restarted router owns no prior slots, so every membership
         // in the snapshot is an orphan to sweep. A concurrently completed old
@@ -328,11 +318,7 @@ impl Actor for Router {
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             RouterMsg::MountLifecycle(event) => {
                 match mount_event_disposition(self.alignment_seq, &event) {

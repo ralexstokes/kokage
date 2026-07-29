@@ -1,12 +1,12 @@
 use std::future::Future;
 
-use crate::actor::context::ActorContext;
+use crate::actor::context::RawContext;
 pub(crate) use kokage_supervisor::BoxError;
 
 /// The result type returned by actor run, startup, and message functions.
 ///
 /// `Ok(())` keeps a handler-style actor running after startup or one handled
-/// message. Call [`LiveContext::stop`](crate::LiveContext::stop) before
+/// message. Call [`Context::stop`](crate::Context::stop) before
 /// returning successfully to request a clean self-stop. A custom [`RawActor`]
 /// owns its receive loop, so returning `Ok(())` simply completes that actor
 /// cleanly.
@@ -21,16 +21,15 @@ pub type ActorResult = Result<(), BoxError>;
 ///
 /// # Capability contract
 ///
-/// A raw actor receives the mailbox-owning [`ActorContext`], including
-/// `recv`, `try_recv`, and `mark_ready`. It does not implement
-/// [`LiveContext`](crate::LiveContext): loop-owned timers and continuations
-/// depend on the framework-owned handler loop. A raw actor expresses those
+/// A raw actor receives the mailbox-owning [`RawContext`], including
+/// `recv`, `try_recv`, and `mark_ready`. Loop-owned timers and continuations
+/// depend on the framework-owned handler loop, so a raw actor expresses those
 /// branches directly with Tokio futures beside `recv`, while watches,
 /// offloads, blocking work, identity, and restricted scope access remain
-/// available on `ActorContext` itself.
+/// available on `RawContext` itself.
 ///
 /// Implementors can use
-/// `async fn run(&mut self, ctx: ActorContext<Self::Msg>) -> ActorResult` in
+/// `async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ActorResult` in
 /// their trait impls. Registration takes a reusable
 /// [`ActorFactory`](crate::ActorFactory), so each run owns fresh
 /// incarnation-local state, including non-[`Clone`] fields. Custom raw actors
@@ -47,7 +46,7 @@ pub trait RawActor: Send + 'static {
     type Msg: Send + 'static;
 
     /// Returns whether this actor reports readiness explicitly from
-    /// [`ActorContext::mark_ready`](crate::host::ActorContext::mark_ready).
+    /// [`RawContext::mark_ready`](crate::host::RawContext::mark_ready).
     ///
     /// Handler-style [`Actor`](crate::Actor) implementations do this
     /// automatically after `on_start`; custom raw actors are ready immediately
@@ -57,5 +56,5 @@ pub trait RawActor: Send + 'static {
     }
 
     /// Runs the actor until it finishes or shutdown is requested.
-    fn run(&mut self, ctx: ActorContext<Self::Msg>) -> impl Future<Output = ActorResult> + Send;
+    fn run(&mut self, ctx: RawContext<Self::Msg>) -> impl Future<Output = ActorResult> + Send;
 }

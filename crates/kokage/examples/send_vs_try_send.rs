@@ -2,7 +2,7 @@ use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
     ActorResult, ActorSpec, Restart, Shutdown, TrySendError,
-    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
     sync::{
@@ -20,7 +20,7 @@ struct OneMessageSink {
 impl RawActor for OneMessageSink {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         if let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }

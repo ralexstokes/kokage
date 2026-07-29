@@ -579,7 +579,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{ActorSlot, ActorSpec, MailboxMode};
-    use crate::{Actor, ActorResult, MessageContext, Restart, Shutdown};
+    use crate::{Actor, ActorResult, Context, Restart, Shutdown};
 
     struct OpaqueMessage;
 
@@ -590,11 +590,7 @@ mod tests {
     impl Actor for OpaqueActor {
         type Msg = OpaqueMessage;
 
-        async fn handle(
-            &mut self,
-            _: OpaqueMessage,
-            _: &mut MessageContext<'_, Self>,
-        ) -> ActorResult {
+        async fn handle(&mut self, _: OpaqueMessage, _: &mut Context<'_, Self>) -> ActorResult {
             Ok(())
         }
     }
@@ -689,7 +685,7 @@ mod tests {
     struct StringActor;
     impl Actor for StringActor {
         type Msg = String;
-        async fn handle(&mut self, _: String, _: &mut MessageContext<'_, Self>) -> ActorResult {
+        async fn handle(&mut self, _: String, _: &mut Context<'_, Self>) -> ActorResult {
             Ok(())
         }
     }
@@ -697,7 +693,7 @@ mod tests {
     struct SnapshotActor;
     impl Actor for SnapshotActor {
         type Msg = Snapshot;
-        async fn handle(&mut self, _: Snapshot, _: &mut MessageContext<'_, Self>) -> ActorResult {
+        async fn handle(&mut self, _: Snapshot, _: &mut Context<'_, Self>) -> ActorResult {
             Ok(())
         }
     }

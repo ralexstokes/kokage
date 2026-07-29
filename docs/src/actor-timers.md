@@ -38,7 +38,7 @@ const RECONNECT: TimerKey = TimerKey::new("reconnect");
 impl Actor for Worker {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
         self.reconcile = Some(ctx.interval_to(
             &ctx.myself(),
@@ -51,7 +51,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: Message,
-        _ctx: &mut MessageContext<'_, Self>,
+        _ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
@@ -114,7 +114,7 @@ const CANCEL: TimerKey = TimerKey::new("cancel");
 impl Actor for Order {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.set_timeout(FILL, Message::FillTimedOut, Duration::from_millis(500));
         Ok(())
     }
@@ -122,7 +122,7 @@ impl Actor for Order {
     async fn handle(
         &mut self,
         message: Message,
-        ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         match (&self.phase, message) {
             (Phase::PendingFill, Message::Filled) => {
@@ -178,7 +178,7 @@ an order deadline can clear the timeout instead of allowing a stale
 ## Cross-actor timers
 
 `send_after_to` and `interval_to` live on every live stage context and on
-`host::ActorContext`. Pass the target's `ActorRef`; the context binds the timer
+`host::RawContext`. Pass the target's `ActorRef`; the context binds the timer
 to the scheduling incarnation internally:
 
 ```rust,ignore

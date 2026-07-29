@@ -12,9 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, CallError, MailboxMode, MessageContext, Reply, Restart,
-    Shutdown, StartContext,
-    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
+    Actor, ActorResult, ActorSlot, CallError, Context, MailboxMode, Reply, Restart, Shutdown,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -38,7 +37,7 @@ impl<M> Clone for GatedCollector<M> {
 impl<M: Send + 'static> RawActor for GatedCollector<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<M>) -> ActorResult {
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         while let Some(message) = ctx.recv().await {
@@ -426,14 +425,14 @@ struct GatedDrainActor {
 impl Actor for GatedDrainActor {
     type Msg = u64;
 
-    async fn handle(&mut self, message: u64, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: u64, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.received
             .send(message)
             .expect("test receives drained message");
         Ok(())
     }
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.started.send(()).expect("test receives start signal");
         self.release.notified().await;
         Ok(())

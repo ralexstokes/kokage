@@ -1,9 +1,8 @@
 //! One transient role run, implemented as a mailbox-driven state machine.
 
-use kokage::LiveContext;
 use std::sync::Arc;
 
-use kokage::{Actor, ActorRef, ActorResult, CancellationToken, MessageContext, StartContext};
+use kokage::{Actor, ActorRef, ActorResult, CancellationToken, Context};
 
 use crate::{
     messages::{
@@ -46,7 +45,7 @@ impl AgentRun {
         Ok(())
     }
 
-    fn start_model(&self, ctx: &mut impl LiveContext<RunMsg>) {
+    fn start_model(&self, ctx: &mut Context<'_, Self>) {
         let request = TurnRequest {
             chat: self.chat,
             task: self.task,
@@ -65,7 +64,7 @@ impl AgentRun {
         });
     }
 
-    async fn start_tool(&self, index: usize, ctx: &mut impl LiveContext<RunMsg>) -> ActorResult {
+    async fn start_tool(&self, index: usize, ctx: &mut Context<'_, Self>) -> ActorResult {
         let call = self.tools[index].clone();
         let key = format!("{}:{}:{index}", self.chat, self.task);
         self.append(JournalEntry::ToolIntent {
@@ -118,7 +117,7 @@ impl AgentRun {
         Ok(())
     }
 
-    async fn finish(&self, ctx: &mut MessageContext<'_, Self>, output: RunOutput) -> ActorResult {
+    async fn finish(&self, ctx: &mut Context<'_, Self>, output: RunOutput) -> ActorResult {
         self.session
             .send(SessionMsg::RunFinished {
                 task: self.task,
@@ -134,16 +133,12 @@ impl AgentRun {
 impl Actor for AgentRun {
     type Msg = RunMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.continue_with(RunMsg::Step);
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             RunMsg::Step => self.start_model(ctx),
             RunMsg::ModelResult { result } => {

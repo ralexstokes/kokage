@@ -1,13 +1,13 @@
 //! Continuations are abandoned once the actor begins stopping, so queuing one
 //! from `on_stop` was a silent no-op before the stage split.
-use kokage::{Actor, ActorResult, MessageContext, StopContext, host::BoxError};
+use kokage::{Actor, ActorResult, Context, StopContext, host::BoxError};
 
 struct Worker;
 
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 

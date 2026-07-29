@@ -15,9 +15,8 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, LiveContext, MessageContext,
-            OrderedTree, Reply, StartContext, StopContext, SupervisorSnapshot,
-            SupervisorSnapshotReceiver,
+            Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, OrderedTree, Reply,
+            StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
         };
     }
 
@@ -35,8 +34,8 @@ mod coverage_probe {
 
     mod host {
         use kokage::host::{
-            ActorContext, ActorRunError, BoxError, ChildContext, ChildResult, ChildSpec,
-            DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
+            ActorRunError, BoxError, ChildContext, ChildResult, ChildSpec, DEFAULT_SHUTDOWN_BOUND,
+            RawActor, RawContext, RunnableActor,
         };
     }
 
@@ -165,7 +164,7 @@ struct BlockingWorker {
 impl Actor for BlockingWorker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: (), ctx: &mut Context<'_, Self>) -> ActorResult {
         let observed = self.observed.clone();
         let actor_id = ctx.id().to_owned();
         ctx.run_blocking(move |token| {
