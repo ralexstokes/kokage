@@ -94,8 +94,9 @@ setting, while graphless scopes use the library default.
 unkeyed `MailboxMode::conflate()` always stores one unread message and ignores
 either capacity. A zero per-actor capacity is rejected by `add_actor`.
 
-`ActorSpec` retains terminal memberships by default everywhere, including in
-dynamic scopes. For an ephemeral dynamic child, select
+`ActorSpec` retains terminal memberships by default everywhere, whether the
+declaration is registered in a graph, placed directly in an ordered tree, or
+inserted into a dynamic scope. For an ephemeral child, select
 `terminal_membership(TerminalMembership::Remove)` explicitly. An exit is
 terminal only when the restart policy declines to restart it, so removal never
 interrupts a restart cycle. Watches still receive `Down` followed by
@@ -103,15 +104,12 @@ interrupts a restart cycle. Watches still receive `Down` followed by
 when removal completes; wait for the snapshot to drop the membership before
 re-adding the same id.
 
-Dynamic scopes always use `Strategy::OneForOne`, so one actor's exit, restart,
-or removal never starts a sibling restart cycle. Once terminal removal
-completes, only a new `add_actor` call can create another membership with that
-child id.
-
-These defaults apply only to actors added with `add_actor`. Actors declared in
-the static tree remain registered after terminal exit, even when an
-`ActorSpec` gives them `RestartPolicy::Never`; declared membership can be
-recreated when its supervisor restarts.
+The terminal-membership choice has the same meaning for static placement and
+dynamic insertion: `Retain` leaves the stopped membership visible, while
+`Remove` detaches it after the terminal lifecycle events. Dynamic scopes always
+use `Strategy::OneForOne`, so one actor's exit, restart, or removal never starts
+a sibling restart cycle. Once terminal removal completes, only a new
+`add_actor` call can create another membership with that child id.
 
 `add_actor` returns an actor ref matching the factory's actor message type, and
 the same ref keeps working across restarts of that actor. Its stability ends at
@@ -156,7 +154,7 @@ and add the actor normally:
 let venue = handle.subtree("coinbase").expect("venue is running");
 let subscription = venue
     .dynamic().expect("dynamic venue")
-    .add_actor("btc-usd", Subscription::new)
+    .add_actor(ActorSpec::new("btc-usd", Subscription::new))
     .await?;
 ```
 
@@ -183,7 +181,7 @@ let session = sessions
     .await?;
 session
     .dynamic().expect("dynamic session scope")
-    .add_actor("current-run", Run::new)
+    .add_actor(ActorSpec::new("current-run", Run::new))
     .await?;
 ```
 
@@ -212,17 +210,16 @@ factory must capture the scope it will later own or reconcile:
 let sessions_tree = DynamicTree::new();
 let sessions = sessions_tree.handle();
 
-let mut graph = GraphBuilder::new();
-let router = graph.actor("router", move || Router::new(sessions.clone()));
-let graph = graph.build()?;
+let router = ActorSpec::new("router", move || Router::new(sessions.clone()));
+let router_ref = router.actor_ref();
 
 let app_tree = OrderedTree::new()
     // Declaration order makes sessions ready before Router::on_start.
     .subtree("sessions", sessions_tree)
-    .actor(graph.actor_for(&router)?);
+    .actor(router);
 let app_handle = app_tree.handle();
 let app = app_tree.spawn()?;
-# drop((app_handle, app));
+# drop((router_ref, app_handle, app));
 ```
 
 Here `sessions` is a `DynamicRuntimeHandle`, so it can add and remove members
@@ -275,7 +272,7 @@ ctx.spawn_scope_wait(
         children
             .dynamic()
             .ok_or(())?
-            .add_actor("worker", || Worker)
+            .add_actor(ActorSpec::new("worker", || Worker))
             .await
             .map_err(|_| ())?;
         Ok::<_, ()>(())
@@ -341,7 +338,10 @@ Choose one actor as the membership writer and route all adds, removals, and
 replay decisions through it. On every writer incarnation, align its durable
 intent with the truthful supervisor view in this order:
 
-1. Start `watch_lifecycle_to` (or `watch_lifecycle`) first.
+1. Start `watch_lifecycle().direct_children()` first. The underlying lifecycle
+   watch is recursive; omit the depth filter when descendant events are part
+   of the reconciliation. `watch_lifecycle_to` is the mapped direct-child
+   convenience when delivery should go through an actor mailbox.
 2. Read `snapshot()` second and reconcile its current children.
 3. Remember `snapshot.lifecycle_seq`.
 4. Apply only ordinary watched events with a larger `seq`; treat `Added` as an
