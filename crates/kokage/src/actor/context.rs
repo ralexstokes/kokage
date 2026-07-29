@@ -1099,6 +1099,8 @@ impl<M: Send + 'static> RawContext<M> {
     /// silently; the terminal `Terminated` is never dropped.
     /// Dropping the returned [`Guard`] cancels the watch; call
     /// [`Guard::detach`] when membership ownership should keep it alive.
+    /// Delivery of the terminal event finishes the guard without marking it
+    /// cancelled.
     pub fn watch<T, F>(&self, target: &ActorRef<T>, mut map: F) -> Guard
     where
         T: Send + 'static,
@@ -1116,13 +1118,19 @@ impl<M: Send + 'static> RawContext<M> {
         // The guard closes the queue on drop, so the hub stops staging events
         // whether this task exits normally or unwinds through a panicking
         // `map` closure.
-        let guard = target.monitors.register_watch(cancellation.clone());
+        let guard = target
+            .monitors
+            .register_watch(cancellation.clone(), finished.clone());
         let myself = self.myself();
         let task_cancellation = cancellation.clone();
-        let task_finished = finished.clone();
         runtime.spawn(async move {
-            let _finished_on_exit = CancelOnDrop::new(task_finished);
             loop {
+                // Registration can stage an immediate event before this task
+                // is first polled. Observe a guard dropped in that window
+                // before invoking the user mapper.
+                if task_cancellation.is_cancelled() {
+                    break;
+                }
                 // Arm the wake-up before observing the queue so a push that
                 // races an empty drain is not lost.
                 let waiter = guard.queue().waiter();

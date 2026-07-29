@@ -1,9 +1,38 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use crate::CancellationToken;
 
-type CancelAction = Arc<dyn Fn() + Send + Sync>;
 type FinishedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
+
+struct CancelAction {
+    invoked: AtomicBool,
+    action: Box<dyn Fn() + Send + Sync>,
+}
+
+impl CancelAction {
+    fn new(action: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            invoked: AtomicBool::new(false),
+            action: Box::new(action),
+        }
+    }
+
+    fn invoke(&self) {
+        if self
+            .invoked
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            (self.action)();
+        }
+    }
+}
 
 /// Ownership handle for a cancellable background operation.
 ///
@@ -16,7 +45,7 @@ type FinishedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
 pub struct Guard {
     cancellation: CancellationToken,
     is_finished: FinishedProbe,
-    cancel_action: Option<CancelAction>,
+    cancel_action: Option<Arc<CancelAction>>,
     cancel_on_drop: bool,
 }
 
@@ -59,7 +88,7 @@ impl Guard {
         Self {
             cancellation,
             is_finished: Arc::new(is_finished),
-            cancel_action: Some(Arc::new(cancel_action)),
+            cancel_action: Some(Arc::new(CancelAction::new(cancel_action))),
             cancel_on_drop: true,
         }
     }
@@ -71,7 +100,7 @@ impl Guard {
     pub fn cancel(&self) {
         self.cancellation.cancel();
         if let Some(cancel_action) = &self.cancel_action {
-            cancel_action();
+            cancel_action.invoke();
         }
     }
 
@@ -111,5 +140,73 @@ impl Drop for Guard {
         if self.cancel_on_drop {
             self.cancel();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::Guard;
+    use crate::CancellationToken;
+
+    #[test]
+    fn dropping_any_armed_clone_cancels_the_shared_operation() {
+        let cancellation = CancellationToken::new();
+        let guard = Guard::from_probe(cancellation.clone(), || false);
+        let clone = guard.clone();
+
+        drop(clone);
+
+        assert!(guard.is_cancelled());
+        assert!(!guard.is_finished());
+    }
+
+    #[test]
+    fn detaching_one_clone_does_not_disarm_another() {
+        let cancellation = CancellationToken::new();
+        let observed = cancellation.clone();
+        let guard = Guard::from_probe(cancellation, || false);
+        let clone = guard.clone();
+
+        guard.detach();
+        assert!(!observed.is_cancelled());
+        drop(clone);
+        assert!(observed.is_cancelled());
+    }
+
+    #[test]
+    fn finished_state_is_independent_from_cancellation() {
+        let cancellation = CancellationToken::new();
+        let finished = CancellationToken::new();
+        finished.cancel();
+        let guard = Guard::from_tokens(cancellation, finished);
+
+        assert!(guard.is_finished());
+        assert!(!guard.is_cancelled());
+    }
+
+    #[test]
+    fn operation_cancel_action_is_invoked_only_once() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&invocations);
+        let guard = Guard::from_probe_with_cancel(
+            CancellationToken::new(),
+            || false,
+            move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        let clone = guard.clone();
+
+        guard.cancel();
+        clone.cancel();
+        drop(guard);
+        drop(clone);
+
+        assert_eq!(invocations.load(Ordering::Relaxed), 1);
     }
 }

@@ -177,7 +177,7 @@ impl WatchQueue {
 /// unwinds through a panicking `map` closure.
 pub(crate) struct WatchQueueGuard {
     queue: Arc<WatchQueue>,
-    cancellation: CancellationToken,
+    finished: CancellationToken,
 }
 
 impl WatchQueueGuard {
@@ -189,7 +189,7 @@ impl WatchQueueGuard {
 impl Drop for WatchQueueGuard {
     fn drop(&mut self) {
         self.queue.close();
-        self.cancellation.cancel();
+        self.finished.cancel();
     }
 }
 
@@ -255,17 +255,18 @@ impl MonitorHub {
     /// Events are staged while holding the hub lock, which totally orders
     /// them per watch; staging is a non-blocking buffer push, so no user code
     /// runs under the lock.
-    pub(crate) fn register_watch(&self, cancellation: CancellationToken) -> WatchQueueGuard {
+    pub(crate) fn register_watch(
+        &self,
+        cancellation: CancellationToken,
+        finished: CancellationToken,
+    ) -> WatchQueueGuard {
         let queue = WatchQueue::new(&self.actor_id);
         let mut state = self.state();
         state.watchers.retain(Watcher::is_live);
         match state.lifecycle {
             Lifecycle::Terminated(generation) => {
                 queue.push(self.terminated_event(generation));
-                return WatchQueueGuard {
-                    queue,
-                    cancellation,
-                };
+                return WatchQueueGuard { queue, finished };
             }
             Lifecycle::Running(generation) => {
                 queue.push(self.up(generation));
@@ -276,10 +277,7 @@ impl MonitorHub {
             cancellation: cancellation.clone(),
             queue: Arc::clone(&queue),
         });
-        WatchQueueGuard {
-            queue,
-            cancellation,
-        }
+        WatchQueueGuard { queue, finished }
     }
 
     pub(crate) fn started(&self) {
@@ -411,8 +409,11 @@ impl ActorMonitors {
         subject: &Arc<MonitorHub>,
     ) -> (CancellationToken, CancellationToken, bool) {
         let mut watches = self.watches.lock().unwrap_or_else(PoisonError::into_inner);
-        watches
-            .retain(|watch| !watch.cancellation.is_cancelled() && watch.subject.strong_count() > 0);
+        watches.retain(|watch| {
+            !watch.cancellation.is_cancelled()
+                && !watch.finished.is_cancelled()
+                && watch.subject.strong_count() > 0
+        });
         if let Some(watch) = watches.iter().find(|watch| {
             watch
                 .subject
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn dropping_guard_closes_queue_and_prunes_watcher() {
         let hub = MonitorHub::new("peer");
-        let guard = hub.register_watch(CancellationToken::new());
+        let guard = hub.register_watch(CancellationToken::new(), CancellationToken::new());
         assert_eq!(hub.state().watchers.len(), 1);
 
         // A panicking `map` closure unwinds the forwarder, which drops the

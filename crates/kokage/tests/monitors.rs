@@ -49,6 +49,7 @@ enum ObserverMessage {
 struct Observer {
     peer: ActorRef<PeerMessage>,
     observed: mpsc::UnboundedSender<MonitorEvent>,
+    mapped: Option<mpsc::UnboundedSender<MonitorEvent>>,
     started: mpsc::UnboundedSender<()>,
     watch_mode: WatchMode,
 }
@@ -64,7 +65,13 @@ impl RawActor for Observer {
     type Msg = ObserverMessage;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
-        let watch = ctx.watch(&self.peer, ObserverMessage::Event);
+        let mapped = self.mapped.clone();
+        let watch = ctx.watch(&self.peer, move |event| {
+            if let Some(mapped) = &mapped {
+                mapped.send(event.clone()).expect("mapper receiver alive");
+            }
+            ObserverMessage::Event(event)
+        });
         match self.watch_mode {
             WatchMode::Cancel => watch.cancel(),
             WatchMode::Drop => drop(watch),
@@ -95,6 +102,7 @@ struct Fixture {
     observer_ref: ActorRef<ObserverMessage>,
     observer_started: mpsc::UnboundedReceiver<()>,
     observed: mpsc::UnboundedReceiver<MonitorEvent>,
+    mapped: mpsc::UnboundedReceiver<MonitorEvent>,
 }
 
 fn runnable_actor<F>(
@@ -123,12 +131,14 @@ fn fixture(watch_mode: WatchMode) -> Fixture {
         started: peer_started_tx.clone(),
     });
     let (observed_tx, observed) = mpsc::unbounded_channel();
+    let (mapped_tx, mapped) = mpsc::unbounded_channel();
     let (observer_started_tx, observer_started) = mpsc::unbounded_channel();
     let (observer, observer_ref) = runnable_actor("observer", {
         let peer_ref = peer_ref.clone();
         move || Observer {
             peer: peer_ref.clone(),
             observed: observed_tx.clone(),
+            mapped: Some(mapped_tx.clone()),
             started: observer_started_tx.clone(),
             watch_mode,
         }
@@ -141,6 +151,7 @@ fn fixture(watch_mode: WatchMode) -> Fixture {
         observer_ref,
         observer_started,
         observed,
+        mapped,
     }
 }
 
@@ -195,6 +206,25 @@ async fn watch_cancelled(watch: &Guard) {
     })
     .await
     .expect("watch cancelled promptly");
+}
+
+async fn watch_finished(watch: &Guard) {
+    timeout(Duration::from_secs(1), async {
+        while !watch.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("watch finished promptly");
+}
+
+async fn assert_mapper_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEvent>) {
+    assert!(
+        timeout(Duration::from_millis(50), receiver.recv())
+            .await
+            .is_err(),
+        "a watch cancelled before its first poll still invoked the mapper"
+    );
 }
 
 fn up(actor_id: &str, generation: u64) -> MonitorEvent {
@@ -359,6 +389,7 @@ async fn cancelled_watch_suppresses_delivery() {
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
+    assert_mapper_silence(&mut fixture.mapped).await;
 
     fixture
         .peer_ref
@@ -394,6 +425,7 @@ async fn dropped_watch_suppresses_delivery() {
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
+    assert_mapper_silence(&mut fixture.mapped).await;
 
     fixture
         .peer_ref
@@ -751,7 +783,11 @@ async fn repeated_watch_calls_alias_until_cancelled() {
     let (registration, event) = recv_test_event(&mut observed, "replacement terminal event").await;
     assert_eq!(registration, 2);
     assert_eq!(expect_terminated(event, "peer"), Some(0));
-    watch_cancelled(&fresh).await;
+    watch_finished(&fresh).await;
+    assert!(
+        !fresh.is_cancelled(),
+        "a terminal event finishes the watch without cancelling it"
+    );
 
     peer_task
         .await
@@ -891,7 +927,11 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
         expect_terminated(next_event(&mut observed).await, "peer"),
         Some(0)
     );
-    watch_cancelled(&watch).await;
+    watch_finished(&watch).await;
+    assert!(
+        !watch.is_cancelled(),
+        "subject terminality finishes the watch without cancelling it"
+    );
 
     peer_task
         .await
@@ -938,6 +978,7 @@ async fn watching_detached_peer_delivers_immediate_terminated() {
     let (observer, _) = runnable_actor("observer", move || Observer {
         peer: detached_peer.clone(),
         observed: observed_tx.clone(),
+        mapped: None,
         started: started_tx.clone(),
         watch_mode: WatchMode::Detach,
     });
@@ -1189,6 +1230,7 @@ async fn two_observers_receive_the_same_events() {
         move || Observer {
             peer: peer_ref.clone(),
             observed: second_observed_tx.clone(),
+            mapped: None,
             started: second_started_tx.clone(),
             watch_mode: WatchMode::Detach,
         }
@@ -1508,6 +1550,7 @@ async fn pending_target_can_be_dropped_from_non_runtime_thread() {
     let (observer, _) = runnable_actor("observer", move || Observer {
         peer: peer_ref.clone(),
         observed: observed_tx.clone(),
+        mapped: None,
         started: observer_started_tx.clone(),
         watch_mode: WatchMode::Detach,
     });
