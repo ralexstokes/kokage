@@ -49,18 +49,14 @@ impl Actor for RushPress {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let runtime = DynamicTree::new().spawn()?;
+    let tree = DynamicTree::new();
+    let dynamic = tree.handle();
+    let runtime = tree.spawn()?;
 
-    let orders = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let orders = dynamic
         .add_actor(ActorSpec::new("front-desk", || Frontend { rush: None }))
         .await?;
-    let rush = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let rush = dynamic
         .add_actor(ActorSpec::new("rush-press", move || RushPress {
             observed: observed_tx.clone(),
         }))
@@ -79,18 +75,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert_eq!(observed, "vip banners x2");
     println!("rush job {observed}");
 
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
-        .remove_child("front-desk")
-        .await?;
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
-        .remove_child("rush-press")
-        .await?;
+    dynamic.remove_child("front-desk").await?;
+    dynamic.remove_child("rush-press").await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }

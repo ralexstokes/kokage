@@ -224,10 +224,10 @@ runtime.wait().await?;
 
 The scope stops when every named child is simultaneously completed. A child
 counts as completed when its current generation returns `Ok(())` on its own
-and no restart is pending. Failure still follows its restart policy, and an id
-not yet present in a dynamic scope stays pending until added. Use
-[`wait_completed`] to await the same condition without automatically stopping
-the runtime.
+and no restart is pending. Failure still follows its restart policy, and an
+unknown id is rejected. A `DynamicRuntimeHandle` provides the same names with
+future-member semantics when an id may be added later. Use [`wait_completed`]
+to await the same condition without automatically stopping the runtime.
 
 - Failures still follow the normal restart policy. A `Restart::never()` child that fails
   can never complete, and the scope runs until explicitly stopped.

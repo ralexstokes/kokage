@@ -88,10 +88,7 @@ async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
     handle_tx
         .send(Some(handle.handle()))
         .expect("startup actor retains handle receiver");
-    handle
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&handle)
         .add_actor(ActorSpec::new("starter", {
             let added_started = Arc::clone(&added_started);
             move || AddsChildOnStart {

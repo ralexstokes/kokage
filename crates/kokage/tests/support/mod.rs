@@ -1,9 +1,17 @@
 #![allow(dead_code)]
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree, SealedActorSpec,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicRuntimeHandle, OrderedTree, Runtime,
+    SealedActorSpec,
     host::{RawActor, RunnableActor},
 };
+
+pub(crate) fn dynamic_root(runtime: &Runtime) -> DynamicRuntimeHandle {
+    runtime
+        .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
+}
 
 /// Small test fixture for incrementally assembling heterogeneous actor specs.
 ///

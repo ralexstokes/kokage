@@ -390,10 +390,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
 
     let graph = graph.build();
-    let subtree = root
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let subtree = support::dynamic_root(&root)
         .add_subtree("workers", graph.subtree("dynamic", DynamicTree::new()))
         .await
         .expect("subtree added");
@@ -433,10 +430,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 #[tokio::test]
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
-    let middle = root
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let middle = support::dynamic_root(&root)
         .add_subtree("middle", DynamicTree::new())
         .await
         .expect("middle subtree added");
@@ -456,9 +450,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 
     assert_eq!(root.handle().actor_stats().len(), 1);
     assert!(middle.subtree("leaf").is_some());
-    root.handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&root)
         .remove_child("middle")
         .await
         .expect("middle subtree removed");
@@ -486,9 +478,7 @@ async fn subtree_validation_phases_report_rejected() {
         .task(ChildSpec::task("duplicate", |_| async { Ok(()) }))
         .task(ChildSpec::task("duplicate", |_| async { Ok(()) }));
     assert_eq!(
-        root.handle()
-            .dynamic()
-            .expect("dynamic root exposes membership capability")
+        support::dynamic_root(&root)
             .add_subtree("invalid", invalid)
             .await
             .expect_err("invalid subtree fails before insertion"),
@@ -497,10 +487,7 @@ async fn subtree_validation_phases_report_rejected() {
         ))
     );
 
-    let first = root
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let first = support::dynamic_root(&root)
         .add_subtree("workers", DynamicTree::new())
         .await
         .expect("first subtree added");
@@ -511,10 +498,7 @@ async fn subtree_validation_phases_report_rejected() {
         .await
         .expect("actor added");
 
-    let error = root
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let error = support::dynamic_root(&root)
         .add_subtree("workers", DynamicTree::new())
         .await
         .expect_err("duplicate subtree rejected");
@@ -574,10 +558,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     let handle = DynamicTree::new().spawn().expect("runtime builds");
-    let tracked = handle
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let tracked = support::dynamic_root(&handle)
         .add_actor(ActorSpec::new("worker", Drain::<()>::new))
         .await
         .expect("tracked actor added");
@@ -606,17 +587,11 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         }
     });
 
-    handle
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&handle)
         .remove_child("worker")
         .await
         .expect("tracked actor removed through runtime handle");
-    handle
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&handle)
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -758,10 +733,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     graph.define(static_ref_slot, || FailOnMessage);
     let root = DynamicTree::new().spawn().expect("runtime builds");
     let graph = graph.build();
-    let subtree = root
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let subtree = support::dynamic_root(&root)
         .add_subtree(
             "workers",
             graph

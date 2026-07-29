@@ -87,7 +87,8 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// Ordered scopes contain a declared child sequence. Declaration order controls
 /// readiness-gated startup, reverse-order shutdown, and the suffix restarted
 /// by [`Strategy::RestForOne`]. Use [`DynamicTree`] for an empty leaf whose
-/// membership is written through a [`DynamicRuntimeHandle`] after spawn.
+/// membership is written through a [`DynamicRuntimeHandle`] obtained before or
+/// after spawn.
 ///
 /// Actor declarations can be placed directly at different scope levels while
 /// retaining their typed wiring.
