@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{LifecycleEventKind, prelude::*};
+use kokage_supervisor::prelude::*;
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -59,21 +59,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nested_handle = running
         .supervisor("nested-pipeline")
         .expect("newly added nested supervisor has a stable handle");
-    let mut nested_lifecycle = nested_handle.watch_lifecycle();
-
-    loop {
-        let event = timeout(Duration::from_secs(2), nested_lifecycle.next())
-            .await?
-            .ok_or_else(|| std::io::Error::other("nested lifecycle stream closed"))?;
-        println!("nested event: {event:?}");
-        if matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, generation: 1, .. }
-                if child_id == "nested-worker"
-        ) {
-            break;
-        }
-    }
+    let mut nested_snapshots = nested_handle.subscribe_snapshots();
+    timeout(
+        Duration::from_secs(2),
+        nested_snapshots.wait_for_child("nested-worker", |child| {
+            child.generation > 0 && child.state.is_running()
+        }),
+    )
+    .await??;
 
     let metrics = running
         .snapshot()

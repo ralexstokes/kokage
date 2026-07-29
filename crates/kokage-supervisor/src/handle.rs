@@ -380,6 +380,7 @@ impl StableSupervisorChannels {
                     },
                     membership: ChildMembershipView::Active,
                     restart_count: 0,
+                    restart_policy: crate::RestartPolicy::default(),
                     next_restart_in: None,
                     supervisor: None,
                 })

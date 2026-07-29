@@ -1986,6 +1986,7 @@ impl SupervisorRuntime {
                     MembershipState::Removed => unreachable!("removed children filtered"),
                 },
                 restart_count: entry.runtime.restart_tracker.total_restarts(),
+                restart_policy: entry.runtime.definition.restart,
                 next_restart_in: entry
                     .runtime
                     .next_restart_deadline

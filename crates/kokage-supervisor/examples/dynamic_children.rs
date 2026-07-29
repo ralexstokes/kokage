@@ -1,13 +1,11 @@
-use kokage_supervisor::{
-    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, prelude::*,
-};
+use kokage_supervisor::prelude::*;
 use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_owner = Supervisor::dynamic().spawn()?;
     let running = running_owner.handle();
-    let mut events = running.watch_lifecycle();
+    let mut snapshots = running.subscribe_snapshots();
 
     running
         .dynamic()
@@ -20,7 +18,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .await?;
 
-    wait_for_child_started(&mut events, "api").await?;
+    timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for_child("api", |child| child.state.is_running()),
+    )
+    .await??;
 
     running
         .dynamic()
@@ -42,7 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .await?;
 
-    wait_for_child_started(&mut events, "cache-warmer").await?;
+    timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for_child("cache-warmer", |child| child.state.is_running()),
+    )
+    .await??;
     println!("cache-warmer added at runtime");
 
     // Let the child do visible work before demonstrating runtime removal.
@@ -53,7 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("dynamic supervisor")
         .remove_child("cache-warmer")
         .await?;
-    wait_for_child_removed(&mut events, "cache-warmer").await?;
+    timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
+    )
+    .await??;
     println!("cache-warmer removed at runtime");
 
     let nested = Supervisor::dynamic().build()?;
@@ -63,10 +73,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await?;
-    wait_for_nested_supervisor_started(&mut events, "nested").await?;
+    timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for_child("nested", |child| child.state.is_running()),
+    )
+    .await??;
     let nested = running
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
+    let mut nested_snapshots = nested.subscribe_snapshots();
     nested
         .dynamic()
         .expect("dynamic supervisor")
@@ -77,7 +92,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }))
         .await?;
-    wait_for_nested_child_started(&mut events, "nested", "seed").await?;
+    timeout(
+        Duration::from_secs(2),
+        nested_snapshots.wait_for_child("seed", |child| child.state.is_running()),
+    )
+    .await??;
     println!("nested supervisor added at runtime");
 
     nested
@@ -100,7 +119,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .await?;
 
-    wait_for_nested_child_started(&mut events, "nested", "nested-cache").await?;
+    timeout(
+        Duration::from_secs(2),
+        nested_snapshots.wait_for_child("nested-cache", |child| child.state.is_running()),
+    )
+    .await??;
     println!("nested-cache added inside nested supervisor");
 
     // Let the child do visible work before demonstrating runtime removal.
@@ -111,115 +134,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("dynamic supervisor")
         .remove_child("nested-cache")
         .await?;
-    wait_for_nested_child_removed(&mut events, "nested", "nested-cache").await?;
+    timeout(
+        Duration::from_secs(2),
+        nested_snapshots.wait_for(|snapshot| snapshot.child("nested-cache").is_none()),
+    )
+    .await??;
     println!("nested-cache removed from nested supervisor");
 
     running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())
-}
-
-async fn wait_for_child_started(
-    events: &mut LifecycleWatch,
-    child_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event = wait_for_event(events, |event| {
-        matches!(
-            &event.kind,
-            LifecycleEventKind::ChildStarted { child_id: id, .. }
-                if event.supervisor_path.is_empty() && id == child_id
-        )
-    })
-    .await?;
-    println!("event: {event:?}");
-    Ok(())
-}
-
-async fn wait_for_child_removed(
-    events: &mut LifecycleWatch,
-    child_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event = wait_for_event(events, |event| {
-        matches!(
-            &event.kind,
-            LifecycleEventKind::ChildRemoved { child_id: id, .. }
-                if event.supervisor_path.is_empty() && id == child_id
-        )
-    })
-    .await?;
-    println!("event: {event:?}");
-    Ok(())
-}
-
-async fn wait_for_nested_supervisor_started(
-    events: &mut LifecycleWatch,
-    nested_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event = wait_for_event(events, |event| {
-        matches!(
-            event.supervisor_path.as_slice(),
-            [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
-        ) && matches!(event.kind, LifecycleEventKind::SupervisorStarted)
-    })
-    .await?;
-    println!("event: {event:?}");
-    Ok(())
-}
-
-async fn wait_for_nested_child_started(
-    events: &mut LifecycleWatch,
-    nested_id: &str,
-    child_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event = wait_for_event(events, |event| {
-        matches!(
-            event.supervisor_path.as_slice(),
-            [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
-        ) && matches!(
-            &event.kind,
-            LifecycleEventKind::ChildStarted { child_id: id, generation: 0, .. }
-                if id == child_id
-        )
-    })
-    .await?;
-    println!("event: {event:?}");
-    Ok(())
-}
-
-async fn wait_for_nested_child_removed(
-    events: &mut LifecycleWatch,
-    nested_id: &str,
-    child_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let event = wait_for_event(events, |event| {
-        matches!(
-            event.supervisor_path.as_slice(),
-            [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
-        ) && matches!(
-            &event.kind,
-            LifecycleEventKind::ChildRemoved { child_id: id, .. } if id == child_id
-        )
-    })
-    .await?;
-    println!("event: {event:?}");
-    Ok(())
-}
-
-async fn wait_for_event(
-    events: &mut LifecycleWatch,
-    mut predicate: impl FnMut(&LifecycleEvent) -> bool,
-) -> Result<LifecycleEvent, Box<dyn std::error::Error>> {
-    Ok(timeout(Duration::from_secs(2), async {
-        loop {
-            let event = events
-                .next()
-                .await
-                .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
-            if predicate(&event) {
-                return Ok::<_, std::io::Error>(event);
-            }
-        }
-    })
-    .await??)
 }

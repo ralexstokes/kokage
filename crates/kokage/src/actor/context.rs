@@ -653,12 +653,6 @@ pub(crate) struct TimerWake {
     pub(crate) deadline: Instant,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TimerSlot {
-    Keyed(TimerKey),
-    Anonymous,
-}
-
 enum Delivery<M> {
     Mailbox(Option<M>),
     Offload(Result<OffloadCompletion<M>, JoinError>),
@@ -672,14 +666,10 @@ pub(crate) struct OffloadCompletion<M> {
 
 struct TimerEntry<M> {
     id: u64,
-    slot: TimerSlot,
+    key: TimerKey,
     deadline: Instant,
     message: M,
-    cancellation: Option<CancellationToken>,
-    repeat: Option<TimerRepeat<M>>,
 }
-
-type TimerRepeat<M> = (Duration, fn(&M) -> M);
 
 /// Far-future cap for deadlines that would otherwise overflow, mirroring the
 /// horizon tokio's own timer wheel saturates to.
@@ -713,47 +703,30 @@ impl<M> TimerTable<M> {
         id
     }
 
-    fn insert(
-        &mut self,
-        slot: TimerSlot,
-        message: M,
-        delay: Duration,
-        cancellation: Option<CancellationToken>,
-        repeat: Option<TimerRepeat<M>>,
-    ) {
-        if slot != TimerSlot::Anonymous
-            && let Some(index) = self.entries.iter().position(|entry| entry.slot == slot)
-        {
+    fn insert(&mut self, key: TimerKey, message: M, delay: Duration) {
+        if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.swap_remove(index);
         }
         let id = self.next_id();
         self.entries.push(TimerEntry {
             id,
-            slot,
+            key,
             deadline: deadline_after(delay),
             message,
-            cancellation,
-            repeat,
         });
     }
 
-    fn clear(&mut self, slot: TimerSlot) {
-        if let Some(index) = self.entries.iter().position(|entry| entry.slot == slot) {
+    fn clear(&mut self, key: TimerKey) {
+        if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.swap_remove(index);
         }
     }
 
-    fn is_armed(&self, slot: TimerSlot) -> bool {
-        self.entries.iter().any(|entry| entry.slot == slot)
+    fn is_armed(&self, key: TimerKey) -> bool {
+        self.entries.iter().any(|entry| entry.key == key)
     }
 
     fn next_wake(&mut self) -> Option<TimerWake> {
-        self.entries.retain(|entry| {
-            !entry
-                .cancellation
-                .as_ref()
-                .is_some_and(CancellationToken::is_cancelled)
-        });
         self.entries
             .iter()
             .min_by_key(|entry| entry.deadline)
@@ -771,26 +744,8 @@ impl<M> TimerTable<M> {
         if self.entries[index].deadline > Instant::now() {
             return None;
         }
-        if self.entries[index]
-            .cancellation
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
-            self.entries.swap_remove(index);
-            return None;
-        }
-        if let Some((period, clone_message)) = self.entries[index].repeat {
-            let message = clone_message(&self.entries[index].message);
-            self.entries[index].deadline = deadline_after(period);
-            Some(message)
-        } else {
-            Some(self.entries.swap_remove(index).message)
-        }
+        Some(self.entries.swap_remove(index).message)
     }
-}
-
-fn clone_message<M: Clone>(message: &M) -> M {
-    message.clone()
 }
 
 pub(crate) struct ActorLifetime(CancellationToken);
@@ -1597,43 +1552,17 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// mailbox. Replacement and [`clear_timeout`](Self::clear_timeout) are
     /// therefore exact until delivery. Timeouts at other keys are unchanged.
     fn set_timeout(&mut self, key: TimerKey, message: M, delay: Duration) {
-        self.cx_mut()
-            .timers
-            .insert(TimerSlot::Keyed(key), message, delay, None, None);
+        self.cx_mut().timers.insert(key, message, delay);
     }
 
     /// Clears the timeout at `key`, if one is armed.
     fn clear_timeout(&mut self, key: TimerKey) {
-        self.cx_mut().timers.clear(TimerSlot::Keyed(key));
+        self.cx_mut().timers.clear(key);
     }
 
     /// Returns whether the timeout at `key` is armed.
     fn timeout_armed(&self, key: TimerKey) -> bool {
-        self.cx().timers.is_armed(TimerSlot::Keyed(key))
-    }
-
-    /// Schedules a periodic actor-local message.
-    ///
-    /// The first message is delivered after one full period. Each delivery
-    /// arms the next one, so missed ticks never pile up. A zero period returns
-    /// an already-cancelled handle and sends no messages.
-    fn interval(&mut self, message: M, period: Duration) -> CancellationHandle
-    where
-        M: Clone,
-    {
-        let timer = CancellationHandle::new();
-        if period.is_zero() {
-            timer.cancel();
-            return timer;
-        }
-        self.cx_mut().timers.insert(
-            TimerSlot::Anonymous,
-            message,
-            period,
-            Some(timer.token()),
-            Some((period, clone_message::<M>)),
-        );
-        timer
+        self.cx().timers.is_armed(key)
     }
 
     /// Sends `message` to `target` after `delay`, bound to this incarnation.

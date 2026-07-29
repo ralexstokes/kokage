@@ -66,19 +66,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         entries: HashMap::new(),
     }));
     let graph = graph.build()?;
+    let dynamic_tree = DynamicTree::new();
+    let dynamic = dynamic_tree.handle();
     let runtime = OrderedTree::graph(graph)
-        .subtree("dynamic", DynamicTree::new())
+        .subtree("dynamic", dynamic_tree)
         .spawn()?;
     let handle = runtime.handle();
     handle.wait_started().await?;
-    let dynamic = handle
-        .subtree("dynamic")
-        .expect("dynamic subtree is available");
 
     let (printed, mut output) = mpsc::unbounded_channel();
     let printer = dynamic
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor(ActorSpec::new("printer", move || Printer {
             printed: printed.clone(),
         }))

@@ -1,7 +1,7 @@
 # Dynamic Actors
 
 A dynamic tree does not need a graph: `DynamicTree::new().spawn()` returns a
-`DynamicRuntime`, starts empty, and idles until that runtime adds a typed actor. Each
+`DynamicRuntime`, starts empty, and idles until its handle adds a typed actor. Each
 added actor becomes a supervised child whose id is the actor's label, and
 `add_actor` returns the typed `ActorRef<M>` directly — there is no registry
 and no string lookup. Refs travel the way any other value does: cloned into an
@@ -59,11 +59,12 @@ impl Actor for RushPress {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = DynamicTree::new().spawn()?;
+    let dynamic = runtime.handle();
 
-    let orders = runtime
+    let orders = dynamic
         .add_actor(ActorSpec::new("front-desk", || FrontDesk { rush: None }))
         .await?;
-    let rush = runtime
+    let rush = dynamic
         .add_actor(ActorSpec::new("rush-press", || RushPress).mailbox_capacity(32))
         .await?;
 
@@ -72,8 +73,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orders.send(FrontDeskMsg::Order("wedding invites x50".into())).await?;
     rush.send("vip banners x2".into()).await?;
 
-    runtime.remove_child("front-desk").await?;
-    runtime.remove_child("rush-press").await?;
+    dynamic.remove_child("front-desk").await?;
+    dynamic.remove_child("rush-press").await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }
@@ -154,15 +155,15 @@ and add the actor normally:
 
 ```rust,ignore
 let venue = handle.subtree("coinbase").expect("venue is running");
-let subscription = venue
-    .dynamic().expect("dynamic venue")
-    .add_actor("btc-usd", Subscription::new)
+let dynamic = venue.dynamic().expect("coinbase is declared dynamic");
+let subscription = dynamic
+    .add_actor(ActorSpec::new("btc-usd", Subscription::new))
     .await?;
 ```
 
 The actor's label (`"btc-usd"` above) is its child id within the nested
 supervisor, so remove it through the same handle with
-`venue.dynamic().expect("dynamic venue").remove_child("btc-usd")`. Actors added
+`dynamic.remove_child("btc-usd")`. Actors added
 this way are supervised, restart normally, and appear in both
 `venue.actor_stats()` and the parent handle's recursive `actor_stats()` result.
 
@@ -183,7 +184,7 @@ let session = sessions
     .await?;
 session
     .dynamic().expect("dynamic session scope")
-    .add_actor("current-run", Run::new)
+    .add_actor(ActorSpec::new("current-run", Run::new))
     .await?;
 ```
 
@@ -216,9 +217,8 @@ let mut graph = GraphBuilder::new();
 graph.actor(ActorSpec::new("router", move || Router::new(sessions.clone())));
 let router = graph
     .build()?
-    .into_nodes()
-    .into_iter()
-    .next()
+    .into_nodes_by_label()
+    .remove("router")
     .expect("router node");
 
 let app_tree = OrderedTree::new()
@@ -275,7 +275,7 @@ ctx.spawn_scope_wait(
         children
             .dynamic()
             .ok_or(())?
-            .add_actor("worker", || Worker)
+            .add_actor(ActorSpec::new("worker", || Worker))
             .await
             .map_err(|_| ())?;
         Ok::<_, ()>(())
@@ -376,8 +376,10 @@ membership receives a later lineage and starts again at generation zero. For
 recursive stats, also compare `observe::ActorStats::supervisor_path`; it distinguishes
 otherwise identical local ids and lineages in sibling or restarted subtrees.
 
-Use `RuntimeHandle::dynamic().expect("dynamic scope").add_child(host::ChildSpec)` for a non-actor task in a dynamic
-scope and `add_subtree` for a nested actor-aware scope. Task children are not
+Use the `DynamicRuntimeHandle` returned by `DynamicTree::handle()` or
+`DynamicRuntime::handle()` to add a non-actor `host::ChildSpec`; use
+`RuntimeHandle::dynamic()` only after runtime navigation discovers a dynamic
+scope. Use `add_subtree` for a nested actor-aware scope. Task children are not
 part of runtime actor stats, but they remain visible in snapshots and lifecycle
 watches.
 

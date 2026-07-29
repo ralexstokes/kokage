@@ -186,7 +186,7 @@ pub trait Actor: Send + 'static {
     /// This hook also runs after a drain and cannot change the stop decision.
     /// During cooperative supervisor removal, the supervisor waits for the
     /// hook before detaching the child and completing
-    /// [`DynamicRuntime::remove_child`](crate::DynamicRuntime::remove_child).
+    /// [`DynamicRuntimeHandle::remove_child`](crate::DynamicRuntimeHandle::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
     /// can abort this hook and detach the child without waiting for it. The
     /// hook's scope handles are

@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{LifecycleEventKind, prelude::*};
+use kokage_supervisor::prelude::*;
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -41,25 +41,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let running_owner = Supervisor::ordered().child(flaky).child(metrics).spawn()?;
     let running = running_owner.handle();
-    let mut lifecycle = running.watch_lifecycle();
-
-    loop {
-        let event = timeout(Duration::from_secs(2), lifecycle.next())
-            .await?
-            .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
-        println!("event: {event:?}");
-
-        if let LifecycleEventKind::ChildStarted {
-            child_id,
-            generation: 1,
-            ..
-        } = event.kind
-            && child_id == "flaky-worker"
-        {
-            println!("child flaky-worker restarted into generation 1");
-            break;
-        }
-    }
+    let mut snapshots = running.subscribe_snapshots();
+    let restarted = timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for_child("flaky-worker", |child| {
+            child.generation > 0 && child.state.is_running()
+        }),
+    )
+    .await??;
+    println!(
+        "child flaky-worker restarted into generation {}",
+        restarted.generation
+    );
 
     running.shutdown_and_wait().await?;
     println!("supervisor stopped");

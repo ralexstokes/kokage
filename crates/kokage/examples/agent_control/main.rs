@@ -3,7 +3,7 @@
 //! The example is an assertion-driven acceptance script for dynamic actor
 //! lifecycles and the runtime surfaces not covered by `trading_engine`:
 //! per-conversation subtrees added and removed at runtime via
-//! `DynamicRuntime::add_subtree`, never-restarted transient children observed
+//! `DynamicRuntimeHandle::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
 //! a readiness-gated `RawActor` bridge, and a `#[derive(Supervision)]` supervision
 //! tree with a real budget ↔ guard cycle.
@@ -122,7 +122,6 @@ mod telemetry;
 mod tool_host;
 
 use std::{
-    collections::HashMap,
     error::Error,
     future::Future,
     sync::{
@@ -133,8 +132,8 @@ use std::{
 };
 
 use kokage::{
-    ActorNode, ActorSlot, DownReason, DynamicTree, MailboxMode, MonitorEvent, RuntimeHandle,
-    Strategy, Supervision, observe::LifecycleWatchGuard, prelude::*,
+    ActorSlot, DownReason, DynamicTree, MailboxMode, MonitorEvent, RuntimeHandle, Strategy,
+    Supervision, observe::LifecycleWatchGuard, prelude::*,
 };
 use tokio::time::Instant;
 
@@ -151,12 +150,6 @@ use tool_host::ToolHost;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
-fn take_node(nodes: &mut HashMap<String, ActorNode>, label: &str) -> ActorNode {
-    nodes
-        .remove(label)
-        .unwrap_or_else(|| panic!("graph contains `{label}`"))
-}
-
 /// Gateway actors keep the 32-deep mailbox the separate `agent-gateway` graph
 /// gave them before the scopes merged into one graph; core actors keep the
 /// graph-wide default.
@@ -169,13 +162,13 @@ fn gateway_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
 /// The budget↔guard cycle is what the derive wires. Topology stays explicit.
 #[derive(Supervision)]
 struct AgentControl {
-    #[supervision(label = "core.budget")]
+    #[supervision(label = "core-budget")]
     budget: Budget,
-    #[supervision(label = "core.guard")]
+    #[supervision(label = "core-guard")]
     guard: Guard,
-    #[supervision(label = "core.tool_host")]
+    #[supervision(label = "core-tool-host")]
     tool_host: ToolHost,
-    #[supervision(label = "core.router")]
+    #[supervision(label = "core-router")]
     router: Router,
 }
 
@@ -297,22 +290,58 @@ async fn build_app() -> Result<App, AnyError> {
     builder.define(journal_slot, Journal::default);
 
     let graph = builder.build()?;
-    let mut nodes: HashMap<_, _> = graph
-        .into_nodes()
-        .into_iter()
-        .map(|node| (node.label().to_owned(), node))
-        .collect();
+    let mut nodes = graph.into_nodes_by_label();
     let gateway_tree = OrderedTree::new()
         .strategy(Strategy::RestForOne)
-        .actor(take_node(&mut nodes, "gateway.outbound").child_id("outbound"))
-        .actor(take_node(&mut nodes, "gateway.progress").child_id("progress"))
-        .actor(take_node(&mut nodes, "gateway.inbound").child_id("inbound"));
+        .actor(
+            nodes
+                .remove("gateway.outbound")
+                .expect("gateway.outbound node")
+                .child_id("outbound"),
+        )
+        .actor(
+            nodes
+                .remove("gateway.progress")
+                .expect("gateway.progress node")
+                .child_id("progress"),
+        )
+        .actor(
+            nodes
+                .remove("gateway.inbound")
+                .expect("gateway.inbound node")
+                .child_id("inbound"),
+        );
     let core_tree = OrderedTree::new()
-        .actor(take_node(&mut nodes, "core.journal").child_id("journal"))
-        .actor(take_node(&mut nodes, "core.budget").child_id("budget"))
-        .actor(take_node(&mut nodes, "core.guard").child_id("guard"))
-        .actor(take_node(&mut nodes, "core.tool_host").child_id("tool_host"))
-        .actor(take_node(&mut nodes, "core.router").child_id("router"));
+        .actor(
+            nodes
+                .remove("core.journal")
+                .expect("core.journal node")
+                .child_id("journal"),
+        )
+        .actor(
+            nodes
+                .remove("core-budget")
+                .expect("core-budget node")
+                .child_id("budget"),
+        )
+        .actor(
+            nodes
+                .remove("core-guard")
+                .expect("core-guard node")
+                .child_id("guard"),
+        )
+        .actor(
+            nodes
+                .remove("core-tool-host")
+                .expect("core-tool-host node")
+                .child_id("tool_host"),
+        )
+        .actor(
+            nodes
+                .remove("core-router")
+                .expect("core-router node")
+                .child_id("router"),
+        );
     let tree = OrderedTree::new()
         .subtree("gateway", gateway_tree)
         .subtree("core", core_tree)
@@ -332,10 +361,14 @@ async fn build_app() -> Result<App, AnyError> {
     // same identity the post-spawn `runtime.subtree("sessions")` lookup would
     // return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
-    let lifecycle_watch = gateway.watch_lifecycle_to(&guard, |event| GuardMsg::BridgeRestarts {
-        total: event
-            .total_restarts()
-            .expect("the direct-child lifecycle pump filters scope events"),
+    let mut bridge_restarts = gateway.snapshot().total_restarts;
+    let lifecycle_watch = gateway.watch_lifecycle_to(&guard, move |event| {
+        if let Some(total) = event.total_restarts() {
+            bridge_restarts = total;
+        }
+        GuardMsg::BridgeRestarts {
+            total: bridge_restarts,
+        }
     });
 
     Ok(App {
@@ -403,7 +436,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
     println!(
-        "PHASE 1 OK — DynamicRuntime::add_subtree per conversation; continue_with; interval_to"
+        "PHASE 1 OK — DynamicRuntimeHandle::add_subtree per conversation; continue_with; interval_to"
     );
     Ok(())
 }

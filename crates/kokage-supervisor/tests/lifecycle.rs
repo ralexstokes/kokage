@@ -11,7 +11,7 @@ use kokage_supervisor::{
     BackoffPolicy, ChildSpec, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig,
     RestartPolicy, Supervisor, SupervisorError,
 };
-use tokio::time::timeout;
+use tokio::{sync::Notify, time::timeout};
 
 const WAIT: Duration = Duration::from_secs(2);
 
@@ -106,25 +106,38 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
             let event = watch.next().await.expect("watch remains open");
             match event.kind {
                 LifecycleEventKind::ChildExited {
+                    seq,
                     child_id,
                     generation: 0,
+                    total_restarts,
+                    child_restart_count,
                     exit,
                     ..
                 } if child_id == "flaky" => {
                     assert!(exit.failure_message().is_some());
                     assert!(!exit.cancelled());
-                    transitions.push("exited");
+                    transitions.push(("exited", seq, total_restarts, child_restart_count));
                 }
                 LifecycleEventKind::ChildRestartScheduled {
+                    seq,
                     child_id,
                     generation: 0,
+                    total_restarts,
+                    child_restart_count,
                     ..
-                } if child_id == "flaky" => transitions.push("scheduled"),
+                } if child_id == "flaky" => {
+                    transitions.push(("scheduled", seq, total_restarts, child_restart_count));
+                }
                 LifecycleEventKind::ChildStarted {
+                    seq,
                     child_id,
                     generation: 1,
+                    total_restarts,
+                    child_restart_count,
                     ..
-                } if child_id == "flaky" => transitions.push("started"),
+                } if child_id == "flaky" => {
+                    transitions.push(("started", seq, total_restarts, child_restart_count));
+                }
                 _ => {}
             }
         }
@@ -132,7 +145,18 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
     .await
     .expect("restart sequence completes");
 
-    assert_eq!(transitions, ["exited", "scheduled", "started"]);
+    assert_eq!(
+        transitions
+            .iter()
+            .map(|transition| transition.0)
+            .collect::<Vec<_>>(),
+        ["exited", "scheduled", "started"]
+    );
+    assert_eq!(transitions[1].1, transitions[0].1 + 1);
+    assert_eq!(transitions[2].1, transitions[1].1 + 1);
+    assert_eq!((transitions[0].2, transitions[0].3), (0, 0));
+    assert_eq!((transitions[1].2, transitions[1].3), (1, 1));
+    assert_eq!((transitions[2].2, transitions[2].3), (1, 1));
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
 
@@ -202,6 +226,13 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         }))
         .await
         .expect("child is added");
+    let added = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
@@ -244,6 +275,96 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         removed.kind,
         LifecycleEventKind::ChildRemoved { lineage: observed, .. } if observed == lineage
     ));
+    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
+    assert_eq!(removed.seq(), exited.seq().map(|seq| seq + 1));
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn readiness_gated_child_started_is_emitted_only_after_ready() {
+    let release = Arc::new(Notify::new());
+    let child_release = Arc::clone(&release);
+    let builder = Supervisor::ordered().child(
+        ChildSpec::task("worker", move |ctx| {
+            let release = Arc::clone(&child_release);
+            async move {
+                release.notified().await;
+                ctx.mark_ready();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        })
+        .wait_for_ready(),
+    );
+    let handle = builder.handle();
+    let mut watch = handle.watch_lifecycle().direct_children();
+    let running = builder.spawn().expect("supervisor spawns");
+
+    timeout(Duration::from_millis(100), async {
+        next_matching(&mut watch, |event| {
+            matches!(
+                event.kind,
+                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "worker"
+            )
+        })
+        .await
+    })
+    .await
+    .expect_err("ChildStarted remains gated on readiness");
+
+    release.notify_one();
+    let started = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted {
+                ref child_id,
+                generation: 0,
+                ..
+            } if child_id == "worker"
+        )
+    })
+    .await;
+    assert!(started.seq().is_some());
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn cooperative_remove_publishes_removed_before_the_command_reply() {
+    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let handle = running.handle();
+    let dynamic = handle.dynamic().expect("scope is dynamic");
+    dynamic
+        .add_child(
+            ChildSpec::task("worker", |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            })
+            .shutdown(kokage_supervisor::ShutdownPolicy::Cooperative {
+                grace: Duration::from_secs(1),
+            }),
+        )
+        .await
+        .expect("worker is added");
+    handle.wait_started().await.expect("worker starts");
+    let mut watch = handle.watch_lifecycle().direct_children();
+    let removal = tokio::spawn(async move { dynamic.remove_child("worker").await });
+
+    let removed = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildRemoved { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    timeout(WAIT, removal)
+        .await
+        .expect("remove command resolves")
+        .expect("remove task joins")
+        .expect("remove succeeds");
+    assert!(handle.snapshot().lifecycle_seq >= removed.seq().expect("removed sequence"));
+    assert!(handle.snapshot().child("worker").is_none());
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -267,6 +388,7 @@ async fn restart_intensity_failure_is_an_in_band_scope_event() {
     })
     .await;
     assert!(intensity.supervisor_path.is_empty());
+    assert!(intensity.total_restarts().is_some());
     assert!(matches!(
         running.wait().await,
         Err(SupervisorError::RestartIntensityExceeded)
@@ -311,8 +433,15 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
 
 #[tokio::test]
 async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
-    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
-    let mut watch = running.handle().watch_lifecycle().direct_children();
+    let builder = Supervisor::dynamic();
+    let handle = builder.handle();
+    let mut watch = handle.watch_lifecycle().direct_children();
+    let running = builder.spawn().expect("supervisor spawns");
+    next_matching(&mut watch, |event| {
+        matches!(event.kind, LifecycleEventKind::SupervisorStarted)
+    })
+    .await;
+    let baseline = running.handle().snapshot().lifecycle_seq;
 
     for index in 0..70 {
         let id = format!("child-{index}");
@@ -340,13 +469,208 @@ async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
         .expect("lag marker arrives")
         .expect("watch remains open");
     assert!(lagged.supervisor_path.is_empty());
-    assert!(matches!(
-        lagged.kind,
-        LifecycleEventKind::Lagged { dropped } if dropped > 1
-    ));
     let snapshot = running.handle().snapshot();
     assert!(snapshot.children.is_empty());
     assert!(snapshot.lifecycle_seq >= 140);
+    let LifecycleEventKind::Lagged { dropped } = lagged.kind else {
+        panic!("first retained event is the lag marker");
+    };
+
+    let mut suffix = Vec::new();
+    while suffix.last().copied() != Some(snapshot.lifecycle_seq) {
+        let event = timeout(WAIT, watch.next())
+            .await
+            .expect("retained suffix arrives")
+            .expect("watch remains open");
+        let seq = event
+            .seq()
+            .expect("overflow suffix contains child transitions");
+        suffix.push(seq);
+    }
+    assert_eq!(
+        dropped + suffix.len() as u64,
+        snapshot.lifecycle_seq - baseline,
+        "lag marker accounts for exactly the discarded transition prefix"
+    );
+    assert_eq!(
+        suffix,
+        (snapshot.lifecycle_seq - suffix.len() as u64 + 1..=snapshot.lifecycle_seq)
+            .collect::<Vec<_>>(),
+        "the retained suffix stays sequence-contiguous"
+    );
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn nested_churn_cannot_overflow_a_direct_child_watch() {
+    let nested_builder = Supervisor::dynamic();
+    let nested_handle = nested_builder.handle();
+    let nested = nested_builder.build().expect("nested supervisor builds");
+    let running = Supervisor::dynamic()
+        .spawn()
+        .expect("root supervisor spawns");
+    let mut direct = running.handle().watch_lifecycle().direct_children();
+    let root_dynamic = running.handle().dynamic().expect("root is a dynamic scope");
+    root_dynamic
+        .add_child(ChildSpec::supervisor("nested", nested))
+        .await
+        .expect("nested scope is added");
+    nested_handle
+        .wait_started()
+        .await
+        .expect("nested scope starts");
+    let nested_dynamic = nested_handle.dynamic().expect("nested scope is dynamic");
+
+    for index in 0..80 {
+        let id = format!("nested-{index}");
+        nested_dynamic
+            .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }))
+            .await
+            .expect("nested child is added");
+        nested_dynamic
+            .remove_child(&id)
+            .await
+            .expect("nested child is removed");
+    }
+
+    root_dynamic
+        .add_child(ChildSpec::task("root-peer", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("root child is added");
+
+    let peer = timeout(WAIT, async {
+        loop {
+            let event = direct.next().await.expect("direct watch remains open");
+            assert!(event.supervisor_path.is_empty());
+            assert!(
+                !matches!(event.kind, LifecycleEventKind::Lagged { .. }),
+                "nested-only traffic must not consume the direct buffer"
+            );
+            if matches!(
+                event.kind,
+                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "root-peer"
+            ) {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("the direct root transition survives nested churn");
+    assert!(peer.seq().is_some());
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lifecycle_sequences_are_gap_free_under_concurrent_dynamic_churn() {
+    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let handle = running.handle();
+    let mut watch = handle.watch_lifecycle().direct_children();
+    let baseline = handle.snapshot().lifecycle_seq;
+    let dynamic = handle.dynamic().expect("scope is dynamic");
+    let mut churn = tokio::task::JoinSet::new();
+
+    for index in 0..16 {
+        let dynamic = dynamic.clone();
+        churn.spawn(async move {
+            let id = format!("child-{index}");
+            dynamic
+                .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }))
+                .await
+                .expect("child is added");
+            dynamic.remove_child(id).await.expect("child is removed");
+        });
+    }
+    while let Some(result) = churn.join_next().await {
+        result.expect("churn task joins");
+    }
+
+    let final_seq = handle.snapshot().lifecycle_seq;
+    let mut observed = Vec::new();
+    while observed.last().copied() != Some(final_seq) {
+        let event = timeout(WAIT, watch.next())
+            .await
+            .expect("transition arrives")
+            .expect("watch remains open");
+        assert!(!matches!(event.kind, LifecycleEventKind::Lagged { .. }));
+        if let Some(seq) = event.seq() {
+            observed.push(seq);
+        }
+    }
+    assert_eq!(observed, (baseline + 1..=final_seq).collect::<Vec<_>>());
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lineage() {
+    let running = Supervisor::dynamic()
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    let dynamic = root.dynamic().expect("root is dynamic");
+    let mut root_watch = root.watch_lifecycle();
+
+    let first_builder = Supervisor::ordered().child(ChildSpec::task("leaf", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let first_handle = first_builder.handle();
+    let mut first_watch = first_handle.watch_lifecycle();
+    dynamic
+        .add_child(ChildSpec::supervisor(
+            "nested",
+            first_builder.build().expect("first nested scope builds"),
+        ))
+        .await
+        .expect("first nested scope is added");
+    let first = next_matching(&mut root_watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
+        )
+    })
+    .await;
+    let first_lineage = first.supervisor_path[0].lineage;
+
+    dynamic
+        .remove_child("nested")
+        .await
+        .expect("first nested scope is removed");
+    timeout(WAIT, async { while first_watch.next().await.is_some() {} })
+        .await
+        .expect("removed nested identity closes its watch");
+
+    let second_builder = Supervisor::ordered().child(ChildSpec::task("leaf", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    dynamic
+        .add_child(ChildSpec::supervisor(
+            "nested",
+            second_builder.build().expect("second nested scope builds"),
+        ))
+        .await
+        .expect("second nested scope is added");
+    let second = next_matching(&mut root_watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
+        ) && event.supervisor_path[0].lineage > first_lineage
+    })
+    .await;
+    assert_eq!(second.supervisor_path[0].id, "nested");
+    assert!(second.supervisor_path[0].lineage > first_lineage);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }

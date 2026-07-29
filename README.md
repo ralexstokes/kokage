@@ -12,9 +12,10 @@ restart the ones that fail.
 
 The actor product needs one dependency. Its prelude covers the day-one actor
 surface; hosting and observation APIs are grouped under `kokage::host` and
-`kokage::observe`, while advanced actor APIs remain at the crate root.
-Applications using raw task supervision directly should also depend on
-`kokage-supervisor`:
+`kokage::observe`, while advanced actor APIs remain at the crate root. Actor
+applications can place raw task children with `kokage::host::ChildSpec`; only
+applications using the lower-level supervisor crate directly need a separate
+`kokage-supervisor` dependency:
 
 ```toml
 [dependencies]
@@ -28,9 +29,19 @@ supervisor restarts it — and the `orders` ref keeps working across the
 restart, transparently reconnecting to the replacement:
 
 ```rust
-use kokage::prelude::{
-    Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, OrderedTree,
-};
+use kokage::prelude::*;
+
+#[derive(Default)]
+struct Press;
+
+impl Actor for Press {
+    type Msg = String;
+
+    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+        println!("printing {order}");
+        Ok(())
+    }
+}
 
 struct FrontDesk {
     press: ActorRef<String>,
@@ -49,10 +60,10 @@ impl Actor for FrontDesk {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wire a static graph with typed, restart-stable actor refs.
     let mut builder = GraphBuilder::new();
-    let press = builder.actor("press", Press::default); // occasionally jams
-    let orders = builder.actor("front-desk", move || FrontDesk {
+    let press = builder.actor(ActorSpec::new("press", Press::default));
+    let orders = builder.actor(ActorSpec::new("front-desk", move || FrontDesk {
         press: press.clone(),
-    });
+    }));
 
     // Compose the supervision tree, then run it.
     let runtime = OrderedTree::graph(builder.build()?).spawn()?;
@@ -90,7 +101,7 @@ supervising plain async tasks.
 ## Getting started
 
 - **Tutorial book** — builds a small fault-tolerant service from scratch,
-  from supervision fundamentals through dynamic actors and observability.
+  from actor basics through task and actor supervision, dynamic actors, and observability.
   Start at [`docs/src/introduction.md`](docs/src/introduction.md), or run
   `just serve-book` for a local copy.
 - **API docs** — `just doc` builds and opens the rustdoc for the workspace.

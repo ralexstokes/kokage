@@ -85,6 +85,9 @@ impl LifecycleEvent {
             | LifecycleEventKind::ChildRestartScheduled { total_restarts, .. } => {
                 Some(*total_restarts)
             }
+            LifecycleEventKind::RestartIntensityExceeded { total_restarts } => {
+                Some(*total_restarts)
+            }
             _ => None,
         }
     }
@@ -218,17 +221,17 @@ pub enum LifecycleEventKind {
 /// Lifecycle stream created by
 /// [`SupervisorHandle::watch_lifecycle`](crate::SupervisorHandle::watch_lifecycle).
 pub struct LifecycleWatch {
-    queue: Arc<RecursiveLifecycleQueue>,
+    watcher: Arc<LifecycleWatcher>,
     watcher_count: Option<Arc<AtomicUsize>>,
-    max_depth: Option<usize>,
+    direct_only: bool,
 }
 
 impl LifecycleWatch {
-    fn new(queue: Arc<RecursiveLifecycleQueue>, watcher_count: Option<Arc<AtomicUsize>>) -> Self {
+    fn new(watcher: Arc<LifecycleWatcher>, watcher_count: Option<Arc<AtomicUsize>>) -> Self {
         Self {
-            queue,
+            watcher,
             watcher_count,
-            max_depth: None,
+            direct_only: false,
         }
     }
 
@@ -237,25 +240,26 @@ impl LifecycleWatch {
     /// Child events in this view are exactly the watched supervisor's direct
     /// children. Supervisor-level events for the watched scope remain visible.
     pub fn direct_children(mut self) -> Self {
-        self.max_depth = Some(0);
+        self.direct_only = true;
         self
     }
 
     /// Returns the next staged tree event, or `None` after the watched stable
     /// supervisor identity becomes terminal and staged events are drained.
     pub async fn next(&mut self) -> Option<LifecycleEvent> {
+        let queue = if self.direct_only {
+            &self.watcher.direct
+        } else {
+            &self.watcher.recursive
+        };
         loop {
-            let notified = self.queue.waiter();
-            if let Some(event) = self.queue.pop() {
-                if self
-                    .max_depth
-                    .is_none_or(|max_depth| event.supervisor_path.len() <= max_depth)
-                {
-                    return Some(event);
-                }
-                continue;
+            let notified = queue.waiter();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(event) = queue.pop() {
+                return Some(event);
             }
-            if self.queue.is_terminal() {
+            if queue.is_terminal() {
                 return None;
             }
             notified.await;
@@ -274,8 +278,14 @@ impl Drop for LifecycleWatch {
 
 impl fmt::Debug for LifecycleWatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let queue = if self.direct_only {
+            &self.watcher.direct
+        } else {
+            &self.watcher.recursive
+        };
         f.debug_struct("LifecycleWatch")
-            .field("terminal", &self.queue.is_terminal())
+            .field("direct_only", &self.direct_only)
+            .field("terminal", &queue.is_terminal())
             .finish_non_exhaustive()
     }
 }
@@ -306,6 +316,37 @@ pub(crate) enum ChildLifecycleEventKind {
 }
 
 type RecursiveLifecycleQueue = LifecycleEventQueue<LifecycleEvent>;
+
+/// Per-subscription buffers for the recursive and scope-local projections.
+///
+/// The local queue is populated at emission time. Switching a watch to
+/// `direct_children()` therefore cannot let nested traffic consume its buffer
+/// or manufacture a pathless lag marker for events outside that view.
+struct LifecycleWatcher {
+    recursive: Arc<RecursiveLifecycleQueue>,
+    direct: Arc<RecursiveLifecycleQueue>,
+}
+
+impl LifecycleWatcher {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            recursive: LifecycleEventQueue::new(),
+            direct: LifecycleEventQueue::new(),
+        })
+    }
+
+    fn push(&self, event: LifecycleEvent) {
+        if event.supervisor_path.is_empty() {
+            self.direct.push(event.clone());
+        }
+        self.recursive.push(event);
+    }
+
+    fn mark_terminal(&self) {
+        self.recursive.mark_terminal();
+        self.direct.mark_terminal();
+    }
+}
 
 struct LifecycleEventQueue<T> {
     events: Mutex<VecDeque<T>>,
@@ -401,7 +442,7 @@ pub(crate) struct LifecycleHub {
 
 struct LifecycleHubState {
     terminal: bool,
-    recursive_watchers: Vec<Weak<RecursiveLifecycleQueue>>,
+    recursive_watchers: Vec<Weak<LifecycleWatcher>>,
 }
 
 impl LifecycleHub {
@@ -449,7 +490,7 @@ impl LifecycleHub {
     }
 
     pub(crate) fn watch(&self) -> LifecycleWatch {
-        let queue = LifecycleEventQueue::new();
+        let watcher = LifecycleWatcher::new();
         self.recursive_watcher_count.fetch_add(1, Ordering::AcqRel);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
@@ -457,16 +498,17 @@ impl LifecycleHub {
             .retain(|watcher| watcher.strong_count() > 0);
         if state.terminal {
             self.recursive_watcher_count.fetch_sub(1, Ordering::AcqRel);
-            queue.mark_terminal();
-            LifecycleWatch::new(queue, None)
+            watcher.mark_terminal();
+            LifecycleWatch::new(watcher, None)
         } else {
-            state.recursive_watchers.push(Arc::downgrade(&queue));
-            LifecycleWatch::new(queue, Some(Arc::clone(&self.recursive_watcher_count)))
+            state.recursive_watchers.push(Arc::downgrade(&watcher));
+            LifecycleWatch::new(watcher, Some(Arc::clone(&self.recursive_watcher_count)))
         }
     }
 
-    /// Assigns a sequence, publishes the aligned snapshot, then stages the
-    /// event while registration is excluded by the same hub lock.
+    /// Assigns a sequence and publishes the aligned snapshot while lifecycle
+    /// registration is excluded by the same hub lock. The caller forwards the
+    /// returned event immediately afterwards.
     pub(crate) fn emit(
         &self,
         draft: LifecycleEventDraft,
@@ -547,10 +589,10 @@ impl LifecycleHub {
             return;
         }
         state.recursive_watchers.retain(|watcher| {
-            let Some(queue) = watcher.upgrade() else {
+            let Some(watcher) = watcher.upgrade() else {
                 return false;
             };
-            queue.push(event.clone());
+            watcher.push(event.clone());
             true
         });
     }
@@ -566,8 +608,8 @@ impl LifecycleHub {
         }
         state.terminal = true;
         for watcher in state.recursive_watchers.drain(..) {
-            if let Some(queue) = watcher.upgrade() {
-                queue.mark_terminal();
+            if let Some(watcher) = watcher.upgrade() {
+                watcher.mark_terminal();
             }
         }
     }
@@ -689,14 +731,20 @@ mod tests {
     }
 
     #[test]
-    fn recursive_lagged_marker_is_tree_wide_and_pathless() {
+    fn recursive_lagged_marker_has_an_exact_count_and_contiguous_suffix() {
         let queue = super::LifecycleEventQueue::new();
         let nested = LifecyclePathSegment::new("nested", 3, 5);
 
-        for _ in 0..=super::LIFECYCLE_BUFFER_CAPACITY {
+        for seq in 1..=super::LIFECYCLE_BUFFER_CAPACITY as u64 + 1 {
             queue.push(LifecycleEvent::new(
                 vec![nested.clone()],
-                LifecycleEventKind::SupervisorStarted,
+                LifecycleEventKind::ChildAdded {
+                    seq,
+                    child_id: format!("child-{seq}"),
+                    lineage: seq,
+                    total_restarts: 0,
+                    child_restart_count: 0,
+                },
             ));
         }
 
@@ -706,6 +754,13 @@ mod tests {
             lagged.kind,
             LifecycleEventKind::Lagged { dropped: 2 }
         ));
+        let suffix = std::iter::from_fn(|| queue.pop())
+            .map(|event| event.seq().expect("suffix event carries a sequence"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            suffix,
+            (3..=super::LIFECYCLE_BUFFER_CAPACITY as u64 + 1).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -736,7 +791,8 @@ mod tests {
         child_sink.forward_child(event);
 
         let forwarded = parent_watch
-            .queue
+            .watcher
+            .recursive
             .pop()
             .expect("ancestor receives the trailing child event");
         assert!(matches!(

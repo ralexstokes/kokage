@@ -40,7 +40,7 @@ nixfmt-check:
 
 # Fast local CI mirror — reuses the local cargo cache and incremental builds.
 # The clean Nix lane retains the explicit all-target build for non-test codegen coverage.
-ci: fmt lint test smoke doc-check public-api nixfmt-check build-book
+ci: fmt lint test smoke doc-check public-api nixfmt-check test-docs
 
 # Full clean Nix CI lane; use before pushing or when touching Nix files.
 ci-nix:
@@ -48,6 +48,9 @@ ci-nix:
 
 doc:
     cargo doc --workspace --no-deps --open
+
+test-docs:
+    bash scripts/test-docs.sh
 
 build-book:
     mdbook build docs

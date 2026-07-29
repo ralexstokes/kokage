@@ -174,10 +174,11 @@ impl Router {
                 proof: self.proof.clone(),
             },
         );
-        let graph = graph.build().expect("session graph builds");
         let session_actor = graph
-            .into_nodes()
-            .pop()
+            .build()
+            .expect("session graph builds")
+            .into_nodes_by_label()
+            .remove("session")
             .expect("session graph contains its actor");
         let mount = self.mount();
         let offload_id = subtree_id.clone();
@@ -191,7 +192,7 @@ impl Router {
                 // the session.
                 let subtree = mount
                     .dynamic()
-                    .expect("dynamic scope")
+                    .expect("the session mount is declared dynamic")
                     .add_subtree(
                         offload_id,
                         OrderedTree::new().actor_with_scope(
@@ -234,7 +235,7 @@ impl Router {
                 matches!(
                     mount
                         .dynamic()
-                        .expect("dynamic scope")
+                        .expect("the session mount is declared dynamic")
                         .remove_child(remove_id)
                         .await,
                     Ok(())
@@ -261,7 +262,7 @@ impl Router {
                 matches!(
                     mount
                         .dynamic()
-                        .expect("dynamic scope")
+                        .expect("the session mount is declared dynamic")
                         .remove_child(remove_id)
                         .await,
                     Ok(())

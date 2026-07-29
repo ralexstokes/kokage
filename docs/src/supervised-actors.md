@@ -15,7 +15,7 @@ durable-factory versus local-actor state boundary.
 ```rust,no_run
 use std::{io, sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
 
-use kokage::{ActorSpec, RestartConfig, host::BoxError};
+use kokage::{RestartConfig, host::BoxError};
 use kokage::prelude::*;
 
 struct FrontDesk {
@@ -71,7 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.handle();
 
     orders.send("business cards x100".into()).await?;
-    let baseline = handle.snapshot().child("press").unwrap().generation;
+    let baseline = handle
+        .snapshot()
+        .child("press")
+        .expect("the declared press actor is present")
+        .generation;
     let mut snapshots = handle.subscribe_snapshots();
     orders.send("origami cranes x1000".into()).await?;
     snapshots
@@ -151,7 +155,7 @@ ordered scope. Restart and shutdown policies set on the `ChildSpec` are
 preserved; unset policies inherit the tree's `default_*` values. Readiness and
 restart configuration on the spec are preserved too. Use `OrderedTree::subtree` for
 recursive actor-aware or graph-less scopes. A dynamic
-`DynamicRuntime::add_child` adds the same task shape at runtime; task children
+`DynamicRuntimeHandle::add_child` adds the same task shape at runtime; task children
 appear in snapshots and lifecycle watches but not actor stats.
 
 There are no string lookups anywhere on this path: every ref you need is
@@ -183,11 +187,10 @@ let refs = App::wire(&mut graph, |refs| AppFactories {
     parser: ParserFactory::new(refs.renderer.clone()),
     renderer: RendererFactory::new(refs.ingest.clone()),
 });
-let graph = graph.build()?;
-let mut nodes = graph.into_nodes().into_iter();
-let ingest = nodes.next().expect("ingest node");
-let parser = nodes.next().expect("parser node");
-let renderer = nodes.next().expect("renderer node");
+let mut nodes = graph.build()?.into_nodes_by_label();
+let ingest = nodes.remove("ingest").expect("ingest node");
+let parser = nodes.remove("parser").expect("parser node");
+let renderer = nodes.remove("renderer").expect("renderer node");
 
 let tree = OrderedTree::new()
     .strategy(Strategy::OneForAll)

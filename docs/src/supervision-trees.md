@@ -58,7 +58,7 @@ For a custom shape, consume the graph into non-cloneable `ActorNode` placement
 tokens and move them to different levels:
 
 ```rust,no_run
-use kokage::{ActorSpec, OrderedTree, prelude::*};
+use kokage::{RestartPolicy, Strategy, prelude::*};
 
 struct Worker;
 
@@ -74,9 +74,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
     graph.actor(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never));
     graph.actor(ActorSpec::new("parse", || Worker));
-    let mut actors = graph.build()?.into_nodes().into_iter();
-    let ingest = actors.next().expect("ingest node");
-    let parse = actors.next().expect("parse node");
+    let mut actors = graph.build()?.into_nodes_by_label();
+    let ingest = actors.remove("ingest").expect("ingest node");
+    let parse = actors.remove("parse").expect("parse node");
 
     let tree = OrderedTree::new()
         .actor(ingest)
@@ -123,9 +123,8 @@ let mut graph = GraphBuilder::new();
 graph.actor(ActorSpec::new("router", move || Router::new(sessions.clone())));
 let router = graph
     .build()?
-    .into_nodes()
-    .into_iter()
-    .next()
+    .into_nodes_by_label()
+    .remove("router")
     .expect("router node");
 
 let app_tree = OrderedTree::new()
@@ -178,7 +177,9 @@ let tree = OrderedTree::new()
 let outline = tree.outline();
 
 assert_eq!(outline.child_ids(), ["ingest", "parse"]);
-let observe::ChildOutline::Actor { restart, .. } = outline.child("ingest").unwrap()
+let observe::ChildOutline::Actor { restart, .. } = outline
+    .child("ingest")
+    .expect("the declared ingest actor is present")
 else {
     unreachable!()
 };

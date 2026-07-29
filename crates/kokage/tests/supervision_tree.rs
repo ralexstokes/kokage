@@ -5,8 +5,11 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time::sleep};
 
 use kokage::{
-    ActorSpec, DynamicTree, Graph, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy,
-    Strategy, host::ChildSpec, observe::ChildOutline, prelude::*,
+    ActorSpec, DynamicTree, Graph, MailboxMode, RestartConfig, RestartPolicy, ScopeKind,
+    ShutdownPolicy, Strategy, SupervisorBuildError, TerminalMembership,
+    host::{ActorContext, ChildSpec, RawActor},
+    observe::ChildOutline,
+    prelude::*,
 };
 
 struct Worker;
@@ -20,6 +23,27 @@ impl Actor for Worker {
         _ctx: &mut MessageContext<'_, Self>,
     ) -> ActorResult {
         reply.send(7);
+        Ok(())
+    }
+}
+
+struct Finite;
+
+impl RawActor for Finite {
+    type Msg = ();
+
+    async fn run(&mut self, _ctx: ActorContext<Self::Msg>) -> ActorResult {
+        Ok(())
+    }
+}
+
+struct Parked;
+
+impl RawActor for Parked {
+    type Msg = Vec<u8>;
+
+    async fn run(&mut self, ctx: ActorContext<Self::Msg>) -> ActorResult {
+        ctx.shutdown_token().cancelled().await;
         Ok(())
     }
 }
@@ -181,6 +205,91 @@ async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
     labels.sort();
     assert_eq!(labels, ["ingest", "parse"]);
     handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[test]
+fn tree_placement_rejects_zero_actor_mailbox_capacity() {
+    let result = OrderedTree::new()
+        .actor(ActorSpec::new("worker", || Worker).mailbox_capacity(0))
+        .spawn();
+
+    assert!(matches!(
+        result,
+        Err(SupervisorBuildError::InvalidConfig(
+            "actor mailbox capacity must be non-zero"
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn tree_placed_specs_inherit_the_hosting_graph_mailbox_default() {
+    let mut graph = GraphBuilder::new();
+    graph.name("shared-tree").mailbox_capacity(9);
+    let graph_actor = graph.actor(ActorSpec::new("graph-actor", || Worker));
+    let graph = graph.build().expect("graph builds");
+
+    let direct = ActorSpec::new("direct-actor", || Worker);
+    let direct_actor = direct.actor_ref();
+    let runtime = OrderedTree::graph(graph)
+        .actor(direct)
+        .spawn()
+        .expect("tree builds");
+    runtime.handle().wait_started().await.expect("actors start");
+
+    assert_eq!(graph_actor.stats().mailbox_capacity, 9);
+    assert_eq!(direct_actor.stats().mailbox_capacity, 9);
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() {
+    let spec = ActorSpec::new("buffered", || Parked)
+        .mailbox(MailboxMode::conflate())
+        .message_size(|message: &Vec<u8>| message.len());
+    let actor = spec.actor_ref();
+    let runtime = OrderedTree::new().actor(spec).spawn().expect("tree builds");
+    runtime.handle().wait_started().await.expect("actor starts");
+
+    actor
+        .try_send(vec![0; 4])
+        .expect("first message is accepted");
+    actor
+        .try_send(vec![0; 3])
+        .expect("replacement message is accepted");
+
+    let stats = actor.stats();
+    assert_eq!(stats.mailbox_capacity, 1);
+    assert_eq!(stats.mailbox_depth, 1);
+    assert_eq!(stats.messages_conflated, 1);
+    assert_eq!(stats.message_bytes_accepted, Some(7));
+
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn static_tree_actor_can_remove_its_terminal_membership() {
+    let spec = ActorSpec::new("finite", || Finite)
+        .restart(RestartPolicy::Never)
+        .terminal_membership(TerminalMembership::Remove);
+    let actor = spec.actor_ref();
+    let tree = OrderedTree::new().actor(spec);
+    let mut snapshots = tree.handle().subscribe_snapshots();
+    let runtime = tree.spawn().expect("tree builds");
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        snapshots
+            .wait_for(|snapshot| snapshot.lifecycle_seq >= 3 && snapshot.child("finite").is_none()),
+    )
+    .await
+    .expect("terminal membership is removed")
+    .expect("snapshot stream remains open");
+    assert!(matches!(
+        actor.try_send(()),
+        Err(kokage::TrySendError::Terminated { actor_id, .. }) if actor_id == "finite"
+    ));
+
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[test]

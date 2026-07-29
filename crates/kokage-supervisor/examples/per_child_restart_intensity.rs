@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{BackoffPolicy, LifecycleEventKind, prelude::*};
+use kokage_supervisor::{BackoffPolicy, prelude::*};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -56,42 +56,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .child(metrics)
         .spawn()?;
     let running = running_owner.handle();
-    let mut events = running.watch_lifecycle();
-
-    loop {
-        let event = timeout(Duration::from_secs(2), events.next())
-            .await?
-            .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
-        println!("event: {event:?}");
-
-        match event.kind {
-            LifecycleEventKind::ChildRestartScheduled {
-                child_id,
-                generation,
-                delay,
-                ..
-            } if child_id == "warm-cache" => {
-                println!(
-                    "warm-cache generation {} is allowed one delayed restart: {delay:?}",
-                    generation
-                );
-            }
-            LifecycleEventKind::ChildStarted {
-                child_id,
-                generation: 1,
-                ..
-            } if child_id == "warm-cache" => {
-                break;
-            }
-            LifecycleEventKind::RestartIntensityExceeded { .. } => {
-                return Err(std::io::Error::other(
-                    "unexpected restart intensity failure in example",
-                )
-                .into());
-            }
-            _ => {}
-        }
-    }
+    let mut snapshots = running.subscribe_snapshots();
+    let scheduled = timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for_child("warm-cache", |child| child.next_restart_in.is_some()),
+    )
+    .await??;
+    println!(
+        "warm-cache generation {} is allowed one delayed restart: {:?}",
+        scheduled.generation, scheduled.next_restart_in
+    );
+    timeout(
+        Duration::from_secs(2),
+        snapshots.wait_for_child("warm-cache", |child| {
+            child.generation > scheduled.generation && child.state.is_running()
+        }),
+    )
+    .await??;
 
     running.shutdown_and_wait().await?;
     println!("supervisor stopped");

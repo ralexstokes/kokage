@@ -479,7 +479,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = invalid.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.add_subtree("invalid", invalid).await,
+        parent.handle().add_subtree("invalid", invalid).await,
         Err(ControlError::Rejected(
             SupervisorBuildError::DuplicateChildId(label)
         )) if label == "duplicate-binding"
@@ -487,6 +487,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     assert_snapshot_receiver_closes(rejected_snapshots).await;
 
     parent
+        .handle()
         .add_subtree("occupied", DynamicTree::new())
         .await
         .expect("first subtree inserts");
@@ -494,7 +495,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = duplicate.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.add_subtree("occupied", duplicate).await,
+        parent.handle().add_subtree("occupied", duplicate).await,
         Err(ControlError::Rejected(SupervisorBuildError::DuplicateChildId(id)))
             if id == "occupied"
     ));
@@ -516,6 +517,7 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
 
     let (awaited_tx, mut awaited_rx) = mpsc::unbounded_channel();
     let awaited = outer
+        .handle()
         .add_subtree("awaited", single_use_mount(awaited_tx))
         .await
         .expect("awaited subtree inserts");

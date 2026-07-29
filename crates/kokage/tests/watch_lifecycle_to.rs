@@ -105,6 +105,7 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = runtime
+        .handle()
         .add_actor(
             ActorSpec::new("sink", move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
@@ -122,6 +123,7 @@ async fn runtime_with_watched_subtree() -> (
     let crasher = crasher_slot.actor_ref();
     graph.define(crasher_slot, || Crasher);
     let watched = runtime
+        .handle()
         .add_subtree(
             "watched",
             OrderedTree::graph(graph.build().expect("nested graph builds"))
@@ -363,6 +365,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     runtime
+        .handle()
         .add_actor(ActorSpec::new("sink", move || RestrictedSink {
             observed: observed_tx.clone(),
             watch: None,
@@ -370,6 +373,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         .await
         .expect("restricted sink added");
     let crasher = runtime
+        .handle()
         .add_actor(ActorSpec::new("crasher", || Crasher).restart(RestartPolicy::OnFailure))
         .await
         .expect("crasher added");

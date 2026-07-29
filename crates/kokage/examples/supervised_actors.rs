@@ -77,7 +77,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Crash the worker. Each run gets a fresh mailbox, so an order queued
     // behind the jam would be lost with it — wait for the supervisor to
     // restart the worker before sending more.
-    let baseline = handle.snapshot().child("worker").unwrap().generation;
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is declared")
+        .generation;
     let mut restarted = handle.subscribe_snapshots();
     orders.send("jam".to_owned()).await?;
     restarted

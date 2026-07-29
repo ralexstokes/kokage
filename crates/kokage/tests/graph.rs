@@ -1056,6 +1056,33 @@ fn dropping_an_unfilled_actor_slot_terminates_its_ref() {
 }
 
 #[test]
+fn dropping_an_unplaced_actor_spec_terminates_its_ref() {
+    let spec = ActorSpec::new("ghost", Drain::<u32>::new);
+    let ghost = spec.actor_ref();
+    drop(spec);
+
+    assert!(matches!(
+        ghost.try_send(1),
+        Err(TrySendError::Terminated { actor_id, .. }) if actor_id == "ghost"
+    ));
+}
+
+#[test]
+fn graph_nodes_can_be_consumed_by_label() {
+    let mut builder = GraphBuilder::new();
+    add_actor(&mut builder, "first", Drain::<()>::new);
+    add_actor(&mut builder, "second", Drain::<()>::new);
+
+    let mut nodes = builder.build().expect("valid graph").into_nodes_by_label();
+    assert_eq!(
+        nodes.remove("second").expect("second node").label(),
+        "second"
+    );
+    assert_eq!(nodes.remove("first").expect("first node").label(), "first");
+    assert!(nodes.is_empty());
+}
+
+#[test]
 fn build_rejects_invalid_graph_definitions() {
     let mut duplicate = GraphBuilder::new();
     add_actor(&mut duplicate, "worker", Drain::<u32>::new);
@@ -1628,6 +1655,7 @@ mod runnable_actor {
             .spawn()
             .expect("dynamic runtime builds");
         runtime
+            .handle()
             .add_actor(ActorSpec::new("worker", || NeverStops).shutdown(
                 ShutdownPolicy::Cooperative {
                     grace: Duration::from_millis(100),
@@ -1641,7 +1669,7 @@ mod runnable_actor {
             .await
             .expect("dynamic actor started");
         assert!(matches!(
-            runtime.remove_child("worker").await,
+            runtime.handle().remove_child("worker").await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"
         ));

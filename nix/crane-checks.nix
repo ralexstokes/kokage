@@ -18,9 +18,12 @@ let
       path: type:
       type == "directory"
       || craneLib.filterCargoSources path type
+      || pkgs.lib.hasInfix "/docs/" (toString path)
+      || pkgs.lib.hasSuffix "/README.md" (toString path)
       || pkgs.lib.hasSuffix ".stderr" (toString path)
       || pkgs.lib.hasSuffix "/assets/index.html" (toString path)
       || pkgs.lib.hasSuffix "/scripts/check-public-api.sh" (toString path)
+      || pkgs.lib.hasSuffix "/scripts/test-docs.sh" (toString path)
       || pkgs.lib.hasSuffix "/scripts/public-api-paths.jq" (toString path);
   };
   commonArgs = {
@@ -59,7 +62,10 @@ in
     commonArgs
     // {
       cargoArtifacts = cargoArtifactsStable;
-      nativeBuildInputs = [ pkgs.cargo-nextest ];
+      nativeBuildInputs = [
+        pkgs.cargo-nextest
+        pkgs.mdbook
+      ];
       buildPhaseCargoCommand = ''
         cargo build --locked --workspace --all-targets --all-features
         cargo nextest run --locked --workspace --all-features --lib --bins --tests --examples
@@ -69,6 +75,7 @@ in
         cargo run --locked -p kokage --example trading_engine --features metrics
         cargo run --locked -p kokage --example agent_control --features metrics
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
+        bash scripts/test-docs.sh
       '';
       doInstallCargoArtifacts = false;
     }

@@ -301,6 +301,12 @@ fn parse_supervision_field(field: &Field) -> syn::Result<SupervisionFieldAttrs> 
             if label.is_empty() {
                 return Err(syn::Error::new_spanned(&literal, "label must not be empty"));
             }
+            if label.contains('.') {
+                return Err(syn::Error::new_spanned(
+                    &literal,
+                    "label must not contain `.`, which separates path components",
+                ));
+            }
             parsed.label = Some(label);
             Ok(())
         })?;
@@ -375,7 +381,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         .map(|(ident, attrs)| attrs.label.clone().unwrap_or_else(|| ident.to_string()))
         .collect();
     let factory_params: Vec<_> = (0..fields.len())
-        .map(|index| format_ident!("F{index}"))
+        .map(|index| format_ident!("__KokageFactory{index}"))
         .collect();
 
     let mut seen = std::collections::HashSet::with_capacity(labels.len());
@@ -411,23 +417,42 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         let actor = &field.ty;
         quote_spanned! {actor.span()=> #factory: ::kokage::ActorFactory<Actor = #actor> }
     });
+    let ref_locals: Vec<_> = idents
+        .iter()
+        .map(|ident| format_ident!("__kokage_{ident}_ref"))
+        .collect();
+    let factory_locals: Vec<_> = idents
+        .iter()
+        .map(|ident| format_ident!("__kokage_{ident}_factory"))
+        .collect();
     let open_stmts = fields
         .iter()
         .zip(&labels)
         .zip(&idents)
-        .map(|((field, label), ident)| {
+        .zip(&ref_locals)
+        .map(|(((field, label), ident), actor_ref)| {
             let actor = &field.ty;
             let slot = format_ident!("__kokage_{ident}_slot");
             quote_spanned! {field.span()=>
                 let #slot = ::kokage::ActorSlot::
                     <<#actor as ::kokage::host::RawActor>::Msg>::new(#label);
-                let #ident = #slot.actor_ref();
+                let #actor_ref = #slot.actor_ref();
             }
         });
-    let define_stmts = idents.iter().map(|ident| {
+    let define_stmts = idents.iter().zip(&factory_locals).map(|(ident, factory)| {
         let slot = format_ident!("__kokage_{ident}_slot");
-        quote! { builder.define(#slot, #ident); }
+        quote! { __kokage_builder.define(#slot, #factory); }
     });
+    let clone_fields = idents.iter().map(|ident| {
+        quote! { #ident: self.#ident.clone() }
+    });
+    let refs_values = idents.iter().zip(&ref_locals).map(|(ident, actor_ref)| {
+        quote! { #ident: #actor_ref }
+    });
+    let factory_patterns = idents
+        .iter()
+        .zip(&factory_locals)
+        .map(|(ident, factory)| quote! { #ident: #factory });
     let refs_doc = format!(
         "Typed, restart-stable actor refs generated for [`{declared}`]. The bundle is cloneable so factories can retain refs for cyclic wiring."
     );
@@ -440,9 +465,14 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
     Ok(quote! {
         #[doc = #refs_doc]
-        #[derive(Clone)]
         #vis struct #refs {
             #(#refs_fields,)*
+        }
+
+        impl ::core::clone::Clone for #refs {
+            fn clone(&self) -> Self {
+                Self { #(#clone_fields,)* }
+            }
         }
 
         #[doc = #factories_doc]
@@ -459,17 +489,17 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
             #[doc = #wire_doc]
             #vis fn wire<#(#factory_params),*>(
-                builder: &mut ::kokage::GraphBuilder,
-                wire: impl ::core::ops::FnOnce(&#refs) -> #factories<#(#factory_params),*>,
+                __kokage_builder: &mut ::kokage::GraphBuilder,
+                __kokage_wire: impl ::core::ops::FnOnce(&#refs) -> #factories<#(#factory_params),*>,
             ) -> #refs
             where
                 #(#factory_bounds,)*
             {
                 #(#open_stmts)*
-                let refs = #refs { #(#idents,)* };
-                let #factories { #(#idents,)* } = wire(&refs);
+                let __kokage_refs = #refs { #(#refs_values,)* };
+                let #factories { #(#factory_patterns,)* } = __kokage_wire(&__kokage_refs);
                 #(#define_stmts)*
-                refs
+                __kokage_refs
             }
         }
     })

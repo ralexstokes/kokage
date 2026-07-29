@@ -65,12 +65,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let frontend = builder.actor(ActorSpec::new("Observe", move || {
         Observe::<String>::new(observed_tx.clone())
     }));
-    let graph = builder.build()?;
-    let actor = graph
-        .into_nodes()
-        .into_iter()
-        .next()
-        .expect("one actor")
+    let actor = builder
+        .build()?
+        .into_nodes_by_label()
+        .remove("Observe")
+        .expect("Observe actor")
         .into_runnable();
     let first_run = tokio::spawn({
         let actor = actor.clone();
