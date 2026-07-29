@@ -20,10 +20,10 @@ watches and supervision. `RestartPolicy::Always` restarts it; `OnFailure` and
 `Never` do not.
 
 For a cyclic static graph, derive `Supervision` on a struct whose fields are
-concrete actor factory types. Its `wire` closure receives a cloneable refs
-struct with one typed `ActorRef` per field before it constructs the factory
-bundle, so cycles and forward references do not require string lookup. Graph
-validation and the supervision tree remain explicit:
+actor types. The derive generates refs and factory bundles. Its `wire` closure
+receives one typed `ActorRef` per field before it constructs the factories, so
+cycles and forward references do not require string lookup. Graph validation
+and the supervision tree remain explicit:
 
 ```rust,no_run
 use std::time::Duration;
@@ -94,15 +94,15 @@ impl Actor for Shipping {
 
 #[derive(Supervision)]
 struct PrintShop {
-    front_desk: FrontDeskFactory,
-    press: PressFactory,
-    shipping: ShippingFactory,
+    front_desk: FrontDesk,
+    press: Press,
+    shipping: Shipping,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let refs = PrintShop::wire(&mut graph, |refs| PrintShop {
+    let refs = PrintShop::wire(&mut graph, |refs| PrintShopFactories {
         front_desk: FrontDeskFactory {
             press: refs.press.clone(),
         },
@@ -188,7 +188,7 @@ custom synchronous construction rather than `Default`.
 ## Struct Declarations
 
 `#[derive(Supervision)]` supports named-field structs whose fields implement
-`ActorFactory`. Field names become actor labels; rename one with
+`host::RawActor`. Field names become actor labels; rename one with
 `#[supervision(label = "...")]`. The generated `wire` method mutates a
 caller-owned `GraphBuilder` and returns cloneable typed refs. Build the graph,
 then select its supervision topology explicitly with `OrderedTree` or
@@ -196,9 +196,11 @@ then select its supervision topology explicitly with `OrderedTree` or
 
 The derive keeps that shape in the type system:
 
-- a field whose type is not an actor factory is a compile error
+- a field whose type is not an actor is a compile error
 - wiring a ref with the wrong message type is a compile error
-- every factory field must be present exactly once in the derived struct literal
+- every factory field must be present exactly once in the generated
+  `<Name>Factories` struct literal
+- each factory must build its corresponding declared actor type
 - a declaration with no actors is a compile error
 - two nodes sharing a name, from field names or `label` overrides, is a
   compile error

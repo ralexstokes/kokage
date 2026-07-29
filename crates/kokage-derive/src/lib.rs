@@ -197,19 +197,18 @@ fn parse_factory_attributes(
 /// `use kokage::Supervision;` for the unqualified form, or write
 /// `#[derive(kokage::Supervision)]`.
 ///
-/// Each field is a concrete [`kokage::ActorFactory`] type. For a struct named
-/// `Pipeline`, the derive generates a cloneable `PipelineRefs` struct and one
-/// method: `Pipeline::wire(&mut GraphBuilder, wire) -> PipelineRefs`.
-/// `wire` opens every actor slot before invoking its closure, so the closure
-/// can construct factories that capture refs to each other. It fills the
-/// slots, but graph validation and supervision topology stay explicit:
+/// Each field is an actor type. For a struct named `Pipeline`, the derive
+/// generates cloneable `PipelineRefs`, generic `PipelineFactories`, and one
+/// method: `Pipeline::wire(&mut GraphBuilder, wire) -> PipelineRefs`. `wire`
+/// opens every actor slot before invoking its closure, so the closure can
+/// construct factories that capture refs to each other. It fills the slots,
+/// but graph validation and supervision topology stay explicit:
 ///
 /// ```
-/// # use kokage::{Actor, ActorFactory, ActorRef, ActorResult, GraphBuilder, MessageContext, OrderedTree};
+/// # use kokage::{Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, OrderedTree};
 /// # struct FrontendMsg;
 /// # struct ParserMsg;
 /// #
-/// #[derive(ActorFactory)]
 /// struct Frontend {
 ///     parser: ActorRef<ParserMsg>,
 /// }
@@ -218,7 +217,6 @@ fn parse_factory_attributes(
 /// #     async fn handle(&mut self, _: FrontendMsg, _: &mut MessageContext<'_, Self>) -> ActorResult { Ok(()) }
 /// # }
 ///
-/// #[derive(ActorFactory)]
 /// struct Parser {
 ///     frontend: ActorRef<FrontendMsg>,
 /// }
@@ -229,15 +227,21 @@ fn parse_factory_attributes(
 ///
 /// #[derive(kokage::Supervision)]
 /// struct Pipeline {
-///     frontend: FrontendFactory,
-///     parser: ParserFactory,
+///     frontend: Frontend,
+///     parser: Parser,
 /// }
 ///
 /// # fn main() -> Result<(), kokage::GraphBuildError> {
 /// let mut graph = GraphBuilder::new();
-/// let refs = Pipeline::wire(&mut graph, |refs| Pipeline {
-///     frontend: FrontendFactory { parser: refs.parser.clone() },
-///     parser: ParserFactory { frontend: refs.frontend.clone() },
+/// let refs = Pipeline::wire(&mut graph, |refs| PipelineFactories {
+///     frontend: {
+///         let parser = refs.parser.clone();
+///         move || Frontend { parser: parser.clone() }
+///     },
+///     parser: {
+///         let frontend = refs.frontend.clone();
+///         move || Parser { frontend: frontend.clone() }
+///     },
 /// });
 /// let tree = OrderedTree::graph(graph.build()?);
 /// # let _ = (tree, refs);
@@ -245,9 +249,8 @@ fn parse_factory_attributes(
 /// # }
 /// ```
 ///
-/// The derived struct is the factory bundle; no parallel `Factories`, `Slots`,
-/// or `Scopes` types are generated. The closure is still necessary because
-/// cycles require refs before their factories can be constructed.
+/// No `Slots` or `Scopes` types are generated. The closure is necessary
+/// because cycles require refs before their factories can be constructed.
 ///
 /// Field names become graph actor labels. A field may use
 /// `#[supervision(label = "...")]` to select another non-empty label. No other
@@ -258,8 +261,8 @@ fn parse_factory_attributes(
 /// The refs struct and `wire` inherit the derived struct's visibility; each
 /// refs field inherits the corresponding factory field's visibility. Generic,
 /// tuple, unit, empty, and non-struct declarations are rejected. Every field
-/// must implement `ActorFactory`; invalid factories and mismatched message
-/// types fail through the generated typed slot and ref expressions.
+/// must implement `RawActor`, and every returned factory must build its
+/// declared field actor type.
 #[proc_macro_derive(Supervision, attributes(supervision))]
 pub fn derive_supervision(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -349,7 +352,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     if fields.is_empty() {
         return Err(syn::Error::new_spanned(
             &declared,
-            "Supervision requires at least one actor factory field",
+            "Supervision requires at least one actor field",
         ));
     }
 
@@ -358,6 +361,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         .map(parse_supervision_field)
         .collect::<syn::Result<Vec<_>>>()?;
     let refs = format_ident!("{declared}Refs");
+    let factories = format_ident!("{declared}Factories");
     let idents: Vec<_> = fields
         .iter()
         .map(|field| field.ident.as_ref().expect("named fields"))
@@ -366,6 +370,9 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         .iter()
         .zip(&attrs)
         .map(|(ident, attrs)| attrs.label.clone().unwrap_or_else(|| ident.to_string()))
+        .collect();
+    let factory_params: Vec<_> = (0..fields.len())
+        .map(|index| format_ident!("F{index}"))
         .collect();
 
     let mut seen = std::collections::HashSet::with_capacity(labels.len());
@@ -380,26 +387,36 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
     let refs_fields = fields.iter().zip(&idents).map(|(field, ident)| {
         let field_vis = &field.vis;
-        let factory = &field.ty;
-        quote_spanned! {factory.span()=>
+        let actor = &field.ty;
+        quote_spanned! {actor.span()=>
             #[allow(dead_code)]
             #field_vis #ident: ::kokage::ActorRef<
-                <<#factory as ::kokage::ActorFactory>::Actor as
-                    ::kokage::host::RawActor>::Msg
+                <#actor as ::kokage::host::RawActor>::Msg
             >
         }
+    });
+    let factory_fields = fields
+        .iter()
+        .zip(&idents)
+        .zip(&factory_params)
+        .map(|((field, ident), factory)| {
+            let field_vis = &field.vis;
+            quote_spanned! {field.span()=> #field_vis #ident: #factory }
+        });
+    let factory_bounds = fields.iter().zip(&factory_params).map(|(field, factory)| {
+        let actor = &field.ty;
+        quote_spanned! {actor.span()=> #factory: ::kokage::ActorFactory<Actor = #actor> }
     });
     let open_stmts = fields
         .iter()
         .zip(&labels)
         .zip(&idents)
         .map(|((field, label), ident)| {
-            let factory = &field.ty;
+            let actor = &field.ty;
             let slot = format_ident!("__kokage_{ident}_slot");
             quote_spanned! {field.span()=>
                 let (#slot, #ident) = builder.slot::
-                    <<<#factory as ::kokage::ActorFactory>::Actor as
-                        ::kokage::host::RawActor>::Msg>(#label);
+                    <<#actor as ::kokage::host::RawActor>::Msg>(#label);
             }
         });
     let define_stmts = idents.iter().map(|ident| {
@@ -412,6 +429,9 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     let wire_doc = format!(
         "Opens every `{declared}` actor slot, invokes `wire` with all typed refs, and fills the slots from the returned factory bundle. Graph validation and supervision topology remain explicit on the caller-owned builder."
     );
+    let factories_doc = format!(
+        "Actor factories generated for [`{declared}`]. Each field factory must construct the actor type in the corresponding declaration field."
+    );
 
     Ok(quote! {
         #[doc = #refs_doc]
@@ -420,15 +440,29 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             #(#refs_fields,)*
         }
 
+        #[doc = #factories_doc]
+        #vis struct #factories<#(#factory_params),*> {
+            #(#factory_fields,)*
+        }
+
         impl #declared {
+            #[doc(hidden)]
+            #[allow(dead_code)]
+            fn __kokage_supervision_declaration(Self { #(#idents,)* }: Self) {
+                let _ = (#(#idents,)*);
+            }
+
             #[doc = #wire_doc]
-            #vis fn wire(
+            #vis fn wire<#(#factory_params),*>(
                 builder: &mut ::kokage::GraphBuilder,
-                wire: impl ::core::ops::FnOnce(&#refs) -> Self,
-            ) -> #refs {
+                wire: impl ::core::ops::FnOnce(&#refs) -> #factories<#(#factory_params),*>,
+            ) -> #refs
+            where
+                #(#factory_bounds,)*
+            {
                 #(#open_stmts)*
                 let refs = #refs { #(#idents,)* };
-                let Self { #(#idents,)* } = wire(&refs);
+                let #factories { #(#idents,)* } = wire(&refs);
                 #(#define_stmts)*
                 refs
             }

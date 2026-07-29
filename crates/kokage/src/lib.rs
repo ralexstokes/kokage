@@ -115,9 +115,9 @@
 //!
 //! Use `#[derive(ActorFactory)]` on named-field actors to generate reusable
 //! factory structs without repeating configuration fields or clone code. For
-//! cyclic actor graphs, derive [`Supervision`] on a named-field bundle of
-//! concrete actor factories. Its wiring closure receives typed refs for every
-//! field before any factory is constructed. Graph validation and supervision
+//! cyclic actor graphs, derive [`Supervision`] on a named-field declaration of
+//! actor types. Its wiring closure receives typed refs for every field before
+//! constructing the generated factory bundle. Graph validation and supervision
 //! topology remain explicit; see the [`Supervision`] derive docs for the
 //! generated API, and mind the bounded-mailbox cycle hazard documented on
 //! [`GraphBuilder`].
