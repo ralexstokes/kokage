@@ -28,7 +28,7 @@ cargo run -p <crate> --example <name>
 | `dynamic_children` | Adding and removing children at runtime. |
 | `per_child_restart_intensity` | Per-child intensity overrides. |
 | `shutdown_with_cancellation_token` | Graceful shutdown driven by a signal. |
-| `watch_lifecycle_recursive` | Reacting to lifecycle events across a tree. |
+| `watch_lifecycle` | Reacting to lifecycle events across a tree. |
 | `subscribe_to_snapshots` | Polling supervisor state. |
 | `tracing` | Structured logging output. |
 | `metrics` | Prometheus metrics (needs `--features metrics`). |

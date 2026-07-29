@@ -107,7 +107,7 @@ impl SupervisorHandle {
     /// use kokage_supervisor::{CompletionOutcome, SupervisorHandle};
     ///
     /// # async fn example(handle: SupervisorHandle) {
-    /// if handle.wait_completed(["source", "indexer"]).await == CompletionOutcome::Completed {
+    /// if handle.wait_completed(["source", "indexer"]).await == Ok(CompletionOutcome::Completed) {
     ///     handle.shutdown();
     /// }
     /// # }
@@ -188,6 +188,41 @@ impl SupervisorHandle {
                 outcome = handle.wait_completed(set.awaited) => outcome,
             };
             if outcome == Ok(CompletionOutcome::Completed) {
+                handle.shutdown();
+            }
+        });
+
+        CompletionGuard { cancellation }
+    }
+
+    /// Shuts this supervisor down once children that may be added later have
+    /// all completed.
+    ///
+    /// This is the fire-and-forget counterpart to
+    /// [`wait_completed_dynamic`](Self::wait_completed_dynamic). Use it for a
+    /// dynamic scope when the named memberships do not exist yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime.
+    pub fn shutdown_on_dynamic_completion<I, S>(&self, ids: I) -> CompletionGuard
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let set = CompletionSet::new(ids);
+        let handle = self.clone();
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+
+        tokio::spawn(async move {
+            let _cancel_on_exit = task_cancellation.clone().drop_guard();
+            let outcome = tokio::select! {
+                biased;
+                () = task_cancellation.cancelled() => return,
+                outcome = handle.wait_completed_dynamic(set.awaited) => outcome,
+            };
+            if outcome == CompletionOutcome::Completed {
                 handle.shutdown();
             }
         });

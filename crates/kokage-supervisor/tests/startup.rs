@@ -688,7 +688,7 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
             .child("never")
             .unwrap()
             .state
-            .startup_aborted()
+            .is_terminal()
     );
     common::shutdown_and_wait(&handle, "drained pre-ready child test shutdown")
         .await

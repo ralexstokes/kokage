@@ -480,6 +480,15 @@ impl RuntimeHandle {
         self.supervisor.shutdown_on_completion(ids)
     }
 
+    /// Shuts this runtime down once named future dynamic members complete.
+    pub fn shutdown_on_dynamic_completion<I, S>(&self, ids: I) -> CompletionGuard
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.shutdown_on_dynamic_completion(ids)
+    }
+
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
     /// Create the watch before reading [`snapshot`](Self::snapshot), then

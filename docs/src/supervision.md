@@ -262,13 +262,14 @@ of its own accord and no restart is pending for it. Three consequences follow:
   new generation.
 - A child cancelled by shutdown, removal, or a group restart can still return
   `Ok(())`. That is not finished work, and it does not count.
-  [`ChildLifecycleEventKind::Exited`] reports it as `cancelled`.
+  [`LifecycleEventKind::ChildExited`] carries a `ChildExitView` whose
+  `cancelled()` method reports it.
 
 Nested supervisors need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
-in its own completion set. Unlike the `AutoShutdown` configuration this
-replaced, it also works on dynamic scopes — an id that is not a member yet stays
-pending until it is added.
+in its own completion set. For dynamic scopes whose ids are not members yet,
+use `wait_completed_dynamic` or `shutdown_on_dynamic_completion`; those names
+make the future-membership behavior explicit.
 
 ## Supervision trees
 
@@ -338,5 +339,5 @@ actors](dynamic-actors.md) chapter.
 [`ShutdownPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ShutdownPolicy.html
 [`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
 [`wait_completed`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html#method.wait_completed
-[`ChildLifecycleEventKind::Exited`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ChildLifecycleEventKind.html#variant.Exited
+[`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage_supervisor/enum.LifecycleEventKind.html#variant.ChildExited
 [`agent_control` example]: https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples/agent_control

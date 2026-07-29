@@ -12,7 +12,7 @@ use tokio::{
 };
 
 mod common;
-use common::{ExitStatusView, ObservedEvent};
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn sibling_restart_dispatches_during_another_childs_backoff() {

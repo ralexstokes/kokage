@@ -3,9 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{
-    ChildSpec, ExitStatusView, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
-};
+use kokage_supervisor::{ChildSpec, RestartPolicy, ShutdownPolicy, Strategy, Supervisor};
 use tokio::sync::{Notify, mpsc};
 
 mod common;
@@ -41,16 +39,15 @@ async fn transient_child_panic_causes_restart() {
     let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
-    assert!(matches!(
+    assert!(
         handle
             .snapshot()
             .child("panic-worker")
             .expect("panic worker remains visible")
             .state
             .last_exit()
-            .map(|exit| &exit.status),
-        Some(ExitStatusView::Panicked)
-    ));
+            .is_some_and(|exit| exit.is_panicked())
+    );
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -106,8 +103,11 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     assert_eq!(common::recv_event(&mut peer_starts_rx).await, 1);
     let peer = common::wait_for_child_running(&mut snapshots, "abort-peer", 1).await;
     assert!(matches!(
-        peer.state.last_exit().map(|exit| &exit.status),
-        Some(ExitStatusView::Aborted { after_grace: false })
+        peer.state.last_exit(),
+        Some(kokage_supervisor::ChildExitView::Aborted {
+            after_grace: false,
+            ..
+        })
     ));
 
     handle.shutdown();

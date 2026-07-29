@@ -11,8 +11,7 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BoxError, ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec, RestartPolicy, Strategy,
-    Supervisor,
+    BoxError, ChildSpec, LifecycleEventKind, LifecycleWatch, RestartPolicy, Strategy, Supervisor,
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -159,17 +158,20 @@ async fn one_for_one_restart_flow() {
         .expect("benchmark supervisor should build")
         .spawn();
     let handle = handle_owner.handle();
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
         .child("flaky")
         .expect("flaky child should be known")
         .generation;
     trigger_failure.notify_one();
-    let generation = lifecycle
-        .started_after("flaky", baseline)
+    let generation = snapshots
+        .wait_for_child("flaky", |child| {
+            child.generation > baseline && child.state.is_running()
+        })
         .await
-        .expect("supervisor remains live during benchmark");
+        .expect("supervisor remains live during benchmark")
+        .generation;
     black_box(generation);
     black_box(attempts.load(Ordering::Relaxed));
 
@@ -262,24 +264,24 @@ async fn dynamic_add_remove_flow() {
     handle.wait().await.expect("shutdown should succeed");
 }
 
-async fn wait_for_child_start_count(events: &mut ChildLifecycleWatch, expected: usize) -> usize {
+async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize) -> usize {
     let mut started = 0;
     while started < expected {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event.kind, ChildLifecycleEventKind::Started { .. }) {
+        if matches!(event.kind, LifecycleEventKind::ChildStarted { .. }) {
             started += 1;
         }
     }
     started
 }
 
-async fn wait_for_restart_count(events: &mut ChildLifecycleWatch, expected: usize) -> usize {
+async fn wait_for_restart_count(events: &mut LifecycleWatch, expected: usize) -> usize {
     let mut restarted = 0;
     while restarted < expected {
         let event = events.next().await.expect("lifecycle stream");
         if matches!(
             event.kind,
-            ChildLifecycleEventKind::Started { generation: 1 }
+            LifecycleEventKind::ChildStarted { generation: 1, .. }
         ) {
             restarted += 1;
         }
@@ -287,19 +289,25 @@ async fn wait_for_restart_count(events: &mut ChildLifecycleWatch, expected: usiz
     restarted
 }
 
-async fn wait_for_named_child_started(events: &mut ChildLifecycleWatch, id: &str) {
+async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if event.child_id == id && matches!(event.kind, ChildLifecycleEventKind::Started { .. }) {
+        if matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == id
+        ) {
             return;
         }
     }
 }
 
-async fn wait_for_named_child_removed(events: &mut ChildLifecycleWatch, id: &str) {
+async fn wait_for_named_child_removed(events: &mut LifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if event.child_id == id && matches!(event.kind, ChildLifecycleEventKind::Removed) {
+        if matches!(
+            event.kind,
+            LifecycleEventKind::ChildRemoved { ref child_id, .. } if child_id == id
+        ) {
             return;
         }
     }

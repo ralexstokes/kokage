@@ -96,7 +96,7 @@ pub enum DrainPolicy {
     /// skipped, and the actor is aborted. There is no per-message signal for the
     /// messages that were lost — what surfaces is a timed-out exit
     /// ([`ActorRunError::ShutdownTimedOut`](crate::host::ActorRunError::ShutdownTimedOut)
-    /// standalone, [`ExitStatusView::Aborted { after_grace: true }`](crate::observe::ExitStatusView::Aborted)
+    /// standalone, [`ChildExitView::Aborted { after_grace: true, .. }`](crate::observe::ChildExitView::Aborted)
     /// under supervision). A `Drain` actor under a too-short grace period
     /// therefore behaves like a slower `Discard`, which is the failure mode to
     /// watch for. The enclosing shutdown also reports the timeout. In particular,

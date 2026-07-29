@@ -215,8 +215,8 @@ pub enum LifecycleEventKind {
     },
 }
 
-/// Recursive lifecycle stream created by
-/// [`SupervisorHandle::watch_lifecycle_recursive`](crate::SupervisorHandle::watch_lifecycle_recursive).
+/// Lifecycle stream created by
+/// [`SupervisorHandle::watch_lifecycle`](crate::SupervisorHandle::watch_lifecycle).
 pub struct LifecycleWatch {
     queue: Arc<RecursiveLifecycleQueue>,
     watcher_count: Option<Arc<AtomicUsize>>,

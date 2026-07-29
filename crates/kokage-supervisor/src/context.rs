@@ -91,7 +91,7 @@ impl ChildContext {
     /// With a cooperative shutdown policy the supervisor first triggers
     /// [`shutdown_token`](Self::shutdown_token). If the child is still running
     /// when its grace period expires, it triggers this token and records the
-    /// exit as [`Aborted { after_grace: true }`](crate::ExitStatusView::Aborted).
+    /// exit as [`Aborted { after_grace: true, .. }`](crate::ChildExitView::Aborted).
     /// The child wrapper then has a short window to finish local accounting
     /// before the supervisor hard-aborts the task: a tenth of this child's own
     /// grace, clamped to between 1 ms and 10 ms. Work that cannot finish in

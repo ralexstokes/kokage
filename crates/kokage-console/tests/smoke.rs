@@ -79,7 +79,7 @@ async fn spawn_console_with_stats(
     let lifecycle_source = lifecycle.handle();
     let handle = Console::builder()
         .snapshots(snapshots_handle.subscribe_snapshots())
-        .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
+        .lifecycle(move || lifecycle_source.watch_lifecycle())
         .actor_stats(stats)
         .bind(([127, 0, 0, 1], 0))
         .build()
@@ -227,7 +227,7 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
     let lifecycle_source = lifecycle.handle();
     let handle = Console::builder()
         .snapshots(snapshots_handle.subscribe_snapshots())
-        .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
+        .lifecycle(move || lifecycle_source.watch_lifecycle())
         .access_token("test-token")
         .bind(([127, 0, 0, 1], 0))
         .build()
@@ -320,7 +320,7 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
     let lifecycle_source = lifecycle.handle();
     let handle = Console::builder()
         .snapshots(snapshots_handle.subscribe_snapshots())
-        .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
+        .lifecycle(move || lifecycle_source.watch_lifecycle())
         .allowed_host("console.example:80")
         .bind(([127, 0, 0, 1], 0))
         .build()
@@ -341,7 +341,7 @@ fn non_loopback_bind_requires_token() {
     let lifecycle_handle = lifecycle.handle();
     let error = Console::builder()
         .snapshots(snapshot_rx)
-        .lifecycle(move || lifecycle_handle.watch_lifecycle_recursive())
+        .lifecycle(move || lifecycle_handle.watch_lifecycle())
         .bind(([0, 0, 0, 0], 9100))
         .build()
         .err()
@@ -498,11 +498,8 @@ async fn ws_streams_events() {
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
     assert_eq!(frame["data"]["supervisor_path"], json!([]));
-    assert_eq!(frame["data"]["kind"]["Child"]["child_id"], "worker");
-    assert_eq!(
-        frame["data"]["kind"]["Child"]["kind"]["Started"]["generation"],
-        0
-    );
+    assert_eq!(frame["data"]["kind"]["ChildStarted"]["child_id"], "worker");
+    assert_eq!(frame["data"]["kind"]["ChildStarted"]["generation"], 0);
 }
 
 #[tokio::test]
