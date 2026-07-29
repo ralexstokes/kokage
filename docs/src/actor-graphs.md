@@ -16,12 +16,12 @@ For acyclic dependencies, obtain a ref from a spec before moving it:
 # impl kokage::Actor for Press { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 # impl kokage::Actor for FrontDesk { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let press_actor = ActorSpec::new("press", || Press);
-let press = press_actor.actor_ref();
+let (press_actor, press) = press_actor.actor_ref();
 let front_desk_actor = ActorSpec::new("front-desk", {
     let press = press.clone();
     move || FrontDesk(press.clone())
 });
-let front_desk = front_desk_actor.actor_ref();
+let (front_desk_actor, front_desk) = front_desk_actor.actor_ref();
 
 let tree = OrderedTree::new()
     .actor(press_actor)
@@ -42,9 +42,9 @@ partially defined declaration structurally impossible:
 # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let left_slot = ActorSlot::<()>::new("left");
-let left = left_slot.actor_ref();
+let (left_slot, left) = left_slot.actor_ref();
 let right_slot = ActorSlot::<()>::new("right");
-let right = right_slot.actor_ref();
+let (right_slot, right) = right_slot.actor_ref();
 
 let left_actor = left_slot.define({
     let right = right.clone();
@@ -96,13 +96,13 @@ failure participates in supervision and readiness.
 Configure an individual declaration before placement:
 
 ```rust
-# use kokage::{ActorSpec, MailboxMode, RestartPolicy};
+# use kokage::{ActorSpec, MailboxMode, Restart};
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(128)
     .mailbox(MailboxMode::queue())
-    .restart(RestartPolicy::Always)
+    .restart(Restart::always())
     .message_size(|message: &String| message.len());
 # let _ = worker;
 ```

@@ -7,8 +7,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, RestartPolicy,
-    ScopeKind, Supervisor, SupervisorSnapshot, SupervisorStateView,
+    Backoff, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, Restart, ScopeKind,
+    Supervisor, SupervisorSnapshot, SupervisorStateView,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -149,11 +149,10 @@ async fn snapshot_shows_restart_state_and_last_exit() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(common::restart_config(
+    .restart(common::restart_with_backoff(
         5,
         Duration::from_secs(1),
-        BackoffPolicy::Fixed(Duration::from_millis(200)),
+        Backoff::fixed(Duration::from_millis(200)),
     ));
 
     let supervisor = Supervisor::ordered()
@@ -430,10 +429,7 @@ async fn snapshot_reports_stopping_while_shutdown_drains_children() {
 #[tokio::test]
 async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
     let supervisor = Supervisor::ordered()
-        .child(
-            ChildSpec::task("temporary", |_ctx| async move { Ok(()) })
-                .restart(RestartPolicy::Never),
-        )
+        .child(ChildSpec::task("temporary", |_ctx| async move { Ok(()) }).restart(Restart::never()))
         .build()
         .expect("valid supervisor");
 

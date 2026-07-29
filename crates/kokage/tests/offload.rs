@@ -14,8 +14,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DrainPolicy, LiveContext, MailboxMode, OffloadDeadline, RestartPolicy,
-    RuntimeHandle, TaskHandle,
+    ActorSlot, LiveContext, MailboxMode, OffloadDeadline, Restart, RuntimeHandle, Shutdown,
+    TaskHandle,
     host::{ActorContext, RawActor},
     prelude::*,
 };
@@ -227,7 +227,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("StaleActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let constructed = constructed.clone();
         let drop_started = drop_started.clone();
@@ -244,7 +244,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     });
     let runtime = graph
         .build()
-        .default_restart(RestartPolicy::OnFailure)
+        .default_restart(Restart::on_failure())
         .spawn()
         .unwrap();
     wait_runtime_started(&runtime.handle(), "stale-offload runtime startup").await;
@@ -315,7 +315,7 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("AbortActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handle_slot = handle_slot.clone();
         let done = done.clone();
@@ -386,7 +386,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     let release = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("ReadyAbortActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let release = release.clone();
         move || ReadyAbortActor {
@@ -453,10 +453,6 @@ impl Actor for DrainAbortActor {
         }
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::test]
@@ -465,7 +461,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
     let shutdown_seen = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DrainAbortActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let shutdown_seen = shutdown_seen.clone();
         move || DrainAbortActor {
@@ -498,7 +494,6 @@ enum DrainMsg {
 
 #[derive(Clone)]
 struct ShutdownActor {
-    policy: DrainPolicy,
     release: Arc<Notify>,
     entered: Arc<Notify>,
     observed: mpsc::UnboundedSender<&'static str>,
@@ -534,25 +529,20 @@ impl Actor for ShutdownActor {
         }
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        self.policy
-    }
 }
 
-async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
+async fn shutdown_case(policy: Shutdown) -> Vec<&'static str> {
     let release = Arc::new(Notify::new());
     let entered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
-    let actor_slot = ActorSlot::new("ShutdownActor");
-    let actor = actor_slot.actor_ref();
+    let actor_slot = ActorSlot::new("ShutdownActor").shutdown(policy);
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let release = release.clone();
         let entered = entered.clone();
         move || ShutdownActor {
-            policy,
             release: release.clone(),
             entered: entered.clone(),
             observed: observed.clone(),
@@ -565,7 +555,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
     actor.send(DrainMsg::Queued).await.unwrap();
     let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
     tokio::task::yield_now().await;
-    if policy == DrainPolicy::Drain {
+    if policy == Shutdown::drain_for(std::time::Duration::from_secs(5)) {
         release.notify_waiters();
     }
     tokio::time::timeout(TEST_TIMEOUT, shutdown)
@@ -583,7 +573,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
 
 #[tokio::test]
 async fn drain_processes_a_full_mailbox_and_offload_completion() {
-    let observed = shutdown_case(DrainPolicy::Drain).await;
+    let observed = shutdown_case(Shutdown::drain_for(std::time::Duration::from_secs(5))).await;
     assert_eq!(observed.first(), Some(&"queued"));
     assert!(observed.contains(&"nested"));
     assert!(observed.contains(&"done"));
@@ -591,7 +581,13 @@ async fn drain_processes_a_full_mailbox_and_offload_completion() {
 
 #[tokio::test]
 async fn discard_aborts_offloads_at_stop_initiation() {
-    assert!(!shutdown_case(DrainPolicy::Discard).await.contains(&"done"));
+    assert!(
+        !shutdown_case(Shutdown::discard_after_current(
+            std::time::Duration::from_secs(5)
+        ))
+        .await
+        .contains(&"done")
+    );
 }
 
 #[derive(Debug)]
@@ -644,7 +640,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let actor_slot = ActorSlot::new("BackpressureActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handler_release = handler_release.clone();
         let offload_release = offload_release.clone();
@@ -687,7 +683,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("conflating-offload").mailbox(MailboxMode::conflate());
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handler_release = handler_release.clone();
         let offload_release = offload_release.clone();
@@ -759,10 +755,6 @@ impl Actor for DeadlineDrainActor {
         }
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::test]
@@ -771,7 +763,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DeadlineDrainActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let registered = registered.clone();
         move || DeadlineDrainActor {
@@ -856,7 +848,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
     let constructed = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("PanicActor");
-    let actor = actor_slot.actor_ref();
+    let (actor_slot, actor) = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let constructed = constructed.clone();
         move || {
@@ -866,7 +858,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
     });
     let runtime = graph
         .build()
-        .default_restart(RestartPolicy::OnFailure)
+        .default_restart(Restart::on_failure())
         .spawn()
         .unwrap();
     wait_runtime_started(&runtime.handle(), "offload-panic runtime startup").await;

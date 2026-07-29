@@ -5,7 +5,7 @@ use support::TreeBuilder;
 use std::time::Duration;
 
 use kokage::{
-    ActorStatus, RestartPolicy, Strategy,
+    ActorStatus, Restart, Strategy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -23,12 +23,11 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, BackoffPolicy, BlockingCancelled, CancellationHandle, CancellationToken,
-            ControlError, DownReason, DrainPolicy, DynamicRestrictedScope, DynamicRuntime,
-            DynamicRuntimeHandle, DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline,
-            RestartConfig, RestartPolicy, RestrictedScope, Runtime, RuntimeHandle, ScopeKind,
-            ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TaskHandle,
-            TerminalMembership, TimerKey, TreeNode,
+            ActorFactory, Backoff, BlockingCancelled, CancellationHandle, CancellationToken,
+            ControlError, DownReason, DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle,
+            DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline, Restart, RestrictedScope,
+            Runtime, RuntimeHandle, ScopeKind, Shutdown, Strategy, SupervisorBuildError,
+            SupervisorError, TaskHandle, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
@@ -87,7 +86,7 @@ fn actor_supervisor_path_segments_are_nameable() {
 }
 
 #[test]
-fn closed_policy_sets_can_be_matched_exhaustively() {
+fn policy_values_expose_their_declared_behavior() {
     fn strategy_name(strategy: Strategy) -> &'static str {
         match strategy {
             Strategy::OneForOne => "one-for-one",
@@ -96,18 +95,21 @@ fn closed_policy_sets_can_be_matched_exhaustively() {
         }
     }
 
-    fn restart_name(policy: RestartPolicy) -> &'static str {
-        match policy {
-            RestartPolicy::Always => "always",
-            RestartPolicy::OnFailure => "on-failure",
-            RestartPolicy::Never => "never",
+    fn restart_name(policy: Restart) -> &'static str {
+        if policy == Restart::always() {
+            "always"
+        } else if policy == Restart::never() {
+            "never"
+        } else {
+            "on-failure"
         }
     }
 
-    fn drain_name(policy: kokage::DrainPolicy) -> &'static str {
-        match policy {
-            kokage::DrainPolicy::Discard => "discard",
-            kokage::DrainPolicy::Drain => "drain",
+    fn drain_name(policy: kokage::Shutdown) -> &'static str {
+        if policy.drains_messages() {
+            "drain"
+        } else {
+            "discard"
         }
     }
 
@@ -127,8 +129,8 @@ fn closed_policy_sets_can_be_matched_exhaustively() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_eq!(restart_name(RestartPolicy::default()), "on-failure");
-    assert_eq!(drain_name(kokage::DrainPolicy::default()), "drain");
+    assert_eq!(restart_name(Restart::default()), "on-failure");
+    assert_eq!(drain_name(kokage::Shutdown::default()), "drain");
     assert_eq!(actor_status_name(ActorStatus::Running), "running");
     assert_eq!(scope_name(kokage::ScopeKind::default()), "ordered");
 }

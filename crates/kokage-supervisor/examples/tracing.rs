@@ -3,14 +3,15 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{BackoffPolicy, prelude::*};
+use kokage_supervisor::{Backoff, prelude::*};
 use tokio::time::{Duration, sleep};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nested_restart = RestartConfig::new(5, Duration::from_secs(5))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
+    let nested_restart = Restart::on_failure()
+        .limit(5, Duration::from_secs(5))
+        .backoff(Backoff::fixed(Duration::from_millis(100)));
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
@@ -32,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(())
                 }
             })
-            .restart_config(nested_restart),
+            .restart(nested_restart),
         )
         .build()?;
 

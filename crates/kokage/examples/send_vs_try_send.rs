@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorResult, ActorSpec, RestartPolicy, TrySendError,
+    ActorResult, ActorSpec, Restart, TrySendError,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::{
@@ -34,18 +34,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let spec = ActorSpec::new("OneMessageSink", move || OneMessageSink {
         observed: observed_tx.clone(),
     });
-    let sink_ref = spec.actor_ref();
+    let (spec, sink_ref) = spec.actor_ref();
     let sink = spec.into_runnable();
 
     let first_run = tokio::spawn({
         let sink = sink.clone();
         async move {
-            sink.run_until(
-                pending::<()>(),
-                RestartPolicy::Always,
-                DEFAULT_SHUTDOWN_BOUND,
-            )
-            .await
+            sink.run_until(pending::<()>(), Restart::always(), DEFAULT_SHUTDOWN_BOUND)
+                .await
         }
     });
     sink_ref.send("first run".to_owned()).await?;
@@ -80,12 +76,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let second_run = tokio::spawn({
         let sink = sink.clone();
         async move {
-            sink.run_until(
-                pending::<()>(),
-                RestartPolicy::Always,
-                DEFAULT_SHUTDOWN_BOUND,
-            )
-            .await
+            sink.run_until(pending::<()>(), Restart::always(), DEFAULT_SHUTDOWN_BOUND)
+                .await
         }
     });
     println!(

@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSpec, RestartPolicy, Strategy,
+    ActorSpec, Restart, Strategy,
     host::{ActorContext, RawActor},
     prelude::*,
 };
@@ -67,7 +67,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         .actor(healthy)
         .actor(failing)
         .strategy(strategy)
-        .default_restart(RestartPolicy::Always)
+        .default_restart(Restart::always())
         .spawn()?;
 
     timeout(Duration::from_secs(1), async {

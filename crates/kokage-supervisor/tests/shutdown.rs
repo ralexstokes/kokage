@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    RestartConfig, RestartPolicy, ShutdownPolicy, Supervisor, SupervisorError,
+    Backoff, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart,
+    Shutdown, Supervisor, SupervisorError,
 };
 use tokio::{
     sync::{Barrier, Notify, mpsc},
@@ -241,9 +241,7 @@ async fn stubborn_child_is_aborted_and_reported_in_cooperative_mode() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: common::SHORT_GRACE,
-            }),
+            .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -285,9 +283,7 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: Duration::from_millis(20),
-            }),
+            .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
         )
         .build()
         .expect("valid supervisor");
@@ -321,9 +317,7 @@ async fn cooperative_shutdown_times_out_with_stuck_child_name() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: common::SHORT_GRACE,
-            }),
+            .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -369,9 +363,7 @@ async fn mixed_cooperative_shutdown_reports_every_timed_out_child() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: common::SHORT_GRACE,
-            }),
+            .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .child(
             ChildSpec::task("cooperative", move |_ctx| {
@@ -385,9 +377,7 @@ async fn mixed_cooperative_shutdown_reports_every_timed_out_child() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: common::SHORT_GRACE,
-            }),
+            .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -435,7 +425,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative { grace: GRACE }),
+            .shutdown(Shutdown::drain_for(GRACE)),
         )
         .build()
         .expect("supervisor builds")
@@ -490,9 +480,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: Duration::from_millis(20),
-            }),
+            .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
         )
         .await
         .expect("short child added");
@@ -509,9 +497,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: Duration::from_secs(5),
-            }),
+            .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
         )
         .await
         .expect("long child added");
@@ -564,9 +550,7 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: common::SHORT_GRACE,
-            }),
+            .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .await
         .expect("stubborn child added");
@@ -633,7 +617,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Abort),
+            .shutdown(Shutdown::abort()),
         )
         .build()
         .expect("valid supervisor");
@@ -656,13 +640,10 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_preempts_zero_delay_restart() {
     let supervisor = Supervisor::ordered()
-        .restart_config(RestartConfig::new(8, Duration::from_secs(1)))
-        .child(
-            ChildSpec::task("flaky", |_ctx| async move {
-                Err(common::test_error("restart immediately"))
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+        .restart(Restart::on_failure().limit(8, Duration::from_secs(1)))
+        .child(ChildSpec::task("flaky", |_ctx| async move {
+            Err(common::test_error("restart immediately"))
+        }))
         .build()
         .expect("valid supervisor");
 
@@ -708,17 +689,14 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
 
     let saw_cancel_for_keeper = saw_cancel.clone();
     let supervisor = Supervisor::ordered()
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             8,
             Duration::from_secs(1),
-            BackoffPolicy::Fixed(Duration::from_millis(200)),
+            Backoff::fixed(Duration::from_millis(200)),
         ))
-        .child(
-            ChildSpec::task("flaky", |_ctx| async move {
-                Err(common::test_error("restart later"))
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+        .child(ChildSpec::task("flaky", |_ctx| async move {
+            Err(common::test_error("restart later"))
+        }))
         .child(
             ChildSpec::task("keeper", move |ctx| {
                 let saw_cancel = saw_cancel_for_keeper.clone();
@@ -728,9 +706,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: common::SHORT_GRACE,
-            }),
+            .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -871,9 +847,7 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
             }
         }
     })
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: common::SHORT_GRACE,
-    });
+    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
     let dependency = ChildSpec::task("dependency", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
@@ -932,9 +906,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
                 Ok(())
             }
         })
-        .shutdown(ShutdownPolicy::Cooperative {
-            grace: Duration::from_secs(5),
-        })
+        .shutdown(Shutdown::drain_for(Duration::from_secs(5)))
     };
     let nested = Supervisor::ordered()
         .child(nested_child("head", head_live.clone(), false))
@@ -943,11 +915,8 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .expect("nested ordered supervisor builds");
     let handle_owner = Supervisor::ordered()
         .child(
-            kokage_supervisor::ChildSpec::supervisor("nested", nested).shutdown(
-                ShutdownPolicy::Cooperative {
-                    grace: common::SHORT_GRACE,
-                },
-            ),
+            kokage_supervisor::ChildSpec::supervisor("nested", nested)
+                .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
         .expect("root builds")
@@ -998,30 +967,22 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
             }
         }
     })
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: Duration::from_secs(5),
-    });
+    .shutdown(Shutdown::drain_for(Duration::from_secs(5)));
     let inner = Supervisor::ordered()
         .child(leaf)
         .build()
         .expect("inner supervisor builds");
     let middle = Supervisor::ordered()
         .child(
-            kokage_supervisor::ChildSpec::supervisor("inner", inner).shutdown(
-                ShutdownPolicy::Cooperative {
-                    grace: Duration::from_secs(5),
-                },
-            ),
+            kokage_supervisor::ChildSpec::supervisor("inner", inner)
+                .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
         )
         .build()
         .expect("middle supervisor builds");
     let handle_owner = Supervisor::ordered()
         .child(
-            kokage_supervisor::ChildSpec::supervisor("middle", middle).shutdown(
-                ShutdownPolicy::Cooperative {
-                    grace: common::SHORT_GRACE,
-                },
-            ),
+            kokage_supervisor::ChildSpec::supervisor("middle", middle)
+                .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
         .expect("root supervisor builds")
@@ -1057,7 +1018,7 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
             std::future::pending::<()>().await;
             Ok(())
         })
-        .shutdown(ShutdownPolicy::Cooperative { grace: GRACE })
+        .shutdown(Shutdown::drain_for(GRACE))
     };
 
     let ordered_owner = Supervisor::ordered()
@@ -1107,7 +1068,7 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
                         Ok(())
                     }
                 })
-                .shutdown(ShutdownPolicy::Cooperative { grace: GRACE }),
+                .shutdown(Shutdown::drain_for(GRACE)),
             )
             .await
             .expect("dynamic member added");

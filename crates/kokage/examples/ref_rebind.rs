@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, marker::PhantomData};
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, CancellationToken, MessageContext, RestartPolicy,
+    Actor, ActorResult, ActorSpec, CancellationToken, MessageContext, Restart,
     host::DEFAULT_SHUTDOWN_BOUND,
 };
 use tokio::sync::mpsc;
@@ -64,7 +64,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let spec = ActorSpec::new("Observe", move || {
         Observe::<String>::new(observed_tx.clone())
     });
-    let frontend = spec.actor_ref();
+    let (spec, frontend) = spec.actor_ref();
     let actor = spec.into_runnable();
     let first_run = tokio::spawn({
         let actor = actor.clone();
@@ -72,7 +72,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             actor
                 .run_until(
                     pending::<()>(),
-                    RestartPolicy::OnFailure,
+                    Restart::on_failure(),
                     DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await
@@ -92,7 +92,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             actor
                 .run_until(
                     stop.cancelled(),
-                    RestartPolicy::OnFailure,
+                    Restart::on_failure(),
                     DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await

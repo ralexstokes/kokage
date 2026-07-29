@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, MessageContext, Reply, RestartPolicy,
-    RuntimeHandle, StartContext, observe::SupervisorSnapshotReceiver,
+    Actor, ActorFactory, ActorResult, ActorSpec, MessageContext, Reply, Restart, RuntimeHandle,
+    StartContext, observe::SupervisorSnapshotReceiver,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
@@ -91,7 +91,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     ));
     let handle = builder
         .build()
-        .default_restart(RestartPolicy::OnFailure)
+        .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");
 

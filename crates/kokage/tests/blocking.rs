@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    ActorResult, ActorSpec, RestartPolicy,
+    ActorResult, ActorSpec, Restart,
     host::{ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
@@ -37,11 +37,7 @@ fn start_actor(actor: RunnableActor) -> (CancellationToken, JoinHandle<Result<()
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -250,7 +246,7 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
             actor
                 .run_until(
                     stop.cancelled(),
-                    RestartPolicy::Never,
+                    Restart::never(),
                     Duration::from_millis(50),
                 )
                 .await
@@ -296,11 +292,7 @@ async fn blocking_panic_propagates_as_actor_panic() {
         Duration::from_secs(1),
         tokio::spawn(async move {
             actor
-                .run_until(
-                    pending::<()>(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }),
     )

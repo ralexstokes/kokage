@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, DownReason, MailboxMode, RestartConfig, RuntimeHandle,
+    ActorSlot, CancellationToken, DownReason, MailboxMode, Restart, RuntimeHandle,
     observe::{LifecycleWatchGuard, SupervisorSnapshotReceiver},
     prelude::*,
 };
@@ -221,23 +221,23 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 
     // Open every slot first so cyclic factories can capture the stable refs.
     let venue_a_feed_slot = feed_slot("venue-a-feed");
-    let venue_a_feed = venue_a_feed_slot.actor_ref();
+    let (venue_a_feed_slot, venue_a_feed) = venue_a_feed_slot.actor_ref();
     let venue_a_gateway_slot = venue_slot("venue-a-gateway");
-    let venue_a_gateway = venue_a_gateway_slot.actor_ref();
+    let (venue_a_gateway_slot, venue_a_gateway) = venue_a_gateway_slot.actor_ref();
     let venue_b_feed_slot = feed_slot("venue-b-feed");
-    let venue_b_feed = venue_b_feed_slot.actor_ref();
+    let (venue_b_feed_slot, venue_b_feed) = venue_b_feed_slot.actor_ref();
     let venue_b_gateway_slot = venue_slot("venue-b-gateway");
-    let venue_b_gateway = venue_b_gateway_slot.actor_ref();
+    let (venue_b_gateway_slot, venue_b_gateway) = venue_b_gateway_slot.actor_ref();
     let reconciler_slot = ActorSlot::<ReconcilerMsg>::new("reconciler");
-    let reconciler = reconciler_slot.actor_ref();
+    let (reconciler_slot, reconciler) = reconciler_slot.actor_ref();
     let ledger_slot = ActorSlot::<LedgerMsg>::new("ledger");
-    let ledger = ledger_slot.actor_ref();
+    let (ledger_slot, ledger) = ledger_slot.actor_ref();
     let router_slot = ActorSlot::<RouterMsg>::new("order-router");
-    let router = router_slot.actor_ref();
+    let (router_slot, router) = router_slot.actor_ref();
     let control_slot = ActorSlot::<ControlMsg>::new("control");
-    let control = control_slot.actor_ref();
+    let (control_slot, control) = control_slot.actor_ref();
     let health_slot = ActorSlot::<HealthMsg>::new("health");
-    let health = health_slot.actor_ref();
+    let (health_slot, health) = health_slot.actor_ref();
 
     let reconciler_actor = reconciler_slot.define({
         let feed_refs = HashMap::from([
@@ -310,7 +310,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     });
 
     let venues = OrderedTree::new()
-        .restart_config(RestartConfig::new(5, Duration::from_secs(10)))
+        .default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)))
         .actor(venue_a_feed_actor)
         .actor(venue_a_gateway_actor)
         .actor(venue_b_feed_actor)
@@ -712,7 +712,7 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
 
     // Sibling shutdown is concurrent. The application stages teardown first:
     // intake is closed, unknown intent is reconciled, and only then are venue
-    // and support actors stopped. DrainPolicy alone does not order siblings.
+    // and support actors stopped. Shutdown alone does not order siblings.
     app.background_stop.cancel();
     app.sampler.await?;
     drop(app.lifecycle_watch);

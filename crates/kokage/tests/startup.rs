@@ -5,7 +5,7 @@ use support::TreeBuilder;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, DrainPolicy, DynamicTree, LiveContext, RestartPolicy, RuntimeHandle,
+    ActorSpec, ActorStatus, DynamicTree, LiveContext, Restart, RuntimeHandle, Shutdown,
     SupervisorError,
     host::{ActorContext, BoxError, ChildSpec, RawActor},
     prelude::*,
@@ -183,7 +183,7 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
     graph.actor(ActorSpec::new("FailsOnStart", || FailsOnStart));
     let handle = graph
         .build()
-        .default_restart(RestartPolicy::Never)
+        .default_restart(Restart::never())
         .spawn()
         .unwrap();
     assert!(matches!(
@@ -238,10 +238,6 @@ impl Actor for DrainContinuation {
             ctx.continue_with("continued");
         }
         Ok(())
-    }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
     }
 }
 
@@ -347,10 +343,6 @@ impl Actor for DrainPhaseProbe {
             _ => Ok(()),
         }
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 fn drain_phase_probe_graph(
@@ -403,7 +395,7 @@ async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() 
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
     let handle = graph
         .build()
-        .default_restart(RestartPolicy::Never)
+        .default_restart(Restart::never())
         .spawn()
         .unwrap();
     handle.handle().wait_started().await.unwrap();
@@ -462,10 +454,6 @@ impl Actor for OverlappingStopProbe {
         }
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::test]
@@ -497,7 +485,6 @@ struct StopsOnStart {
     started: Arc<Notify>,
     release: Arc<Notify>,
     events: Arc<Mutex<Vec<&'static str>>>,
-    policy: DrainPolicy,
 }
 
 impl Actor for StopsOnStart {
@@ -524,10 +511,6 @@ impl Actor for StopsOnStart {
         self.events.lock().await.push("stopped");
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        self.policy
-    }
 }
 
 #[tokio::test]
@@ -536,20 +519,22 @@ async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() 
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut graph = TreeBuilder::new();
-    let actor = graph.actor(ActorSpec::new("StopsOnStart", {
-        let started = started.clone();
-        let release = release.clone();
-        let events = events.clone();
-        move || StopsOnStart {
-            started: started.clone(),
-            release: release.clone(),
-            events: events.clone(),
-            policy: DrainPolicy::Discard,
-        }
-    }));
+    let actor = graph.actor(
+        ActorSpec::new("StopsOnStart", {
+            let started = started.clone();
+            let release = release.clone();
+            let events = events.clone();
+            move || StopsOnStart {
+                started: started.clone(),
+                release: release.clone(),
+                events: events.clone(),
+            }
+        })
+        .shutdown(Shutdown::discard_after_current(Duration::from_secs(5))),
+    );
     let handle = graph
         .build()
-        .default_restart(RestartPolicy::Never)
+        .default_restart(Restart::never())
         .spawn()
         .unwrap();
 
@@ -578,20 +563,22 @@ async fn start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut graph = TreeBuilder::new();
-    let actor = graph.actor(ActorSpec::new("StopsOnStart", {
-        let started = started.clone();
-        let release = release.clone();
-        let events = events.clone();
-        move || StopsOnStart {
-            started: started.clone(),
-            release: release.clone(),
-            events: events.clone(),
-            policy: DrainPolicy::Drain,
-        }
-    }));
+    let actor = graph.actor(
+        ActorSpec::new("StopsOnStart", {
+            let started = started.clone();
+            let release = release.clone();
+            let events = events.clone();
+            move || StopsOnStart {
+                started: started.clone(),
+                release: release.clone(),
+                events: events.clone(),
+            }
+        })
+        .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
+    );
     let handle = graph
         .build()
-        .default_restart(RestartPolicy::Never)
+        .default_restart(Restart::never())
         .spawn()
         .unwrap();
 
@@ -631,7 +618,7 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
     graph.actor(ActorSpec::new("PromptRaw", || PromptRaw));
     let handle = graph
         .build()
-        .default_restart(RestartPolicy::Never)
+        .default_restart(Restart::never())
         .spawn()
         .unwrap();
     tokio::time::timeout(Duration::from_secs(1), handle.handle().wait_started())
@@ -676,11 +663,14 @@ impl Actor for DefaultPolicy {
 }
 
 #[test]
-fn the_default_drain_policy_is_drain() {
-    assert_eq!(DrainPolicy::default(), DrainPolicy::Drain);
+fn the_default_shutdown_drains() {
+    assert_eq!(
+        Shutdown::default(),
+        Shutdown::drain_for(std::time::Duration::from_secs(5))
+    );
 }
 
-/// A handler that never mentions `drain_policy` finishes the mailbox its
+/// A handler that never configures shutdown finishes the mailbox its
 /// incarnation already accepted. Flipping this default back to `Discard` is a
 /// silent message-loss change, so it is pinned here rather than left to the
 /// tests that set a policy explicitly.

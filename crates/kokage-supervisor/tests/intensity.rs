@@ -6,9 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, Supervisor, SupervisorError,
-};
+use kokage_supervisor::{Backoff, ChildSpec, Restart, Supervisor, SupervisorError};
 use tokio::{
     sync::{Notify, mpsc},
     time::sleep,
@@ -20,11 +18,10 @@ use common::ObservedEvent;
 #[tokio::test]
 async fn repeated_failures_can_exceed_restart_intensity() {
     let supervisor = Supervisor::ordered()
-        .restart_config(RestartConfig::new(1, Duration::from_secs(1)))
-        .child(
-            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
-                .restart(RestartPolicy::OnFailure),
-        )
+        .restart(Restart::on_failure().limit(1, Duration::from_secs(1)))
+        .child(ChildSpec::task("flaky", |_| async {
+            Err(common::test_error("boom"))
+        }))
         .build()
         .expect("valid supervisor");
 
@@ -41,15 +38,14 @@ async fn repeated_failures_can_exceed_restart_intensity() {
 #[tokio::test]
 async fn configured_backoff_delays_restart_attempts() {
     let supervisor = Supervisor::ordered()
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             1,
             Duration::from_secs(1),
-            BackoffPolicy::Fixed(Duration::from_millis(75)),
+            Backoff::fixed(Duration::from_millis(75)),
         ))
-        .child(
-            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
-                .restart(RestartPolicy::OnFailure),
-        )
+        .child(ChildSpec::task("flaky", |_| async {
+            Err(common::test_error("boom"))
+        }))
         .build()
         .expect("valid supervisor");
 
@@ -71,20 +67,14 @@ async fn configured_backoff_delays_restart_attempts() {
 #[tokio::test]
 async fn jittered_exponential_backoff_delays_restart_attempts() {
     let supervisor = Supervisor::ordered()
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             1,
             Duration::from_secs(1),
-            BackoffPolicy::Exponential {
-                base: Duration::from_millis(80),
-                factor: 2,
-                max: Duration::from_millis(500),
-                jitter: true,
-            },
+            Backoff::exponential(Duration::from_millis(80), 2, Duration::from_millis(500)).jitter(),
         ))
-        .child(
-            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
-                .restart(RestartPolicy::OnFailure),
-        )
+        .child(ChildSpec::task("flaky", |_| async {
+            Err(common::test_error("boom"))
+        }))
         .build()
         .expect("valid supervisor");
 
@@ -108,33 +98,25 @@ async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let running = Supervisor::ordered()
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             3,
             Duration::from_secs(1),
-            BackoffPolicy::Exponential {
-                base: Duration::from_millis(40),
-                factor: 2,
-                max: Duration::from_millis(200),
-                jitter: false,
-            },
+            Backoff::exponential(Duration::from_millis(40), 2, Duration::from_millis(200)),
         ))
-        .child(
-            ChildSpec::task("flaky", move |ctx| {
-                let starts_tx = starts_tx.clone();
-                async move {
-                    starts_tx
-                        .send((ctx.generation(), Instant::now()))
-                        .expect("test receiver dropped");
-                    if ctx.generation() < 2 {
-                        Err(common::test_error("boom"))
-                    } else {
-                        ctx.shutdown_token().cancelled().await;
-                        Ok(())
-                    }
+        .child(ChildSpec::task("flaky", move |ctx| {
+            let starts_tx = starts_tx.clone();
+            async move {
+                starts_tx
+                    .send((ctx.generation(), Instant::now()))
+                    .expect("test receiver dropped");
+                if ctx.generation() < 2 {
+                    Err(common::test_error("boom"))
+                } else {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+            }
+        }))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -163,44 +145,36 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
     let release_for_child = release.clone();
 
     let running = Supervisor::ordered()
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             5,
             Duration::from_millis(200),
-            BackoffPolicy::Exponential {
-                base: Duration::from_millis(50),
-                factor: 4,
-                max: Duration::from_secs(2),
-                jitter: false,
-            },
+            Backoff::exponential(Duration::from_millis(50), 4, Duration::from_secs(2)),
         ))
-        .child(
-            ChildSpec::task("flaky", move |ctx| {
-                let release = release_for_child.clone();
-                async move {
-                    match ctx.generation() {
-                        0 => {
-                            release.notified().await;
-                            Err(common::test_error("boom"))
-                        }
-                        // Fast failures: by the third restart the earlier
-                        // timestamps have aged out of the 200ms window, but
-                        // the consecutive-restart counter must keep growing.
-                        1 | 2 => Err(common::test_error("boom")),
-                        // Outlive the window, then fail: this is the only
-                        // thing that resets the counter.
-                        3 => {
-                            sleep(Duration::from_millis(300)).await;
-                            Err(common::test_error("boom"))
-                        }
-                        _ => {
-                            ctx.shutdown_token().cancelled().await;
-                            Ok(())
-                        }
+        .child(ChildSpec::task("flaky", move |ctx| {
+            let release = release_for_child.clone();
+            async move {
+                match ctx.generation() {
+                    0 => {
+                        release.notified().await;
+                        Err(common::test_error("boom"))
+                    }
+                    // Fast failures: by the third restart the earlier
+                    // timestamps have aged out of the 200ms window, but
+                    // the consecutive-restart counter must keep growing.
+                    1 | 2 => Err(common::test_error("boom")),
+                    // Outlive the window, then fail: this is the only
+                    // thing that resets the counter.
+                    3 => {
+                        sleep(Duration::from_millis(300)).await;
+                        Err(common::test_error("boom"))
+                    }
+                    _ => {
+                        ctx.shutdown_token().cancelled().await;
+                        Ok(())
                     }
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+            }
+        }))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -237,15 +211,15 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
 #[tokio::test]
 async fn child_restart_intensity_override_controls_backoff() {
     let supervisor = Supervisor::ordered()
-        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(
-            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) })
-                .restart(RestartPolicy::OnFailure)
-                .restart_config(common::restart_config(
+            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) }).restart(
+                common::restart_with_backoff(
                     1,
                     Duration::from_secs(1),
-                    BackoffPolicy::Fixed(Duration::from_millis(75)),
-                )),
+                    Backoff::fixed(Duration::from_millis(75)),
+                ),
+            ),
         )
         .build()
         .expect("valid supervisor");
@@ -286,8 +260,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let beta = ChildSpec::task("beta", move |ctx| {
         let beta_attempts = beta_attempts.clone();
@@ -303,11 +276,10 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let handle_owner = Supervisor::ordered()
-        .restart_config(RestartConfig::new(1, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(1, Duration::from_secs(1)))
         .child(alpha)
         .child(beta)
         .build()
@@ -327,7 +299,7 @@ async fn child_restart_intensity_override_is_enforced() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let running = Supervisor::ordered()
-        .restart_config(RestartConfig::new(10, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(10, Duration::from_secs(1)))
         .child(
             ChildSpec::task("flaky", move |ctx| {
                 let starts_tx = starts_tx.clone();
@@ -338,8 +310,7 @@ async fn child_restart_intensity_override_is_enforced() {
                     Err(common::test_error("boom"))
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .restart_config(RestartConfig::new(1, Duration::from_secs(1))),
+            .restart(Restart::on_failure().limit(1, Duration::from_secs(1))),
         )
         .build()
         .expect("valid supervisor")
@@ -364,30 +335,27 @@ async fn restart_budget_recovers_after_failures_age_out_of_window() {
 
     let release_second_failure_for_child = release_second_failure.clone();
     let running = Supervisor::ordered()
-        .restart_config(RestartConfig::new(1, Duration::from_millis(100)))
-        .child(
-            ChildSpec::task("flaky", move |ctx| {
-                let release_second_failure = release_second_failure_for_child.clone();
-                let starts_tx = starts_tx.clone();
-                async move {
-                    starts_tx
-                        .send(ctx.generation())
-                        .expect("test receiver dropped");
-                    match ctx.generation() {
-                        0 => Err(common::test_error("first boom")),
-                        1 => {
-                            release_second_failure.notified().await;
-                            Err(common::test_error("second boom"))
-                        }
-                        _ => {
-                            ctx.shutdown_token().cancelled().await;
-                            Ok(())
-                        }
+        .restart(Restart::on_failure().limit(1, Duration::from_millis(100)))
+        .child(ChildSpec::task("flaky", move |ctx| {
+            let release_second_failure = release_second_failure_for_child.clone();
+            let starts_tx = starts_tx.clone();
+            async move {
+                starts_tx
+                    .send(ctx.generation())
+                    .expect("test receiver dropped");
+                match ctx.generation() {
+                    0 => Err(common::test_error("first boom")),
+                    1 => {
+                        release_second_failure.notified().await;
+                        Err(common::test_error("second boom"))
+                    }
+                    _ => {
+                        ctx.shutdown_token().cancelled().await;
+                        Ok(())
                     }
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+            }
+        }))
         .build()
         .expect("valid supervisor")
         .spawn();
@@ -429,8 +397,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let release_beta_for_child = release_beta.clone();
     let beta = ChildSpec::task("beta", move |ctx| {
@@ -448,12 +415,11 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let handle_owner = Supervisor::ordered()
         .strategy(kokage_supervisor::Strategy::OneForAll)
-        .restart_config(RestartConfig::new(1, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(1, Duration::from_secs(1)))
         .child(alpha)
         .child(beta)
         .build()

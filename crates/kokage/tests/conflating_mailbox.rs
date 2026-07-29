@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, CallError, DrainPolicy, MailboxMode, MessageContext, Reply,
-    RestartPolicy, StartContext,
+    Actor, ActorResult, ActorSlot, CallError, MailboxMode, MessageContext, Reply, Restart,
+    StartContext,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::sync::{Notify, mpsc};
@@ -57,7 +57,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("ticks").mailbox(MailboxMode::conflate());
-    let actor_ref = actor_ref_slot.actor_ref();
+    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -77,11 +77,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -121,7 +117,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("ticks").mailbox(MailboxMode::conflate());
-    let actor_ref = actor_ref_slot.actor_ref();
+    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -141,11 +137,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -191,7 +183,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
     let actor_ref_slot = ActorSlot::new("snapshots")
         .mailbox(MailboxMode::conflate())
         .message_size(sized_snapshot_size);
-    let actor_ref = actor_ref_slot.actor_ref();
+    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -211,11 +203,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -257,7 +245,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
     let slot = ActorSlot::new("market-data")
         .mailbox_capacity(2)
         .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol));
-    let actor_ref = slot.actor_ref();
+    let (slot, actor_ref) = slot.actor_ref();
     builder.define(slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -277,11 +265,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -351,7 +335,7 @@ async fn replaced_call_reports_reply_dropped() {
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("requests").mailbox(MailboxMode::conflate());
-    let actor_ref = actor_ref_slot.actor_ref();
+    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -371,11 +355,7 @@ async fn replaced_call_reports_reply_dropped() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -438,20 +418,16 @@ impl Actor for GatedDrainActor {
         self.release.notified().await;
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::test]
-async fn drain_policy_handles_latest_message_after_shutdown() {
+async fn draining_shutdown_handles_latest_message_after_shutdown() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("drain").mailbox(MailboxMode::conflate());
-    let actor_ref = actor_ref_slot.actor_ref();
+    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedDrainActor {
@@ -471,11 +447,7 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });
@@ -509,7 +481,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
             value % 2
         }
     }));
-    let actor_ref = actor_ref_slot.actor_ref();
+    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
         let release = release.clone();
         move || GatedCollector {
@@ -529,11 +501,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
         }
     });

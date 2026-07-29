@@ -1,11 +1,14 @@
 # Compile-fail UI tests
 
-`actor-factory/`, `single-use-tree/`, `public-api/`, and `lifecycle-stages/` hold
+`actor-factory/`, `single-use-tree/`, `declaration-sealing/`, `public-api/`, and
+`lifecycle-stages/` hold
 [trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
 `tests/derive_ui.rs`. `actor-factory/` covers the `#[derive(ActorFactory)]`
 shape and attribute contract. The `single-use-tree/` fixtures pin linear
 placement, single-definition actor slots, and owner/handle boundaries;
-`public-api/` pins the documented export tiers. Each
+`declaration-sealing/` proves mailbox
+configuration is unavailable after `actor_ref()`; `public-api/` pins the
+documented export tiers. Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
 spans included. The corresponding `*-pass/` directories cover supported
 derive attributes and visibility.

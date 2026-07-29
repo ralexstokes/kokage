@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use kokage_supervisor::{
-    __private, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartConfig,
-    RestartPolicy, ScopeKind, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
+    __private, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart, ScopeKind,
+    Shutdown, Strategy, Supervisor, SupervisorBuildError,
 };
 
 use crate::{
@@ -19,9 +19,8 @@ use crate::{
 #[derive(Clone)]
 struct ScopeConfig {
     strategy: Strategy,
-    restart_intensity: Option<RestartConfig>,
-    default_restart: RestartPolicy,
-    default_shutdown: ShutdownPolicy,
+    default_restart: Restart,
+    default_shutdown: Shutdown,
     mailbox_capacity: usize,
     reservation: Option<u64>,
 }
@@ -30,9 +29,8 @@ impl ScopeConfig {
     fn new() -> Self {
         Self {
             strategy: Strategy::default(),
-            restart_intensity: None,
-            default_restart: RestartPolicy::default(),
-            default_shutdown: ShutdownPolicy::default(),
+            default_restart: Restart::default(),
+            default_shutdown: Shutdown::default(),
             mailbox_capacity: crate::actor::DEFAULT_MAILBOX_CAPACITY,
             reservation: None,
         }
@@ -102,7 +100,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// # Example
 ///
 /// ```
-/// use kokage::{ActorSpec, OrderedTree, RestartPolicy, Strategy, prelude::*};
+/// use kokage::{ActorSpec, OrderedTree, Restart, Strategy, prelude::*};
 ///
 /// struct Worker;
 ///
@@ -116,7 +114,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let ingest = ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never);
+/// let ingest = ActorSpec::new("ingest", || Worker).restart(Restart::never());
 /// let parse = ActorSpec::new("parse", || Worker);
 ///
 /// let tree = OrderedTree::new()
@@ -185,23 +183,16 @@ impl TreeNode {
 
 macro_rules! tree_common_methods {
     () => {
-        /// Sets this scope's default restart intensity.
-        #[must_use]
-        pub fn restart_config(mut self, config: RestartConfig) -> Self {
-            self.inner = self.inner.restart_config(config);
-            self
-        }
-
         /// Sets the restart policy inherited by actors in this scope.
         #[must_use]
-        pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
+        pub fn default_restart(mut self, restart: Restart) -> Self {
             self.inner = self.inner.default_restart(restart);
             self
         }
 
         /// Sets the shutdown policy inherited by actors in this scope.
         #[must_use]
-        pub fn default_shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+        pub fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
             self.inner = self.inner.default_shutdown(shutdown);
             self
         }
@@ -270,7 +261,10 @@ impl OrderedTree {
 
     /// Appends an actor declaration.
     #[must_use]
-    pub fn actor<M: Send + 'static>(mut self, actor: ActorSpec<M>) -> Self {
+    pub fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+        mut self,
+        actor: ActorSpec<M, CONFIGURABLE>,
+    ) -> Self {
         self.inner = self.inner.actor(actor);
         self
     }
@@ -391,7 +385,10 @@ impl TreeData<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor<M: Send + 'static>(mut self, actor: ActorSpec<M>) -> Self {
+    fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+        mut self,
+        actor: ActorSpec<M, CONFIGURABLE>,
+    ) -> Self {
         self.children_mut()
             .push(SupervisionChild::Actor(actor.into_deferred_node()));
         self
@@ -453,23 +450,16 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
         }
     }
 
-    /// Sets this scope's default restart intensity.
-    #[must_use]
-    fn restart_config(mut self, config: RestartConfig) -> Self {
-        self.config_mut().restart_intensity = Some(config);
-        self
-    }
-
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
-    fn default_restart(mut self, restart: RestartPolicy) -> Self {
+    fn default_restart(mut self, restart: Restart) -> Self {
         self.config_mut().default_restart = restart;
         self
     }
 
     /// Sets the shutdown policy inherited by actor nodes.
     #[must_use]
-    fn default_shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+    fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
         self.config_mut().default_shutdown = shutdown;
         self
     }
@@ -518,7 +508,6 @@ impl ScopeNode {
             strategy: config.strategy,
             default_restart: config.default_restart,
             default_shutdown: config.default_shutdown,
-            restart_intensity: config.restart_intensity.unwrap_or_default(),
             children,
         }
     }
@@ -568,9 +557,6 @@ impl ScopeNode {
                 builder = builder
                     .default_restart(config.default_restart)
                     .default_shutdown(config.default_shutdown);
-                if let Some(intensity) = config.restart_intensity {
-                    builder = builder.restart_config(intensity);
-                }
                 Ok((builder.build()?, actors))
             }
             Self::Ordered { children, .. } => {
@@ -585,9 +571,6 @@ impl ScopeNode {
                     .strategy(config.strategy)
                     .default_restart(config.default_restart)
                     .default_shutdown(config.default_shutdown);
-                if let Some(intensity) = config.restart_intensity {
-                    builder = builder.restart_config(intensity);
-                }
                 for child in children {
                     builder = child.lower(
                         builder,
@@ -612,17 +595,12 @@ impl SupervisionChild {
         }
     }
 
-    fn outline(
-        &self,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
-    ) -> ChildOutline {
+    fn outline(&self, default_restart: Restart, default_shutdown: Shutdown) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
                 id: actor.label().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
-                restart_intensity: actor.restart_config,
             },
             Self::Task(child) => {
                 let (restart, shutdown) =
@@ -644,8 +622,8 @@ impl SupervisionChild {
         self,
         builder: OrderedSupervisorBuilder,
         actors: &Arc<ActorRuntimeState>,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
+        default_restart: Restart,
+        default_shutdown: Shutdown,
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<OrderedSupervisorBuilder, SupervisorBuildError> {
         Ok(match self {
@@ -658,8 +636,6 @@ impl SupervisionChild {
                     deferred: _,
                     restart,
                     shutdown,
-                    restart_config,
-                    terminal_membership,
                 } = actors.materialize_actor_node(actor);
                 builder.child(actor_child_spec(
                     actor.expect("tree lowering materialized the actor"),
@@ -667,12 +643,7 @@ impl SupervisionChild {
                     ActorChildOptions::new(
                         restart.unwrap_or(default_restart),
                         shutdown.unwrap_or(default_shutdown),
-                    )
-                    .restart_config(restart_config)
-                    .remove_on_exit(matches!(
-                        terminal_membership,
-                        crate::TerminalMembership::Remove
-                    )),
+                    ),
                 ))
             }
             Self::Task(child) => builder.child(child),
@@ -793,21 +764,15 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         crate::RuntimeHandle::new(supervisor, Arc::clone(&reservation.actors))
     }
 
-    /// Sets this scope's default restart intensity.
-    #[must_use]
-    fn restart_config(self, config: RestartConfig) -> Self {
-        self.map_tree(|tree| tree.restart_config(config))
-    }
-
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
-    fn default_restart(self, restart: RestartPolicy) -> Self {
+    fn default_restart(self, restart: Restart) -> Self {
         self.map_tree(|tree| tree.default_restart(restart))
     }
 
     /// Sets the shutdown policy inherited by actor nodes.
     #[must_use]
-    fn default_shutdown(self, shutdown: ShutdownPolicy) -> Self {
+    fn default_shutdown(self, shutdown: Shutdown) -> Self {
         self.map_tree(|tree| tree.default_shutdown(shutdown))
     }
 
@@ -844,7 +809,10 @@ impl IdentityTree<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor<M: Send + 'static>(self, actor: ActorSpec<M>) -> Self {
+    fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+        self,
+        actor: ActorSpec<M, CONFIGURABLE>,
+    ) -> Self {
         self.map_tree(|tree| tree.actor(actor))
     }
 
@@ -894,16 +862,10 @@ pub struct SupervisionOutline {
     pub strategy: Strategy,
     /// Restart policy inherited by children without an explicit override.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub default_restart: RestartPolicy,
+    pub default_restart: Restart,
     /// Shutdown policy inherited by children without an explicit override.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub default_shutdown: ShutdownPolicy,
-    /// Default restart-intensity policy.
-    ///
-    /// The serialized field deliberately keeps the behavior name
-    /// `restart_intensity`; [`RestartConfig`] names its combined budget and
-    /// backoff value.
-    pub restart_intensity: RestartConfig,
+    pub default_shutdown: Shutdown,
     /// Declared children in semantic order; empty for a dynamic scope.
     pub children: Vec<ChildOutline>,
 }
@@ -918,20 +880,18 @@ pub enum ChildOutline {
         /// Child id within the enclosing scope.
         id: String,
         /// Resolved restart policy.
-        restart: RestartPolicy,
+        restart: Restart,
         /// Resolved shutdown policy.
-        shutdown: ShutdownPolicy,
-        /// Optional child-specific intensity policy.
-        restart_intensity: Option<RestartConfig>,
+        shutdown: Shutdown,
     },
     /// An arbitrary task child.
     Task {
         /// Child id.
         id: String,
         /// Restart policy.
-        restart: RestartPolicy,
+        restart: Restart,
         /// Shutdown policy.
-        shutdown: ShutdownPolicy,
+        shutdown: Shutdown,
     },
     /// A nested ordered or dynamic scope.
     Scope {

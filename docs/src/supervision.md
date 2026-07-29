@@ -12,14 +12,15 @@ This example supervises a `front-desk` task that should run forever and a
 use std::time::Duration;
 
 use kokage::{
-    BackoffPolicy, OrderedTree, RestartConfig, RestartPolicy, ShutdownPolicy,
+    Backoff, OrderedTree, Restart, Shutdown,
     host::ChildSpec,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let press_restart = RestartConfig::new(3, Duration::from_secs(10))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
+    let press_restart = Restart::on_failure()
+        .limit(3, Duration::from_secs(10))
+        .backoff(Backoff::fixed(Duration::from_millis(100)));
 
     // A press that jams shortly after starting.
     let press = ChildSpec::task("press", |ctx| async move {
@@ -27,17 +28,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(Duration::from_millis(200)).await;
         Err("paper jam".into())
     })
-    .restart_config(press_restart)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: Duration::from_secs(1),
-    });
+    .restart(press_restart)
+    .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)));
 
     // A front desk that runs until its tree asks it to stop.
     let front_desk = ChildSpec::task("front-desk", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let runtime = OrderedTree::new()
         .task(press)
@@ -71,30 +70,30 @@ application lifecycle model.
 
 ## Restart policies
 
-Each child has a [`RestartPolicy`] that decides whether an exit triggers a
+Each child has a [`Restart`] that decides whether an exit triggers a
 restart:
 
-- **`RestartPolicy::Always`** always restarts, even after a clean `Ok(())`
+- **`Restart::always()`** always restarts, even after a clean `Ok(())`
   exit. It suits a service that should never stop, such as the front desk.
-- **`RestartPolicy::OnFailure`** (the default) restarts after an error, panic,
+- **`Restart::on_failure()`** (the default) restarts after an error, panic,
   or abort, but treats a clean exit as final. It suits the press: a jam should
   be retried, but deliberately finishing should be final.
-- **`RestartPolicy::Never`** runs at most once. It suits one-shot startup or
+- **`Restart::never()`** runs at most once. It suits one-shot startup or
   batch work.
 
 Unbounded restarting would turn a persistent fault into a busy loop, so
-restarts are budgeted by a [`RestartConfig`]: at most `max_restarts` within a
+`Restart::limit` budgets a declaration to at most `max_restarts` within a
 sliding `within` window. Exceeding the budget fails the scope and escalates to
 its parent.
 
-A [`BackoffPolicy`] can delay attempts with a fixed or exponential schedule.
+A [`Backoff`] can delay attempts with a fixed or exponential schedule.
 The exponential attempt count is tracked per child and resets after a run
 survives longer than the intensity window. Shutdown always wins over a pending
 restart delay.
 
-Call `OrderedTree::restart_config` or `DynamicTree::restart_config` to set the
-scope-wide budget, and `ChildSpec::restart_config` when one task needs its own
-budget.
+Call `OrderedTree::default_restart` or `DynamicTree::default_restart` to set a
+scope-wide declaration, and `ChildSpec::restart` when one task needs its own
+mode, budget, backoff, or terminal-removal behavior.
 
 ## Ordered startup and readiness
 
@@ -160,12 +159,18 @@ it, or use `OneForAll` if every member must share fate. The runnable
 ## Shutdown policies
 
 When a task must stop because its runtime is shutting down, its membership is
-removed, or its group is restarting, [`ShutdownPolicy`] governs how:
+removed, or its group is restarting, [`Shutdown`] governs how:
 
-- **`ShutdownPolicy::Cooperative { grace }`** cancels the task's shutdown
-  token and waits for a voluntary exit. After `grace`, the task is aborted and
-  the shutdown or removal reports a timeout.
-- **`ShutdownPolicy::Abort`** aborts immediately.
+- **`Shutdown::drain_for(grace)`** cancels the child's shutdown token and waits
+  for a voluntary exit. Actor children drain accepted messages during the
+  grace; for plain task children, the drain distinction is inert.
+- **`Shutdown::discard_after_current(grace)`** uses the same cooperative grace,
+  while actor children finish only an in-flight message and discard the queued
+  remainder.
+- **`Shutdown::abort()`** aborts immediately.
+
+After either cooperative grace expires, the child is aborted and shutdown or
+removal reports a timeout.
 
 Tokio aborts take effect at `.await` points. A non-yielding loop cannot be
 preempted, so put truly blocking work on a blocking pool or in an external
@@ -176,16 +181,17 @@ its complete grace, so the worst-case grace budget is their sum. Dynamic
 scopes cancel siblings together and use the longest single grace as their
 overall budget.
 
-A supervised actor also has one user-facing shutdown deadline: its child
-`ShutdownPolicy` grace bounds queued messages, outstanding offloads, and
-`on_stop`. Offload deadlines remain independent bounds on individual offloads;
-they do not extend the child grace. A host running an actor outside a tree
-passes the equivalent explicit bound to `RunnableActor::run_until`; the
-recommended standalone value is [`host::DEFAULT_SHUTDOWN_BOUND`].
+A supervised actor has one user-facing shutdown declaration. Its `Shutdown`
+grace bounds queued messages, outstanding offloads, and `on_stop`, and its mode
+decides whether queued messages are drained or discarded. Offload deadlines
+remain independent bounds on individual offloads; they do not extend the child
+grace. A host running an actor outside a tree passes the same `Shutdown` value
+to `RunnableActor::run_until`; a conventional standalone declaration is
+`Shutdown::drain_for(`[`host::DEFAULT_SHUTDOWN_BOUND`]`)`.
 
 ### One shutdown clock per child
 
-The cooperative grace bounds the complete actor drain. When it expires, the
+The cooperative grace bounds the complete actor shutdown. When it expires, the
 supervisor records `ChildExitView::Aborted { after_grace: true }`, asks the
 actor wrapper to terminate its mailbox and publish final observability, then
 hard-aborts the wrapper if that short accounting step does not finish. A root
@@ -206,7 +212,7 @@ immediately is observed:
 ```rust,ignore
 let tree = OrderedTree::new()
     .task(source)
-    .task(indexer.restart(RestartPolicy::Never))
+    .task(indexer.restart(Restart::never()))
     .task(metrics_reporter);
 
 let handle = tree.handle();
@@ -223,7 +229,7 @@ not yet present in a dynamic scope stays pending until added. Use
 [`wait_completed`] to await the same condition without automatically stopping
 the runtime.
 
-- Failures still follow the normal restart policy. A `Never` child that fails
+- Failures still follow the normal restart policy. A `Restart::never()` child that fails
   can never complete, and the scope runs until explicitly stopped.
 - A later start un-completes a child, so one cancelled as part of a
   sibling-driven `OneForAll` or `RestForOne` restart must complete again on its
@@ -248,7 +254,7 @@ runtime hierarchy:
 
 ```rust,ignore
 let pressroom = OrderedTree::new()
-    .restart_config(pressroom_restart)
+    .default_restart(pressroom_restart)
     .task(press);
 
 let shop = OrderedTree::new()
@@ -292,11 +298,10 @@ actors](dynamic-actors.md).
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`Runtime`]: https://stokes.io/kokage/api/kokage/struct.Runtime.html
 [`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
-[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/enum.RestartPolicy.html
-[`RestartConfig`]: https://stokes.io/kokage/api/kokage/struct.RestartConfig.html
-[`BackoffPolicy`]: https://stokes.io/kokage/api/kokage/enum.BackoffPolicy.html
+[`Restart`]: https://stokes.io/kokage/api/kokage/struct.Restart.html
+[`Backoff`]: https://stokes.io/kokage/api/kokage/struct.Backoff.html
 [`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
-[`ShutdownPolicy`]: https://stokes.io/kokage/api/kokage/enum.ShutdownPolicy.html
+[`Shutdown`]: https://stokes.io/kokage/api/kokage/struct.Shutdown.html
 [`host::DEFAULT_SHUTDOWN_BOUND`]: https://stokes.io/kokage/api/kokage/host/constant.DEFAULT_SHUTDOWN_BOUND.html
 [`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.shutdown_on_completion
 [`wait_completed`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.wait_completed

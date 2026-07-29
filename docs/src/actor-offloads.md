@@ -172,20 +172,21 @@ supports it.
 
 ## Shutdown
 
-Offloads follow handler actors' `DrainPolicy`:
+Offloads follow the actor declaration's `Shutdown`:
 
-- `Discard` closes external intake and aborts outstanding offloads as soon as
-  shutdown reaches the actor loop.
-- `Drain` closes external intake, then processes queued messages and offload
-  completions until both are exhausted. A drained message may start another
-  offload, which joins the same bounded drain.
+- `Shutdown::discard_after_current(grace)` closes external intake after an
+  in-flight message, discards the queued remainder, and aborts outstanding
+  offloads when shutdown reaches the actor loop.
+- `Shutdown::drain_for(grace)` closes external intake, then processes queued
+  messages and offload completions until both are exhausted. A drained message
+  may start another offload, which joins the same bounded drain.
 
 Draining must interleave messages and completions. Waiting for all offloads
 first would postpone already accepted external work unnecessarily. Completions
 cannot deadlock on mailbox capacity because they remain in the loop-owned task
 set until reaped. Each offload future is still bounded by its own required
-deadline; the standalone host bound or supervised child grace remains the
-outer backstop for slow handlers.
+deadline; the one `Shutdown` grace declared for a standalone or supervised
+actor remains the outer backstop for slow handlers.
 
 `observe::ActorStats::outstanding_offloads` exposes the current number of owned offloads.
 It falls when the actor loop reaps a completion or observes an abort. The method

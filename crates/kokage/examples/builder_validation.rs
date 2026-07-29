@@ -57,14 +57,14 @@ async fn main() {
     // Message-type mismatches now fail at compile time:
     //
     // let slot = ActorSlot::<u32>::new("worker");
-    // let _worker = slot.actor_ref();
+    // let (slot, _worker) = slot.actor_ref();
     // let _worker = slot.define(Idle::<String>::new);
     //
     // Reusing a slot token also fails at compile time because `define`
     // consumes it:
     //
     // let slot = ActorSlot::<String>::new("worker");
-    // let _worker = slot.actor_ref();
+    // let (slot, _worker) = slot.actor_ref();
     // let _worker = slot.define(Idle::<String>::new);
     // let _other = slot.define(Idle::<String>::new);
 

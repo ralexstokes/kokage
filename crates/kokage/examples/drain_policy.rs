@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc};
 
-use kokage::{ActorSpec, DrainPolicy, prelude::*};
+use kokage::{ActorSpec, Shutdown, prelude::*};
 use tokio::sync::{Notify, mpsc};
 
 const JOBS: usize = 5;
@@ -32,13 +32,6 @@ impl Actor for Worker {
         }
         Ok(())
     }
-
-    // Drain is the default; spelled out here because it is what this example
-    // demonstrates. Actors that should drop queued work at shutdown instead
-    // return `DrainPolicy::Discard`.
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::main]
@@ -57,8 +50,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         started: started_tx.clone(),
         release: actor_release.clone(),
         handled: handled_tx.clone(),
-    });
-    let worker = worker_spec.actor_ref();
+    })
+    .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
+    let (worker_spec, worker) = worker_spec.actor_ref();
 
     let runtime = OrderedTree::new().actor(worker_spec).spawn()?;
     worker.send(Msg::Hold).await?;

@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kokage_supervisor::{CancellationToken, RestartPolicy};
+use kokage_supervisor::{CancellationToken, Restart};
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::actor::{
@@ -1082,7 +1082,7 @@ impl<M> Drop for BindingCore<M> {
 pub(crate) struct BindingGuard<M> {
     core: Arc<BindingCore<M>>,
     observability: ScopeObservability,
-    restart_policy: RestartPolicy,
+    restart_policy: Restart,
 }
 
 impl<M> BindingGuard<M> {
@@ -1090,7 +1090,7 @@ impl<M> BindingGuard<M> {
         core: Arc<BindingCore<M>>,
         mailbox: MailboxRef<M>,
         observability: ScopeObservability,
-        restart_policy: RestartPolicy,
+        restart_policy: Restart,
     ) -> Self {
         core.bind(mailbox);
         observability.emit_mailbox_bound(core.actor_id());
@@ -1104,7 +1104,7 @@ impl<M> BindingGuard<M> {
 
 impl<M> Drop for BindingGuard<M> {
     fn drop(&mut self) {
-        if matches!(self.restart_policy, RestartPolicy::Never) {
+        if self.restart_policy.is_never() {
             self.core.terminate();
         } else {
             // A dropped run is a failure for restart purposes. Unknown future

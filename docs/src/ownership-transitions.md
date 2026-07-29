@@ -3,9 +3,9 @@
 Removing an actor is not an atomic handoff of application traffic. A message
 can be accepted just before the actor observes shutdown, and mailbox acceptance
 only means at-most-once delivery to that incarnation. The default
-`DrainPolicy::Drain` handles the queued prefix during a clean removal, within
-the actor's configured shutdown grace. A queued message can still disappear if
-the actor overrides that policy with `DrainPolicy::Discard`, crashes, is
+`Shutdown::drain_for(5s)` handles the queued prefix during a clean removal,
+within the actor's configured shutdown grace. A queued message can still
+disappear if the actor selects `Shutdown::discard_after_current`, crashes, is
 aborted, or exhausts its shutdown grace before draining. The runtime cannot
 infer who should own that work, whether it is safe to replay, or how to
 deduplicate its effects.
@@ -59,7 +59,7 @@ The protocol has five parts:
    `Mounting` buffer is no longer required merely to avoid control-loop
    serialization.
 5. **Bounce the race and drain.** After requesting eviction, the retiree
-   sends any late arrival back to the router and uses `DrainPolicy::Drain`.
+   sends any late arrival back to the router and uses `Shutdown::drain_for`.
    FIFO mailboxes preserve sequential enqueue order from one sender, so the
    retiree's `Evict` reaches the router before its later bounce, and the
    bounce lands in the transition buffer (or mints the replacement) instead
@@ -72,7 +72,7 @@ recipe. Its offload-based router retains symmetric `Mounting` and `Removing`
 states, although only the removal must be pipelined for control-plane safety.
 The slot machine and epoch-minted `add_subtree` membership live in
 `crates/kokage/examples/agent_control/router.rs`; the
-retiree bounce, retirement re-request, and `DrainPolicy::Drain` live in
+retiree bounce, retirement re-request, and draining shutdown live in
 `session.rs`; phase 7 in `main.rs` injects traffic inside the eviction window
 and proves the replacement session answers it with replayed context.
 

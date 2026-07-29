@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{BackoffPolicy, prelude::*};
+use kokage_supervisor::{Backoff, prelude::*};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -12,8 +12,9 @@ fn example_error(message: &'static str) -> BoxError {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let warm_cache_restart = RestartConfig::new(1, Duration::from_secs(1))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
+    let warm_cache_restart = Restart::on_failure()
+        .limit(1, Duration::from_secs(1))
+        .backoff(Backoff::fixed(Duration::from_millis(100)));
     let warm_cache_attempts = Arc::new(AtomicUsize::new(0));
 
     // Intensity uses a sliding timestamp window. Backoff attempts are tracked
@@ -40,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     })
-    .restart_config(warm_cache_restart);
+    .restart(warm_cache_restart);
 
     let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -51,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Supervisor default: children do not get any restart budget unless they override it.
     let running_owner = Supervisor::ordered()
-        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
         .spawn()?;

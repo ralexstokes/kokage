@@ -18,6 +18,10 @@ fn derive_ui() {
     // a nested scope declaration.
     t.compile_fail("tests/ui/single-use-tree/*.rs");
 
+    // Minting a stable ref seals mailbox configuration so options that shape
+    // the binding cannot fail later through an ordering panic.
+    t.compile_fail("tests/ui/declaration-sealing/*.rs");
+
     // Public API tiers are intentionally disjoint: observation and raw-hosting
     // types live outside the crate root and day-one prelude, and the supervisor
     // attachment bridge remains hidden behind `__private`.

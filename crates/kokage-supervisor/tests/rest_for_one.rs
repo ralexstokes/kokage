@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{ChildSpec, RestartPolicy, ShutdownPolicy, Strategy, Supervisor};
+use kokage_supervisor::{ChildSpec, Restart, Shutdown, Strategy, Supervisor};
 use tokio::sync::{Notify, mpsc};
 
 mod common;
@@ -37,7 +37,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let downstream = reporting_child("downstream", started_tx);
     let handle_owner = Supervisor::ordered()
@@ -90,7 +90,7 @@ async fn last_child_failure_restarts_only_itself() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -137,7 +137,7 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let peer = ChildSpec::task("stubborn-peer", move |ctx| {
@@ -154,10 +154,8 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: common::SHORT_GRACE,
-    });
+    .restart(Restart::always())
+    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -208,7 +206,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
             }
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let fail_middle_for_child = fail_middle.clone();
     let middle = ChildSpec::task("middle", {
@@ -230,7 +228,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
             }
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let slow = ChildSpec::task("slow", {
         let started_tx = started_tx.clone();
@@ -253,10 +251,8 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
             }
         }
     })
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: Duration::from_secs(1),
-    });
+    .restart(Restart::always())
+    .shutdown(Shutdown::drain_for(Duration::from_secs(1)));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -320,7 +316,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
             }
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let never = ChildSpec::task("never", {
         let started_tx = started_tx.clone();
@@ -337,7 +333,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
             }
         }
     })
-    .restart(RestartPolicy::Never);
+    .restart(Restart::never());
     let eligible = reporting_child("eligible", started_tx);
 
     let handle_owner = Supervisor::ordered()
@@ -380,7 +376,7 @@ fn reporting_child(
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always)
+    .restart(Restart::always())
 }
 
 /// Two upstream children fail while the suffix drain is held open, so both
@@ -422,10 +418,8 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
             }
         }
     })
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: Duration::from_secs(1),
-    });
+    .restart(Restart::always())
+    .shutdown(Shutdown::drain_for(Duration::from_secs(1)));
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -498,8 +492,6 @@ fn failing_once_child(
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: Duration::from_millis(200),
-    })
+    .restart(Restart::on_failure())
+    .shutdown(Shutdown::drain_for(Duration::from_millis(200)))
 }

@@ -3,9 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, Strategy, Supervisor,
-};
+use kokage_supervisor::{Backoff, ChildSpec, Restart, Strategy, Supervisor};
 use tokio::{
     sync::{Notify, mpsc},
     time::{Duration, sleep, timeout},
@@ -40,11 +38,10 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
             }
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(common::restart_config(
+    .restart(common::restart_with_backoff(
         4,
         Duration::from_secs(2),
-        BackoffPolicy::Fixed(Duration::from_secs(30)),
+        Backoff::fixed(Duration::from_secs(30)),
     ));
     let fast = ChildSpec::task("fast", {
         let fast_failure = Arc::clone(&fast_failure);
@@ -65,7 +62,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
             }
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
     let handle_owner = Supervisor::ordered()
         .child(slow)
         .child(fast)
@@ -126,7 +123,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let sibling_ticks_for_child = sibling_ticks.clone();
     let sibling = ChildSpec::task("sibling", move |ctx| {
@@ -195,7 +192,7 @@ async fn permanent_child_restarts_after_completion() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let supervisor = Supervisor::ordered()
         .child(child)
@@ -228,7 +225,7 @@ async fn temporary_child_does_not_restart() {
                     Err(common::test_error("no restart"))
                 }
             })
-            .restart(RestartPolicy::Never),
+            .restart(Restart::never()),
         )
         .build()
         .expect("valid supervisor");
@@ -269,7 +266,7 @@ async fn temporary_child_does_not_restart() {
 
 #[tokio::test]
 async fn child_restart_intensity_is_isolated_per_child() {
-    let child_restart_intensity = RestartConfig::new(1, Duration::from_secs(1));
+    let child_restart_intensity = Restart::on_failure().limit(1, Duration::from_secs(1));
 
     let (child_a_tx, mut child_a_rx) = mpsc::unbounded_channel();
     let (child_b_tx, mut child_b_rx) = mpsc::unbounded_channel();
@@ -291,8 +288,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(child_restart_intensity);
+    .restart(child_restart_intensity);
 
     let child_b = ChildSpec::task("child-b", move |ctx| {
         let child_b_attempts = child_b_attempts.clone();
@@ -309,12 +305,11 @@ async fn child_restart_intensity_is_isolated_per_child() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(child_restart_intensity);
+    .restart(child_restart_intensity);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
-        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(child_a)
         .child(child_b)
         .build()
@@ -337,25 +332,22 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let running = Supervisor::ordered()
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             2,
             Duration::from_secs(1),
-            BackoffPolicy::Fixed(Duration::from_millis(40)),
+            Backoff::fixed(Duration::from_millis(40)),
         ))
-        .child(
-            ChildSpec::task("flaky", move |ctx| {
-                let attempts = attempts.clone();
-                async move {
-                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        Err(common::test_error("boom"))
-                    } else {
-                        ctx.shutdown_token().cancelled().await;
-                        Ok(())
-                    }
+        .child(ChildSpec::task("flaky", move |ctx| {
+            let attempts = attempts.clone();
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(common::test_error("boom"))
+                } else {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+            }
+        }))
         .build()
         .expect("valid supervisor")
         .spawn();

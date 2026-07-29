@@ -14,8 +14,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    ChildSpec, ChildStateView, CompletionOutcome, RestartConfig, RestartPolicy, ShutdownPolicy,
-    Strategy, Supervisor, SupervisorError,
+    ChildSpec, ChildStateView, CompletionOutcome, Restart, Shutdown, Strategy, Supervisor,
+    SupervisorError,
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -37,7 +37,7 @@ impl Drop for NotifyOnDrop {
 async fn a_completed_child_stops_siblings_and_supervisor() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let builder = Supervisor::ordered()
-        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(Restart::never()))
         .child(ChildSpec::task("sibling", move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             async move {
@@ -85,7 +85,7 @@ async fn a_completion_set_waits_for_its_last_child() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::Never),
+            .restart(Restart::never()),
         )
         .child(
             ChildSpec::task("second", move |_| {
@@ -95,7 +95,7 @@ async fn a_completion_set_waits_for_its_last_child() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::Never),
+            .restart(Restart::never()),
         );
     let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
     let supervisor = builder.build().expect("valid supervisor");
@@ -190,7 +190,7 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
     let handle_owner = Supervisor::ordered()
         .child(
             ChildSpec::task("worker", |_| async { Ok(()) })
-                .restart(RestartPolicy::Never)
+                .restart(Restart::never())
                 .wait_for_ready(),
         )
         .build()
@@ -237,7 +237,7 @@ async fn dynamic_completion_realigns_after_real_lifecycle_overflow() {
     );
 
     dynamic
-        .add_child(ChildSpec::task("target", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .add_child(ChildSpec::task("target", |_| async { Ok(()) }).restart(Restart::never()))
         .await
         .expect("target is added");
     for index in 0..70 {
@@ -271,7 +271,7 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
     let inner = inner_builder.build().expect("valid inner supervisor");
 
     let parent = Supervisor::ordered()
-        .child(ChildSpec::supervisor("job", inner).restart(RestartPolicy::OnFailure))
+        .child(ChildSpec::supervisor("job", inner).restart(Restart::on_failure()))
         .build()
         .expect("valid parent supervisor");
 
@@ -324,7 +324,7 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
 
 #[tokio::test]
 async fn a_dynamic_scope_can_await_completion() {
-    let builder = Supervisor::dynamic().default_restart(RestartPolicy::Never);
+    let builder = Supervisor::dynamic().default_restart(Restart::never());
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
     let _finished = builder
@@ -374,9 +374,9 @@ async fn a_failed_never_child_never_completes() {
     let builder = Supervisor::ordered()
         .child(
             ChildSpec::task("failed", |_| async { Err(common::test_error("failed")) })
-                .restart(RestartPolicy::Never),
+                .restart(Restart::never()),
         )
-        .child(ChildSpec::task("completed", |_| async { Ok(()) }).restart(RestartPolicy::Never));
+        .child(ChildSpec::task("completed", |_| async { Ok(()) }).restart(Restart::never()));
     let _finished = builder
         .handle()
         .shutdown_on_completion(["failed", "completed"]);
@@ -492,7 +492,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
             }
         }
     })
-    .restart(RestartPolicy::Never);
+    .restart(Restart::never());
     // Returns `Ok(())` because the supervisor cancelled it, not because its
     // work finished. That must not satisfy the completion set.
     let restarted = ChildSpec::task("restarted", move |ctx| {
@@ -565,7 +565,7 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
             }
         }
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
     let failing = ChildSpec::task("failing", move |ctx| {
         let finish_always = finish_always.clone();
         async move {
@@ -610,7 +610,7 @@ async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
                 Ok(())
             }
         })
-        .restart(RestartPolicy::Always),
+        .restart(Restart::always()),
     );
     let handle = builder.handle();
     let owner = builder.build().expect("valid supervisor").spawn();
@@ -635,7 +635,7 @@ async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
 #[tokio::test]
 async fn a_dropped_guard_leaves_the_supervisor_running() {
     let builder = Supervisor::ordered()
-        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(Restart::never()))
         .child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -692,7 +692,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
             }
         }
     })
-    .shutdown(ShutdownPolicy::Abort);
+    .shutdown(Shutdown::abort());
     let failing = ChildSpec::task("failing", move |_| {
         let fail = fail.clone();
         let started_tx = started_tx.clone();
@@ -704,7 +704,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
     });
 
     let handle_owner = Supervisor::dynamic()
-        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

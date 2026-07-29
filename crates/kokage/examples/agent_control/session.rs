@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, CancellationHandle, CancellationToken, DrainPolicy,
-    LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
+    Actor, ActorRef, ActorResult, ActorSpec, CancellationHandle, CancellationToken, LiveContext,
+    MessageContext, Restart, StartContext, TimerKey,
 };
 use tokio::time::Instant;
 
@@ -128,7 +128,7 @@ impl Session {
                         cancel: cancel.clone(),
                     },
                 )
-                .restart(RestartPolicy::Never),
+                .restart(Restart::never()),
             )
             .await?;
         ctx.watch(&run_ref, move |event| SessionMsg::RunEvent {
@@ -209,13 +209,6 @@ impl Actor for Session {
         drop(proof);
         ctx.continue_with(SessionMsg::Rehydrate);
         Ok(())
-    }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        // A retiring session must drain, not discard: a message the router
-        // forwarded before it processed our Evict would otherwise die with
-        // this incarnation instead of being bounced back for the replacement.
-        DrainPolicy::Drain
     }
 
     async fn handle(

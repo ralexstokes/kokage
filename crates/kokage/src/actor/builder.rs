@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use kokage_supervisor::{RestartConfig, RestartPolicy, ShutdownPolicy, TerminalMembership};
+use kokage_supervisor::{Restart, Shutdown};
 
 use crate::actor::{
     binding::{BindingCore, MailboxMode},
@@ -181,24 +181,18 @@ impl<M> Default for ActorOptions<M> {
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
 /// the declaration through [`crate::OrderedTree::actor`] or
 /// [`crate::DynamicRuntimeHandle::add_actor`].
-/// Terminal memberships are retained by default in every destination. Select
-/// [`TerminalMembership::Remove`] explicitly for an ephemeral dynamic actor.
-pub struct ActorSpec<M: Send + 'static> {
+pub struct ActorSpec<M: Send + 'static, const CONFIGURABLE: bool = true> {
     pub(crate) actor_id: Arc<str>,
     pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,
     pub(crate) factory: Box<dyn ErasedActorFactory<M>>,
     pub(crate) actor_options: ActorOptions<M>,
-    pub(crate) restart: Option<RestartPolicy>,
-    pub(crate) shutdown: Option<ShutdownPolicy>,
-    pub(crate) restart_config: Option<RestartConfig>,
-    pub(crate) terminal_membership: TerminalMembership,
+    pub(crate) restart: Option<Restart>,
+    pub(crate) shutdown: Option<Shutdown>,
 }
 
-impl<M: Send + 'static> ActorSpec<M> {
+impl<M: Send + 'static> ActorSpec<M, true> {
     /// Creates a declaration for `factory` under `actor_id`.
     ///
-    /// The declaration uses [`TerminalMembership::Retain`] unless changed
-    /// with [`terminal_membership`](Self::terminal_membership).
     pub fn new<F>(actor_id: impl Into<String>, factory: F) -> Self
     where
         F: ActorFactory,
@@ -211,25 +205,37 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
-            restart_config: None,
-            terminal_membership: TerminalMembership::Retain,
         }
     }
 
-    /// Returns this declaration's restart-stable typed actor ref.
-    pub fn actor_ref(&self) -> ActorRef<M> {
-        ActorRef::from_core(self.binding(), None)
-    }
-
-    pub(crate) fn binding(&self) -> &Arc<BindingCore<M>> {
-        self.binding
-            .get_or_init(|| match self.actor_options.size_hint {
-                Some(size_hint) => Arc::new(BindingCore::with_message_size(
-                    Arc::clone(&self.actor_id),
-                    size_hint,
-                )),
-                None => Arc::new(BindingCore::new(Arc::clone(&self.actor_id))),
-            })
+    /// Mints this declaration's restart-stable typed ref and seals mailbox
+    /// configuration.
+    ///
+    /// The returned declaration can be placed in a tree, but no longer has
+    /// `mailbox`, `mailbox_capacity`, or `message_size` methods. Configure the
+    /// declaration first, then destructure this result.
+    pub fn actor_ref(self) -> (ActorSpec<M, false>, ActorRef<M>) {
+        let binding = Arc::clone(self.binding());
+        let actor_ref = ActorRef::from_core(&binding, None);
+        let Self {
+            actor_id,
+            binding,
+            factory,
+            actor_options,
+            restart,
+            shutdown,
+        } = self;
+        (
+            ActorSpec {
+                actor_id,
+                binding,
+                factory,
+                actor_options,
+                restart,
+                shutdown,
+            },
+            actor_ref,
+        )
     }
 
     /// Overrides the hosting scope's mailbox capacity for this actor.
@@ -248,49 +254,42 @@ impl<M: Send + 'static> ActorSpec<M> {
 
     /// Enables accepted-message byte observation.
     ///
-    /// Configure this before calling [`actor_ref`](Self::actor_ref).
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`actor_ref`](Self::actor_ref) has already initialized the
-    /// stable binding, because changing the observation mode afterwards would
-    /// make the existing ref disagree with the declaration.
     #[must_use]
     pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
-        assert!(
-            self.binding.get().is_none(),
-            "message_size must be configured before ActorSpec::actor_ref"
-        );
         self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
 
     /// Overrides the enclosing scope's restart policy.
     #[must_use]
-    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+    pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = Some(restart);
         self
     }
 
     /// Overrides the enclosing scope's shutdown policy.
     #[must_use]
-    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+    pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = Some(shutdown);
         self
     }
+}
 
-    /// Gives this actor its own restart-intensity window.
-    #[must_use]
-    pub fn restart_config(mut self, config: RestartConfig) -> Self {
-        self.restart_config = Some(config);
-        self
+impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
+    #[doc(hidden)]
+    pub fn __actor_ref(&self) -> ActorRef<M> {
+        ActorRef::from_core(self.binding(), None)
     }
 
-    /// Selects what happens to this child after a terminal exit.
-    #[must_use]
-    pub fn terminal_membership(mut self, membership: TerminalMembership) -> Self {
-        self.terminal_membership = membership;
-        self
+    pub(crate) fn binding(&self) -> &Arc<BindingCore<M>> {
+        self.binding
+            .get_or_init(|| match self.actor_options.size_hint {
+                Some(size_hint) => Arc::new(BindingCore::with_message_size(
+                    Arc::clone(&self.actor_id),
+                    size_hint,
+                )),
+                None => Arc::new(BindingCore::new(Arc::clone(&self.actor_id))),
+            })
     }
 
     /// Converts this declaration into the advanced custom-host actor.
@@ -320,8 +319,6 @@ impl<M: Send + 'static> ActorSpec<M> {
             actor_options,
             restart,
             shutdown,
-            restart_config,
-            terminal_membership,
         } = self;
         let deferred = DeferredActor(Box::new(DeferredActorSpec {
             actor_id,
@@ -334,20 +331,16 @@ impl<M: Send + 'static> ActorSpec<M> {
             deferred: Some(deferred),
             restart,
             shutdown,
-            restart_config,
-            terminal_membership,
         }
     }
 }
 
-impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
+impl<M: Send + 'static, const CONFIGURABLE: bool> fmt::Debug for ActorSpec<M, CONFIGURABLE> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ActorSpec")
             .field("actor_id", &self.actor_id)
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
-            .field("restart_config", &self.restart_config)
-            .field("terminal_membership", &self.terminal_membership)
             .finish_non_exhaustive()
     }
 }
@@ -356,10 +349,8 @@ impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
 pub(crate) struct ActorNode {
     pub(crate) actor: Option<RunnableActor>,
     pub(crate) deferred: Option<DeferredActor>,
-    pub(crate) restart: Option<RestartPolicy>,
-    pub(crate) shutdown: Option<ShutdownPolicy>,
-    pub(crate) restart_config: Option<RestartConfig>,
-    pub(crate) terminal_membership: TerminalMembership,
+    pub(crate) restart: Option<Restart>,
+    pub(crate) shutdown: Option<Shutdown>,
 }
 
 impl ActorNode {
@@ -393,8 +384,6 @@ impl fmt::Debug for ActorNode {
             .field("id", &self.label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
-            .field("restart_config", &self.restart_config)
-            .field("terminal_membership", &self.terminal_membership)
             .finish()
     }
 }
@@ -404,17 +393,15 @@ impl fmt::Debug for ActorNode {
 /// Create the slot and its ref before factories that close a cycle, then pass
 /// the factory to [`define`](Self::define) to obtain an ordinary [`ActorSpec`].
 /// A slot has the same fluent configuration vocabulary as `ActorSpec`.
-pub struct ActorSlot<M: Send + 'static> {
+pub struct ActorSlot<M: Send + 'static, const CONFIGURABLE: bool = true> {
     actor_id: Arc<str>,
     binding: OnceLock<Arc<BindingCore<M>>>,
     actor_options: ActorOptions<M>,
-    restart: Option<RestartPolicy>,
-    shutdown: Option<ShutdownPolicy>,
-    restart_config: Option<RestartConfig>,
-    terminal_membership: TerminalMembership,
+    restart: Option<Restart>,
+    shutdown: Option<Shutdown>,
 }
 
-impl<M: Send + 'static> ActorSlot<M> {
+impl<M: Send + 'static> ActorSlot<M, true> {
     /// Opens an unfilled actor declaration.
     pub fn new(actor_id: impl Into<String>) -> Self {
         Self {
@@ -423,14 +410,31 @@ impl<M: Send + 'static> ActorSlot<M> {
             actor_options: ActorOptions::new(),
             restart: None,
             shutdown: None,
-            restart_config: None,
-            terminal_membership: TerminalMembership::Retain,
         }
     }
 
-    /// Returns this slot's restart-stable typed actor ref.
-    pub fn actor_ref(&self) -> ActorRef<M> {
-        ActorRef::from_core(self.binding(), None)
+    /// Mints this slot's restart-stable typed ref and seals mailbox
+    /// configuration.
+    pub fn actor_ref(self) -> (ActorSlot<M, false>, ActorRef<M>) {
+        let binding = Arc::clone(self.binding());
+        let actor_ref = ActorRef::from_core(&binding, None);
+        let Self {
+            actor_id,
+            binding,
+            actor_options,
+            restart,
+            shutdown,
+        } = self;
+        (
+            ActorSlot {
+                actor_id,
+                binding,
+                actor_options,
+                restart,
+                shutdown,
+            },
+            actor_ref,
+        )
     }
 
     fn binding(&self) -> &Arc<BindingCore<M>> {
@@ -459,53 +463,33 @@ impl<M: Send + 'static> ActorSlot<M> {
     }
 
     /// Enables accepted-message byte observation for this slot.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`actor_ref`](Self::actor_ref) has already initialized the
-    /// stable binding, because changing the observation mode afterwards would
-    /// make the existing ref disagree with the declaration.
     #[must_use]
     pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
-        assert!(
-            self.binding.get().is_none(),
-            "message_size must be configured before ActorSlot::actor_ref"
-        );
         self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
 
     /// Overrides the enclosing scope's restart policy.
     #[must_use]
-    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+    pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = Some(restart);
         self
     }
     /// Overrides the enclosing scope's shutdown policy.
     #[must_use]
-    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+    pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = Some(shutdown);
         self
     }
-    /// Gives this actor its own restart-intensity window.
-    #[must_use]
-    pub fn restart_config(mut self, config: RestartConfig) -> Self {
-        self.restart_config = Some(config);
-        self
-    }
-    /// Selects what happens to this child after a terminal exit.
-    #[must_use]
-    pub fn terminal_membership(mut self, membership: TerminalMembership) -> Self {
-        self.terminal_membership = membership;
-        self
-    }
+}
 
+impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
     /// Defines this cyclic-wiring slot into an ordinary actor declaration.
     ///
     /// The slot token's message type must match the actor's message type, so a
     /// mismatch is rejected by the compiler. Consuming the token also makes a
     /// second definition unrepresentable in ordinary Rust code.
-    pub fn define<F>(self, factory: F) -> ActorSpec<M>
+    pub fn define<F>(self, factory: F) -> ActorSpec<M, CONFIGURABLE>
     where
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
@@ -517,8 +501,6 @@ impl<M: Send + 'static> ActorSlot<M> {
             actor_options: self.actor_options,
             restart: self.restart,
             shutdown: self.shutdown,
-            restart_config: self.restart_config,
-            terminal_membership: self.terminal_membership,
         }
     }
 }
@@ -579,7 +561,7 @@ mod tests {
     #[test]
     fn actor_spec_applies_options_and_returns_runnable() {
         let spec = ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate());
-        let actor_ref = spec.actor_ref();
+        let (spec, actor_ref) = spec.actor_ref();
         let actor = spec.into_runnable();
         assert_eq!(actor_ref.id(), "worker");
         assert_eq!(actor.label(), "worker");

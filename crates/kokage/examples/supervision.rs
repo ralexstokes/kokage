@@ -74,11 +74,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
     let frontend_slot = ActorSlot::<FrontendMsg>::new("frontend");
-    let frontend = frontend_slot.actor_ref();
+    let (frontend_slot, frontend) = frontend_slot.actor_ref();
     let parser_slot = ActorSlot::<ParserMsg>::new("parser");
-    let parser = parser_slot.actor_ref();
+    let (parser_slot, parser) = parser_slot.actor_ref();
     let sink_slot = ActorSlot::<SinkMsg>::new("sink");
-    let sink = sink_slot.actor_ref();
+    let (sink_slot, sink) = sink_slot.actor_ref();
 
     let frontend_actor = frontend_slot.define({
         let parser = parser.clone();

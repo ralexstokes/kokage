@@ -5,15 +5,17 @@ That gives each logical actor independent restart policy, mailbox binding,
 lifecycle events, and statistics.
 
 ```rust
-# use kokage::{ActorSpec, OrderedTree, RestartPolicy, ShutdownPolicy};
+use std::time::Duration;
+
+# use kokage::{ActorSpec, OrderedTree, Restart, Shutdown};
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let worker = ActorSpec::new("worker", || Worker)
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::default());
-let worker_ref = worker.actor_ref();
+    .restart(Restart::always())
+    .shutdown(Shutdown::drain_for(Duration::from_secs(5)));
+let (worker, worker_ref) = worker.actor_ref();
 
 let runtime = OrderedTree::new()
     .actor(worker)

@@ -27,9 +27,9 @@ use crate::{
         LifecycleEventKind, LifecycleHub, LifecyclePathSegment, LifecycleTreeSink,
     },
     observability::{SupervisorObservability, format_child_path},
-    restart::{RestartConfig, RestartPolicy},
+    restart::Restart,
     scope::ScopeKind,
-    shutdown::ShutdownPolicy,
+    shutdown::Shutdown,
     snapshot::{
         ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,
         NestedSnapshotNotification, NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
@@ -174,7 +174,7 @@ pub(crate) struct ChildEntry {
 
 struct PendingRemoval {
     reply: oneshot::Sender<Result<(), ControlError>>,
-    policy: ShutdownPolicy,
+    policy: Shutdown,
     grace_deadline: Instant,
     initiated_at: StdInstant,
     grace_expired: bool,
@@ -211,7 +211,6 @@ impl ChildEntry {
         formatted_path: String,
         definition: Arc<ChildDefinition>,
         nested_channels: Option<Arc<StableSupervisorChannels>>,
-        default_restart_intensity: RestartConfig,
         lineage: u64,
     ) -> Self {
         Self {
@@ -219,7 +218,7 @@ impl ChildEntry {
             formatted_path,
             lineage,
             attachment: definition.attachment.clone(),
-            runtime: ChildRuntime::new(definition, default_restart_intensity),
+            runtime: ChildRuntime::new(definition),
             last_exit: None,
             last_exit_cancelled: false,
             nested_snapshot: None,
@@ -298,9 +297,8 @@ pub(crate) fn reconcile_stable_identities(
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
     pub(crate) kind: ScopeKind,
-    pub(crate) default_restart_intensity: RestartConfig,
-    pub(crate) default_restart: RestartPolicy,
-    pub(crate) default_shutdown: ShutdownPolicy,
+    pub(crate) default_restart: Restart,
+    pub(crate) default_shutdown: Shutdown,
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
     pub(crate) parent_link: Option<ParentLink>,
@@ -382,7 +380,6 @@ impl SupervisorRuntime {
         revivable: bool,
         own_handle: SupervisorHandle,
     ) -> Self {
-        let default_restart_intensity = config.restart_intensity;
         let kind = config.kind;
         let observability = SupervisorObservability::new(path_prefix.clone(), config.strategy);
         let lifecycle_tree = parent_link.as_ref().map_or_else(
@@ -430,7 +427,6 @@ impl SupervisorRuntime {
                 formatted_path,
                 spec,
                 child_nested_channels,
-                default_restart_intensity,
                 lineage,
             ));
             children_by_id.insert(id.clone(), key);
@@ -451,7 +447,6 @@ impl SupervisorRuntime {
             meta: RuntimeMeta {
                 strategy: config.strategy,
                 kind,
-                default_restart_intensity,
                 default_restart: config.default_restart,
                 default_shutdown: config.default_shutdown,
                 path_prefix,
@@ -904,9 +899,7 @@ impl SupervisorRuntime {
         if entry.membership != MembershipState::Active {
             return GroupRespawnDisposition::Skip;
         }
-        if entry.runtime.has_started
-            && matches!(entry.runtime.definition.restart, RestartPolicy::Never)
-        {
+        if entry.runtime.has_started && entry.runtime.definition.restart.is_never() {
             return GroupRespawnDisposition::Finalize {
                 startup_aborted: !entry.runtime.has_reported_ready,
             };
@@ -927,7 +920,12 @@ impl SupervisorRuntime {
         }
         // Skipped by the group respawn and never restarted afterwards; if
         // this supervisor is the root, that judgment is final.
-        if self.children[key].runtime.definition.remove_on_exit {
+        if self.children[key]
+            .runtime
+            .definition
+            .restart
+            .remove_on_exit()
+        {
             self.finalize_removed_child(key, false);
         } else {
             self.mark_child_terminal(key);
@@ -970,11 +968,11 @@ impl SupervisorRuntime {
             );
         }
 
-        if let Some(restart_intensity) = child.restart_intensity_override() {
-            restart_intensity
-                .validate()
-                .map_err(ControlError::Rejected)?;
-        }
+        child
+            .inner
+            .restart
+            .validate()
+            .map_err(ControlError::Rejected)?;
         let id = child.id().to_owned();
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
@@ -993,7 +991,6 @@ impl SupervisorRuntime {
             formatted_path,
             definition,
             None,
-            self.meta.default_restart_intensity,
             lineage,
         ));
         self.children_by_id.insert(id.clone(), key);
@@ -1021,9 +1018,10 @@ impl SupervisorRuntime {
                 .into(),
             );
         }
-        if let Some(intensity) = spec.restart_intensity_override() {
-            intensity.validate().map_err(ControlError::Rejected)?;
-        }
+        spec.inner
+            .restart
+            .validate()
+            .map_err(ControlError::Rejected)?;
         if let Some(&key) = self.children_by_id.get(&id) {
             let error = if self.children[key].membership == MembershipState::Removing {
                 ControlError::ChildRemovalInProgress(id)
@@ -1045,7 +1043,6 @@ impl SupervisorRuntime {
             formatted_path,
             definition,
             Some(Arc::clone(&stable)),
-            self.meta.default_restart_intensity,
             lineage,
         ));
         self.children_by_id.insert(id.clone(), key);
@@ -1399,7 +1396,8 @@ impl SupervisorRuntime {
             if self.children[classified.key]
                 .runtime
                 .definition
-                .remove_on_exit
+                .restart
+                .remove_on_exit()
             {
                 let startup_result = if startup_aborted {
                     self.terminal_start_member(classified.key, lineage)
@@ -1422,10 +1420,9 @@ impl SupervisorRuntime {
             // stops.
             let stop_is_final = match self.meta.strategy {
                 Strategy::OneForOne => true,
-                Strategy::OneForAll => matches!(restart_policy, RestartPolicy::Never),
+                Strategy::OneForAll => restart_policy.is_never(),
                 Strategy::RestForOne => {
-                    matches!(restart_policy, RestartPolicy::Never)
-                        || self.child_order.first() == Some(&classified.key)
+                    restart_policy.is_never() || self.child_order.first() == Some(&classified.key)
                 }
             };
             if stop_is_final {
@@ -2285,9 +2282,7 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::Cooperative {
-                grace: Duration::ZERO,
-            },
+            policy: Shutdown::drain_for(Duration::ZERO),
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2311,9 +2306,7 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::Cooperative {
-                grace: Duration::ZERO,
-            },
+            policy: Shutdown::drain_for(Duration::ZERO),
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2337,9 +2330,7 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::Cooperative {
-                grace: Duration::from_secs(60),
-            },
+            policy: Shutdown::drain_for(Duration::from_secs(60)),
             grace_deadline: Instant::now() + Duration::from_secs(60),
             initiated_at: StdInstant::now(),
             grace_expired: false,
@@ -2365,9 +2356,7 @@ mod tests {
         let (reply, _reply_rx) = oneshot::channel();
         let pending = PendingRemoval {
             reply,
-            policy: ShutdownPolicy::Cooperative {
-                grace: Duration::ZERO,
-            },
+            policy: Shutdown::drain_for(Duration::ZERO),
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: false,

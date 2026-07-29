@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{CancellationToken, RestartPolicy};
+use kokage_supervisor::{CancellationToken, Restart, Shutdown};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
 use tokio_util::task::AbortOnDropHandle;
@@ -40,7 +40,8 @@ pub(crate) struct RunnerStart {
     pub(crate) shutdown: CancellationToken,
     pub(crate) mailbox_capacity: usize,
     pub(crate) observability: ScopeObservability,
-    pub(crate) restart_policy: RestartPolicy,
+    pub(crate) restart_policy: Restart,
+    pub(crate) drain_messages: bool,
     pub(crate) ready: oneshot::Sender<()>,
     pub(crate) supervisor: RuntimeHandle,
 }
@@ -117,6 +118,7 @@ where
                 mailbox,
                 myself,
                 shutdown: actor_shutdown,
+                drain_messages: start.drain_messages,
                 observability,
                 timers: Default::default(),
                 lifetime: ActorLifetime::new(),
@@ -196,7 +198,7 @@ pub enum ActorRunError {
 /// [`RunnableActor::run_until`] when it has no deadline of its own.
 ///
 /// This matches the default grace of
-/// [`ShutdownPolicy`](crate::ShutdownPolicy), so an actor behaves the same
+/// [`Shutdown`](crate::Shutdown), so an actor behaves the same
 /// whether it is hosted by hand or by an [`OrderedTree`](crate::OrderedTree).
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
@@ -262,30 +264,26 @@ impl RunnableActor {
     /// Runs this actor with a fresh mailbox until shutdown resolves.
     ///
     /// `restart` controls the binding disposition after the run, while
-    /// `shutdown_bound` limits the whole drain and stop-hook path for this
-    /// standalone host. Supervised runtimes use each child specification's
-    /// [`ShutdownPolicy`](crate::ShutdownPolicy) grace instead.
-    /// [`DEFAULT_SHUTDOWN_BOUND`] is a reasonable bound for a host without a
-    /// deadline of its own.
+    /// `shutdown` controls both the actor drain behavior and the bound for the
+    /// drain and stop-hook path, exactly as it does under a supervision tree.
     ///
-    /// When `shutdown_bound` expires before the actor finishes draining, the
+    /// When the shutdown grace expires before the actor finishes draining, the
     /// inner task is aborted and the run resolves to
     /// [`ActorRunError::ShutdownTimedOut`] — a timeout is reported rather than
     /// laundered into a clean exit, so `.expect(..)` on the result will panic
     /// for an actor that overruns its bound.
     ///
     /// - A clean exit leaves the binding rebindable only for
-    ///   [`Always`](RestartPolicy::Always).
+    ///   [`Restart::always`].
     /// - Failure, panic, or unexpected task cancellation leaves it rebindable
-    ///   for [`Always`](RestartPolicy::Always) and
-    ///   [`OnFailure`](RestartPolicy::OnFailure).
+    ///   for [`Restart::always`] and [`Restart::on_failure`].
     /// - Requested shutdown terminates the binding for every policy.
     /// - Dropping the `run_until` future aborts the incarnation and leaves the
     ///   binding rebindable for `Always` and `OnFailure`; `Never` terminates it.
     ///
-    /// [`RestartPolicy::default()`] is `OnFailure`, so
-    /// `run_until(shutdown, Default::default(), shutdown_bound)` leaves a
-    /// failed run rebindable. Pass [`RestartPolicy::Never`] explicitly for a
+    /// [`Restart::default`] uses [`Restart::on_failure`], so
+    /// `run_until(shutdown, Default::default(), shutdown)` leaves a failed run
+    /// rebindable. Pass [`Restart::never`] explicitly for a
     /// binding that terminates after every exit.
     ///
     /// A hand-written host must call
@@ -296,15 +294,17 @@ impl RunnableActor {
     /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::host::ActorContext::supervisor):
     /// control operations return `ControlError::Unavailable` and observation
     /// streams are closed.
-    pub async fn run_until<F>(
+    pub async fn run_until<F, S>(
         &self,
         shutdown: F,
-        restart: RestartPolicy,
-        shutdown_bound: Duration,
+        restart: Restart,
+        shutdown_policy: S,
     ) -> Result<(), ActorRunError>
     where
         F: Future<Output = ()>,
+        S: Into<Shutdown>,
     {
+        let shutdown_policy = shutdown_policy.into();
         let shutdown_observed = CancellationToken::new();
         let deadline_start = shutdown_observed.clone();
         let bounded_shutdown = async move {
@@ -313,12 +313,16 @@ impl RunnableActor {
         };
         let abort = async move {
             deadline_start.cancelled().await;
-            sleep(shutdown_bound).await;
+            if shutdown_policy.is_abort() {
+                return;
+            }
+            sleep(shutdown_policy.grace()).await;
         };
         self.run_until_ready(
             bounded_shutdown,
             abort,
             restart,
+            shutdown_policy.drains_messages(),
             RuntimeHandle::unavailable(),
             || {},
         )
@@ -329,7 +333,8 @@ impl RunnableActor {
         &self,
         shutdown: F,
         abort: A,
-        restart: RestartPolicy,
+        restart: Restart,
+        drain_messages: bool,
         supervisor: RuntimeHandle,
         ready: R,
     ) -> Result<(), ActorRunError>
@@ -358,6 +363,7 @@ impl RunnableActor {
                     mailbox_capacity: self.inner.mailbox_capacity,
                     observability: self.inner.observability.clone(),
                     restart_policy: restart,
+                    drain_messages,
                     ready: ready_tx,
                     supervisor,
                 })
@@ -490,7 +496,7 @@ enum RunDisposition {
 }
 
 fn run_disposition(
-    policy: RestartPolicy,
+    policy: Restart,
     shutdown_requested: bool,
     status: ActorExitStatus,
 ) -> RunDisposition {
@@ -498,17 +504,11 @@ fn run_disposition(
         return RunDisposition::Terminate;
     }
 
-    match (policy, status) {
-        (RestartPolicy::Always, ActorExitStatus::Stopped) => RunDisposition::ExpectRebind,
-        (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Failed)
-        | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Panicked)
-        | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::Cancelled)
-        | (RestartPolicy::Always | RestartPolicy::OnFailure, ActorExitStatus::ShutdownTimedOut) => {
-            RunDisposition::ExpectRebind
-        }
-        (RestartPolicy::Never, _)
-        | (RestartPolicy::OnFailure, ActorExitStatus::Stopped)
-        | (_, ActorExitStatus::Shutdown) => RunDisposition::Terminate,
+    let is_failure = !matches!(status, ActorExitStatus::Stopped | ActorExitStatus::Shutdown);
+    if policy.should_restart(is_failure) {
+        RunDisposition::ExpectRebind
+    } else {
+        RunDisposition::Terminate
     }
 }
 
@@ -519,10 +519,10 @@ mod tests {
     #[test]
     fn run_disposition_matches_documented_restart_semantics() {
         assert_eq!(
-            run_disposition(RestartPolicy::Always, false, ActorExitStatus::Stopped),
+            run_disposition(Restart::always(), false, ActorExitStatus::Stopped),
             RunDisposition::ExpectRebind
         );
-        for policy in [RestartPolicy::OnFailure, RestartPolicy::Never] {
+        for policy in [Restart::on_failure(), Restart::never()] {
             assert_eq!(
                 run_disposition(policy, false, ActorExitStatus::Stopped),
                 RunDisposition::Terminate
@@ -535,23 +535,19 @@ mod tests {
             ActorExitStatus::Cancelled,
             ActorExitStatus::ShutdownTimedOut,
         ] {
-            for policy in [RestartPolicy::Always, RestartPolicy::OnFailure] {
+            for policy in [Restart::always(), Restart::on_failure()] {
                 assert_eq!(
                     run_disposition(policy, false, status),
                     RunDisposition::ExpectRebind
                 );
             }
             assert_eq!(
-                run_disposition(RestartPolicy::Never, false, status),
+                run_disposition(Restart::never(), false, status),
                 RunDisposition::Terminate
             );
         }
 
-        for policy in [
-            RestartPolicy::Always,
-            RestartPolicy::OnFailure,
-            RestartPolicy::Never,
-        ] {
+        for policy in [Restart::always(), Restart::on_failure(), Restart::never()] {
             assert_eq!(
                 run_disposition(policy, false, ActorExitStatus::Shutdown),
                 RunDisposition::Terminate

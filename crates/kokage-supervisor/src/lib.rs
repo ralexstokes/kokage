@@ -25,7 +25,7 @@
 //! - **[`OneForOne`](Strategy::OneForOne)** — only the failed child is
 //!   restarted. Siblings are unaffected. This is the default.
 //! - **[`OneForAll`](Strategy::OneForAll)** — all children are stopped and
-//!   restarted together. [`Never`](RestartPolicy::Never) children are still
+//!   restarted together. [`Restart::never`] children are still
 //!   drained with the group but are not respawned. Use this when children have
 //!   hard interdependencies.
 //! - **[`RestForOne`](Strategy::RestForOne)** — the failed child and children
@@ -34,32 +34,39 @@
 //!
 //! # Restart policies
 //!
-//! Each child has a [`RestartPolicy`]:
+//! Each child has a [`Restart`]:
 //!
-//! - **[`Always`](RestartPolicy::Always)** — always restarted, regardless of
+//! - **[`Restart::always`]** — always restarted, regardless of
 //!   exit status.
-//! - **[`OnFailure`](RestartPolicy::OnFailure)** (default) — restarted only on
+//! - **[`Restart::on_failure`]** (default) — restarted only on
 //!   failure (`Err`, panic, or abort). A clean `Ok(())` exit is final.
-//! - **[`Never`](RestartPolicy::Never)** — never restarted. Runs at most
+//! - **[`Restart::never`]** — never restarted. Runs at most
 //!   once.
 //!
-//! Restarts are bounded by a [`RestartConfig`] limit (default: 5 restarts
+//! Restarts are bounded by a [`Restart`] limit (default: 5 restarts
 //! within 30 seconds). When exceeded, the supervisor exits with
-//! [`SupervisorError::RestartIntensityExceeded`]. An optional [`BackoffPolicy`]
+//! [`SupervisorError::RestartIntensityExceeded`]. An optional [`Backoff`]
 //! inserts a delay before each restart attempt (fixed, exponential, or
 //! jittered exponential). A shutdown request always wins over a pending
 //! restart delay, including zero-delay restarts.
 //!
 //! # Shutdown
 //!
-//! Each child has a [`ShutdownPolicy`] that controls how it is stopped:
+//! Each child has a [`Shutdown`] that controls how it is stopped:
 //!
-//! - **[`Cooperative`](ShutdownPolicy::Cooperative)** (default, 5 s grace) —
-//!   cancel the child's token and wait up to its grace period, then abort and
-//!   report a timeout for shutdown or removal if it does not exit. During a
-//!   group restart, the old generation is escalated to abort and the restart
-//!   proceeds once that task exits.
-//! - **[`Abort`](ShutdownPolicy::Abort)** — abort the Tokio task immediately.
+//! - **[`Shutdown::drain_for`]** (default, 5 s grace) — cancel the child's
+//!   token and wait up to its grace period. Actor children drain accepted
+//!   messages during that grace; the drain distinction is inert for task
+//!   children.
+//! - **[`Shutdown::discard_after_current`]** — use the same cooperative grace,
+//!   while actor children finish only their in-flight message and discard the
+//!   queued remainder.
+//! - **[`Shutdown::abort`]** — abort the Tokio task immediately.
+//!
+//! When a cooperative grace expires, the supervisor aborts the task and
+//! reports a timeout for shutdown or removal. During a group restart, the old
+//! generation is escalated to abort and the restart proceeds once that task
+//! exits.
 //!
 //! Ordered scopes drain in reverse declaration order, giving each cooperative
 //! child its own grace period before moving to the previous child. Once an
@@ -124,7 +131,7 @@
 //! - Has a restart-stable direct handle whose subscriptions and snapshots
 //!   survive nested restarts.
 //! - Is restarted by the parent according to its [`ChildSpec`] policies.
-//! - Is recursively hard-aborted when its wrapper uses [`ShutdownPolicy::Abort`]
+//! - Is recursively hard-aborted when its wrapper uses [`Shutdown::abort`]
 //!   or when a terminal, non-revivable ancestor fails. A parent-restartable
 //!   failed incarnation lets nested runtimes finish cooperatively before their
 //!   stable identities rebind; a normal cooperative stop likewise applies the
@@ -209,7 +216,7 @@
 //!   `OneForAll`.
 //! - `examples/nested_supervisor.rs` — supervision trees.
 //! - `examples/dynamic_children.rs` — adding and removing children at runtime.
-//! - `examples/per_child_restart_intensity.rs` — per-child intensity overrides.
+//! - `examples/per_child_restart_intensity.rs` — per-child restart limits.
 //! - `examples/shutdown_with_cancellation_token.rs` — graceful shutdown driven
 //!   by a signal.
 //! - `examples/watch_lifecycle_recursive.rs` — reacting to the recursive
@@ -248,9 +255,7 @@ pub mod __private {
     use std::any::Any;
 
     pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
-    use crate::{
-        ChildSpec, DynamicSupervisorHandle, RestartPolicy, ShutdownPolicy, SupervisorHandle,
-    };
+    use crate::{ChildSpec, DynamicSupervisorHandle, Restart, Shutdown, SupervisorHandle};
 
     /// Adds process-local metadata to a child specification.
     pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
@@ -279,24 +284,24 @@ pub mod __private {
     /// Resolves one child's explicit policy overrides against scope defaults.
     pub fn child_policies(
         child: &ChildSpec,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
-    ) -> (RestartPolicy, ShutdownPolicy) {
+        default_restart: Restart,
+        default_shutdown: Shutdown,
+    ) -> (Restart, Shutdown) {
         child.resolved_policies(default_restart, default_shutdown)
     }
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
-pub use child::{BoxError, ChildResult, ChildSpec, TerminalMembership};
+pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionError, CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch};
-pub use restart::{BackoffPolicy, RestartConfig, RestartPolicy};
+pub use restart::{Backoff, Restart};
 pub use scope::ScopeKind;
-pub use shutdown::ShutdownPolicy;
+pub use shutdown::Shutdown;
 pub use snapshot::{
     ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError,
     SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,

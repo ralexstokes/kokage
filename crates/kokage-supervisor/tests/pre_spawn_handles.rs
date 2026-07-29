@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use kokage_supervisor::{
-    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, RestartConfig, Strategy,
-    Supervisor, SupervisorError,
+    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
+    SupervisorError,
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -141,7 +141,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             "builder" => drop(builder),
             "failed-build" => {
                 let error = builder
-                    .restart_config(RestartConfig::new(1, Duration::ZERO))
+                    .restart(Restart::on_failure().limit(1, Duration::ZERO))
                     .build()
                     .expect_err("invalid build fails");
                 assert!(error.to_string().contains("window"));

@@ -3,9 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
-};
+use kokage_supervisor::{Backoff, ChildSpec, Restart, Shutdown, Strategy, Supervisor};
 use tokio::{
     sync::{Barrier, Notify, mpsc},
     time::{Duration, timeout},
@@ -139,8 +137,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -152,7 +149,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -189,7 +186,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Never);
+    .restart(Restart::never());
 
     let release_failure_for_child = release_failure.clone();
     let trigger = ChildSpec::task("trigger", move |ctx| {
@@ -209,7 +206,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -221,7 +218,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -271,7 +268,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let live_instances = live_instances.clone();
@@ -287,7 +284,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -331,10 +328,8 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: common::SHORT_GRACE,
-    });
+    .restart(Restart::on_failure())
+    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
 
     let peer_live_flag_for_child = peer_live_flag.clone();
     let peer = ChildSpec::task("stubborn-peer", move |ctx| {
@@ -353,10 +348,8 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: common::SHORT_GRACE,
-    });
+    .restart(Restart::always())
+    .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -381,7 +374,7 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
 }
 
 /// A cooperative grace expiry must not skip reconciliation of an unrelated
-/// abort-mode straggler. `ShutdownPolicy::Abort` promises an abort, not
+/// abort-mode straggler. `Shutdown::abort()` promises an abort, not
 /// preemption of a non-yielding future, so a child whose next poll boundary is
 /// past the ordered drain's cursor window is reconciled against the drain
 /// group's longest grace, exactly as it would be in a dynamic scope.
@@ -399,10 +392,8 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
         }
         Ok(())
     })
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::Cooperative {
-        grace: Duration::from_millis(200),
-    });
+    .restart(Restart::always())
+    .shutdown(Shutdown::drain_for(Duration::from_millis(200)));
 
     let release_failure_for_child = release_failure.clone();
     let trigger = ChildSpec::task("trigger", move |ctx| {
@@ -418,7 +409,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     // Blocks between polls, so its abort cannot land inside the cursor window.
     let late_peer = ChildSpec::task("late-abort-peer", move |ctx| {
@@ -433,8 +424,8 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
             }
         }
     })
-    .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::Abort);
+    .restart(Restart::always())
+    .shutdown(Shutdown::abort());
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -488,7 +479,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let finish_generation_one_for_peer = finish_generation_one.clone();
     let peer = ChildSpec::task("peer", move |ctx| {
@@ -508,7 +499,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -576,8 +567,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(RestartConfig::new(1, Duration::from_secs(1)));
+    .restart(Restart::on_failure().limit(1, Duration::from_secs(1)));
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -589,12 +579,11 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::Always)
-    .restart_config(RestartConfig::new(0, Duration::from_secs(1)));
+    .restart(Restart::always().limit(0, Duration::from_secs(1)));
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(trigger)
         .child(peer)
         .build()
@@ -624,21 +613,20 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let peer = ChildSpec::task("peer", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             2,
             Duration::from_secs(1),
-            BackoffPolicy::Fixed(Duration::from_millis(40)),
+            Backoff::fixed(Duration::from_millis(40)),
         ))
         .child(trigger)
         .child(peer)
@@ -766,7 +754,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let peer_attempts = peer_attempts.clone();
@@ -782,14 +770,14 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_config(common::restart_config(
+        .restart(common::restart_with_backoff(
             2,
             Duration::from_secs(1),
-            BackoffPolicy::Fixed(Duration::from_millis(40)),
+            Backoff::fixed(Duration::from_millis(40)),
         ))
         .child(trigger)
         .child(peer)

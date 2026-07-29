@@ -63,11 +63,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
         delivered: delivered_tx.clone(),
         run: 0,
     });
-    let worker = worker_spec.actor_ref();
+    let (worker_spec, worker) = worker_spec.actor_ref();
     let orders_spec = ActorSpec::new("front-desk", move || Frontend {
         worker: worker.clone(),
     });
-    let orders = orders_spec.actor_ref();
+    let (orders_spec, orders) = orders_spec.actor_ref();
 
     let runtime = OrderedTree::new()
         .actor(worker_spec)
