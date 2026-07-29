@@ -1680,6 +1680,8 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Watches the target logical actor across restarts.
+    ///
+    /// See [`ActorContext::watch`] for the full contract.
     fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> CancellationHandle
     where
         T: Send + 'static,
@@ -1795,6 +1797,8 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Sends `message` to `target` after `delay`, bound to this incarnation.
+    ///
+    /// See [`ActorContext::send_after_to`] for the full contract.
     fn send_after_to<T: Send + 'static>(
         &self,
         target: &ActorRef<T>,
@@ -1805,6 +1809,8 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Periodically sends `message` to `target`, bound to this incarnation.
+    ///
+    /// See [`ActorContext::interval_to`] for the full contract.
     fn interval_to<T: Clone + Send + 'static>(
         &self,
         target: &ActorRef<T>,
@@ -1815,6 +1821,8 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Runs a bounded future without blocking this actor's receive loop.
+    ///
+    /// See [`ActorContext::offload`] for the full contract.
     fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> TaskHandle
     where
         F: Future<Output = T> + Send + 'static,

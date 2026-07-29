@@ -374,7 +374,7 @@ membership receives a later lineage and starts again at generation zero. For
 recursive stats, also compare `observe::ActorStats::supervisor_path`; it distinguishes
 otherwise identical local ids and lineages in sibling or restarted subtrees.
 
-Use `RuntimeHandle::dynamic().unwrap().add_child(host::ChildSpec)` for a non-actor task in a dynamic
+Use `RuntimeHandle::dynamic().expect("dynamic scope").add_child(host::ChildSpec)` for a non-actor task in a dynamic
 scope and `add_subtree` for a nested actor-aware scope. Task children are not
 part of runtime actor stats, but they remain visible in snapshots and lifecycle
 watches. Applications that need raw `Supervisor` construction or
