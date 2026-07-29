@@ -7,9 +7,9 @@
 shape and attribute contract. `supervision/` covers the narrow
 `#[derive(Supervision)]` cyclic-wiring contract: supported declaration shapes,
 factory bounds, label syntax (empty, duplicate, dotted, and unsupported
-options), typed refs, visibility, rejection of topology attributes, and
-absence of the removed topology constructors and helper types. The
-`single-use-tree/` fixtures pin linear placement and owner/handle boundaries;
+options), typed refs, visibility, and rejection of struct-level topology
+attributes. The `single-use-tree/` fixtures pin linear placement and
+owner/handle boundaries;
 `public-api/` pins the documented export tiers. Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
 spans included. The corresponding `*-pass/` directories cover supported

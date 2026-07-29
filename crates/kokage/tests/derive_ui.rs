@@ -21,8 +21,8 @@ fn derive_ui() {
     t.compile_fail("tests/ui/single-use-tree/*.rs");
 
     // Public API tiers are intentionally disjoint: observation and raw-hosting
-    // types do not leak back into the crate root or day-one prelude, and the
-    // supervisor attachment bridge remains hidden behind `__private`.
+    // types live outside the crate root and day-one prelude, and the supervisor
+    // attachment bridge remains hidden behind `__private`.
     t.compile_fail("tests/ui/public-api/*.rs");
 
     t.compile_fail("tests/ui/supervision/*.rs");

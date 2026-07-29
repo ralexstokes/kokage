@@ -1,5 +1,0 @@
-error[E0404]: expected trait, found derive macro `kokage::Supervision`
- --> tests/ui/public-api/supervision_trait_private.rs:1:35
-  |
-1 | fn requires_public_supervision<T: kokage::Supervision>() {}
-  |                                   ^^^^^^^^^^^^^^^^^^^ not a trait

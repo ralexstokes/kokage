@@ -1,0 +1,35 @@
+error[E0432]: unresolved import `kokage::prelude::ActorContext`
+ --> tests/ui/public-api/prelude_export_tier.rs:6:5
+  |
+6 | use kokage::prelude::ActorContext;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ActorContext` in `prelude`
+  |
+help: a similar name exists in the module
+  |
+6 - use kokage::prelude::ActorContext;
+6 + use kokage::prelude::StopContext;
+  |
+
+error[E0432]: unresolved import `kokage::prelude::ActorFactory`
+ --> tests/ui/public-api/prelude_export_tier.rs:7:5
+  |
+7 | use kokage::prelude::ActorFactory;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ActorFactory` in `prelude`
+
+error[E0432]: unresolved import `kokage::prelude::BoxError`
+ --> tests/ui/public-api/prelude_export_tier.rs:8:5
+  |
+8 | use kokage::prelude::BoxError;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `BoxError` in `prelude`
+
+error[E0432]: unresolved import `kokage::prelude::RawActor`
+ --> tests/ui/public-api/prelude_export_tier.rs:9:5
+  |
+9 | use kokage::prelude::RawActor;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawActor` in `prelude`
+
+error[E0432]: unresolved import `kokage::prelude::Supervision`
+  --> tests/ui/public-api/prelude_export_tier.rs:10:5
+   |
+10 | use kokage::prelude::Supervision;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `Supervision` in `prelude`
