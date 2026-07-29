@@ -13,14 +13,13 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree,
-    OrderedTree, Reply, RuntimeHandle, SendError, Shutdown,
-    host::{BoxError, RawActor, RawContext},
-    observe::{LifecycleEventKind, SupervisorSnapshotReceiver},
-};
-use kokage_supervisor::{
-    ChildSpec, CompletionOutcome, ControlError, Restart, Strategy, SupervisorBuildError,
-    SupervisorError, SupervisorStateView,
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context,
+    ControlError, DynamicTree, OrderedTree, Reply, Restart, RuntimeHandle, SendError, Shutdown,
+    Strategy, SupervisorError,
+    host::{BoxError, ChildSpec, RawActor, RawContext},
+    observe::{
+        CompletionOutcome, LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView,
+    },
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -482,9 +481,7 @@ async fn subtree_validation_phases_report_rejected() {
             .add_subtree("invalid", invalid)
             .await
             .expect_err("invalid subtree fails before insertion"),
-        ControlError::Rejected(SupervisorBuildError::DuplicateChildId(
-            "duplicate".to_owned()
-        ))
+        ControlError::Rejected(BuildError::DuplicateChildId("duplicate".to_owned()))
     );
 
     let first = support::dynamic_root(&root)
@@ -504,7 +501,7 @@ async fn subtree_validation_phases_report_rejected() {
         .expect_err("duplicate subtree rejected");
     assert_eq!(
         error,
-        ControlError::Rejected(SupervisorBuildError::DuplicateChildId("workers".to_owned()))
+        ControlError::Rejected(BuildError::DuplicateChildId("workers".to_owned()))
     );
     assert_eq!(root.handle().actor_stats().len(), 1);
     assert!(root.handle().subtree("workers").is_some());

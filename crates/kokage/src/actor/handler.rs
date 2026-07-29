@@ -28,9 +28,9 @@ enum LoopEvent<M> {
 /// Watches and offloads remain available on [`RawContext`].
 ///
 /// A [`Context::stop`] exit is normal for monitoring and supervision. A
-/// [`Restart::always`](kokage_supervisor::Restart::always) child restarts
-/// after it; [`Restart::on_failure`](kokage_supervisor::Restart::on_failure)
-/// and [`Restart::never`](kokage_supervisor::Restart::never) children do not.
+/// [`Restart::always`](crate::Restart::always) child restarts after it;
+/// [`Restart::on_failure`](crate::Restart::on_failure) and
+/// [`Restart::never`](crate::Restart::never) children do not.
 ///
 /// # Incarnation construction
 ///

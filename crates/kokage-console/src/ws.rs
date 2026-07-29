@@ -3,8 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use kokage::observe::ActorStats;
-use kokage_supervisor::{LifecycleEvent, SupervisorSnapshot, SupervisorSnapshotReceiver};
+use kokage::observe::{ActorStats, LifecycleEvent, SupervisorSnapshot, SupervisorSnapshotReceiver};
 use tokio::time::{self, Duration};
 
 use crate::server::AppState;

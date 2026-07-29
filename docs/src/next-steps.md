@@ -18,20 +18,20 @@ example. Run any of them with:
 cargo run -p <crate> --example <name>
 ```
 
-### `kokage-supervisor`
+### Task supervision with `kokage`
 
 | Example | Shows |
 |---------|-------|
-| `one_for_one_restart` | Basic restart behaviour. |
-| `one_for_all_pipeline` | Interdependent children with `OneForAll`. |
-| `nested_supervisor` | Supervision trees. |
-| `dynamic_children` | Adding and removing children at runtime. |
-| `per_child_restart_intensity` | Per-child intensity overrides. |
-| `shutdown_with_cancellation_token` | Graceful shutdown driven by a signal. |
-| `watch_lifecycle_recursive` | Reacting to lifecycle events across a tree. |
-| `subscribe_to_snapshots` | Polling supervisor state. |
-| `tracing` | Structured logging output. |
-| `metrics` | Prometheus metrics (needs `--features metrics`). |
+| `task_one_for_one_restart` | Basic task restart behaviour. |
+| `task_one_for_all_pipeline` | Interdependent task children with `OneForAll`. |
+| `task_nested_supervisor` | Nested task supervision trees. |
+| `task_dynamic_children` | Adding and removing task children at runtime. |
+| `task_per_child_restart_intensity` | Per-child intensity overrides. |
+| `task_shutdown_with_cancellation_token` | Graceful shutdown driven by a signal. |
+| `task_watch_lifecycle_recursive` | Reacting to lifecycle events across a tree. |
+| `task_subscribe_to_snapshots` | Polling supervisor state. |
+| `task_tracing` | Structured logging output. |
+| `task_metrics` | Prometheus metrics (needs `--features metrics`). |
 
 ### `kokage`
 

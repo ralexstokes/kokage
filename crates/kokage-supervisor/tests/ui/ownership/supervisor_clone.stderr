@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `Supervisor` in the current scope
- --> tests/ui/ownership/supervisor_clone.rs:4:28
-  |
-4 |     let _copy = supervisor.clone();
-  |                            ^^^^^ method not found in `Supervisor`

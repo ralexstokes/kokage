@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{CancellationToken, Restart, Shutdown, ShutdownMode};
+use crate::supervisor::{CancellationToken, Restart, Shutdown, ShutdownMode};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
 use tokio_util::task::AbortOnDropHandle;

@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kokage_supervisor::{CancellationToken, Restart, RestartMode};
+use crate::supervisor::{CancellationToken, Restart, RestartMode};
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::actor::{

@@ -5,9 +5,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use kokage_supervisor::{
-    __private, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart, ScopeKind,
-    Shutdown, Strategy, Supervisor, SupervisorBuildError,
+use crate::supervisor::{
+    __private, BuildError, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart,
+    ScopeKind, Shutdown, Strategy, Supervisor,
 };
 
 use crate::{
@@ -96,7 +96,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// [`outline`](Self::outline) removes executable payloads, producing a
 /// [`SupervisionOutline`] that can be compared, debug-printed, and, with the
 /// `serde` feature, serialized. It is the declaration-time companion to a
-/// running [`SupervisorSnapshot`](kokage_supervisor::SupervisorSnapshot).
+/// running [`SupervisorSnapshot`](crate::observe::SupervisorSnapshot).
 ///
 /// # Example
 ///
@@ -171,9 +171,7 @@ impl From<DynamicTree> for TreeNode {
 }
 
 impl TreeNode {
-    pub(crate) fn into_parts(
-        self,
-    ) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
+    pub(crate) fn into_parts(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), BuildError> {
         match self.0 {
             TreeNodeKind::Ordered(tree) => tree.into_parts(),
             TreeNodeKind::Dynamic(tree) => tree.into_parts(),
@@ -221,9 +219,7 @@ macro_rules! tree_common_methods {
             self.inner.outline()
         }
 
-        pub(crate) fn into_parts(
-            self,
-        ) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
+        pub(crate) fn into_parts(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), BuildError> {
             self.inner.into_parts()
         }
     };
@@ -297,7 +293,7 @@ impl OrderedTree {
     /// their corresponding build error. A failed spawn consumes the tree and
     /// makes every handle issued from it terminal. Having no children is
     /// valid and does not return an error.
-    pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
+    pub fn spawn(self) -> Result<Runtime, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
         Ok(Runtime::new(supervisor.spawn(), actors))
     }
@@ -337,11 +333,11 @@ impl DynamicTree {
     ///
     /// # Errors
     ///
-    /// Returns the applicable [`SupervisorBuildError`] when the dynamic
+    /// Returns the applicable [`BuildError`] when the dynamic
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal. An empty dynamic
     /// scope is valid and stays available for later insertion.
-    pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
+    pub fn spawn(self) -> Result<Runtime, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
         Ok(Runtime::new(supervisor.spawn(), actors))
     }
@@ -512,10 +508,10 @@ impl ScopeNode {
     fn lower(
         self,
         reservations: &mut Vec<ScopeReservation>,
-    ) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
+    ) -> Result<(Supervisor, Arc<ActorRuntimeState>), BuildError> {
         let config = self.config().clone();
         if config.mailbox_capacity == 0 {
-            return Err(SupervisorBuildError::InvalidConfig(
+            return Err(BuildError::InvalidConfig(
                 "actor mailbox capacity must be non-zero",
             ));
         }
@@ -622,12 +618,12 @@ impl SupervisionChild {
         default_restart: Restart,
         default_shutdown: Shutdown,
         reservations: &mut Vec<ScopeReservation>,
-    ) -> Result<OrderedSupervisorBuilder, SupervisorBuildError> {
+    ) -> Result<OrderedSupervisorBuilder, BuildError> {
         Ok(match self {
             Self::Actor(actor) => {
                 actor
                     .validate()
-                    .map_err(|error| SupervisorBuildError::InvalidConfig(error.message()))?;
+                    .map_err(|error| BuildError::InvalidConfig(error.message()))?;
                 let ActorNode {
                     actor,
                     deferred: _,
@@ -783,7 +779,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         self.tree.outline()
     }
 
-    fn into_parts(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
+    fn into_parts(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), BuildError> {
         let Self {
             tree,
             mut reservations,

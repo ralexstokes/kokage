@@ -5,9 +5,11 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use kokage::{Actor, ActorResult, ActorSpec, Context, DynamicTree, observe::ActorStats};
+use kokage::{
+    Actor, ActorResult, ActorSpec, Context, DynamicTree, Runtime, host::ChildSpec,
+    observe::ActorStats,
+};
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
-use kokage_supervisor::{ChildSpec, RunningSupervisor, Supervisor};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -57,11 +59,10 @@ fn actor_stats() -> Vec<ActorStats> {
 
 async fn spawn_console_with_stats(
     stats: impl Fn() -> Vec<ActorStats> + Send + Sync + 'static,
-) -> (ConsoleHandle, RunningSupervisor, RunningSupervisor) {
-    let snapshots = Supervisor::dynamic()
-        .build()
-        .expect("test snapshot supervisor builds")
-        .spawn();
+) -> (ConsoleHandle, Runtime, Runtime) {
+    let snapshots = DynamicTree::new()
+        .spawn()
+        .expect("test snapshot tree spawns");
     let snapshots_handle = snapshots.handle();
     snapshots_handle
         .dynamic()
@@ -72,10 +73,9 @@ async fn spawn_console_with_stats(
         }))
         .await
         .expect("test snapshot child is added");
-    let lifecycle = Supervisor::dynamic()
-        .build()
-        .expect("test lifecycle supervisor builds")
-        .spawn();
+    let lifecycle = DynamicTree::new()
+        .spawn()
+        .expect("test lifecycle tree spawns");
     let lifecycle_source = lifecycle.handle();
     let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
@@ -89,7 +89,7 @@ async fn spawn_console_with_stats(
     (handle, snapshots, lifecycle)
 }
 
-async fn spawn_console() -> (ConsoleHandle, RunningSupervisor, RunningSupervisor) {
+async fn spawn_console() -> (ConsoleHandle, Runtime, Runtime) {
     spawn_console_with_stats(actor_stats).await
 }
 
@@ -213,14 +213,12 @@ async fn accepts_matching_browser_websocket_origin() {
 
 #[tokio::test]
 async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
-    let snapshots = Supervisor::dynamic()
-        .build()
-        .expect("test snapshot supervisor builds")
-        .spawn();
-    let lifecycle = Supervisor::dynamic()
-        .build()
-        .expect("test lifecycle supervisor builds")
-        .spawn();
+    let snapshots = DynamicTree::new()
+        .spawn()
+        .expect("test snapshot tree spawns");
+    let lifecycle = DynamicTree::new()
+        .spawn()
+        .expect("test lifecycle tree spawns");
     let snapshots_handle = snapshots.handle();
     let lifecycle_source = lifecycle.handle();
     let handle = ConsoleBuilder::new()
@@ -304,14 +302,12 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
 
 #[tokio::test]
 async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
-    let snapshots = Supervisor::dynamic()
-        .build()
-        .expect("test snapshot supervisor builds")
-        .spawn();
-    let lifecycle = Supervisor::dynamic()
-        .build()
-        .expect("test lifecycle supervisor builds")
-        .spawn();
+    let snapshots = DynamicTree::new()
+        .spawn()
+        .expect("test snapshot tree spawns");
+    let lifecycle = DynamicTree::new()
+        .spawn()
+        .expect("test lifecycle tree spawns");
     let snapshots_handle = snapshots.handle();
     let lifecycle_source = lifecycle.handle();
     let handle = ConsoleBuilder::new()
@@ -329,9 +325,9 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 
 #[tokio::test]
 async fn non_loopback_bind_requires_token() {
-    let snapshots = Supervisor::dynamic();
+    let snapshots = DynamicTree::new();
     let snapshot_rx = snapshots.handle().subscribe_snapshots();
-    let lifecycle = Supervisor::dynamic();
+    let lifecycle = DynamicTree::new();
     let lifecycle_handle = lifecycle.handle();
     let error = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
@@ -353,7 +349,7 @@ async fn builder_reports_missing_observability_sources() {
         .expect("snapshots must be required");
     assert!(matches!(missing_snapshots, ConsoleError::MissingSnapshots));
 
-    let snapshots = Supervisor::dynamic();
+    let snapshots = DynamicTree::new();
     let snapshot_rx = snapshots.handle().subscribe_snapshots();
     let missing_lifecycle = ConsoleBuilder::new()
         .snapshots(snapshot_rx)

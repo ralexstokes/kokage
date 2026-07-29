@@ -1,0 +1,19 @@
+error[E0432]: unresolved imports `kokage::DynamicSupervisorBuilder`, `kokage::DynamicSupervisorHandle`, `kokage::OrderedSupervisorBuilder`, `kokage::RunningSupervisor`, `kokage::Supervisor`, `kokage::SupervisorHandle`
+ --> tests/ui/public-api/private_supervisor_layer.rs:4:5
+  |
+4 |     DynamicSupervisorBuilder, DynamicSupervisorHandle, OrderedSupervisorBuilder,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^ no `OrderedSupervisorBuilder` in the root
+  |     |                         |
+  |     |                         no `DynamicSupervisorHandle` in the root
+  |     no `DynamicSupervisorBuilder` in the root
+5 |     RunningSupervisor, Supervisor, SupervisorHandle,
+  |     ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^ no `SupervisorHandle` in the root
+  |     |                  |
+  |     |                  no `Supervisor` in the root
+  |     no `RunningSupervisor` in the root
+  |
+help: a similar name exists in the module (notice the capitalization)
+  |
+5 -     RunningSupervisor, Supervisor, SupervisorHandle,
+5 +     RunningSupervisor, supervisor, SupervisorHandle,
+  |

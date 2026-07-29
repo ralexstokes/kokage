@@ -37,8 +37,10 @@ mod ws;
 
 use std::{io, net::SocketAddr, sync::Arc};
 
-use kokage::{RuntimeHandle, observe::ActorStats};
-use kokage_supervisor::{LifecycleWatch, SupervisorSnapshotReceiver};
+use kokage::{
+    RuntimeHandle,
+    observe::{ActorStats, LifecycleWatch, SupervisorSnapshotReceiver},
+};
 use thiserror::Error;
 use tokio::sync::watch;
 

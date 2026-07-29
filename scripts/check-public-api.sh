@@ -10,7 +10,7 @@ if [[ -n "$toolchain" ]]; then
 fi
 
 status=0
-for package in kokage-supervisor kokage; do
+for package in kokage; do
     crate=${package//-/_}
     RUSTDOCFLAGS="${RUSTDOCFLAGS:-} -Z unstable-options --output-format json" \
         "${cargo[@]}" rustdoc --locked -p "$package" --all-features --lib

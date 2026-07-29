@@ -1,12 +1,10 @@
 [workspace]
 default-members = [
-    "crates/kokage-supervisor",
     "crates/kokage-derive",
     "crates/kokage",
     "crates/kokage-console",
 ]
 members = [
-    "crates/kokage-supervisor",
     "crates/kokage-derive",
     "crates/kokage",
     "crates/kokage-console",
@@ -22,7 +20,6 @@ futures-util = "0.3"
 getrandom = "0.3"
 kokage = { path = "crates/kokage" }
 kokage-derive = { path = "crates/kokage-derive" }
-kokage-supervisor = { path = "crates/kokage-supervisor" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 metrics-util = { version = "0.20", features = ["debugging"] }

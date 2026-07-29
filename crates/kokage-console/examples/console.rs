@@ -24,10 +24,11 @@
 use std::{error::Error, io, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, Context, DynamicTree, OrderedTree, host::BoxError,
+    Actor, ActorRef, ActorResult, ActorSpec, Backoff, Context, DynamicTree, OrderedTree, Restart,
+    Strategy,
+    host::{BoxError, ChildSpec},
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
-use kokage_supervisor::{Backoff, ChildSpec, Restart, Strategy};
 use tokio::time::sleep;
 
 fn example_error(message: &'static str) -> BoxError {

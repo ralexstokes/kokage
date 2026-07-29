@@ -6,10 +6,9 @@ use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
     ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, DownReason, DynamicTree, Guard,
-    MonitorEvent, Restart,
+    MonitorEvent, Restart, Shutdown,
     host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
-use kokage_supervisor::Shutdown;
 use tokio::{
     sync::{Notify, mpsc, oneshot},
     time::timeout,

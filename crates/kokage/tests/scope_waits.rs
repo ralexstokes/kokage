@@ -28,7 +28,7 @@ async fn wait_for<T>(receiver: &mut mpsc::UnboundedReceiver<T>, phase: &str) -> 
 }
 
 enum ReadyMsg {
-    ScopeStarted(Result<(), kokage_supervisor::SupervisorError>),
+    ScopeStarted(Result<(), kokage::SupervisorError>),
 }
 
 struct ReadyReporter {

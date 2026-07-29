@@ -13,7 +13,6 @@ categories = ["asynchronous", "visualization"]
 axum = { workspace = true, features = ["ws"] }
 getrandom.workspace = true
 kokage = { path = "../kokage", default-features = false, features = ["serde"] }
-kokage-supervisor = { workspace = true, features = ["serde"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tracing.workspace = true

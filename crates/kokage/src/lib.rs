@@ -217,6 +217,7 @@
 mod actor;
 mod runtime;
 mod supervision;
+mod supervisor;
 
 /// Raw actor and task-hosting machinery.
 ///
@@ -224,17 +225,14 @@ mod supervision;
 /// This module contains the lower-level execution surface for custom receive
 /// loops, directly driven runnable actors, and arbitrary supervised tasks.
 /// For task children it re-exports every type needed to name a
-/// [`kokage_supervisor::ChildSpec::task`] factory as a standalone function.
-///
-/// `ChildSpec` is exposed here for task children. Its lower-level
-/// `ChildSpec::supervisor` constructor still requires `kokage-supervisor`'s
-/// `Supervisor`; compose actor-aware nested scopes with
-/// [`OrderedTree::subtree`] or [`DynamicRuntimeHandle::add_subtree`] instead.
+/// [`host::ChildSpec::task`] factory as a standalone function. Nested scopes are
+/// composed with [`OrderedTree::subtree`] or
+/// [`DynamicRuntimeHandle::add_subtree`].
 pub mod host {
-    pub use crate::actor::{
-        ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
+    pub use crate::{
+        actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+        supervisor::{BoxError, ChildContext, ChildResult, ChildSpec},
     };
-    pub use kokage_supervisor::{BoxError, ChildContext, ChildResult, ChildSpec};
 }
 
 /// Runtime observation, lifecycle, topology, and completion types.
@@ -245,12 +243,12 @@ pub mod observe {
     pub use crate::{
         actor::{ActorStats, SupervisorPathSegment},
         supervision::{ChildOutline, SupervisionOutline},
-    };
-    pub use kokage_supervisor::{
-        ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-        CompletionOutcome, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
-        LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
-        SupervisorSnapshotReceiver, SupervisorStateView,
+        supervisor::{
+            ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
+            CompletionOutcome, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
+            LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
+            SupervisorSnapshotReceiver, SupervisorStateView,
+        },
     };
 }
 
@@ -278,15 +276,15 @@ pub mod prelude {
 #[cfg(feature = "derive")]
 pub use kokage_derive::ActorFactory;
 
+pub use crate::supervisor::{
+    Backoff, BackoffParts, BuildError, CancellationToken, ControlError, Guard, Restart, RestartMode,
+    Shutdown, ShutdownMode, Strategy, SupervisorError,
+};
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, Context, DownReason, DynamicRestrictedScope, MailboxMode,
     MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot, SealedActorSpec,
     SendError, StopContext, TimerKey, TrySendError,
-};
-pub use kokage_supervisor::{
-    Backoff, BackoffParts, CancellationToken, ControlError, Guard, Restart, RestartMode, Shutdown,
-    ShutdownMode, Strategy, SupervisorBuildError, SupervisorError,
 };
 pub use runtime::{DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{
+use crate::supervisor::{
     __private::{guard_from_probe, guard_from_probe_with_cancel, guard_from_tokens},
     CancellationToken, Guard,
 };
