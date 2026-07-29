@@ -549,6 +549,9 @@ impl DynamicRuntimeHandle {
     /// Dynamic additions start immediately and dynamic siblings stop
     /// concurrently under one shared maximum-grace deadline. Use
     /// [`RuntimeHandle::wait_started`] when readiness is needed.
+    /// Wrap the supplied tree with [`TreeNode::restart`](crate::TreeNode::restart)
+    /// or [`TreeNode::shutdown`](crate::TreeNode::shutdown) to override the
+    /// subtree edge's policies in this dynamic parent.
     ///
     /// Both failure phases use [`ControlError::Rejected`]: first the supplied
     /// tree is lowered and validated, then the parent validates insertion of
@@ -566,12 +569,19 @@ impl DynamicRuntimeHandle {
     ) -> Result<RuntimeHandle, ControlError> {
         let id = id.into();
         let parts = tree.into().into_parts();
-        let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
+        let parts = parts.map_err(ControlError::Rejected)?;
+        let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
+        if let Some(restart) = parts.restart {
+            child = child.restart(restart);
+        }
+        if let Some(shutdown) = parts.shutdown {
+            child = child.shutdown(shutdown);
+        }
         let lineage = self
             .supervisor
             .add_child(__private::attach(
-                ChildSpec::supervisor(id.clone(), nested_supervisor),
-                RuntimeAttachment::subtree(&self.handle.actors, Arc::clone(&nested_actors)),
+                child,
+                RuntimeAttachment::subtree(&self.handle.actors, Arc::clone(&parts.actors)),
             ))
             .await?;
         runtime_subtree_membership(
