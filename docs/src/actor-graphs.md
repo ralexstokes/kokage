@@ -121,7 +121,8 @@ directional request flow.
 ## Direct hosting
 
 `ActorSpec::into_runnable` materializes one `host::RunnableActor` for tests or
-hosts with their own supervision story. A directly hosted spec with an
-explicit zero mailbox capacity panics; tree placement and dynamic insertion
-report that invalid declaration through their ordinary error types. Normal
+hosts with their own supervision story without applying supervisor-placement
+validation. Tree placement and dynamic insertion reject an explicit zero
+mailbox capacity through their ordinary error types; direct hosts are
+responsible for validating configuration before running it. Normal
 applications should place the spec in `OrderedTree` or `DynamicTree`.

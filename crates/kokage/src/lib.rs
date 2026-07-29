@@ -8,7 +8,7 @@
 //! [`OrderedTree`], and spawn the tree:
 //!
 //! ```no_run
-//! use kokage::{ActorSpec, prelude::*};
+//! use kokage::prelude::*;
 //!
 //! struct Echo;
 //!
@@ -119,7 +119,7 @@
 //! Slots let factories refer to actors declared later without string lookup:
 //!
 //! ```
-//! use kokage::{ActorSlot, ActorSpec, OrderedTree};
+//! use kokage::prelude::*;
 //! # struct Left(kokage::ActorRef<()>);
 //! # struct Right(kokage::ActorRef<()>);
 //! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
@@ -252,7 +252,8 @@ pub mod observe {
 /// Common imports for `kokage` consumers.
 ///
 /// This prelude is intentionally limited to the actor traits and contexts,
-/// the primary [`OrderedTree`] composition path, its [`ActorSpec`] declaration,
+/// the primary [`OrderedTree`] composition path, its [`ActorSpec`] and
+/// [`ActorSlot`] declarations,
 /// and the snapshot pair used by
 /// application health and readiness code. Advanced configuration, error,
 /// dynamic-membership, lifecycle-history, and raw-hosting types remain at the
@@ -263,8 +264,8 @@ pub mod observe {
 /// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, ActorSpec, LiveContext, MessageContext, OrderedTree, Reply,
-        StartContext, StopContext,
+        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, LiveContext, MessageContext,
+        OrderedTree, Reply, StartContext, StopContext,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }

@@ -251,6 +251,10 @@ impl OrderedTree {
     }
 
     /// Creates an empty ordered scope with standard runtime defaults.
+    ///
+    /// Empty ordered trees are valid and remain idle until shutdown. They are
+    /// useful as a uniform root while configuration conditionally adds
+    /// subtrees.
     pub fn new() -> Self {
         Self {
             inner: TreeData::new().with_identity(),
@@ -298,7 +302,8 @@ impl OrderedTree {
     ///
     /// Invalid child ids, restart settings, or duplicate sibling ids return
     /// their corresponding build error. A failed spawn consumes the tree and
-    /// makes every handle issued from it terminal.
+    /// makes every handle issued from it terminal. Having no children is
+    /// valid and does not return an error.
     pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
         Ok(Runtime::new(supervisor.spawn(), actors))
@@ -321,6 +326,9 @@ impl DynamicTree {
     }
 
     /// Creates an empty dynamic scope with standard runtime defaults.
+    ///
+    /// The spawned scope remains idle until actors, tasks, or subtrees are
+    /// inserted through its dynamic handle.
     pub fn new() -> Self {
         Self {
             inner: TreeData::dynamic().with_identity(),
@@ -337,7 +345,8 @@ impl DynamicTree {
     ///
     /// Returns the applicable [`SupervisorBuildError`] when the dynamic
     /// scope's restart configuration is invalid. A failed spawn consumes the
-    /// tree and makes every handle issued from it terminal.
+    /// tree and makes every handle issued from it terminal. An empty dynamic
+    /// scope is valid and stays available for later insertion.
     pub fn spawn(self) -> Result<DynamicRuntime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
         Ok(DynamicRuntime::new(supervisor.spawn(), actors))
@@ -641,6 +650,9 @@ impl SupervisionChild {
     ) -> Result<OrderedSupervisorBuilder, SupervisorBuildError> {
         Ok(match self {
             Self::Actor(actor) => {
+                actor
+                    .validate()
+                    .map_err(|error| SupervisorBuildError::InvalidConfig(error.message()))?;
                 let ActorNode {
                     actor,
                     deferred: _,
@@ -648,9 +660,7 @@ impl SupervisionChild {
                     shutdown,
                     restart_config,
                     terminal_membership,
-                } = actors
-                    .materialize_actor_node(actor)
-                    .map_err(|error| SupervisorBuildError::InvalidConfig(error.message()))?;
+                } = actors.materialize_actor_node(actor);
                 builder.child(actor_child_spec(
                     actor.expect("tree lowering materialized the actor"),
                     actors,

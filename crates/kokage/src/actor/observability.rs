@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 #[cfg(feature = "metrics")]
@@ -10,12 +10,6 @@ use tracing::{Span, debug, info, info_span, trace, warn};
 
 #[cfg(feature = "metrics")]
 use metrics::{Counter, Histogram, counter, histogram};
-
-static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
-
-pub(crate) fn anonymous_graph_name() -> Arc<str> {
-    format!("graph-{}", NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed)).into()
-}
 
 fn saturating_decrement(counter: &AtomicUsize) -> usize {
     let mut current = counter.load(Ordering::Acquire);
@@ -28,29 +22,26 @@ fn saturating_decrement(counter: &AtomicUsize) -> usize {
     }
 }
 
-/// Lifecycle tracing state retained by actor runners.
+/// Per-scope lifecycle tracing state retained by actor runners.
 #[derive(Clone, Debug)]
-pub(crate) struct GraphObservability {
-    graph_name: Arc<str>,
+pub(crate) struct ScopeObservability {
     running_actors: Arc<AtomicUsize>,
 }
 
-impl GraphObservability {
-    pub(crate) fn new(graph_name: Arc<str>) -> Self {
+impl ScopeObservability {
+    pub(crate) fn new() -> Self {
         Self {
-            graph_name,
             running_actors: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub(crate) fn actor_span(&self, actor_id: &str) -> Span {
-        info_span!("actor", graph = %self.graph_name, actor_id = %actor_id)
+        info_span!("actor", actor_id = %actor_id)
     }
 
     pub(crate) fn emit_actor_started(&self, actor_id: &Arc<str>) {
         let running = self.running_actors.fetch_add(1, Ordering::AcqRel) + 1;
         info!(
-            graph = %self.graph_name,
             actor_id = %actor_id,
             running_actors = running,
             "actor started"
@@ -66,7 +57,6 @@ impl GraphObservability {
         let running = saturating_decrement(&self.running_actors);
         if status == ActorExitStatus::Shutdown {
             debug!(
-                graph = %self.graph_name,
                 actor_id = %actor_id,
                 status = status.as_str(),
                 running_actors = running,
@@ -74,7 +64,6 @@ impl GraphObservability {
             );
         } else if let Some(error) = error {
             warn!(
-                graph = %self.graph_name,
                 actor_id = %actor_id,
                 status = status.as_str(),
                 error = %error,
@@ -83,7 +72,6 @@ impl GraphObservability {
             );
         } else {
             warn!(
-                graph = %self.graph_name,
                 actor_id = %actor_id,
                 status = status.as_str(),
                 running_actors = running,
@@ -93,19 +81,11 @@ impl GraphObservability {
     }
 
     pub(crate) fn emit_mailbox_bound(&self, actor_id: &Arc<str>) {
-        info!(
-            graph = %self.graph_name,
-            actor_id = %actor_id,
-            "actor mailbox bound"
-        );
+        info!(actor_id = %actor_id, "actor mailbox bound");
     }
 
     pub(crate) fn emit_mailbox_cleared(&self, actor_id: &Arc<str>) {
-        debug!(
-            graph = %self.graph_name,
-            actor_id = %actor_id,
-            "actor mailbox cleared"
-        );
+        debug!(actor_id = %actor_id, "actor mailbox cleared");
     }
 
     /// Reports continuations that were queued but never taken, because the
@@ -119,7 +99,6 @@ impl GraphObservability {
     /// handler that wants to avoid the warning can check before queueing.
     pub(crate) fn emit_continuations_dropped(&self, actor_id: &Arc<str>, dropped: usize) {
         warn!(
-            graph = %self.graph_name,
             actor_id = %actor_id,
             dropped_continuations = dropped,
             "continuations queued while the actor was stopping were dropped"
@@ -127,15 +106,11 @@ impl GraphObservability {
     }
 
     pub(crate) fn emit_message_received(&self, actor_id: &Arc<str>) {
-        trace!(
-            graph = %self.graph_name,
-            actor_id = %actor_id,
-            "message received"
-        );
+        trace!(actor_id = %actor_id, "message received");
     }
 }
 
-/// Emits the per-message send trace without attaching graph-wide state to
+/// Emits the per-message send trace without attaching scope lifecycle state to
 /// restart-stable actor references.
 pub(crate) fn trace_actor_message(
     source_actor_id: Option<&str>,
@@ -290,17 +265,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anonymous_graph_names_are_unique() {
-        let first = anonymous_graph_name();
-        let second = anonymous_graph_name();
-        assert_ne!(first, second);
-        assert!(first.starts_with("graph-"));
-        assert!(second.starts_with("graph-"));
-    }
-
-    #[test]
     fn actor_exit_running_count_saturates_at_zero() {
-        let observability = GraphObservability::new(Arc::from("orders"));
+        let observability = ScopeObservability::new();
         observability.emit_actor_exited(&Arc::from("worker"), ActorExitStatus::Cancelled, None);
         assert_eq!(observability.running_actors.load(Ordering::Acquire), 0);
     }

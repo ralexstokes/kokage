@@ -78,10 +78,7 @@ impl ActorRuntimeState {
         spec.into_node(&self.actor_builder())
     }
 
-    pub(crate) fn materialize_actor_node(
-        &self,
-        actor: ActorNode,
-    ) -> Result<ActorNode, ActorOptionsValidationError> {
+    pub(crate) fn materialize_actor_node(&self, actor: ActorNode) -> ActorNode {
         actor.materialize(&self.actor_builder())
     }
 }

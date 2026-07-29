@@ -26,7 +26,7 @@ use crate::{
         context::{ActorContext, ActorLifetime, ActorRef},
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
-        observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
+        observability::{ActorExitStatus, ScopeObservability},
         raw::{BoxError, RawActor},
     },
 };
@@ -39,7 +39,7 @@ pub(crate) type BoxedActorFuture =
 pub(crate) struct RunnerStart {
     pub(crate) shutdown: CancellationToken,
     pub(crate) mailbox_capacity: usize,
-    pub(crate) observability: GraphObservability,
+    pub(crate) observability: ScopeObservability,
     pub(crate) restart_policy: RestartPolicy,
     pub(crate) ready: oneshot::Sender<()>,
     pub(crate) supervisor: RuntimeHandle,
@@ -205,7 +205,7 @@ struct RunnableActorInner {
     binding_lifecycle: Arc<dyn BindingLifecycle>,
     runner: Arc<dyn ErasedRunner>,
     mailbox_capacity: usize,
-    observability: GraphObservability,
+    observability: ScopeObservability,
     running: AtomicBool,
 }
 
@@ -214,7 +214,7 @@ pub(crate) struct RunnableActorParts {
     pub(crate) binding_lifecycle: Arc<dyn BindingLifecycle>,
     pub(crate) runner: Arc<dyn ErasedRunner>,
     pub(crate) mailbox_capacity: usize,
-    pub(crate) observability: GraphObservability,
+    pub(crate) observability: ScopeObservability,
 }
 
 impl RunnableActor {
@@ -559,21 +559,21 @@ impl std::fmt::Debug for RunnableActor {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RunnableActorBuilder {
-    observability: GraphObservability,
+    observability: ScopeObservability,
     mailbox_capacity: usize,
 }
 
 impl RunnableActorBuilder {
     pub(crate) fn new() -> Self {
         Self {
-            observability: GraphObservability::new(anonymous_graph_name()),
+            observability: ScopeObservability::new(),
             mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
         }
     }
 
     pub(crate) fn with_mailbox_capacity(mailbox_capacity: usize) -> Self {
         Self {
-            observability: GraphObservability::new(anonymous_graph_name()),
+            observability: ScopeObservability::new(),
             mailbox_capacity,
         }
     }
