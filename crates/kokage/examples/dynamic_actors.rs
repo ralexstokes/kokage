@@ -57,13 +57,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let runtime = runtime_owner.handle();
 
     let orders = runtime
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor("front-desk", || Frontend { rush: None })
         .await?;
     let rush = runtime
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor("rush-press", move || RushPress {
             observed: observed_tx.clone(),
         })
@@ -82,16 +78,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert_eq!(observed, "vip banners x2");
     println!("rush job {observed}");
 
-    runtime
-        .dynamic()
-        .expect("dynamic scope")
-        .remove_child("front-desk")
-        .await?;
-    runtime
-        .dynamic()
-        .expect("dynamic scope")
-        .remove_child("rush-press")
-        .await?;
+    runtime.remove_child("front-desk").await?;
+    runtime.remove_child("rush-press").await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }

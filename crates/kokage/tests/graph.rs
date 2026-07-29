@@ -1655,14 +1655,11 @@ mod runnable_actor {
         let (actor_slot, _) = builder.slot("factory-template");
         builder.define(actor_slot, Drain::<()>::new);
         let graph = builder.build().expect("valid graph");
-        let handle = DynamicTree::new()
+        let runtime = DynamicTree::new()
             .derived_defaults(&graph)
             .spawn()
             .expect("dynamic runtime builds");
-        handle
-            .handle()
-            .dynamic()
-            .expect("dynamic scope")
+        runtime
             .add_actor_with(
                 "worker",
                 || NeverStops,
@@ -1674,17 +1671,17 @@ mod runnable_actor {
             )
             .await
             .expect("dynamic actor added");
-        handle
+        runtime
             .handle()
             .wait_started()
             .await
             .expect("dynamic actor started");
         assert!(matches!(
-            handle.handle().dynamic().expect("dynamic scope").remove_child("worker").await,
+            runtime.remove_child("worker").await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"
         ));
-        handle.shutdown_and_wait().await.expect("clean shutdown");
+        runtime.shutdown_and_wait().await.expect("clean shutdown");
     }
 
     async fn wait_for_stale_mailbox(actor_ref: &ActorRef<String>) {

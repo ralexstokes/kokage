@@ -1,7 +1,7 @@
 # Dynamic Actors
 
-A dynamic tree does not need a graph: `DynamicTree::new().spawn()` starts empty
-and idles until its `DynamicRuntime` capability adds a typed actor. Each
+A dynamic tree does not need a graph: `DynamicTree::new().spawn()` returns a
+`DynamicRuntime`, starts empty, and idles until that runtime adds a typed actor. Each
 added actor becomes a supervised child whose id is the actor's label, and
 `add_actor` returns the typed `ActorRef<M>` directly — there is no registry
 and no string lookup. Refs travel the way any other value does: cloned into an
@@ -59,12 +59,11 @@ impl Actor for RushPress {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = DynamicTree::new().spawn()?;
-    let dynamic = runtime.dynamic().expect("dynamic root");
 
-    let orders = dynamic
+    let orders = runtime
         .add_actor("front-desk", || FrontDesk { rush: None })
         .await?;
-    let rush = dynamic
+    let rush = runtime
         .add_actor_with(
             "rush-press",
             || RushPress,
@@ -77,8 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     orders.send(FrontDeskMsg::Order("wedding invites x50".into())).await?;
     rush.send("vip banners x2".into()).await?;
 
-    dynamic.remove_child("front-desk").await?;
-    dynamic.remove_child("rush-press").await?;
+    runtime.remove_child("front-desk").await?;
+    runtime.remove_child("rush-press").await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }
@@ -150,7 +149,10 @@ A runtime can be reduced back to zero actors and keeps running until
 
 ## Adding to a nested supervisor
 
-`RuntimeHandle::dynamic()` targets the handle's own supervisor. For subtrees
+`DynamicRuntime::handle()` preserves that statically known membership
+capability in a `DynamicRuntimeHandle`. `RuntimeHandle::dynamic()` remains for
+runtime-discovered scopes, where the scope kind is not known until navigation.
+For subtrees
 declared with `OrderedTree::subtree`, obtain the actor-aware nested handle
 and add the actor normally:
 
@@ -226,6 +228,11 @@ let app_handle = app_tree.handle();
 let app = app_tree.spawn()?;
 # drop((app_handle, app));
 ```
+
+Here `sessions` is a `DynamicRuntimeHandle`, so it can add and remove members
+directly once the nested scope starts. Use `sessions.as_runtime_handle()` when
+only the common observation and lifecycle surface is needed, or
+`sessions.into_runtime_handle()` to erase the statically known capability.
 
 `OrderedTree` and `DynamicTree` deliberately do not implement `Clone`: one
 identity can bind to one eventual runtime. Moving a tree through `subtree` or

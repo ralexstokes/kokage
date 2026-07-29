@@ -127,8 +127,9 @@ spelling when no override is needed.
 ## Identity exists before spawn
 
 Every tree owns its one stable runtime identity from construction. Call
-`handle()` whenever wiring code needs the scope's [`RuntimeHandle`] before the
-tree is spawned:
+`handle()` whenever wiring code needs the scope's handle before the tree is
+spawned. An `OrderedTree` returns a [`RuntimeHandle`], while a `DynamicTree`
+returns a `DynamicRuntimeHandle` that exposes membership directly:
 
 ```rust,ignore
 let sessions_tree = DynamicTree::new();
@@ -227,6 +228,7 @@ startup ordering and dynamic-membership reconciliation.
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
+[`DynamicRuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.DynamicRuntimeHandle.html
 [`host::RunnableActor`]: https://stokes.io/kokage/api/kokage/host/struct.RunnableActor.html
 [`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
 [`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html

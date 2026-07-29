@@ -525,9 +525,6 @@ async fn dynamic_tree_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -536,9 +533,6 @@ async fn dynamic_tree_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor("tracked", || IdleActor)
         .await
         .expect("failed to add runtime actor");

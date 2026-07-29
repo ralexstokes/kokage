@@ -80,10 +80,10 @@ pub trait SupervisionFactories<T: Supervision> {
 /// ```
 /// # use kokage::{
 /// #     Actor, ActorResult, DynamicScope, GraphBuildError, MessageContext, RestartPolicy,
-/// #     DynamicTree, RuntimeHandle,
+/// #     DynamicRuntimeHandle, DynamicTree,
 /// # };
 /// # struct Manager {
-/// #     sessions: RuntimeHandle,
+/// #     sessions: DynamicRuntimeHandle,
 /// # }
 /// # impl Actor for Manager {
 /// #     type Msg = ();
