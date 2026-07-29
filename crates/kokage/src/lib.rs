@@ -204,9 +204,9 @@
 //! live mailbox usage are available through [`ActorRef::stats`] and
 //! [`RuntimeHandle::actor_stats`]; exporting time-series is a user-side
 //! sampler task over those surfaces (see `examples/actor_metrics.rs`).
-//! Actors registered with [`ActorOptions::message_size`] expose
+//! Actors registered with [`ActorSpec::message_size`] expose
 //! application-defined accepted-byte totals through [`observe::ActorStats`] and emit
-//! size metrics when the `metrics` feature is enabled. The same options can
+//! size metrics when the `metrics` feature is enabled. The same declaration can
 //! select a [`MailboxMode`] and apply to statically or dynamically registered
 //! actors.
 //! Install subscribers and samplers at the application boundary, not inside

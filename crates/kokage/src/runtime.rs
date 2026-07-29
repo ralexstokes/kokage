@@ -711,7 +711,7 @@ impl DynamicRuntimeHandle {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
             restart_config: spec.restart_config,
-            remove_on_exit: !matches!(spec.terminal_membership, Some(TerminalMembership::Retain)),
+            remove_on_exit: matches!(spec.terminal_membership, TerminalMembership::Remove),
         };
         let actor = self.handle.actors.make_actor(spec);
         self.add_constructed_actor((actor.actor, actor_ref), dynamic_options)
@@ -921,8 +921,9 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 #[cfg(test)]
 mod tests {
     use crate::{
-        DynamicRuntime, DynamicRuntimeHandle, DynamicTree, OrderedTree, Runtime, RuntimeHandle,
-        SupervisorBuildError,
+        Actor, ActorResult, ActorSpec, DynamicRuntime, DynamicRuntimeHandle, DynamicTree,
+        MessageContext, OrderedTree, RestartPolicy, Runtime, RuntimeHandle, SupervisorBuildError,
+        TerminalMembership,
     };
 
     #[test]
@@ -937,12 +938,104 @@ mod tests {
         let _ = (ordered_spawn, ordered_handle, dynamic_spawn, dynamic_handle);
     }
 
+    struct FailsOnMessage;
+
+    impl Actor for FailsOnMessage {
+        type Msg = ();
+
+        async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+            Err(std::io::Error::other("expected test failure").into())
+        }
+    }
+
     #[test]
     fn unavailable_runtime_handle_is_cached() {
         let first = super::RuntimeHandle::unavailable();
         let second = super::RuntimeHandle::unavailable();
 
         assert!(std::sync::Arc::ptr_eq(&first.actors, &second.actors));
+    }
+
+    #[tokio::test]
+    async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
+        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartPolicy::Never);
+        let static_ref = static_spec.actor_ref();
+        let static_runtime = OrderedTree::new()
+            .actor(static_spec)
+            .spawn()
+            .expect("static runtime builds");
+        static_runtime
+            .wait_started()
+            .await
+            .expect("static actor starts");
+        let mut static_snapshots = static_runtime.subscribe_snapshots();
+        static_ref.send(()).await.expect("static message accepted");
+        static_snapshots
+            .wait_for(|snapshot| {
+                snapshot
+                    .child("static")
+                    .is_some_and(|child| child.state.is_stopped())
+            })
+            .await
+            .expect("static terminal membership remains visible");
+        static_runtime
+            .shutdown_and_wait()
+            .await
+            .expect("static runtime shuts down");
+
+        let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
+        let dynamic = dynamic_runtime.dynamic().expect("root is dynamic");
+        let dynamic_ref = dynamic
+            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartPolicy::Never))
+            .await
+            .expect("dynamic actor is inserted");
+        dynamic_runtime
+            .wait_started()
+            .await
+            .expect("dynamic actor starts");
+        let mut dynamic_snapshots = dynamic_runtime.subscribe_snapshots();
+        dynamic_ref
+            .send(())
+            .await
+            .expect("dynamic message accepted");
+        dynamic_snapshots
+            .wait_for(|snapshot| {
+                snapshot
+                    .child("dynamic")
+                    .is_some_and(|child| child.state.is_stopped())
+            })
+            .await
+            .expect("dynamic terminal membership remains visible");
+        dynamic_runtime
+            .shutdown_and_wait()
+            .await
+            .expect("dynamic runtime shuts down");
+    }
+
+    #[tokio::test]
+    async fn dynamic_membership_removal_is_explicit() {
+        let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
+        let dynamic = runtime.dynamic().expect("root is dynamic");
+        let actor_ref = dynamic
+            .add_actor(
+                ActorSpec::new("ephemeral", || FailsOnMessage)
+                    .restart(RestartPolicy::Never)
+                    .terminal_membership(TerminalMembership::Remove),
+            )
+            .await
+            .expect("dynamic actor is inserted");
+        runtime.wait_started().await.expect("dynamic actor starts");
+        let mut snapshots = runtime.subscribe_snapshots();
+        assert!(snapshots.latest().child("ephemeral").is_some());
+        actor_ref.send(()).await.expect("dynamic message accepted");
+        snapshots
+            .wait_for(|snapshot| snapshot.child("ephemeral").is_none())
+            .await
+            .expect("explicitly ephemeral membership is removed");
+        runtime
+            .shutdown_and_wait()
+            .await
+            .expect("dynamic runtime shuts down");
     }
 
     #[tokio::test]
