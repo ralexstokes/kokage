@@ -88,7 +88,9 @@ without storing a guard. Calling `cancel` on any clone suppresses future
 delivery. Cancellation cannot retract an event already accepted by the
 mailbox. Permanently removing either actor membership also ends the watch; a
 watched actor's final `Terminated` event is queued before its membership
-removal completes.
+removal completes. Once that terminal event is delivered, `is_finished()` is
+true while `is_cancelled()` remains false; explicit cancellation and observer
+membership removal report cancellation as well as eventual completion.
 
 Calling `watch` again for the same observer/subject pair is idempotent. This
 keeps the common pattern of registering in `on_start` and detaching safe when
