@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, GraphBuilder, MessageContext};
+use kokage::{Actor, ActorResult, ActorSlot, GraphBuilder, MessageContext};
 
 #[derive(Clone)]
 struct Worker;
@@ -13,6 +13,6 @@ impl Actor for Worker {
 
 fn main() {
     let mut builder = GraphBuilder::new();
-    let (slot, _worker) = builder.slot::<String>("worker");
+    let slot = ActorSlot::<String>::new("worker");
     builder.define(slot, || Worker);
 }

@@ -1,0 +1,47 @@
+error[E0425]: cannot find type `ApplicationSlots` in this scope
+  --> tests/ui/supervision/removed_topology_surface.rs:19:19
+   |
+13 | #[derive(Supervision)]
+   |          ----------- similarly named struct `ApplicationRefs` defined here
+...
+19 |     let _: Option<ApplicationSlots> = None;
+   |                   ^^^^^^^^^^^^^^^^
+   |
+help: a struct with a similar name exists
+   |
+19 -     let _: Option<ApplicationSlots> = None;
+19 +     let _: Option<ApplicationRefs> = None;
+   |
+
+error[E0425]: cannot find type `ApplicationScopes` in this scope
+  --> tests/ui/supervision/removed_topology_surface.rs:20:19
+   |
+13 | #[derive(Supervision)]
+   |          ----------- similarly named struct `ApplicationFactories` defined here
+...
+20 |     let _: Option<ApplicationScopes> = None;
+   |                   ^^^^^^^^^^^^^^^^^
+   |
+help: a struct with a similar name exists
+   |
+20 -     let _: Option<ApplicationScopes> = None;
+20 +     let _: Option<ApplicationFactories> = None;
+   |
+
+error[E0599]: no associated function or constant named `tree` found for struct `Application` in the current scope
+  --> tests/ui/supervision/removed_topology_surface.rs:21:18
+   |
+14 | struct Application {
+   | ------------------ associated function or constant `tree` not found for this struct
+...
+21 |     Application::tree(|_| ApplicationFactories { worker: || Worker });
+   |                  ^^^^ associated function or constant not found in `Application`
+
+error[E0599]: no associated function or constant named `tree_with` found for struct `Application` in the current scope
+  --> tests/ui/supervision/removed_topology_surface.rs:22:18
+   |
+14 | struct Application {
+   | ------------------ associated function or constant `tree_with` not found for this struct
+...
+22 |     Application::tree_with(GraphBuilder::new(), |_| ApplicationFactories {
+   |                  ^^^^^^^^^ associated function or constant not found in `Application`

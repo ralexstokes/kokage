@@ -1,14 +1,12 @@
 //! A multi-venue trading engine exercising the library's supervision,
 //! messaging, and timer features together.
 //!
-//! The whole shape is one `#[derive(Supervision)]` declaration (`TradingEngine`):
-//! a root scope of core actors with a nested `venues` scope, both one-for-one
-//! with sequential start. Struct nesting is scope nesting, and every actor
-//! joins a single graph, so the mutual references resolve without opening
-//! slots by hand — venue actors capture core refs (ledger, reconciler) and the
-//! reconciler captures every feed's ref in the same wiring closure. Actor
-//! labels are qualified by scope path, so the venue ids are
-//! `venues.venue-a-feed` and friends.
+//! `#[derive(Supervision)]` wires the cyclic core actors and their typed refs;
+//! the configured venue slots join the same graph explicitly. Linear actor
+//! nodes then build a root scope with a restart-budgeted `venues` subtree.
+//! Venue actors capture core refs (ledger, reconciler), while the reconciler
+//! captures every feed ref. Graph labels remain qualified as
+//! `venues.venue-a-feed` and friends, while supervisor child ids are local.
 //!
 //! # Modules
 //!
@@ -131,8 +129,8 @@ use std::{
 };
 
 use kokage::{
-    CancellationToken, DownReason, MailboxMode, Supervision,
-    observe::{LifecycleWatchGuard, SupervisorSnapshotReceiver},
+    ActorNode, ActorSlot, CancellationToken, DownReason, MailboxMode, Supervision,
+    observe::{ChildLifecycleWatch, LifecycleWatchGuard},
     prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -145,7 +143,7 @@ use messages::*;
 use reconciler::Reconciler;
 use router::OrderRouter;
 use telemetry::LatencyRecorder;
-use venue::{ExchangeSim, VenueFeed, VenueFeedFactory, VenueGateway, VenueGatewayFactory};
+use venue::{ExchangeSim, VenueFeedFactory, VenueGatewayFactory};
 
 const VENUE_A: VenueId = "venue-a";
 const VENUE_B: VenueId = "venue-b";
@@ -154,6 +152,12 @@ const PHASE_TIMEOUT: Duration = Duration::from_secs(3);
 const URGENT_BOUND: Duration = Duration::from_secs(2);
 
 type AnyError = Box<dyn Error + Send + Sync>;
+
+fn take_node(nodes: &mut HashMap<String, ActorNode>, label: &str) -> ActorNode {
+    nodes
+        .remove(label)
+        .unwrap_or_else(|| panic!("graph contains `{label}`"))
+}
 
 fn feed_message_key(message: &FeedMsg) -> &'static str {
     match message {
@@ -168,40 +172,19 @@ fn feed_message_key(message: &FeedMsg) -> &'static str {
 /// gave them before the scopes merged into one graph.
 const VENUE_MAILBOX: usize = 16;
 
-fn venue_options<M: Send + 'static>() -> ActorOptions<M> {
-    ActorOptions::new().mailbox_capacity(VENUE_MAILBOX)
+fn venue_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
+    ActorSlot::new(label).mailbox_capacity(VENUE_MAILBOX)
 }
 
-fn feed_options() -> ActorOptions<FeedMsg> {
-    venue_options()
+fn feed_slot(label: &str) -> ActorSlot<FeedMsg> {
+    venue_slot(label)
         .mailbox(MailboxMode::conflate_by_key(feed_message_key))
         .message_size(messages::feed_message_size)
 }
 
-/// One scope per venue-facing pair, restart-budgeted as a group. Labels are
-/// pinned so the qualified ids stay `venues.venue-a-feed` and friends.
-#[derive(Supervision)]
-#[supervision(
-    restart_config = RestartConfig::new(5, Duration::from_secs(10)),
-)]
-struct Venues {
-    #[supervision(label = "venue-a-feed", options = feed_options())]
-    venue_a_feed: VenueFeed,
-    #[supervision(label = "venue-a-gateway", options = venue_options())]
-    venue_a_gateway: VenueGateway,
-    #[supervision(label = "venue-b-feed", options = feed_options())]
-    venue_b_feed: VenueFeed,
-    #[supervision(label = "venue-b-gateway", options = venue_options())]
-    venue_b_gateway: VenueGateway,
-}
-
-/// The whole engine. `venues` comes first so the venue scope starts ahead of
-/// the core actors, matching the subtree-before-actors order the runtime
-/// builder used before.
+/// The core cyclic wiring declaration. Supervision topology stays explicit.
 #[derive(Supervision)]
 struct TradingEngine {
-    #[supervision(scope)]
-    venues: Venues,
     reconciler: Reconciler,
     ledger: Ledger,
     #[supervision(label = "order-router")]
@@ -255,48 +238,30 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let venue_b = ExchangeSim::default();
     let intake_gate = Arc::new(AtomicBool::new(true));
 
-    // Core and venue actors share one graph, so the cycle between them — feeds
-    // hold the reconciler's ref, the reconciler holds every feed's — is wired in
-    // a single closure with no slots to open and fill by hand.
+    // Open the configured venue slots first. The derived core wiring can then
+    // capture their refs, and the venue factories can be defined afterward
+    // with the core refs, closing the feed↔reconciler cycle.
     let mut builder = kokage::GraphBuilder::new();
     builder.name("trading-engine").mailbox_capacity(32);
-    let (tree, refs) = TradingEngine::tree_with(builder, |refs| {
-        let venues = &refs.venues;
+    let venue_a_feed_slot = feed_slot("venues.venue-a-feed");
+    let venue_a_feed = venue_a_feed_slot.actor_ref();
+    let venue_a_gateway_slot = venue_slot("venues.venue-a-gateway");
+    let venue_a_gateway = venue_a_gateway_slot.actor_ref();
+    let venue_b_feed_slot = feed_slot("venues.venue-b-feed");
+    let venue_b_feed = venue_b_feed_slot.actor_ref();
+    let venue_b_gateway_slot = venue_slot("venues.venue-b-gateway");
+    let venue_b_gateway = venue_b_gateway_slot.actor_ref();
+
+    let refs = TradingEngine::wire(&mut builder, |refs| {
         let feed_refs = HashMap::from([
-            (VENUE_A, venues.venue_a_feed.clone()),
-            (VENUE_B, venues.venue_b_feed.clone()),
+            (VENUE_A, venue_a_feed.clone()),
+            (VENUE_B, venue_b_feed.clone()),
         ]);
         let gateways = HashMap::from([
-            (VENUE_A, venues.venue_a_gateway.clone()),
-            (VENUE_B, venues.venue_b_gateway.clone()),
+            (VENUE_A, venue_a_gateway.clone()),
+            (VENUE_B, venue_b_gateway.clone()),
         ]);
         TradingEngineFactories {
-            venues: VenuesFactories {
-                venue_a_feed: VenueFeedFactory {
-                    venue: VENUE_A,
-                    exchange: venue_a.clone(),
-                    reconciler: refs.reconciler.clone(),
-                    latency: latency.clone(),
-                },
-                venue_a_gateway: VenueGatewayFactory {
-                    venue: VENUE_A,
-                    exchange: venue_a.clone(),
-                    ledger: refs.ledger.clone(),
-                    latency: latency.clone(),
-                },
-                venue_b_feed: VenueFeedFactory {
-                    venue: VENUE_B,
-                    exchange: venue_b.clone(),
-                    reconciler: refs.reconciler.clone(),
-                    latency: latency.clone(),
-                },
-                venue_b_gateway: VenueGatewayFactory {
-                    venue: VENUE_B,
-                    exchange: venue_b.clone(),
-                    ledger: refs.ledger.clone(),
-                    latency: latency.clone(),
-                },
-            },
             reconciler: {
                 let exchanges = vec![(VENUE_A, venue_a.clone()), (VENUE_B, venue_b.clone())];
                 move || Reconciler::new(feed_refs.clone(), exchanges.clone())
@@ -323,8 +288,8 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
             },
             control: {
                 let intake_gate = intake_gate.clone();
-                let venue_a_gateway = venues.venue_a_gateway.clone();
-                let venue_b_gateway = venues.venue_b_gateway.clone();
+                let venue_a_gateway = venue_a_gateway.clone();
+                let venue_b_gateway = venue_b_gateway.clone();
                 move || Control {
                     gateways: vec![venue_a_gateway.clone(), venue_b_gateway.clone()],
                     intake_gate: intake_gate.clone(),
@@ -335,20 +300,73 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
                 move || Health::new(control.clone())
             },
         }
-    })?;
+    });
+
     let TradingEngineRefs {
-        venues,
         reconciler,
         ledger,
         router,
         control,
         health,
     } = refs;
-    let VenuesRefs {
-        venue_a_feed,
-        venue_b_feed,
-        ..
-    } = venues;
+
+    builder.define(
+        venue_a_feed_slot,
+        VenueFeedFactory {
+            venue: VENUE_A,
+            exchange: venue_a.clone(),
+            reconciler: reconciler.clone(),
+            latency: latency.clone(),
+        },
+    );
+    builder.define(
+        venue_a_gateway_slot,
+        VenueGatewayFactory {
+            venue: VENUE_A,
+            exchange: venue_a.clone(),
+            ledger: ledger.clone(),
+            latency: latency.clone(),
+        },
+    );
+    builder.define(
+        venue_b_feed_slot,
+        VenueFeedFactory {
+            venue: VENUE_B,
+            exchange: venue_b.clone(),
+            reconciler: reconciler.clone(),
+            latency: latency.clone(),
+        },
+    );
+    builder.define(
+        venue_b_gateway_slot,
+        VenueGatewayFactory {
+            venue: VENUE_B,
+            exchange: venue_b.clone(),
+            ledger: ledger.clone(),
+            latency: latency.clone(),
+        },
+    );
+
+    let graph = builder.build()?;
+    let mut nodes: HashMap<_, _> = graph
+        .into_nodes()
+        .into_iter()
+        .map(|node| (node.label().to_owned(), node))
+        .collect();
+    let venues = OrderedTree::new()
+        .restart_config(RestartConfig::new(5, Duration::from_secs(10)))
+        .actor(take_node(&mut nodes, "venues.venue-a-feed").child_id("venue-a-feed"))
+        .actor(take_node(&mut nodes, "venues.venue-a-gateway").child_id("venue-a-gateway"))
+        .actor(take_node(&mut nodes, "venues.venue-b-feed").child_id("venue-b-feed"))
+        .actor(take_node(&mut nodes, "venues.venue-b-gateway").child_id("venue-b-gateway"));
+    let tree = OrderedTree::new()
+        .subtree("venues", venues)
+        .actor(take_node(&mut nodes, "reconciler"))
+        .actor(take_node(&mut nodes, "ledger"))
+        .actor(take_node(&mut nodes, "order-router"))
+        .actor(take_node(&mut nodes, "control"))
+        .actor(take_node(&mut nodes, "health"));
+    assert!(nodes.is_empty(), "every graph actor is placed exactly once");
 
     let runtime = tree.spawn()?;
 
@@ -361,13 +379,10 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // scope is direct children, so nested per-venue supervisors would each
     // need their own lifecycle pump.
     let lifecycle_watch = runtime
-        .handle()
         .subtree("venues")
         .expect("venues runtime subtree")
         .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
-            total: event
-                .total_restarts()
-                .expect("the direct-child lifecycle pump filters scope events"),
+            total: event.total_restarts,
         });
 
     Ok(App {
@@ -389,7 +404,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.handle().wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.wait_started()).await??;
     assert_eq!(app.venue_a.feed_sessions(VENUE_A), 1);
     assert_eq!(app.venue_b.feed_sessions(VENUE_B), 1);
     assert_eq!(app.venue_a.gateway_sessions(VENUE_A), 1);
@@ -468,7 +483,6 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     let before_b = generation(app, "venue-b-feed");
     let venues = app
         .runtime
-        .handle()
         .subtree("venues")
         .expect("venues runtime subtree");
     let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
@@ -641,7 +655,6 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     await_until(|| async {
         let stats = app
             .runtime
-            .handle()
             .subtree("venues")
             .expect("venue runtime subtree")
             .actor_stats();
@@ -667,7 +680,6 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     flood.await?;
     let feed_stats = app
         .runtime
-        .handle()
         .subtree("venues")
         .expect("venue runtime subtree")
         .actor_stats();
@@ -688,7 +700,6 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
     let venues = app
         .runtime
-        .handle()
         .subtree("venues")
         .expect("venues runtime subtree");
     for (id, feed) in [
@@ -771,14 +782,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
             >= 2
     );
     println!("selected metrics: {selected_metrics:#?}");
-    println!(
-        "final supervisor snapshot: {:#?}",
-        app.runtime.handle().snapshot()
-    );
-    println!(
-        "final actor stats: {:#?}",
-        app.runtime.handle().actor_stats()
-    );
+    println!("final supervisor snapshot: {:#?}", app.runtime.snapshot());
+    println!("final actor stats: {:#?}", app.runtime.actor_stats());
     println!("PHASE 8 OK — staged shutdown and observability");
     Ok(())
 }
@@ -794,23 +799,21 @@ where
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.subscribe_snapshots();
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
+    let lifecycle = handle.watch_lifecycle();
     let generation = handle
         .snapshot()
         .child(id)
         .unwrap_or_else(|| panic!("{id} is supervised"))
         .generation;
-    (snapshots, generation)
+    (lifecycle, generation)
 }
 
-async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, baseline: u64) {
-    snapshots
-        .wait_for_child(id, |child| {
-            child.generation > baseline && child.state.is_running()
-        })
+async fn await_restart(mut lifecycle: ChildLifecycleWatch, id: &str, baseline: u64) {
+    lifecycle
+        .started_after(id, baseline)
         .await
-        .unwrap_or_else(|_| panic!("snapshot stream closed before {id} restarted"));
+        .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
 }
 
 async fn await_until<F, Fut>(mut predicate: F) -> Result<(), AnyError>
@@ -895,7 +898,6 @@ fn both_health(status: &ReconcilerStatus, health: VenueHealth) -> bool {
 
 fn generation(app: &App, child: &str) -> u64 {
     app.runtime
-        .handle()
         .snapshot()
         .descendant(["venues", child])
         .expect("nested child snapshot")

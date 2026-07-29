@@ -1,5 +1,16 @@
 error[E0271]: type mismatch resolving `<Worker as RawActor>::Msg == String`
-  --> tests/ui/supervision/wrong_type_define.rs:17:13
+  --> tests/ui/supervision/wrong_type_define.rs:17:26
    |
 17 |     builder.define(slot, || Worker);
-   |             ^^^^^^ expected `String`, found `()`
+   |             ------       ^^^^^^^^^ expected `String`, found `()`
+   |             |
+   |             required by a bound introduced by this call
+   |
+note: required by a bound in `GraphBuilder::define`
+  --> src/actor/builder.rs
+   |
+   |     pub fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
+   |            ------ required by a bound in this associated function
+...
+   |         F::Actor: RawActor<Msg = M>,
+   |                            ^^^^^^^ required by this bound in `GraphBuilder::define`

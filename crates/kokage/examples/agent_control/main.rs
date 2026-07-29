@@ -31,13 +31,13 @@
 //!
 //! # Supervision shape
 //!
-//! The shape below is one `#[derive(Supervision)]` declaration (`AgentControl`),
-//! so struct nesting is scope nesting and every actor label is qualified by its
-//! scope path (`gateway.inbound`, `core.journal`). Supervisor child ids stay
-//! local, so the paths read `root.gateway.inbound` and `root.core.journal`.
+//! `#[derive(Supervision)]` wires the cyclic core and its typed refs. Configured
+//! gateway/journal slots join the same graph, then linear actor nodes build the
+//! explicit tree below. Graph labels remain qualified (`gateway.inbound`,
+//! `core.journal`) while supervisor child ids stay local.
 //!
 //! ```text
-//! root (OneForOne)                     — struct AgentControl
+//! root (OneForOne)
 //! ├── gateway   RestForOne, sequential start: outbound → progress → inbound
 //! │             (inbound is last: its panic restarts only inbound; an
 //! │              outbound/progress failure also restarts the bridge)
@@ -46,8 +46,7 @@
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
 //! └── sessions  empty subtree mount; per-conversation subtrees at runtime
-//!               (a `DynamicScope` field, so the router can capture its mount
-//!                handle at wiring time)
+//!               (the router captures its pre-spawn mount handle at wiring)
 //!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
 //!         │                        every incarnation's id unique, so respawn
 //!         │                        never races a predecessor's removal
@@ -123,6 +122,7 @@ mod telemetry;
 mod tool_host;
 
 use std::{
+    collections::HashMap,
     error::Error,
     future::Future,
     sync::{
@@ -133,8 +133,8 @@ use std::{
 };
 
 use kokage::{
-    DownReason, DynamicScope, MailboxMode, MonitorEvent, Supervision, observe::LifecycleWatchGuard,
-    prelude::*,
+    ActorNode, ActorSlot, DownReason, MailboxMode, MonitorEvent, Supervision,
+    observe::LifecycleWatchGuard, prelude::*,
 };
 use tokio::time::Instant;
 
@@ -151,52 +151,32 @@ use tool_host::ToolHost;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
+fn take_node(nodes: &mut HashMap<String, ActorNode>, label: &str) -> ActorNode {
+    nodes
+        .remove(label)
+        .unwrap_or_else(|| panic!("graph contains `{label}`"))
+}
+
 /// Gateway actors keep the 32-deep mailbox the separate `agent-gateway` graph
 /// gave them before the scopes merged into one graph; core actors keep the
 /// graph-wide default.
 const GATEWAY_MAILBOX: usize = 32;
 
-fn gateway_options<M: Send + 'static>() -> ActorOptions<M> {
-    ActorOptions::new().mailbox_capacity(GATEWAY_MAILBOX)
+fn gateway_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
+    ActorSlot::new(label).mailbox_capacity(GATEWAY_MAILBOX)
 }
 
-/// Sequential start: outbound → progress → inbound. `RestForOne` puts the
-/// bridge last, so an inbound panic restarts only inbound while an
-/// outbound/progress failure also recycles the bridge that depends on them.
-#[derive(Supervision)]
-#[supervision(strategy = Strategy::RestForOne)]
-struct Gateway {
-    #[supervision(options = gateway_options())]
-    outbound: Outbound,
-    #[supervision(options = gateway_options()
-        .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat())))]
-    progress: Progress,
-    #[supervision(options = gateway_options())]
-    inbound: Inbound,
-}
-
-/// The budget↔guard cycle is what justifies deriving rather than ordering
-/// registrations by hand.
-#[derive(Supervision)]
-struct Core {
-    #[supervision(options = ActorOptions::new().message_size(messages::journal_message_size))]
-    journal: Journal,
-    budget: Budget,
-    guard: Guard,
-    tool_host: ToolHost,
-    router: Router,
-}
-
-/// The whole application. `sessions` is a dynamic scope: its builder is wired
-/// like any other field, which is what lets the router capture its mount handle
-/// before any actor is constructed.
+/// The budget↔guard cycle is what the derive wires. Topology stays explicit.
 #[derive(Supervision)]
 struct AgentControl {
-    #[supervision(scope)]
-    gateway: Gateway,
-    #[supervision(scope)]
-    core: Core,
-    sessions: DynamicScope,
+    #[supervision(label = "core.budget")]
+    budget: Budget,
+    #[supervision(label = "core.guard")]
+    guard: Guard,
+    #[supervision(label = "core.tool_host")]
+    tool_host: ToolHost,
+    #[supervision(label = "core.router")]
+    router: Router,
 }
 
 struct App {
@@ -250,72 +230,94 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions_mount = sessions_runtime.handle();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
-    // Every actor joins one graph, so the wiring closure sees gateway and core
-    // refs together: the bridge captures `core.router` and the router captures
-    // `gateway.outbound` in the same literal, with no slot/define split and no
-    // ordering between the two scopes.
+    // Open the configured gateway and journal slots before deriving the core.
+    // The core factories can capture those refs, and the bridge factory is
+    // filled afterward with the derived router ref.
     let mut builder = kokage::GraphBuilder::new();
     builder.name("agent-control");
-    let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
-        gateway: GatewayFactories {
-            outbound: {
-                let chat = chat.clone();
-                move || Outbound::new(chat.clone())
-            },
-            progress: {
-                let chat = chat.clone();
-                move || Progress::new(chat.clone())
-            },
-            inbound: {
-                let chat = chat.clone();
-                let journal = refs.core.journal.clone();
-                let router = refs.core.router.clone();
-                move || Inbound::new(chat.clone(), journal.clone(), router.clone())
-            },
+    let outbound_slot = gateway_slot::<OutboundMsg>("gateway.outbound");
+    let outbound = outbound_slot.actor_ref();
+    let progress_slot = gateway_slot::<ProgressMsg>("gateway.progress").mailbox(
+        MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat()),
+    );
+    let progress = progress_slot.actor_ref();
+    let inbound_slot = gateway_slot::<InboundMsg>("gateway.inbound");
+    let journal_slot =
+        ActorSlot::<JournalMsg>::new("core.journal").message_size(messages::journal_message_size);
+    let journal = journal_slot.actor_ref();
+
+    let refs = AgentControl::wire(&mut builder, |refs| AgentControlFactories {
+        budget: {
+            let guard = refs.guard.clone();
+            move || Budget::new(guard.clone())
         },
-        core: CoreFactories {
-            journal: Journal::default,
-            budget: {
-                let refs = refs.core.clone();
-                move || Budget::new(refs.guard.clone())
-            },
-            guard: {
-                let refs = refs.core.clone();
-                let model = model.clone();
-                let gate = gate.clone();
-                move || {
-                    Guard::new(
-                        refs.budget.clone(),
-                        refs.router.clone(),
-                        model.clone(),
-                        gate.clone(),
-                    )
-                }
-            },
-            tool_host: ToolHost::default,
-            router: RouterFactory {
-                mount: sessions_mount.clone(),
-                journal: refs.core.journal.clone(),
-                budget: refs.core.budget.clone(),
-                tool_host: refs.core.tool_host.clone(),
-                guard: refs.core.guard.clone(),
-                outbound: refs.gateway.outbound.clone(),
-                progress: refs.gateway.progress.clone(),
-                gate: gate.clone(),
-                model: model_client.clone(),
-                session_epoch: session_epoch.clone(),
-                proof: proof.clone(),
-            },
+        guard: {
+            let budget = refs.budget.clone();
+            let router = refs.router.clone();
+            let model = model.clone();
+            let gate = gate.clone();
+            move || Guard::new(budget.clone(), router.clone(), model.clone(), gate.clone())
         },
-        sessions: sessions_runtime,
-    })?;
-    let CoreRefs {
-        journal,
+        tool_host: ToolHost::default,
+        router: RouterFactory {
+            mount: sessions_mount.clone(),
+            journal: journal.clone(),
+            budget: refs.budget.clone(),
+            tool_host: refs.tool_host.clone(),
+            guard: refs.guard.clone(),
+            outbound: outbound.clone(),
+            progress: progress.clone(),
+            gate: gate.clone(),
+            model: model_client.clone(),
+            session_epoch: session_epoch.clone(),
+            proof: proof.clone(),
+        },
+    });
+    let AgentControlRefs {
         budget,
         guard,
         tool_host,
         router,
-    } = refs.core;
+    } = refs;
+
+    builder.define(outbound_slot, {
+        let chat = chat.clone();
+        move || Outbound::new(chat.clone())
+    });
+    builder.define(progress_slot, {
+        let chat = chat.clone();
+        move || Progress::new(chat.clone())
+    });
+    builder.define(inbound_slot, {
+        let chat = chat.clone();
+        let journal = journal.clone();
+        let router = router.clone();
+        move || Inbound::new(chat.clone(), journal.clone(), router.clone())
+    });
+    builder.define(journal_slot, Journal::default);
+
+    let graph = builder.build()?;
+    let mut nodes: HashMap<_, _> = graph
+        .into_nodes()
+        .into_iter()
+        .map(|node| (node.label().to_owned(), node))
+        .collect();
+    let gateway_tree = OrderedTree::new()
+        .strategy(Strategy::RestForOne)
+        .actor(take_node(&mut nodes, "gateway.outbound").child_id("outbound"))
+        .actor(take_node(&mut nodes, "gateway.progress").child_id("progress"))
+        .actor(take_node(&mut nodes, "gateway.inbound").child_id("inbound"));
+    let core_tree = OrderedTree::new()
+        .actor(take_node(&mut nodes, "core.journal").child_id("journal"))
+        .actor(take_node(&mut nodes, "core.budget").child_id("budget"))
+        .actor(take_node(&mut nodes, "core.guard").child_id("guard"))
+        .actor(take_node(&mut nodes, "core.tool_host").child_id("tool_host"))
+        .actor(take_node(&mut nodes, "core.router").child_id("router"));
+    let tree = OrderedTree::new()
+        .subtree("gateway", gateway_tree)
+        .subtree("core", core_tree)
+        .subtree("sessions", sessions_runtime);
+    assert!(nodes.is_empty(), "every graph actor is placed exactly once");
 
     let runtime = tree.spawn()?;
     let gateway = runtime

@@ -158,7 +158,7 @@ typed refs. Derive it on an actor declaration, return the generated factory
 bundle from `wire`, then build the supervision tree explicitly:
 
 ```rust,ignore
-use kokage::{ActorSpec, GraphBuilder, OrderedTree, RestartPolicy, Strategy, Supervision};
+use kokage::{GraphBuilder, OrderedTree, RestartPolicy, Strategy, Supervision};
 
 #[derive(Supervision)]
 struct App {
@@ -174,18 +174,20 @@ let refs = App::wire(&mut graph, |refs| AppFactories {
     renderer: RendererFactory::new(refs.ingest.clone()),
 });
 let graph = graph.build()?;
+let mut nodes = graph.into_nodes().into_iter();
+let ingest = nodes.next().expect("ingest node");
+let parser = nodes.next().expect("parser node");
+let renderer = nodes.next().expect("renderer node");
 
 let tree = OrderedTree::new()
     .strategy(Strategy::OneForAll)
-    .actor(
-        ActorSpec::new(graph.actor_for(&refs.ingest)?)
-            .restart(RestartPolicy::Never),
-    )
+    .default_restart(RestartPolicy::Never)
+    .actor(ingest)
     .subtree(
         "workers",
         OrderedTree::new()
-            .actor(graph.actor_for(&refs.parser)?)
-            .actor(graph.actor_for(&refs.renderer)?),
+            .actor(parser)
+            .actor(renderer),
     );
 let runtime = tree.spawn()?;
 ```
@@ -195,7 +197,9 @@ longer generates `Slots` or `Scopes` types. The wiring closure remains because
 every ref must exist before cyclic factories can capture it.
 
 Only `#[supervision(label = "...")]` remains as a field attribute. Mailbox
-configuration belongs on the explicit graph declaration. Restart/shutdown
-policy, ordering, nested scopes, and dynamic membership belong on
-`OrderedTree` and `DynamicTree`; there is no `DynamicScope` marker or
+configuration belongs on the explicit graph declaration: derived fields use
+the graph defaults, while an actor that needs individual settings can be left
+out of the derived declaration and wired with an `ActorSlot` alongside it.
+Restart/shutdown policy, ordering, nested scopes, and dynamic membership belong
+on `OrderedTree` and `DynamicTree`; there is no `DynamicScope` marker or
 type-name detection.
