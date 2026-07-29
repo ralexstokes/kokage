@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, marker::PhantomData};
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, CancellationToken, MessageContext, Restart,
+    Actor, ActorResult, ActorSpec, CancellationToken, MessageContext, Restart, Shutdown,
     host::DEFAULT_SHUTDOWN_BOUND,
 };
 use tokio::sync::mpsc;
@@ -73,7 +73,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .run_until(
                     pending::<()>(),
                     Restart::on_failure(),
-                    DEFAULT_SHUTDOWN_BOUND,
+                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -93,7 +93,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                 .run_until(
                     stop.cancelled(),
                     Restart::on_failure(),
-                    DEFAULT_SHUTDOWN_BOUND,
+                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }

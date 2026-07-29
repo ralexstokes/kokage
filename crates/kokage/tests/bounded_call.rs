@@ -7,7 +7,7 @@ use std::{
 };
 
 use kokage::{
-    ActorResult, ActorSpec, CallError, Reply, Restart,
+    ActorResult, ActorSpec, CallError, Reply, Restart, Shutdown,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
@@ -24,7 +24,11 @@ fn start(actor: RunnableActor) -> (CancellationToken, tokio::task::JoinHandle<()
         let stop = stop.clone();
         async move {
             actor
-                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+                .run_until(
+                    stop.cancelled(),
+                    Restart::never(),
+                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                )
                 .await
                 .expect("actor run succeeds");
         }

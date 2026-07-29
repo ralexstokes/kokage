@@ -15,7 +15,7 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorResult, ActorSpec, LiveContext, MessageContext, Reply, Restart,
-    RuntimeHandle,
+    RuntimeHandle, Shutdown,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
     observe::SupervisorSnapshotReceiver,
 };
@@ -270,7 +270,11 @@ async fn constructor_panic_uses_the_actor_panic_path() {
 
     let joined = tokio::spawn(async move {
         actor
-            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .run_until(
+                pending::<()>(),
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     })
     .await;

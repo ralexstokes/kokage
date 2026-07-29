@@ -86,7 +86,11 @@ fn start_graph(
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+                    .run_until(
+                        stop.cancelled(),
+                        Restart::never(),
+                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    )
                     .await
             })
         })
@@ -487,7 +491,11 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let graph = builder.build();
 
     let result = runnable(graph, "worker")
-        .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+        .run_until(
+            pending::<()>(),
+            Restart::never(),
+            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+        )
         .await;
     assert!(matches!(
         result,
@@ -520,7 +528,11 @@ async fn handler_error_fails_the_actor_run() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .run_until(
+                pending::<()>(),
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     actor.send(()).await.expect("message sent");
@@ -568,7 +580,11 @@ async fn message_context_stop_is_idempotent_and_exits_normally() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .run_until(
+                pending::<()>(),
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
 
@@ -596,7 +612,11 @@ async fn message_context_error_takes_precedence_over_a_stop_request() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .run_until(
+                pending::<()>(),
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
 
@@ -1071,7 +1091,11 @@ async fn actors_can_declare_distinct_mailbox_capacities() {
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+                    .run_until(
+                        stop.cancelled(),
+                        Restart::never(),
+                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    )
                     .await
             })
         })
@@ -1113,7 +1137,11 @@ async fn actor_error_fails_its_run() {
     let graph = builder.build();
 
     let result = runnable(graph, "bad")
-        .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+        .run_until(
+            pending::<()>(),
+            Restart::never(),
+            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+        )
         .await;
     assert!(matches!(
         result,
@@ -1139,7 +1167,11 @@ async fn early_clean_exit_is_a_clean_actor_run() {
     let graph = builder.build();
 
     runnable(graph, "quitter")
-        .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+        .run_until(
+            pending::<()>(),
+            Restart::never(),
+            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+        )
         .await
         .expect("clean early exit is ordinary completion");
 }
@@ -1193,7 +1225,7 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
                 .run_until(
                     stop.cancelled(),
                     Restart::never(),
-                    Duration::from_millis(50),
+                    Shutdown::drain_for(Duration::from_millis(50)),
                 )
                 .await
         }
@@ -1397,7 +1429,11 @@ mod runnable_actor {
             let stop = stop.clone();
             async move {
                 actor
-                    .run_until(stop.cancelled(), restart, DEFAULT_SHUTDOWN_BOUND)
+                    .run_until(
+                        stop.cancelled(),
+                        restart,
+                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    )
                     .await
             }
         });
@@ -1526,7 +1562,7 @@ mod runnable_actor {
                 .run_until(
                     async {},
                     Restart::never(),
-                    Duration::from_millis(100),
+                    Shutdown::drain_for(Duration::from_millis(100)),
                 )
                 .await,
             Err(ActorRunError::ShutdownTimedOut { actor_id, .. }) if actor_id == "worker"
@@ -1541,7 +1577,11 @@ mod runnable_actor {
         let worker = single_actor(graph, "worker");
 
         worker
-            .run_until(async {}, Restart::never(), Duration::from_secs(30))
+            .run_until(
+                async {},
+                Restart::never(),
+                Shutdown::drain_for(Duration::from_secs(30)),
+            )
             .await
             .expect("cooperative shutdown completes cleanly");
     }
@@ -1706,7 +1746,7 @@ mod runnable_actor {
                 .run_until(
                     pending::<()>(),
                     Restart::never(),
-                    DEFAULT_SHUTDOWN_BOUND,
+                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await,
             Err(ActorRunError::AlreadyRunning { actor_id , .. }) if actor_id == "worker"
@@ -1740,7 +1780,11 @@ mod runnable_actor {
         let running_worker = worker.clone();
         let task = tokio::spawn(async move {
             running_worker
-                .run_until(pending::<()>(), Default::default(), DEFAULT_SHUTDOWN_BOUND)
+                .run_until(
+                    pending::<()>(),
+                    Default::default(),
+                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                )
                 .await
         });
 
@@ -1770,7 +1814,11 @@ mod runnable_actor {
             let running_worker = worker.clone();
             let task = tokio::spawn(async move {
                 running_worker
-                    .run_until(pending::<()>(), policy, DEFAULT_SHUTDOWN_BOUND)
+                    .run_until(
+                        pending::<()>(),
+                        policy,
+                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    )
                     .await
             });
 

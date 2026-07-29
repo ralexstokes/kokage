@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorResult, ActorSpec, Restart, TrySendError,
+    ActorResult, ActorSpec, Restart, Shutdown, TrySendError,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::{
@@ -40,8 +40,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let first_run = tokio::spawn({
         let sink = sink.clone();
         async move {
-            sink.run_until(pending::<()>(), Restart::always(), DEFAULT_SHUTDOWN_BOUND)
-                .await
+            sink.run_until(
+                pending::<()>(),
+                Restart::always(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
+            .await
         }
     });
     sink_ref.send("first run".to_owned()).await?;
@@ -76,8 +80,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let second_run = tokio::spawn({
         let sink = sink.clone();
         async move {
-            sink.run_until(pending::<()>(), Restart::always(), DEFAULT_SHUTDOWN_BOUND)
-                .await
+            sink.run_until(
+                pending::<()>(),
+                Restart::always(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
+            .await
         }
     });
     println!(

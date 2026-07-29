@@ -294,17 +294,15 @@ impl RunnableActor {
     /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::host::ActorContext::supervisor):
     /// control operations return `ControlError::Unavailable` and observation
     /// streams are closed.
-    pub async fn run_until<F, S>(
+    pub async fn run_until<F>(
         &self,
         shutdown: F,
         restart: Restart,
-        shutdown_policy: S,
+        shutdown_policy: Shutdown,
     ) -> Result<(), ActorRunError>
     where
         F: Future<Output = ()>,
-        S: Into<Shutdown>,
     {
-        let shutdown_policy = shutdown_policy.into();
         let shutdown_observed = CancellationToken::new();
         let deadline_start = shutdown_observed.clone();
         let bounded_shutdown = async move {

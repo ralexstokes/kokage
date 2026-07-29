@@ -108,12 +108,6 @@ impl Default for Shutdown {
     }
 }
 
-impl From<Duration> for Shutdown {
-    fn from(bound: Duration) -> Self {
-        Self::drain_for(bound)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
