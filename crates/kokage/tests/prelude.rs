@@ -19,12 +19,13 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorSlot, BackoffPolicy, BlockingCancelled, CancellationHandle,
-            CancellationToken, ControlError, DownReason, DrainPolicy, DynamicActorOptions,
-            DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, DynamicScope, Graph,
-            GraphBuildError, GraphLookupError, MailboxMode, MonitorEvent, OffloadDeadline,
-            RestrictedScope, ScopeKind, Supervision, SupervisorBuildError, SupervisorError,
-            TaskHandle, TimerKey, TreeNode,
+            ActorFactory, ActorSlot, ActorSpec, BackoffPolicy, BlockingCancelled,
+            CancellationHandle, CancellationToken, ControlError, DownReason, DrainPolicy,
+            DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, DynamicTree, Graph,
+            GraphBuildError, GraphSpawnError, MailboxMode, MonitorEvent, OffloadDeadline,
+            RestartConfig, RestartPolicy, RestrictedScope, Runtime, RuntimeHandle, ScopeKind,
+            ShutdownPolicy, Strategy, Supervision, SupervisorBuildError, SupervisorError,
+            TaskHandle, TerminalMembership, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
@@ -43,10 +44,6 @@ mod coverage_probe {
             LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard,
             SupervisionOutline, SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView,
         };
-    }
-
-    mod derive_private {
-        use kokage::__private::{Supervision, SupervisionFactories, qualified_label};
     }
 }
 

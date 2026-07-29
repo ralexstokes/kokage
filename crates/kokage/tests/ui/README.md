@@ -3,14 +3,13 @@
 `actor-factory/`, `supervision/`, and `lifecycle-stages/` hold
 [trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
 `tests/derive_ui.rs`. The former covers the `#[derive(ActorFactory)]` shape
-and attribute contract. The latter covers the `#[derive(Supervision)]` contract,
-including marker-only dynamic scopes and private plumbing, typed factory
-return/completeness checks, plus the two token-API guarantees
-(wrong-type `define` is E0271, reusing a consumed `ActorSlot` is E0382). Each
+and attribute contract. The latter covers the narrow `#[derive(Supervision)]`
+cyclic-wiring contract: supported declaration shapes, factory bounds, labels,
+typed refs, visibility, and rejection of topology attributes, plus the slot
+token guarantees (wrong-type `define` and reuse after move). Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
 spans included. The corresponding `*-pass/` directories cover supported
-derive attributes, visibility, constructor functions, and capturing
-factories.
+derive attributes and visibility.
 
 `lifecycle-stages/` covers the guarantees bought by splitting `ActorContext`
 into per-stage views: `on_start` cannot await its own readiness through

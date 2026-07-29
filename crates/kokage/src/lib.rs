@@ -115,11 +115,12 @@
 //!
 //! Use `#[derive(ActorFactory)]` on named-field actors to generate reusable
 //! factory structs without repeating configuration fields or clone code. For
-//! cyclic actor graphs and the supervision scopes that run them, derive
-//! [`Supervision`] on a named-field struct whose fields are the actors. The
-//! wiring closure receives typed refs for every field before any actor is
-//! constructed; see the [`Supervision`] derive docs for the generated API, and
-//! mind the bounded-mailbox cycle hazard documented on [`GraphBuilder`].
+//! cyclic actor graphs, derive [`Supervision`] on a named-field bundle of
+//! concrete actor factories. Its wiring closure receives typed refs for every
+//! field before any factory is constructed. Graph validation and supervision
+//! topology remain explicit; see the [`Supervision`] derive docs for the
+//! generated API, and mind the bounded-mailbox cycle hazard documented on
+//! [`GraphBuilder`].
 //! Derive names are intentionally not part of [`prelude`]; add
 //! `use kokage::{ActorFactory, Supervision};` when using their unqualified
 //! names alongside `use kokage::prelude::*`, or qualify the derive as
@@ -256,7 +257,6 @@
 mod actor;
 mod runtime;
 mod supervision;
-mod supervision_derive;
 
 /// Raw actor and task-hosting machinery.
 ///
@@ -292,14 +292,6 @@ pub mod observe {
         CompletionGuard, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
         LifecyclePathSegment, LifecycleWatch, SnapshotRecvError, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
-    };
-}
-
-/// Implementation bridge used by `kokage` derive expansions.
-#[doc(hidden)]
-pub mod __private {
-    pub use crate::supervision_derive::{
-        Supervision, SupervisionFactories, qualified_label, validate_derived_builder,
     };
 }
 
@@ -339,4 +331,3 @@ pub use kokage_supervisor::{
 };
 pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
-pub use supervision_derive::DynamicScope;

@@ -1,26 +1,45 @@
-error[E0277]: the trait bound `NotActor: kokage::Actor` is not satisfied
+error[E0277]: expected a `Fn()` closure, found `NotActor`
  --> tests/ui/supervision/non_actor_field.rs:8:13
   |
 8 |     worker: NotActor,
-  |             ^^^^^^^^ unsatisfied trait bound
+  |             ^^^^^^^^ expected an `Fn()` closure, found `NotActor`
   |
-help: the trait `kokage::Actor` is not implemented for `NotActor`
+help: the trait `Fn()` is not implemented for `NotActor`
  --> tests/ui/supervision/non_actor_field.rs:4:1
   |
 4 | struct NotActor;
   | ^^^^^^^^^^^^^^^
-  = note: required for `NotActor` to implement `RawActor`
+  = note: wrap the `NotActor` in a closure with no arguments: `|| { /* code */ }`
+  = note: required for `NotActor` to implement `ActorFactory`
 
-error[E0277]: the trait bound `NotActor: kokage::Actor` is not satisfied
- --> tests/ui/supervision/non_actor_field.rs:6:10
+error[E0277]: expected a `Fn()` closure, found `NotActor`
+ --> tests/ui/supervision/non_actor_field.rs:8:5
   |
 6 | #[derive(Supervision)]
-  |          ^^^^^^^^^^^ unsatisfied trait bound
+  |          ----------- in this derive macro expansion
+7 | struct BadScope {
+8 |     worker: NotActor,
+  |     ^^^^^^^^^^^^^^^^ expected an `Fn()` closure, found `NotActor`
   |
-help: the trait `kokage::Actor` is not implemented for `NotActor`
+help: the trait `Fn()` is not implemented for `NotActor`
  --> tests/ui/supervision/non_actor_field.rs:4:1
   |
 4 | struct NotActor;
   | ^^^^^^^^^^^^^^^
-  = note: required for `NotActor` to implement `RawActor`
-  = note: this error originates in the derive macro `Supervision` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: wrap the `NotActor` in a closure with no arguments: `|| { /* code */ }`
+  = note: required for `NotActor` to implement `ActorFactory`
+  = note: this error originates in the derive macro `Clone` which comes from the expansion of the derive macro `Supervision` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: expected a `Fn()` closure, found `NotActor`
+ --> tests/ui/supervision/non_actor_field.rs:8:5
+  |
+8 |     worker: NotActor,
+  |     ^^^^^^ expected an `Fn()` closure, found `NotActor`
+  |
+help: the trait `Fn()` is not implemented for `NotActor`
+ --> tests/ui/supervision/non_actor_field.rs:4:1
+  |
+4 | struct NotActor;
+  | ^^^^^^^^^^^^^^^
+  = note: wrap the `NotActor` in a closure with no arguments: `|| { /* code */ }`
+  = note: required for `NotActor` to implement `ActorFactory`

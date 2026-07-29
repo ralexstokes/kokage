@@ -200,12 +200,6 @@ error[E0432]: unresolved import `kokage::SupervisionOutline`
    |
 32 | use kokage::SupervisionOutline;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisionOutline` in the root
-   |
-help: a similar name exists in the module
-   |
-32 - use kokage::SupervisionOutline;
-32 + use kokage::supervision_derive;
-   |
 
 error[E0432]: unresolved import `kokage::SupervisorLifecycleEvent`
   --> tests/ui/public-api/moved_root_exports.rs:33:5

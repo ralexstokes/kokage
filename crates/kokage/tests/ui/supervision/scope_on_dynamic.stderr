@@ -1,5 +1,0 @@
-error: a `DynamicScope` field declares a dynamic scope without an attribute; it cannot also be marked `scope`
-  --> tests/ui/supervision/scope_on_dynamic.rs:16:19
-   |
-16 |     #[supervision(scope)]
-   |                   ^^^^^

@@ -1,6 +1,6 @@
-error: duplicate node name `parse`; node names must be unique within one struct
+error: duplicate actor label `parse`; labels must be unique within one struct
   --> tests/ui/supervision/duplicate_node_name.rs:16:5
    |
 16 | /     #[supervision(label = "parse")]
-17 | |     render: Worker,
-   | |__________________^
+17 | |     render: fn() -> Worker,
+   | |__________________________^

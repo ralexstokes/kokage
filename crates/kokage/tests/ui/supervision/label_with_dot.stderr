@@ -1,5 +1,0 @@
-error: label must not contain `.`, which separates path components
-  --> tests/ui/supervision/label_with_dot.rs:15:27
-   |
-15 |     #[supervision(label = "workers.manager")]
-   |                           ^^^^^^^^^^^^^^^^^

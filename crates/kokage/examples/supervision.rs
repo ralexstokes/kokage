@@ -1,6 +1,8 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorRef, ActorResult, MessageContext, Supervision};
+use kokage::{
+    Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, OrderedTree, Supervision,
+};
 use tokio::sync::mpsc;
 
 enum FrontendMsg {
@@ -11,7 +13,6 @@ enum FrontendMsg {
 struct ParserMsg(String);
 struct SinkMsg(String);
 
-#[derive(Clone)]
 struct Frontend {
     parser: ActorRef<ParserMsg>,
     acked: mpsc::UnboundedSender<()>,
@@ -33,7 +34,6 @@ impl Actor for Frontend {
     }
 }
 
-#[derive(Clone)]
 struct Parser {
     frontend: ActorRef<FrontendMsg>,
     sink: ActorRef<SinkMsg>,
@@ -53,7 +53,6 @@ impl Actor for Parser {
     }
 }
 
-#[derive(Clone)]
 struct Sink {
     out: mpsc::UnboundedSender<String>,
 }
@@ -83,27 +82,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (acked_tx, mut acked_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let (tree, refs) = Pipeline::tree(|refs| PipelineFactories {
+    let mut graph = GraphBuilder::new();
+    let refs = Pipeline::wire(&mut graph, |refs| PipelineFactories {
         frontend: {
-            let refs = refs.clone();
+            let parser = refs.parser.clone();
             move || Frontend {
-                parser: refs.parser.clone(),
+                parser: parser.clone(),
                 acked: acked_tx.clone(),
             }
         },
         parser: {
-            let refs = refs.clone();
+            let frontend = refs.frontend.clone();
+            let sink = refs.sink.clone();
             move || Parser {
-                frontend: refs.frontend.clone(),
-                sink: refs.sink.clone(),
+                frontend: frontend.clone(),
+                sink: sink.clone(),
             }
         },
         sink: move || Sink {
             out: out_tx.clone(),
         },
-    })?;
-    let runtime_owner = tree.spawn()?;
-    let runtime = runtime_owner.handle();
+    });
+    let tree = OrderedTree::graph(graph.build()?);
+    let runtime = tree.spawn()?;
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))

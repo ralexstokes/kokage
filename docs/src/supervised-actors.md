@@ -151,94 +151,52 @@ and travels by clone or by message.
 Use `Strategy::OneForAll` when a group of actor children should share fate,
 or configure them as a runtime subtree for a scoped restart boundary.
 
-## Declaring a Tree with the Derive
+## Derived Wiring, Explicit Topology
 
-When the shape is static, `#[derive(Supervision)]` can declare the graph and
-its `OrderedTree` at once: struct nesting is scope nesting.
+`#[derive(Supervision)]` is intentionally limited to cyclic graph wiring and
+typed refs. Derive it on a concrete factory bundle, call `wire` on a
+caller-owned `GraphBuilder`, then build the supervision tree explicitly:
 
 ```rust,ignore
-use kokage::{DynamicScope, RestartPolicy, Strategy, Supervision};
-
-#[derive(Supervision)]
-#[supervision(strategy = Strategy::OneForAll)]
-struct Workers {
-    parse: Parser,
-    render: Renderer,
-}
+use kokage::{ActorSpec, GraphBuilder, OrderedTree, RestartPolicy, Strategy, Supervision};
 
 #[derive(Supervision)]
 struct App {
-    #[supervision(restart = RestartPolicy::Never)]
-    ingest: Ingest,
-    #[supervision(scope)]
-    workers: Workers,
-    sessions: DynamicScope,
+    ingest: IngestFactory,
+    parser: ParserFactory,
+    renderer: RendererFactory,
 }
 
-// Identity exists before wiring, so an actor factory can capture the mount.
-let sessions = DynamicTree::new().default_restart(RestartPolicy::Never);
-let mount = sessions.handle();
+let mut graph = GraphBuilder::new();
+let refs = App::wire(&mut graph, |refs| App {
+    ingest: IngestFactory::new(refs.parser.clone()),
+    parser: ParserFactory::new(refs.renderer.clone()),
+    renderer: RendererFactory::new(refs.ingest.clone()),
+});
+let graph = graph.build()?;
 
-let (tree, refs) = App::tree(|_refs| AppFactories {
-    ingest: move || Ingest::new(mount.clone()),
-    workers: WorkersFactories {
-        parse: || Parser::new(),
-        render: || Renderer::new(),
-    },
-    sessions,
-})?;
+let tree = OrderedTree::new()
+    .strategy(Strategy::OneForAll)
+    .actor(
+        ActorSpec::new(graph.actor_for(&refs.ingest)?)
+            .restart(RestartPolicy::Never),
+    )
+    .subtree(
+        "workers",
+        OrderedTree::new()
+            .actor(graph.actor_for(&refs.parser)?)
+            .actor(graph.actor_for(&refs.renderer)?),
+    );
 let runtime = tree.spawn()?;
 ```
 
-All three actors join **one** graph, so refs cross scope boundaries freely and
-cyclic wiring keeps working exactly as it does for a graph alone. Only
-supervision placement is hierarchical. Actor labels are qualified by the scope
-path, so the graph above contains `ingest`, `workers.parse`, and
-`workers.render`.
+The derived struct itself is the factory bundle; the macro generates only
+`AppRefs` and `App::wire`, not parallel `Factories`, `Slots`, or `Scopes`
+types. The wiring closure remains because every ref must exist before cyclic
+factories can capture it.
 
-Supervisor child ids stay local to their scope: `parse` is named `parse` inside
-the `workers` supervisor, giving the path `root.workers.parse` — the label with
-`root.` in front, not a repeated scope name. Snapshot and lifecycle lookups take
-the local id (`workers_handle.snapshot().child("parse")`) while `actor_stats`
-reports the qualified label (`workers.parse`).
-
-Because one graph means one `mailbox_capacity`, set a per-actor override with
-`ActorOptions::mailbox_capacity` where a scope previously had its own graph.
-
-Field order is semantic here in a way it is not for a graph alone: an ordered
-scope starts children in declaration order, and `Strategy::RestForOne` restarts
-the ones that follow. Reordering fields changes restart behaviour.
-
-Nested and dynamic scopes are selected in two different ways:
-
-- `#[supervision(scope)]` — a nested derived struct, becoming a named child
-  scope.
-- A field whose type is spelled `DynamicScope` — an empty scope whose
-  membership is written at runtime. The derive reserves that final path
-  segment syntactically, so a type alias is treated as an actor field and fails
-  the actor trait bound; unrelated types with the same name are not supported.
-  The marker is never constructed; its wiring entry is a `DynamicTree`.
-  Supplying the tree is what
-  makes the scope's mount handle available *before* wiring, so
-  an actor can hold it as a durable factory field instead of looking the scope
-  up after spawn. Policy comes from the tree
-  (`DynamicTree::new().default_restart(..)`), not from attributes.
-
-Per-actor `restart`, `shutdown`, and `restart_config` overrides go on the
-field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
-the non-`Clone` `OrderedTree` declaration — paired, like every generated
-constructor, with the refs bundle — without spawning it. The tree carries the
-pre-spawn identities for dynamic fields, so the mount
-handles supplied during wiring bind to the runtime eventually built from that
-exact declaration. It is also useful for asserting shape through `outline()`.
-
-The derive generates `tree` and `tree_with`. The latter takes an otherwise
-empty `GraphBuilder` when you need to configure the graph-wide name or mailbox
-capacity before generated composition registers its actors.
-
-Use `GraphBuilder::actor(id, factory)` for ordinary hand-written wiring and
-`actor_with(id, ActorOptions, factory)` for per-actor options. Reserve
-`slot(id)` plus `define` for cyclic wiring; choose `slot_with(id, ActorOptions)` for
-non-default mailbox behavior. Compose the resulting graph with
-`OrderedTree`; call `handle()` before spawn when wiring needs its pre-spawn
-handle.
+Only `#[supervision(label = "...")]` remains as a field attribute. Mailbox
+configuration belongs on the explicit graph declaration. Restart/shutdown
+policy, ordering, nested scopes, and dynamic membership belong on
+`OrderedTree` and `DynamicTree`; there is no `DynamicScope` marker or
+type-name detection.
