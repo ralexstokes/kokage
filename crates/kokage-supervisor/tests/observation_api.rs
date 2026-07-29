@@ -104,6 +104,7 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
     });
 
     running
+        .handle()
         .dynamic()
         .expect("dynamic capability")
         .add_child(ChildSpec::task("job", |_| async { Ok(()) }).restart(RestartPolicy::Never))
