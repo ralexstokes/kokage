@@ -10,7 +10,7 @@ use std::{
 
 use kokage::{
     ActorResult, ActorSpec, Restart, Shutdown,
-    host::{ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use tokio::{
     sync::{Notify, oneshot},
@@ -65,7 +65,7 @@ struct ReturnsResult {
 impl RawActor for ReturnsResult {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<()>) -> ActorResult {
         let result = ctx.run_blocking(|_token| Ok::<_, &'static str>(42)).await;
         send_once(&self.observed, result);
         while ctx.recv().await.is_some() {}
@@ -96,7 +96,7 @@ struct WaitsForShutdown {
 impl RawActor for WaitsForShutdown {
     type Msg = ();
 
-    async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<()>) -> ActorResult {
         let started = self.started.clone();
         let cancelled = self.cancelled.clone();
         ctx.run_blocking(move |token| {
@@ -150,7 +150,7 @@ struct DropsFuture {
 impl RawActor for DropsFuture {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<()>) -> ActorResult {
         let started = self.started.clone();
         let cancelled = self.cancelled.clone();
         {
@@ -210,7 +210,7 @@ struct IgnoresCancellation {
 impl RawActor for IgnoresCancellation {
     type Msg = ();
 
-    async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<()>) -> ActorResult {
         let started = self.started.clone();
         let release = self.release.clone();
         let finished = self.finished.clone();
@@ -281,7 +281,7 @@ struct Panics;
 impl RawActor for Panics {
     type Msg = ();
 
-    async fn run(&mut self, ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<()>) -> ActorResult {
         ctx.run_blocking(|_token| -> () { panic!("blocking panic") })
             .await
             .expect("blocking task should panic before returning");

@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use kokage::{
-    Actor, ActorRef, ActorResult, MessageContext,
-    host::{ActorContext, RawActor},
+    Actor, ActorRef, ActorResult, Context,
+    host::{RawActor, RawContext},
 };
 
 use crate::{
@@ -28,11 +28,7 @@ impl Outbound {
 impl Actor for Outbound {
     type Msg = OutboundMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             OutboundMsg::Reply { chat, text } | OutboundMsg::Notice { chat, text } => {
                 self.chat.deliver_reply(chat, text);
@@ -56,11 +52,7 @@ impl Progress {
 impl Actor for Progress {
     type Msg = ProgressMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         let (chat, line) = match message {
             ProgressMsg::Delta { chat, line } => (chat, line),
             ProgressMsg::Typing { chat } => (chat, "typing…".to_owned()),
@@ -142,7 +134,7 @@ impl RawActor for Inbound {
         true
     }
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let mut session = self.chat.connect();
         ctx.mark_ready();
         loop {

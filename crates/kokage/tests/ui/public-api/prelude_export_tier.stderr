@@ -1,13 +1,13 @@
-error[E0432]: unresolved import `kokage::prelude::ActorContext`
+error[E0432]: unresolved import `kokage::prelude::RawContext`
  --> tests/ui/public-api/prelude_export_tier.rs:6:5
   |
-6 | use kokage::prelude::ActorContext;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ActorContext` in `prelude`
+6 | use kokage::prelude::RawContext;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawContext` in `prelude`
   |
 help: a similar name exists in the module
   |
-6 - use kokage::prelude::ActorContext;
-6 + use kokage::prelude::StopContext;
+6 - use kokage::prelude::RawContext;
+6 + use kokage::prelude::Context;
   |
 
 error[E0432]: unresolved import `kokage::prelude::ActorFactory`

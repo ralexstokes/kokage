@@ -7,7 +7,7 @@ before spawn.
 ## Standalone dynamic scope
 
 ```rust
-use kokage::{Actor, ActorResult, ActorSpec, DynamicTree, MessageContext};
+use kokage::{Actor, ActorResult, ActorSpec, DynamicTree, Context};
 
 struct Worker;
 
@@ -17,7 +17,7 @@ impl Actor for Worker {
     async fn handle(
         &mut self,
         message: String,
-        _ctx: &mut MessageContext<'_, Self>,
+        _ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         println!("{message}");
         Ok(())
@@ -86,7 +86,7 @@ message-size settings:
 ```rust
 # use kokage::{ActorSpec, MailboxMode, Restart};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(32)
     .mailbox(MailboxMode::queue())
@@ -105,7 +105,7 @@ id:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let tree = OrderedTree::new().subtree("sessions", DynamicTree::new());
@@ -140,7 +140,7 @@ future dynamic scopes directly:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
 # struct Router(kokage::DynamicRuntimeHandle);
-# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let sessions = DynamicTree::new();
 let sessions_handle = sessions.handle();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
@@ -155,7 +155,7 @@ let app = OrderedTree::new()
 No global `OnceLock` is needed, and moving the declaration into the parent
 preserves the issued handle's identity.
 
-## Scope handles inside actors
+## Advanced orchestration: scope handles inside actors
 
 Actor lifecycle contexts expose the containing scope through
 `ctx.supervisor()`. Resolve a declared nested scope by id:
@@ -171,16 +171,19 @@ let worker = dynamic
     .await?;
 ```
 
-This returns a `RestrictedScope`: observation and scheduled insertion are
-available, while lifecycle waits that could deadlock an actor callback remain
-withheld. The lookup works during `on_start`, before the child scope starts.
+This advanced orchestration surface returns a `RestrictedScope`: observation
+and scheduled insertion are available, while lifecycle waits that could
+deadlock an actor callback remain withheld. The lookup works during `on_start`,
+before the child scope starts. Use `Context::spawn_scope_wait` when a lifecycle
+wait must run outside the callback and map its result back through the actor's
+mailbox.
 
 Declare a leader-owned scope explicitly:
 
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy};
 # struct Leader;
-# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let session = OrderedTree::new().subtree(
     "session-runtime",
     OrderedTree::new()

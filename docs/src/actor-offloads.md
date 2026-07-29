@@ -6,14 +6,14 @@ maps its total result back into an ordinary typed message:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::host::ActorContext;
+use kokage::host::RawContext;
 
 enum Msg {
     Loaded(String),
 }
 
 # async fn load() -> String { String::new() }
-# fn start(ctx: &mut ActorContext<Msg>) {
+# fn start(ctx: &mut RawContext<Msg>) {
 ctx.offload(
     Duration::from_millis(250),
     load(),
@@ -44,12 +44,12 @@ concurrent offloads in one incarnation remains part of the message protocol:
 
 ```rust,no_run
 # use std::time::Duration;
-# use kokage::{OffloadDeadline, host::ActorContext};
+# use kokage::{OffloadDeadline, host::RawContext};
 enum Msg {
     Fetched { request: u64, value: Result<String, OffloadDeadline> },
 }
 # async fn fetch() -> String { String::new() }
-# fn start(ctx: &mut ActorContext<Msg>, request: u64) {
+# fn start(ctx: &mut RawContext<Msg>, request: u64) {
 ctx.offload(Duration::from_secs(1), fetch(), move |value| {
     Msg::Fetched { request, value }
 });
@@ -104,7 +104,7 @@ impl Actor for Router {
     async fn handle(
         &mut self,
         message: RouterMsg,
-        ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut Context<'_, Self>,
     ) -> ActorResult {
         match message {
             RouterMsg::Submit { venue, order, reply } => {
@@ -190,6 +190,6 @@ actor remains the outer backstop for slow handlers.
 
 `observe::ActorStats::outstanding_offloads` exposes the current number of owned offloads.
 It falls when the actor loop reaps a completion or observes an abort. The method
-lives on `host::ActorContext`: `recv` and `try_recv` merge offload
+lives on `host::RawContext`: `recv` and `try_recv` merge offload
 completions with mailbox messages for a `host::RawActor`, but a hand-written raw loop
 must still define its own shutdown and drain protocol.

@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, marker::PhantomData};
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, CancellationToken, MessageContext, Restart, Shutdown,
+    Actor, ActorResult, ActorSpec, CancellationToken, Context, Restart, Shutdown,
     host::DEFAULT_SHUTDOWN_BOUND,
 };
 use tokio::sync::mpsc;
@@ -37,11 +37,7 @@ impl<M> Clone for Observe<M> {
 impl<M: Send + 'static> Actor for Observe<M> {
     type Msg = Command<M>;
 
-    async fn handle(
-        &mut self,
-        message: Command<M>,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Command<M>, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             Command::Observe(message) => {
                 self.observed.send(message).expect("receiver alive");

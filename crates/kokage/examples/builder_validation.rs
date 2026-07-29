@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use kokage::{
     ActorResult, ActorSlot, ActorSpec, OrderedTree, SupervisorBuildError,
-    host::{ActorContext, RawActor},
+    host::{RawActor, RawContext},
 };
 
 struct Idle<M>(PhantomData<fn(M)>);
@@ -16,7 +16,7 @@ impl<M> Idle<M> {
 impl<M: Send + 'static> RawActor for Idle<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }

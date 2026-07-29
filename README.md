@@ -37,7 +37,7 @@ struct Press;
 impl Actor for Press {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
         println!("printing {order}");
         Ok(())
     }
@@ -50,7 +50,7 @@ struct FrontDesk {
 impl Actor for FrontDesk {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.press.send(order).await?;
         Ok(())
     }

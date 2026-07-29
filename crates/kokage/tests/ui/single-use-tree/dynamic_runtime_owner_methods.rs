@@ -1,5 +1,5 @@
 use kokage::{
-    Actor, ActorResult, ActorSpec, DynamicRuntime, DynamicTree, MessageContext, OrderedTree,
+    Actor, ActorResult, ActorSpec, DynamicRuntime, DynamicTree, Context, OrderedTree,
     host::ChildSpec,
 };
 
@@ -8,7 +8,7 @@ struct Idle;
 impl Actor for Idle {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }

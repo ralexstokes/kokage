@@ -13,7 +13,7 @@ use std::{
 
 use kokage::{
     ActorRef, ActorResult, ActorSpec, OrderedTree, Reply, SendError,
-    host::{ActorContext, BoxError, RawActor},
+    host::{BoxError, RawActor, RawContext},
 };
 use kokage_supervisor::{Backoff, Restart, Strategy};
 use tokio::{
@@ -40,7 +40,7 @@ struct Frontend {
 impl RawActor for Frontend {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         while let Some(message) = ctx.recv().await {
             let worker = self.worker.clone();
@@ -60,7 +60,7 @@ struct Worker {
 impl RawActor for Worker {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         let run = self.starts.fetch_add(1, Ordering::SeqCst);
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
@@ -150,7 +150,7 @@ struct CleanThenReceive {
 impl RawActor for CleanThenReceive {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         let run = self.runs.fetch_add(1, Ordering::SeqCst);
         if run == 0 {
             send_once(&self.first_exited, ());
@@ -228,7 +228,7 @@ struct NotifyCleanExit {
 impl RawActor for NotifyCleanExit {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
         send_once(&self.exited, ());
         Ok(())
     }
@@ -303,7 +303,7 @@ struct RestartingRpc {
 impl RawActor for RestartingRpc {
     type Msg = RpcMsg;
 
-    async fn run(&mut self, mut ctx: ActorContext<RpcMsg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<RpcMsg>) -> ActorResult {
         let run = self.runs.fetch_add(1, Ordering::SeqCst);
         while let Some(message) = ctx.recv().await {
             match message {

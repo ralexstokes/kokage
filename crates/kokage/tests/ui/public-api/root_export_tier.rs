@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 
 use kokage::host::{
-    ActorContext as _, ActorRunError as _, BoxError as _, ChildContext as _, ChildResult as _,
+    RawContext as _, ActorRunError as _, BoxError as _, ChildContext as _, ChildResult as _,
     ChildSpec as _, RawActor as _, RunnableActor as _, DEFAULT_SHUTDOWN_BOUND as _,
 };
 use kokage::observe::{
@@ -14,7 +14,7 @@ use kokage::observe::{
 };
 use kokage::{ActorSlot as _, ActorSpec as _};
 
-use kokage::ActorContext;
+use kokage::RawContext;
 use kokage::ActorRunError;
 use kokage::ActorStats;
 use kokage::BoxError;

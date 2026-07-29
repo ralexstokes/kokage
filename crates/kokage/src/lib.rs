@@ -18,7 +18,7 @@
 //!     async fn handle(
 //!         &mut self,
 //!         message: String,
-//!         _ctx: &mut MessageContext<'_, Self>,
+//!         _ctx: &mut Context<'_, Self>,
 //!     ) -> ActorResult {
 //!         println!("{message}");
 //!         Ok(())
@@ -58,9 +58,7 @@
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
-//! | [`host::ActorContext`] | Full mailbox, watch, timer, blocking-work, and shutdown context for a [`host::RawActor`]. |
-//! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage-specific actor lifecycle capabilities. |
-//! | [`LiveContext`] | Timers, continuations, and other capabilities shared by the running stages. |
+//! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
@@ -86,11 +84,11 @@
 //! [`Reply`]. [`ActorRef::send`] rides through restart windows when a
 //! rebind is expected.
 //!
-//! [`host::ActorContext::recv`] returns `None` as soon as shutdown is
+//! [`host::RawContext::recv`] returns `None` as soon as shutdown is
 //! requested. [`Actor`]'s framework-owned loop defaults to
 //! [`Shutdown::drain_for`] and finishes queued messages before stopping; a
 //! hand-written [`host::RawActor`] loop can inspect remaining work with
-//! [`host::ActorContext::try_recv`].
+//! [`host::RawContext::try_recv`].
 //!
 //! Restarts also lose queued messages: the new incarnation binds a fresh
 //! mailbox, so messages accepted behind a poison message are dropped with the
@@ -99,7 +97,7 @@
 //! unbound restart window, but it cannot recover a message already accepted by
 //! the failed incarnation.
 //!
-//! Actors can watch a peer with [`host::ActorContext::watch`]. The watch follows
+//! Actors can watch a peer with [`host::RawContext::watch`]. The watch follows
 //! logical membership across restarts and maps [`MonitorEvent`]s — `Up`,
 //! `Down`, terminal `Terminated`, or overload `Lagged` — into the observer's
 //! ordinary mailbox. Watches survive restarts of both actors;
@@ -122,8 +120,8 @@
 //! use kokage::prelude::*;
 //! # struct Left(kokage::ActorRef<()>);
 //! # struct Right(kokage::ActorRef<()>);
-//! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
-//! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+//! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+//! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 //! let left_slot = ActorSlot::<()>::new("left");
 //! let (left_slot, left) = left_slot.actor_ref();
 //! let right_slot = ActorSlot::<()>::new("right");
@@ -142,11 +140,11 @@
 //!
 //! ```
 //! use kokage::{
-//!     Actor, ActorResult, ActorSpec, CancellationToken, MessageContext,
+//!     Actor, ActorResult, ActorSpec, CancellationToken, Context,
 //!     Restart, Shutdown, host::DEFAULT_SHUTDOWN_BOUND,
 //! };
 //! # struct Worker;
-//! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult { Ok(()) } }
+//! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ActorResult { Ok(()) } }
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let actor = ActorSpec::new("worker", || Worker).into_runnable();
@@ -230,7 +228,7 @@ mod supervision;
 /// [`OrderedTree::subtree`] or [`DynamicRuntimeHandle::add_subtree`] instead.
 pub mod host {
     pub use crate::actor::{
-        ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
+        ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
     };
     pub use kokage_supervisor::{BoxError, ChildContext, ChildResult, ChildSpec};
 }
@@ -268,8 +266,7 @@ pub mod observe {
 /// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, LiveContext, MessageContext,
-        OrderedTree, Reply, StartContext, StopContext,
+        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, OrderedTree, Reply, StopContext,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -280,8 +277,8 @@ pub use kokage_derive::ActorFactory;
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, CancellationHandle, DownReason, DynamicRestrictedScope,
-    LiveContext, MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, Reply,
-    RestrictedScope, SealedActorSlot, SealedActorSpec, SendError, StartContext, StopContext,
+    Context, MailboxMode, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot,
+    SealedActorSpec, SendError, StopContext,
     TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{

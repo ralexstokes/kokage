@@ -53,7 +53,7 @@ impl Reconciler {
         }
     }
 
-    fn watch(&self, venue: VenueId, ctx: &impl LiveContext<ReconcilerMsg>) {
+    fn watch(&self, venue: VenueId, ctx: &Context<'_, Self>) {
         let feed = self.feeds.get(venue).expect("known venue");
         ctx.watch(feed, move |event| ReconcilerMsg::Feed { venue, event });
     }
@@ -66,7 +66,7 @@ impl Reconciler {
         }
     }
 
-    fn rearm(&mut self, ctx: &mut impl LiveContext<ReconcilerMsg>) {
+    fn rearm(&mut self, ctx: &mut Context<'_, Self>) {
         let now = Instant::now();
         let earliest = self
             .venues
@@ -89,7 +89,7 @@ impl Reconciler {
 impl Actor for Reconciler {
     type Msg = ReconcilerMsg;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         for (venue, exchange) in &self.sessions {
             assert!(
                 exchange.feed_sessions(venue) >= 1,
@@ -106,11 +106,7 @@ impl Actor for Reconciler {
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: ReconcilerMsg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: ReconcilerMsg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             ReconcilerMsg::Market(snapshot) => {
                 let venue = snapshot.venue;

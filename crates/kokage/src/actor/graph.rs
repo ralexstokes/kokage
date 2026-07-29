@@ -23,7 +23,7 @@ use crate::{
             mailbox,
         },
         cancellation::CancelOnDrop,
-        context::{ActorContext, ActorLifetime, ActorRef},
+        context::{ActorLifetime, ActorRef, RawContext},
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
         observability::{ActorExitStatus, ScopeObservability},
@@ -113,7 +113,7 @@ where
             );
             let myself = ActorRef::from_core(&binding, Some(actor_id.clone()));
             let monitor_hub = binding.monitor_hub();
-            let mut ctx = ActorContext {
+            let mut ctx = RawContext {
                 id: actor_id,
                 mailbox,
                 myself,
@@ -291,7 +291,7 @@ impl RunnableActor {
     /// policy that left the binding waiting to rebind.
     ///
     /// Actors run through this unsupervised entry point receive a terminal
-    /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::host::ActorContext::supervisor):
+    /// [`RuntimeHandle`] from [`RawContext::supervisor`](crate::host::RawContext::supervisor):
     /// control operations return `ControlError::Unavailable` and observation
     /// streams are closed.
     pub async fn run_until<F>(

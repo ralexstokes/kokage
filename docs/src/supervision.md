@@ -120,7 +120,7 @@ runtime.handle().wait_started().await?;
 The API task is not spawned until the database reports readiness. Plain tasks
 without `wait_for_ready` count as ready immediately. Actor children are gated
 automatically: their `on_start` hook is the readiness boundary. Use
-`LiveContext::continue_with(message)` in `on_start` to queue expensive
+`Context::continue_with(message)` in `on_start` to queue expensive
 follow-up work as the actor's next message without delaying later siblings.
 
 Ordered membership is immutable after spawn, so `RuntimeHandle::dynamic`
@@ -174,7 +174,7 @@ removal reports a timeout.
 
 Tokio aborts take effect at `.await` points. A non-yielding loop cannot be
 preempted, so put truly blocking work on a blocking pool or in an external
-process. Actor code can use `LiveContext::run_blocking` for this boundary.
+process. Actor code can use `Context::run_blocking` for this boundary.
 
 Ordered trees stop children in reverse declaration order and give each child
 its complete grace, so the worst-case grace budget is their sum. Dynamic

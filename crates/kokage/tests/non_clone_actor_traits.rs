@@ -14,9 +14,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, LiveContext, MessageContext, Reply, Restart,
-    RuntimeHandle, Shutdown,
-    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
+    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, RuntimeHandle, Shutdown,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
     observe::SupervisorSnapshotReceiver,
 };
 use tokio::sync::mpsc;
@@ -51,7 +50,7 @@ struct HandlerWithNonCloneState {
 impl Actor for HandlerWithNonCloneState {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }
@@ -61,11 +60,7 @@ struct HandlerWithSendOnlyMessage;
 impl Actor for HandlerWithSendOnlyMessage {
     type Msg = Cell<usize>;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         let value = ctx.run_blocking(move |_| message.get()).await?;
         ctx.continue_with(Cell::new(value));
         Ok(())
@@ -79,7 +74,7 @@ struct RawWithNonCloneState {
 impl RawActor for RawWithNonCloneState {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
         Ok(())
     }
 }
@@ -113,11 +108,7 @@ struct NonCloneHandler {
 impl Actor for NonCloneHandler {
     type Msg = ProbeMsg;
 
-    async fn handle(
-        &mut self,
-        message: ProbeMsg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: ProbeMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             ProbeMsg::Increment(reply) => {
                 self.local += 1;
@@ -200,7 +191,7 @@ struct NonCloneRaw {
 impl RawActor for NonCloneRaw {
     type Msg = bool;
 
-    async fn run(&mut self, mut ctx: ActorContext<bool>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<bool>) -> ActorResult {
         let mut local = 0;
         while let Some(crash) = ctx.recv().await {
             if crash {
@@ -287,7 +278,7 @@ struct DefaultActor;
 impl Actor for DefaultActor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }

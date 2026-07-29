@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::actor::{
-    context::{ActorContext, MessageContext, StartContext, StopContext, TimerWake},
+    context::{Context, RawContext, StopContext, TimerWake},
     raw::{ActorResult, BoxError, RawActor},
 };
 
@@ -21,17 +21,14 @@ enum LoopEvent<M> {
 ///
 /// # Capability contract
 ///
-/// Handler actors do not receive the mailbox-owning [`ActorContext`]. The
+/// Handler actors do not receive the mailbox-owning [`RawContext`]. The
 /// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
-/// hook a stage-specific view instead. In return, the live startup and message
-/// stages implement [`LiveContext`](crate::LiveContext), which provides
-/// loop-owned timers, continuations, and actor-owned scope waits that a custom
-/// raw loop must express directly. Watches and offloads remain available on
-/// [`ActorContext`].
+/// hook a [`Context`] instead. It provides loop-owned timers, continuations,
+/// watches, offloads, and actor-owned scope waits that a custom raw loop must
+/// express directly.
 ///
-/// A [`LiveContext::stop`](crate::LiveContext::stop) exit is normal for
-/// monitoring and supervision. An
-/// A [`Restart::always`](kokage_supervisor::Restart::always) child restarts
+/// A [`Context::stop`] exit is normal for monitoring and supervision. A
+/// [`Restart::always`](kokage_supervisor::Restart::always) child restarts
 /// after it; [`Restart::on_failure`](kokage_supervisor::Restart::on_failure)
 /// and [`Restart::never`](kokage_supervisor::Restart::never) children do not.
 ///
@@ -51,20 +48,20 @@ pub trait Actor: Send + 'static {
     /// Handles one received message.
     ///
     /// Returning `Ok(())` receives the next message unless
-    /// [`ctx.stop()`](crate::LiveContext::stop) was called. A stop request is
+    /// [`ctx.stop()`](Context::stop) was called. A stop request is
     /// clean: the actor's declared shutdown behavior is applied to the queued mailbox
     /// before [`on_stop`](Self::on_stop) runs. Returning `Err` fails the actor
     /// exactly like [`RawActor::run`] returning `Err`.
     fn handle(
         &mut self,
         message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
+        ctx: &mut Context<'_, Self>,
     ) -> impl Future<Output = ActorResult> + Send;
 
     /// Runs once before the first message of each actor run.
     ///
     /// This is the place to acquire per-incarnation resources. Calling
-    /// [`ctx.stop()`](crate::LiveContext::stop) requests a clean stop before
+    /// [`ctx.stop()`](Context::stop) requests a clean stop before
     /// the ordinary receive loop.
     /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current)
     /// drops messages queued during startup, while
@@ -75,7 +72,7 @@ pub trait Actor: Send + 'static {
     /// supervision it is an ordinary restartable failure.
     fn on_start(
         &mut self,
-        _ctx: &mut StartContext<'_, Self>,
+        _ctx: &mut Context<'_, Self>,
     ) -> impl Future<Output = ActorResult> + Send {
         async { Ok(()) }
     }
@@ -109,8 +106,8 @@ impl<H: Actor> RawActor for H {
         true
     }
 
-    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
-        self.on_start(&mut StartContext::new(&mut ctx)).await?;
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+        self.on_start(&mut Context::new(&mut ctx)).await?;
         ctx.mark_ready();
 
         let mut stopping = ctx.is_stop_requested();
@@ -147,8 +144,7 @@ impl<H: Actor> RawActor for H {
             match event {
                 LoopEvent::Message(Some(message)) => {
                     ctx.record_received();
-                    self.handle(message, &mut MessageContext::new(&mut ctx))
-                        .await?;
+                    self.handle(message, &mut Context::new(&mut ctx)).await?;
                     stopping = ctx.is_stop_requested();
                 }
                 LoopEvent::Message(None) => break,
@@ -172,8 +168,7 @@ impl<H: Actor> RawActor for H {
                         };
                         let Some(message) = message else { break };
                         ctx.record_received();
-                        self.handle(message, &mut MessageContext::new(&mut ctx))
-                            .await?;
+                        self.handle(message, &mut Context::new(&mut ctx)).await?;
                         if ctx.is_stop_requested() {
                             stopping = true;
                             break;
@@ -181,8 +176,7 @@ impl<H: Actor> RawActor for H {
                     }
                     if !stopping && let Some(message) = ctx.take_fired_timer(timer) {
                         ctx.record_received();
-                        self.handle(message, &mut MessageContext::new(&mut ctx))
-                            .await?;
+                        self.handle(message, &mut Context::new(&mut ctx)).await?;
                         stopping = ctx.is_stop_requested();
                     }
                 }
@@ -203,7 +197,7 @@ impl<H: Actor> RawActor for H {
                 // drain decision. Continuations queued by drain handlers are
                 // left for the context to drop with the incarnation, and
                 // reported below. A handler that cares can inspect `status`.
-                self.handle(message, &mut MessageContext::draining(&mut ctx))
+                self.handle(message, &mut Context::draining(&mut ctx))
                     .await?;
             }
         } else {

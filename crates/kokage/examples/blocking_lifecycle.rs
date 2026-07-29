@@ -1,6 +1,6 @@
 use std::{error::Error, thread, time::Duration};
 
-use kokage::{Actor, ActorResult, ActorSpec, LiveContext, MessageContext};
+use kokage::{Actor, ActorResult, ActorSpec, Context};
 use tokio::sync::mpsc;
 
 mod support;
@@ -18,11 +18,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = Command;
 
-    async fn handle(
-        &mut self,
-        command: Command,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, command: Command, ctx: &mut Context<'_, Self>) -> ActorResult {
         match command {
             Command::Start(input) => {
                 let myself = ctx.myself();

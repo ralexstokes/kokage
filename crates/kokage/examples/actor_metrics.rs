@@ -16,11 +16,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = &'static str;
 
-    async fn handle(
-        &mut self,
-        message: &'static str,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: &'static str, _ctx: &mut Context<'_, Self>) -> ActorResult {
         println!("processing `{message}`");
         self.completed.send(()).expect("receiver alive");
         Ok(())

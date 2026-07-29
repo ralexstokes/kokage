@@ -9,7 +9,7 @@ lifecycle events, and statistics.
 
 # use kokage::{ActorSpec, OrderedTree, Restart, Shutdown};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let worker = ActorSpec::new("worker", || Worker)
@@ -123,7 +123,7 @@ restart boundaries:
 ```rust
 # use kokage::{ActorSpec, OrderedTree, Strategy};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let venues = OrderedTree::new()
     .strategy(Strategy::OneForAll)
     .actor(ActorSpec::new("feed", || Worker))

@@ -13,9 +13,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, DynamicTree, MessageContext,
-    OrderedTree, Reply, RuntimeHandle, SendError, Shutdown, StartContext,
-    host::{ActorContext, BoxError, RawActor},
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree,
+    OrderedTree, Reply, RuntimeHandle, SendError, Shutdown,
+    host::{BoxError, RawActor, RawContext},
     observe::{LifecycleEventKind, SupervisorSnapshotReceiver},
 };
 use kokage_supervisor::{
@@ -44,7 +44,7 @@ impl<M> Clone for Drain<M> {
 impl<M: Send + 'static> RawActor for Drain<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: ActorContext<M>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<M>) -> ActorResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -58,7 +58,7 @@ struct Observe {
 impl RawActor for Observe {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -74,7 +74,7 @@ struct ObserveOnce {
 impl RawActor for ObserveOnce {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         let message = ctx.recv().await.expect("message received before shutdown");
         self.observed.send(message).expect("receiver alive");
         Ok(())
@@ -860,7 +860,7 @@ struct FailAfterObserve {
 impl RawActor for FailAfterObserve {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: ActorContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
         match ctx.recv().await {
             Some(message) => {
                 self.observed.send(message).expect("receiver alive");
@@ -1133,7 +1133,7 @@ struct FailOnMessage;
 impl RawActor for FailOnMessage {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<()>) -> ActorResult {
         if ctx.recv().await.is_some() {
             return Err::<_, BoxError>(Box::new(io::Error::other("boom")));
         }
@@ -1187,7 +1187,7 @@ struct AlwaysFails;
 impl RawActor for AlwaysFails {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
         Err::<_, BoxError>(Box::new(io::Error::other("boom")))
     }
 }
@@ -1233,16 +1233,12 @@ struct ResettingCounter {
 impl Actor for ResettingCounter {
     type Msg = CounterMsg;
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.on_starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: CounterMsg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: CounterMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             CounterMsg::Add(n) => {
                 self.total += n;
@@ -1378,11 +1374,7 @@ struct StuckDrainActor {
 impl Actor for StuckDrainActor {
     type Msg = StuckDrainMsg;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             StuckDrainMsg::Gate => {
                 self.handling_gate.notify_one();
@@ -1448,7 +1440,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
 impl RawActor for PendingActor {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
         self.started.notify_one();
         std::future::pending().await
     }

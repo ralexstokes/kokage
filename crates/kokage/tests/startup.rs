@@ -5,9 +5,8 @@ use support::TreeBuilder;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, DynamicTree, LiveContext, Restart, RuntimeHandle, Shutdown,
-    SupervisorError,
-    host::{ActorContext, BoxError, ChildSpec, RawActor},
+    ActorSpec, ActorStatus, DynamicTree, Restart, RuntimeHandle, Shutdown, SupervisorError,
+    host::{BoxError, ChildSpec, RawActor, RawContext},
     prelude::*,
 };
 use tokio::sync::{Mutex, Notify, mpsc, watch};
@@ -22,7 +21,7 @@ struct Probe {
 impl Actor for Probe {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         self.order.lock().await.push(self.name);
         if let Some(release) = &self.release {
             release.notified().await;
@@ -33,11 +32,7 @@ impl Actor for Probe {
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.order.lock().await.push(message);
         Ok(())
     }
@@ -52,7 +47,7 @@ struct AddsChildOnStart {
 impl Actor for AddsChildOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
         let handle = {
             let ready = self
                 .handle_rx
@@ -80,7 +75,7 @@ impl Actor for AddsChildOnStart {
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }
@@ -168,11 +163,11 @@ struct FailsOnStart;
 impl Actor for FailsOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
         Err(std::io::Error::other("actor init failed").into())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }
@@ -218,11 +213,7 @@ struct DrainContinuation {
 impl Actor for DrainContinuation {
     type Msg = &'static str;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" || message == "hold-and-continue" {
             if message == "hold-and-continue" {
@@ -312,11 +303,7 @@ struct DrainPhaseProbe {
 impl Actor for DrainPhaseProbe {
     type Msg = &'static str;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         self.observed.lock().await.push((
             message,
             ctx.status(),
@@ -432,11 +419,7 @@ struct OverlappingStopProbe {
 impl Actor for OverlappingStopProbe {
     type Msg = &'static str;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         match message {
             "hold" => {
                 self.observed.send(ctx.status()).unwrap();
@@ -490,19 +473,17 @@ struct StopsOnStart {
 impl Actor for StopsOnStart {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+        assert_eq!(ctx.status(), ActorStatus::Running);
         ctx.continue_with("continuation");
         self.started.notify_one();
         self.release.notified().await;
         ctx.stop();
+        assert_eq!(ctx.status(), ActorStatus::Stopping);
         Ok(())
     }
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.events.lock().await.push(message);
         Ok(())
     }
@@ -514,7 +495,7 @@ impl Actor for StopsOnStart {
 }
 
 #[tokio::test]
-async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() {
+async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -558,7 +539,7 @@ async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() 
 }
 
 #[tokio::test]
-async fn start_context_stop_with_drain_handles_the_queued_mailbox_only() {
+async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
@@ -607,7 +588,7 @@ struct PromptRaw;
 impl RawActor for PromptRaw {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: ActorContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ActorResult {
         Ok(())
     }
 }
@@ -645,11 +626,7 @@ struct DefaultPolicy {
 impl Actor for DefaultPolicy {
     type Msg = &'static str;
 
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
         self.handled.lock().await.push(message);
         if message == "hold" {
             self.started.notify_one();

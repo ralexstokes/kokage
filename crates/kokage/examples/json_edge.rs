@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, Cursor};
 
-use kokage::{Actor, ActorResult, ActorSpec, MessageContext, OrderedTree, Shutdown};
+use kokage::{Actor, ActorResult, ActorSpec, Context, OrderedTree, Shutdown};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -17,7 +17,7 @@ struct Printer;
 impl Actor for Printer {
     type Msg = Order;
 
-    async fn handle(&mut self, order: Order, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, order: Order, _ctx: &mut Context<'_, Self>) -> ActorResult {
         println!("{} x {}", order.quantity, order.item);
         Ok(())
     }

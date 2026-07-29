@@ -859,8 +859,8 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorResult, ActorSpec, DynamicRuntime, DynamicRuntimeHandle, DynamicTree,
-        MessageContext, OrderedTree, Restart, Runtime, RuntimeHandle, SupervisorBuildError,
+        Actor, ActorResult, ActorSpec, Context, DynamicRuntime, DynamicRuntimeHandle, DynamicTree,
+        OrderedTree, Restart, Runtime, RuntimeHandle, SupervisorBuildError,
     };
 
     #[test]
@@ -880,7 +880,7 @@ mod tests {
     impl Actor for FailsOnMessage {
         type Msg = ();
 
-        async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+        async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
             Err(std::io::Error::other("expected test failure").into())
         }
     }
