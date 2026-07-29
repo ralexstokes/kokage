@@ -152,20 +152,12 @@
 //! explicit as [`ChildLifecycleEventKind::Lagged`]; recursive stream overflow
 //! uses [`LifecycleEventKind::Lagged`] as a tree-wide marker.
 //!
-//! # Deliberate dependency coupling
+//! # Runtime-independent boundaries
 //!
-//! [`ChildContext::shutdown_token`] returns the exact
-//! [`tokio_util::sync::CancellationToken`] used internally. This is a
-//! deliberate public boundary: child futures can join the supervisor's token
-//! into application cancellation trees and pass it to Tokio ecosystem APIs
-//! without a crate-specific wrapper or adapter. Other implementation details,
-//! including supervisor control channels and their errors, remain crate-owned.
-//!
-//! Snapshot subscriptions likewise expose Tokio's
-//! [`watch::Receiver`](tokio::sync::watch::Receiver) directly.
-//! [`SupervisorHandle::subscribe_snapshots`] deliberately preserves the
-//! receiver's conflating delivery and `wait_for` API instead of wrapping it in
-//! a crate-specific stream.
+//! Child shutdown uses the crate-owned [`CancellationToken`], and snapshot
+//! subscriptions return [`SupervisorSnapshotReceiver`]. These façade types
+//! preserve cancellation-tree and conflating-watch semantics without exposing
+//! the scheduler's channel or cancellation implementation in public APIs.
 //!
 //! # Quick start
 //!
@@ -219,6 +211,7 @@
 
 mod attachment;
 mod builder;
+mod cancellation;
 mod child;
 mod completion;
 mod context;
@@ -266,6 +259,7 @@ pub mod __private {
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
+pub use cancellation::CancellationToken;
 pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
@@ -280,8 +274,8 @@ pub use restart::{BackoffPolicy, RestartConfig, RestartPolicy};
 pub use scope::ScopeKind;
 pub use shutdown::ShutdownPolicy;
 pub use snapshot::{
-    ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
-    SupervisorStateView,
+    ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError,
+    SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
 };
 pub use strategy::Strategy;
 pub use supervisor::Supervisor;

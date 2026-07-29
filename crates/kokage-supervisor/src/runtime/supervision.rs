@@ -10,10 +10,10 @@ use tokio::{
     task::{Id, JoinError, JoinSet},
     time::Instant,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::{
+    CancellationToken,
     child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},

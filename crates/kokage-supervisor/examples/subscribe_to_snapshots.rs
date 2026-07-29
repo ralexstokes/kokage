@@ -33,8 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let observer = tokio::spawn(async move {
         loop {
-            snapshots.changed().await?;
-            let snapshot = snapshots.borrow().clone();
+            let snapshot = snapshots.changed().await?;
             println!("\nsnapshot update:");
             print_snapshot(&snapshot, 0);
 
@@ -43,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        Ok::<(), tokio::sync::watch::error::RecvError>(())
+        Ok::<(), kokage_supervisor::SnapshotRecvError>(())
     });
 
     sleep(Duration::from_millis(200)).await;

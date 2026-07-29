@@ -6,7 +6,78 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+
+/// Error returned when a supervisor snapshot stream can no longer change.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SnapshotRecvError {
+    /// The supervisor identity is terminal and its snapshot sender was dropped.
+    #[error("supervisor snapshot stream is closed")]
+    Closed,
+}
+
+/// A conflating stream of snapshots for one stable supervisor identity.
+///
+/// Each receiver tracks its own observed version. Cloning a receiver preserves
+/// the source receiver's current observed version, while subsequent reads and
+/// waits remain independent.
+#[derive(Clone, Debug)]
+pub struct SupervisorSnapshotReceiver {
+    inner: watch::Receiver<SupervisorSnapshot>,
+}
+
+impl SupervisorSnapshotReceiver {
+    pub(crate) fn new(inner: watch::Receiver<SupervisorSnapshot>) -> Self {
+        Self { inner }
+    }
+
+    /// Returns a clone of the latest snapshot without marking it observed.
+    pub fn latest(&self) -> SupervisorSnapshot {
+        self.inner.borrow().clone()
+    }
+
+    /// Returns a clone of the latest snapshot and marks it observed by this receiver.
+    pub fn take_latest(&mut self) -> SupervisorSnapshot {
+        self.inner.borrow_and_update().clone()
+    }
+
+    /// Returns whether this receiver has an unobserved snapshot version.
+    pub fn has_changed(&self) -> Result<bool, SnapshotRecvError> {
+        self.inner
+            .has_changed()
+            .map_err(|_| SnapshotRecvError::Closed)
+    }
+
+    /// Waits for a new snapshot, marks it observed, and returns a clone.
+    pub async fn changed(&mut self) -> Result<SupervisorSnapshot, SnapshotRecvError> {
+        self.inner
+            .changed()
+            .await
+            .map_err(|_| SnapshotRecvError::Closed)?;
+        Ok(self.take_latest())
+    }
+
+    /// Waits until the latest snapshot satisfies `predicate`.
+    ///
+    /// Every examined snapshot is marked observed by this receiver. Snapshot
+    /// delivery is conflating, so intermediate values may be skipped.
+    pub async fn wait_for(
+        &mut self,
+        mut predicate: impl FnMut(&SupervisorSnapshot) -> bool,
+    ) -> Result<SupervisorSnapshot, SnapshotRecvError> {
+        loop {
+            let snapshot = self.take_latest();
+            if predicate(&snapshot) {
+                return Ok(snapshot);
+            }
+            self.inner
+                .changed()
+                .await
+                .map_err(|_| SnapshotRecvError::Closed)?;
+        }
+    }
+}
 
 use crate::{event::ExitStatusView, scope::ScopeKind, strategy::Strategy};
 
@@ -413,7 +484,61 @@ impl SnapshotCell {
 mod tests {
     use std::sync::Arc;
 
-    use super::NestedSnapshotState;
+    use tokio::sync::watch;
+
+    use super::{
+        NestedSnapshotState, SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        SupervisorStateView,
+    };
+    use crate::Strategy;
+
+    fn snapshot(total_restarts: u64) -> SupervisorSnapshot {
+        let mut snapshot = SupervisorSnapshot::new(
+            SupervisorStateView::Running,
+            Strategy::OneForOne,
+            Vec::new(),
+        );
+        snapshot.total_restarts = total_restarts;
+        snapshot
+    }
+
+    #[tokio::test]
+    async fn snapshot_receiver_conflates_and_tracks_versions_per_receiver() {
+        let (sender, inner) = watch::channel(snapshot(0));
+        let mut first = SupervisorSnapshotReceiver::new(inner);
+        let mut second = first.clone();
+
+        sender.send(snapshot(1)).expect("receivers remain open");
+        sender.send(snapshot(2)).expect("receivers remain open");
+
+        assert_eq!(first.latest().total_restarts, 2);
+        assert_eq!(first.has_changed(), Ok(true));
+        assert_eq!(first.changed().await.unwrap().total_restarts, 2);
+        assert_eq!(first.has_changed(), Ok(false));
+
+        assert_eq!(second.has_changed(), Ok(true));
+        assert_eq!(second.take_latest().total_restarts, 2);
+        assert_eq!(second.has_changed(), Ok(false));
+    }
+
+    #[tokio::test]
+    async fn snapshot_receiver_waits_for_matches_and_reports_closure() {
+        let (sender, inner) = watch::channel(snapshot(0));
+        let mut receiver = SupervisorSnapshotReceiver::new(inner);
+
+        sender.send(snapshot(1)).expect("receiver remains open");
+        sender.send(snapshot(3)).expect("receiver remains open");
+        let matched = receiver
+            .wait_for(|snapshot| snapshot.total_restarts >= 2)
+            .await
+            .expect("matching snapshot is available");
+        assert_eq!(matched.total_restarts, 3);
+        assert_eq!(receiver.has_changed(), Ok(false));
+
+        drop(sender);
+        assert_eq!(receiver.changed().await, Err(SnapshotRecvError::Closed));
+        assert_eq!(receiver.has_changed(), Err(SnapshotRecvError::Closed));
+    }
 
     #[test]
     fn nested_snapshot_state_recovers_after_mutex_poisoning() {

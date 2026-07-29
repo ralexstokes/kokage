@@ -16,6 +16,7 @@ mod monitor;
 mod observability;
 mod raw;
 
+pub(crate) use cancellation::CancelOnDrop;
 pub(crate) use context::deadline_after;
 
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};

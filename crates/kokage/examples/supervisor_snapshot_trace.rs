@@ -125,8 +125,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    snapshots.changed().await?;
-    println!("snapshot: {:?}", snapshots.borrow().state);
+    let snapshot = snapshots.changed().await?;
+    println!("snapshot: {:?}", snapshot.state);
 
     handle.shutdown_and_wait().await?;
     event_task.abort();

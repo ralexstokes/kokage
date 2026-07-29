@@ -1,4 +1,4 @@
-use tokio_util::sync::CancellationToken;
+use kokage_supervisor::CancellationToken;
 
 /// Opaque token identifying one actor incarnation's lifetime.
 ///
@@ -30,6 +30,20 @@ impl Lifetime {
 #[derive(Clone, Debug)]
 pub struct CancellationHandle {
     cancellation: CancellationToken,
+}
+
+pub(crate) struct CancelOnDrop(CancellationToken);
+
+impl CancelOnDrop {
+    pub(crate) fn new(cancellation: CancellationToken) -> Self {
+        Self(cancellation)
+    }
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 impl CancellationHandle {

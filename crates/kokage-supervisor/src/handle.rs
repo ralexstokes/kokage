@@ -18,7 +18,8 @@ use crate::{
     error::{ControlError, SupervisorError},
     lifecycle::{ChildLifecycleWatch, LifecycleHub, LifecycleWatch},
     snapshot::{
-        ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
+        ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
+        SupervisorSnapshotReceiver, SupervisorStateView,
     },
 };
 
@@ -1840,8 +1841,8 @@ impl SupervisorHandle {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn subscribe_snapshots(&self) -> watch::Receiver<SupervisorSnapshot> {
-        self.snapshots_rx()
+    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
+        SupervisorSnapshotReceiver::new(self.snapshots_rx())
     }
 
     fn control_endpoint(&self) -> Result<ControlEndpoint, ControlError> {

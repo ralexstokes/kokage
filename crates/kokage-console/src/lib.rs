@@ -39,7 +39,7 @@ mod ws;
 use std::{net::SocketAddr, sync::Arc};
 
 use kokage::{RuntimeHandle, observe::ActorStats};
-use kokage_supervisor::{LifecycleWatch, SupervisorSnapshot};
+use kokage_supervisor::{LifecycleWatch, SupervisorSnapshotReceiver};
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -121,7 +121,7 @@ pub enum ConsoleBuildError {
 
 /// Builder for configuring a [`Console`] server.
 pub struct ConsoleBuilder {
-    snapshots: Option<watch::Receiver<SupervisorSnapshot>>,
+    snapshots: Option<SupervisorSnapshotReceiver>,
     lifecycle: Option<LifecycleSource>,
     stats: StatsSource,
     bind: SocketAddr,
@@ -141,8 +141,8 @@ impl ConsoleBuilder {
         }
     }
 
-    /// Sets the snapshot watch receiver.
-    pub fn snapshots(mut self, rx: watch::Receiver<SupervisorSnapshot>) -> Self {
+    /// Sets the supervisor snapshot receiver.
+    pub fn snapshots(mut self, rx: SupervisorSnapshotReceiver) -> Self {
         self.snapshots = Some(rx);
         self
     }
@@ -223,7 +223,7 @@ impl ConsoleBuilder {
 
 /// A configured console server ready to start.
 pub struct Console {
-    snapshots: watch::Receiver<SupervisorSnapshot>,
+    snapshots: SupervisorSnapshotReceiver,
     lifecycle: LifecycleSource,
     stats: StatsSource,
     bind: SocketAddr,

@@ -150,7 +150,7 @@ async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) 
     timeout(Duration::from_secs(2), async {
         loop {
             if snapshots
-                .borrow()
+                .latest()
                 .child(id)
                 .is_some_and(|child| child.generation == generation && child.started())
             {
