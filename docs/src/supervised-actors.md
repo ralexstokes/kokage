@@ -205,14 +205,14 @@ let tree = OrderedTree::new()
 let runtime = tree.spawn()?;
 ```
 
-The macro generates `AppRefs`, generic `AppFactories`, and `App::wire`; it no
-longer generates `Slots` or `Scopes` types. The wiring closure remains because
-every ref must exist before cyclic factories can capture it.
+The macro generates `AppRefs`, generic `AppFactories`, and `App::wire`. The
+wiring closure is necessary because every ref must exist before cyclic
+factories can capture it.
 
-Only `#[supervision(label = "...")]` remains as a field attribute. Mailbox
-configuration belongs on the explicit graph declaration: derived fields use
-the graph defaults, while an actor that needs individual settings can be left
-out of the derived declaration and wired with an `ActorSlot` alongside it.
+Fields support `#[supervision(label = "...")]` for overriding actor labels.
+Mailbox configuration belongs on the explicit graph declaration: derived
+fields use the graph defaults, while an actor that needs individual settings
+can be left out of the derived declaration and wired with an `ActorSlot`
+alongside it.
 Restart/shutdown policy, ordering, nested scopes, and dynamic membership belong
-on `OrderedTree` and `DynamicTree`; there is no `DynamicScope` marker or
-type-name detection.
+on `OrderedTree` and `DynamicTree`.

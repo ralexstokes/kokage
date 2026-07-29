@@ -250,8 +250,8 @@ fn parse_factory_attributes(
 /// # }
 /// ```
 ///
-/// No `Slots` or `Scopes` types are generated. The closure is necessary
-/// because cycles require refs before their factories can be constructed.
+/// The closure is necessary because cycles require refs before their factories
+/// can be constructed.
 ///
 /// Field names become graph actor labels. A field may use
 /// `#[supervision(label = "...")]` to select another non-empty label. Labels
@@ -323,7 +323,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     {
         return Err(syn::Error::new_spanned(
             attr,
-            "`supervision` attributes on structs are no longer supported; configure topology \
+            "`supervision` attributes are not supported on structs; configure topology \
              and policy explicitly on the supervision tree",
         ));
     }
