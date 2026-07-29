@@ -1,11 +1,22 @@
 //! The plumbing a derived supervision struct lowers onto.
 //!
 //! `#[derive(Supervision)]` generates implementations of the traits declared
-//! here. They are re-exported only through `__private` so downstream generated
+//! here. They are exposed through `__private` solely so downstream generated
 //! code can name them; application code uses the generated refs, factories,
 //! `tree`, and `tree_with` surface.
 
-use crate::{Graph, GraphBuilder, GraphLookupError, OrderedTree};
+use crate::{Graph, GraphBuildError, GraphBuilder, GraphLookupError, OrderedTree};
+
+/// Rejects actor registration state that generated supervision constructors
+/// cannot include in their derived tree.
+#[doc(hidden)]
+pub fn validate_derived_builder(builder: &GraphBuilder) -> Result<(), GraphBuildError> {
+    if builder.has_registered_actors() {
+        Err(GraphBuildError::NonEmptyGraphBuilder)
+    } else {
+        Ok(())
+    }
+}
 
 /// Derive support for a group of actors and its supervision scope.
 ///
@@ -62,9 +73,11 @@ pub trait SupervisionFactories<T: Supervision> {
 
 /// Marker field type declaring an empty dynamic scope in a derived struct.
 ///
-/// A field of this type carries no actor and is never constructed; it declares
-/// a [`DynamicTree`](crate::DynamicTree) scope whose
-/// membership is written at runtime.
+/// A field whose type is spelled `DynamicScope` carries no actor and is never
+/// constructed; it declares a [`DynamicTree`](crate::DynamicTree) scope whose
+/// membership is written at runtime. The derive reserves that final path
+/// segment syntactically, so type aliases and unrelated types with the same
+/// name are not supported for marker fields.
 /// Its wiring entry is a [`DynamicTree`](crate::DynamicTree) rather than an
 /// actor factory — which is what makes
 /// the scope's mount handle available before any actor is constructed, so a

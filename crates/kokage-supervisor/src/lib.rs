@@ -255,7 +255,9 @@ pub mod __private {
     use std::any::Any;
 
     pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
-    use crate::{ChildSpec, RestartPolicy, ShutdownPolicy, SupervisorHandle};
+    use crate::{
+        ChildSpec, DynamicSupervisorHandle, RestartPolicy, ShutdownPolicy, SupervisorHandle,
+    };
 
     /// Adds process-local metadata to a child specification.
     pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
@@ -267,6 +269,14 @@ pub mod __private {
 
     /// Returns process-local metadata from the current supervision tree.
     pub fn attached_children<T>(handle: &SupervisorHandle) -> Vec<AttachedChild<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        handle.attached_children()
+    }
+
+    /// Returns process-local metadata from a dynamic supervision tree.
+    pub fn dynamic_attached_children<T>(handle: &DynamicSupervisorHandle) -> Vec<AttachedChild<T>>
     where
         T: Any + Send + Sync,
     {

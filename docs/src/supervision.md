@@ -299,14 +299,23 @@ removed while it is running:
 
 ```rust,ignore
 let lineage = handle
-    .dynamic().expect("dynamic supervisor")
+    .dynamic()
+    .expect("dynamic supervisor")
     .add_child(ChildSpec::task("night-shift-press", factory))
     .await?;
-handle.dynamic().unwrap().remove_child("night-shift-press").await?;
+handle
+    .dynamic()
+    .expect("dynamic supervisor")
+    .remove_child("night-shift-press")
+    .await?;
 
 // A dynamic nested scope has its own restart-stable handle:
 let pressroom = handle.supervisor("pressroom").expect("added dynamically");
-pressroom.dynamic().unwrap().add_child(child).await?;
+pressroom
+    .dynamic()
+    .expect("dynamic pressroom")
+    .add_child(child)
+    .await?;
 ```
 
 `add_child` returns the lineage allocated atomically for that

@@ -211,9 +211,12 @@ Nested and dynamic scopes are selected in two different ways:
 
 - `#[supervision(scope)]` — a nested derived struct, becoming a named child
   scope.
-- A field whose type is `DynamicScope` — an empty scope whose membership is
-  written at runtime. The marker is never constructed; its wiring entry is a
-  `DynamicTree`. Supplying the tree is what
+- A field whose type is spelled `DynamicScope` — an empty scope whose
+  membership is written at runtime. The derive reserves that final path
+  segment syntactically, so a type alias is treated as an actor field and fails
+  the actor trait bound; unrelated types with the same name are not supported.
+  The marker is never constructed; its wiring entry is a `DynamicTree`.
+  Supplying the tree is what
   makes the scope's mount handle available *before* wiring, so
   an actor can hold it as a durable factory field instead of looking the scope
   up after spawn. Policy comes from the tree

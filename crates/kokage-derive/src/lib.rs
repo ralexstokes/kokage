@@ -344,7 +344,8 @@ fn parse_factory_attributes(
 /// * returning the wrong actor type from a field factory fails to compile;
 /// * filling the same slot twice is unrepresentable — the generated code owns
 ///   exactly one slot token per field;
-/// * a `DynamicScope` field declares a dynamic scope without an attribute;
+/// * a field whose type is spelled `DynamicScope` declares a dynamic scope
+///   without an attribute;
 /// * the removed `#[supervision(dynamic)]` attribute is rejected;
 /// * marking a `DynamicScope` field as a nested `scope` is rejected;
 /// * a `label` that is empty or contains `.` is rejected; and
@@ -461,22 +462,26 @@ fn parse_factory_attributes(
 /// | `strategy` | This scope's restart strategy. |
 /// | `restart` | Default restart policy inherited by actor fields. |
 /// | `shutdown` | Default shutdown policy inherited by actor fields. |
-/// | `restart_intensity` | This scope's restart-intensity window. |
+/// | `restart_config` | This scope's restart-intensity configuration. |
 ///
 /// ## Field attributes
 ///
 /// `label = "..."` renames a node. `options = <expression>` configures an
-/// actor's mailbox. `restart`, `shutdown`, and `restart_intensity` override
+/// actor's mailbox. `restart`, `shutdown`, and `restart_config` override
 /// the enclosing scope's defaults for one actor. A nested scope declares those
 /// three on its own struct instead. `scope` selects a nested derived struct:
 ///
 /// * `scope` — a nested derived struct, contributing a named child scope.
 ///
-/// A field whose type is `DynamicScope` declares an empty scope whose
-/// membership is written at runtime. The marker is never constructed. Its
-/// wiring entry is a `DynamicTree` rather than an actor factory. Construct one
-/// with `DynamicTree::new()`; it configures the scope and makes its mount handle
-/// available before any actor is built, so a factory can capture it.
+/// A field whose type is spelled `DynamicScope` declares an empty scope whose
+/// membership is written at runtime. The derive reserves that final path
+/// segment syntactically: a type alias for `DynamicScope` is treated as an
+/// actor field and fails the actor trait bound, while an unrelated type with
+/// that name is rejected by the generated marker check. The marker is never
+/// constructed. Its wiring entry is a `DynamicTree` rather than an actor
+/// factory. Construct one with `DynamicTree::new()`; it configures the scope
+/// and makes its mount handle available before any actor is built, so a
+/// factory can capture it.
 ///
 #[proc_macro_derive(Supervision, attributes(supervision))]
 pub fn derive_supervision(input: TokenStream) -> TokenStream {
@@ -492,7 +497,7 @@ struct ScopeAttrs {
     strategy: Option<Expr>,
     restart: Option<Expr>,
     shutdown: Option<Expr>,
-    restart_intensity: Option<Expr>,
+    restart_config: Option<Expr>,
 }
 
 /// What a declared field is.
@@ -513,7 +518,7 @@ struct FieldAttrs {
     options: Option<Expr>,
     restart: Option<Expr>,
     shutdown: Option<Expr>,
-    restart_intensity: Option<Expr>,
+    restart_config: Option<Expr>,
 }
 
 impl Default for FieldAttrs {
@@ -524,7 +529,7 @@ impl Default for FieldAttrs {
             options: None,
             restart: None,
             shutdown: None,
-            restart_intensity: None,
+            restart_config: None,
         }
     }
 }
@@ -558,11 +563,14 @@ fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
             if meta.path.is_ident("shutdown") {
                 return take_expr(&mut parsed.shutdown, &meta, "shutdown");
             }
+            if meta.path.is_ident("restart_config") {
+                return take_expr(&mut parsed.restart_config, &meta, "restart_config");
+            }
             if meta.path.is_ident("restart_intensity") {
-                return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
+                return Err(meta.error("`restart_intensity` has been renamed to `restart_config`"));
             }
             Err(meta.error(
-                "expected `strategy`, `restart`, `shutdown`, or `restart_intensity`, \
+                "expected `strategy`, `restart`, `shutdown`, or `restart_config`, \
                  each `= <expression>`",
             ))
         })?;
@@ -632,12 +640,15 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
             if meta.path.is_ident("shutdown") {
                 return take_expr(&mut parsed.shutdown, &meta, "shutdown");
             }
+            if meta.path.is_ident("restart_config") {
+                return take_expr(&mut parsed.restart_config, &meta, "restart_config");
+            }
             if meta.path.is_ident("restart_intensity") {
-                return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
+                return Err(meta.error("`restart_intensity` has been renamed to `restart_config`"));
             }
             Err(meta.error(
                 "expected `scope`, `label = \"...\"`, \
-                 or `options`/`restart`/`shutdown`/`restart_intensity` = <expression>",
+                 or `options`/`restart`/`shutdown`/`restart_config` = <expression>",
             ))
         })?;
     }
@@ -651,18 +662,18 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
     if parsed.kind == FieldKind::Scope
         && (parsed.restart.is_some()
             || parsed.shutdown.is_some()
-            || parsed.restart_intensity.is_some())
+            || parsed.restart_config.is_some())
     {
         return Err(syn::Error::new_spanned(
             field,
-            "a nested scope declares its own `restart`, `shutdown`, and `restart_intensity` \
+            "a nested scope declares its own `restart`, `shutdown`, and `restart_config` \
              on its own struct",
         ));
     }
     if parsed.kind == FieldKind::Dynamic
         && (parsed.restart.is_some()
             || parsed.shutdown.is_some()
-            || parsed.restart_intensity.is_some())
+            || parsed.restart_config.is_some())
     {
         return Err(syn::Error::new_spanned(
             field,
@@ -971,8 +982,8 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     if let Some(shutdown) = &scope_attrs.shutdown {
         scope_root = quote! { #scope_root.default_shutdown(#shutdown) };
     }
-    if let Some(intensity) = &scope_attrs.restart_intensity {
-        scope_root = quote! { #scope_root.restart_config(#intensity) };
+    if let Some(config) = &scope_attrs.restart_config {
+        scope_root = quote! { #scope_root.restart_config(#config) };
     }
     let root_constructors = quote! {
         impl #declared {
@@ -995,7 +1006,8 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
             #[doc = "Builds this derived supervision declaration with the supplied graph builder."]
             #[doc = ""]
-            #[doc = "The builder should have graph-wide settings configured but no actors registered; this constructor registers the actors declared by the derive."]
+            #[doc = "The builder may have graph-wide settings configured, but must not contain registered actors; this constructor registers the actors declared by the derive."]
+            #[doc = "Passing a builder with registered actors returns [`GraphBuildError::NonEmptyGraphBuilder`](::kokage::GraphBuildError::NonEmptyGraphBuilder)."]
             #[doc = ""]
             #[doc = "# Panics"]
             #[doc = ""]
@@ -1010,6 +1022,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             where
                 #(#factory_bounds,)*
             {
+                ::kokage::__private::validate_derived_builder(&builder)?;
                 let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
                 let tree = Self::__supervision_scope(&graph, &refs, scopes)
                     .expect("derived refs belong to the graph that opened them");
@@ -1155,8 +1168,8 @@ fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
     if let Some(shutdown) = &attrs.shutdown {
         spec = quote! { #spec.shutdown(#shutdown) };
     }
-    if let Some(intensity) = &attrs.restart_intensity {
-        spec = quote! { #spec.restart_config(#intensity) };
+    if let Some(config) = &attrs.restart_config {
+        spec = quote! { #spec.restart_config(#config) };
     }
     spec
 }
