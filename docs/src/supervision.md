@@ -1,6 +1,6 @@
 # Supervision fundamentals
 
-Time to open the print shop. In this chapter we stay in `tokio-supervisor`
+Time to open the print shop. In this chapter we stay in `kokage-supervisor`
 land and supervise two plain tasks: a `front-desk` that should run forever,
 and a `press` that keeps jamming. Along the way we meet every knob a
 [`ChildSpec`] has.
@@ -8,7 +8,7 @@ and a `press` that keeps jamming. Along the way we meet every knob a
 ```rust,no_run
 use std::time::Duration;
 
-use tokio_supervisor::{
+use kokage_supervisor::{
     BackoffPolicy, ChildSpec, RestartPolicy, RestartConfig, ShutdownPolicy, Strategy,
     Supervisor,
 };
@@ -226,11 +226,11 @@ child escalates when its own grace expires; a short-grace child cannot borrow a
 longer-grace sibling's budget.
 
 Standalone hosts pass an explicit shutdown bound to
-`tokio_otp::host::RunnableActor::run_until`
-(`tokio_otp::host::DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
+`kokage::host::RunnableActor::run_until`
+(`kokage::host::DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
 provides the same inner-task backstop without storing execution policy on the
 graph, and an actor that overruns it resolves the run to
-`tokio_otp::host::ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
+`kokage::host::ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
 abort, code that never reaches a poll boundary, and blocking work already
 running on the blocking pool, can continue outside the actor task.
 
@@ -324,13 +324,13 @@ or an explicit shutdown.
 We will use a higher-level version of this API in the [Dynamic
 actors](dynamic-actors.md) chapter.
 
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
-[`RestartPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.RestartPolicy.html
-[`RestartConfig`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.RestartConfig.html
-[`BackoffPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.BackoffPolicy.html
-[`Strategy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.Strategy.html
-[`ShutdownPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ShutdownPolicy.html
-[`shutdown_on_completion`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
-[`wait_completed`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html#method.wait_completed
-[`ChildLifecycleEventKind::Exited`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ChildLifecycleEventKind.html#variant.Exited
-[`agent_control` example]: https://github.com/ralexstokes/tokio-otp/tree/main/crates/tokio-otp/examples/agent_control
+[`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
+[`RestartPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.RestartPolicy.html
+[`RestartConfig`]: https://stokes.io/kokage/api/kokage_supervisor/struct.RestartConfig.html
+[`BackoffPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.BackoffPolicy.html
+[`Strategy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.Strategy.html
+[`ShutdownPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ShutdownPolicy.html
+[`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
+[`wait_completed`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html#method.wait_completed
+[`ChildLifecycleEventKind::Exited`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ChildLifecycleEventKind.html#variant.Exited
+[`agent_control` example]: https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples/agent_control

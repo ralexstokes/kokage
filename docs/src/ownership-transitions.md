@@ -68,7 +68,7 @@ The runnable `agent_control` example implements a conservative version of this
 recipe. Its offload-based router retains symmetric `Mounting` and `Removing`
 states, although only the removal must be pipelined for control-plane safety.
 The slot machine and epoch-minted `add_subtree` membership live in
-`crates/tokio-otp/examples/agent_control/router.rs`; the
+`crates/kokage/examples/agent_control/router.rs`; the
 retiree bounce, retirement re-request, and `DrainPolicy::Drain` live in
 `session.rs`; phase 7 in `main.rs` injects traffic inside the eviction window
 and proves the replacement session answers it with replayed context.

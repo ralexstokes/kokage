@@ -31,7 +31,7 @@ here=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 # that changes flake.nix/flake.lock invalidates the marker. .envrc exports the
 # same path:fingerprint format.
 want="$here:$(cat "$here/flake.nix" "$here/flake.lock" 2>/dev/null | sha256sum | cut -d' ' -f1)"
-if [ "${TOKIO_OTP_DEVSHELL:-}" = "$want" ]; then
+if [ "${KOKAGE_DEVSHELL:-}" = "$want" ]; then
     exec "$@"
 fi
 
@@ -39,4 +39,4 @@ fi
 # runs in the caller's working directory. warn-dirty is off because the tree is
 # dirty on nearly every invocation and the warning just clutters agent logs.
 exec nix develop --option warn-dirty false --no-update-lock-file "$here" \
-    --command env "TOKIO_OTP_DEVSHELL=$want" "$@"
+    --command env "KOKAGE_DEVSHELL=$want" "$@"

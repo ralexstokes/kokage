@@ -19,7 +19,7 @@ Handler-style actors have one loop-owned timer table. `send_after` and
 ```rust,ignore
 use std::time::Duration;
 
-use tokio_otp::{CancellationHandle, prelude::*};
+use kokage::{CancellationHandle, prelude::*};
 
 #[derive(Clone)]
 enum Message {
@@ -80,7 +80,7 @@ whether it exists. Other keys remain independent:
 ```rust,ignore
 use std::time::Duration;
 
-use tokio_otp::{TimerKey, prelude::*};
+use kokage::{TimerKey, prelude::*};
 
 enum Message {
     Filled,
@@ -167,12 +167,12 @@ an order deadline can clear the timeout instead of allowing a stale
 
 ## Cross-actor timers
 
-`tokio_otp::timers::send_after_to` and `interval_to` are small utilities built
+`kokage::timers::send_after_to` and `interval_to` are small utilities built
 on public API. Pass the scheduling incarnation's observe-only `Lifetime` and
 the target's `ActorRef`:
 
 ```rust,ignore
-use tokio_otp::timers;
+use kokage::timers;
 
 let lifetime = ctx.lifetime();
 timers::send_after_to(

@@ -1,5 +1,5 @@
 {
-  description = "tokio-otp development environment";
+  description = "kokage development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -41,7 +41,7 @@
             ];
           }
         );
-        rustupHome = pkgs.runCommandLocal "tokio-otp-rustup-home" { } ''
+        rustupHome = pkgs.runCommandLocal "kokage-rustup-home" { } ''
           mkdir -p $out/toolchains $out/update-hashes
           ln -s ${rustToolchain} $out/toolchains/${stableChannel}-${rustHost}
           ln -s ${nightlyToolchain} $out/toolchains/nightly-${rustHost}

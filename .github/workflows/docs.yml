@@ -36,7 +36,7 @@ jobs:
         run: |
           nix develop --command mdbook build docs
           nix develop --command cargo doc --workspace --no-deps --all-features
-          echo '<meta http-equiv="refresh" content="0; url=tokio_otp/index.html">' > target/doc/index.html
+          echo '<meta http-equiv="refresh" content="0; url=kokage/index.html">' > target/doc/index.html
 
           mkdir -p _site/api
           cp -r docs/book/. _site/

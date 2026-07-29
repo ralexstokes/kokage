@@ -58,7 +58,7 @@ For a custom shape, clone individual [`host::RunnableActor`] values out of the g
 and place them at different levels:
 
 ```rust,no_run
-use tokio_otp::{ActorSpec, OrderedTree, prelude::*};
+use kokage::{ActorSpec, OrderedTree, prelude::*};
 
 struct Worker;
 
@@ -225,12 +225,12 @@ Inside the leader, every actor stage's `children()` method returns a
 `RestrictedScope` for the child scope. See [Scope handles inside actors] for
 startup ordering and dynamic-membership reconciliation.
 
-[`OrderedTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.OrderedTree.html
-[`DynamicTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.DynamicTree.html
-[`RuntimeHandle`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.RuntimeHandle.html
-[`host::RunnableActor`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.RunnableActor.html
-[`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
-[`observe::SupervisionOutline`]: https://stokes.io/tokio-otp/api/tokio_otp/observe/struct.SupervisionOutline.html
-[`ScopeKind`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ScopeKind.html
-[`observe::SupervisorSnapshot`]: https://stokes.io/tokio-otp/api/tokio_otp/observe/struct.SupervisorSnapshot.html
+[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
+[`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
+[`host::RunnableActor`]: https://stokes.io/kokage/api/kokage/host/struct.RunnableActor.html
+[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
+[`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html
+[`ScopeKind`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ScopeKind.html
+[`observe::SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html
 [Scope handles inside actors]: dynamic-actors.md#scope-handles-inside-actors

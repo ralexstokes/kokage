@@ -1290,7 +1290,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-otp"
+name = "kokage"
 version = "0.1.0"
 dependencies = [
  "futures-util",
@@ -1300,8 +1300,8 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-otp-derive",
- "tokio-supervisor",
+ "kokage-derive",
+ "kokage-supervisor",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -1309,7 +1309,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-otp-console"
+name = "kokage-console"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -1319,20 +1319,20 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-otp",
- "tokio-supervisor",
+ "kokage",
+ "kokage-supervisor",
  "tokio-tungstenite",
  "tracing",
 ]
 
 [[package]]
-name = "tokio-otp-derive"
+name = "kokage-derive"
 version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
- "tokio-otp",
+ "kokage",
 ]
 
 [[package]]
@@ -1346,7 +1346,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-supervisor"
+name = "kokage-supervisor"
 version = "0.1.0"
 dependencies = [
  "metrics",
