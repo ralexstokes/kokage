@@ -280,9 +280,11 @@ async fn build_app() -> Result<App, AnyError> {
         .actor(tool_host_actor)
         .actor(router_actor);
     let tree = OrderedTree::new()
+        // The router captures this pre-spawn identity, so make the sessions
+        // scope ready before the core subtree starts the router.
+        .subtree("sessions", sessions_runtime)
         .subtree("gateway", gateway_tree)
-        .subtree("core", core_tree)
-        .subtree("sessions", sessions_runtime);
+        .subtree("core", core_tree);
     let runtime = tree.spawn()?;
     let gateway = runtime
         .handle()

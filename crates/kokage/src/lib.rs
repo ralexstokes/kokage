@@ -58,10 +58,24 @@
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
+//! | [`host::ActorContext`] | Full mailbox, watch, timer, blocking-work, and shutdown context for a [`host::RawActor`]. |
 //! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage-specific actor lifecycle capabilities. |
+//! | [`LiveContext`] | Timers, continuations, and other capabilities shared by the running stages. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
+//!
+//! # Composition modes
+//!
+//! - **Ordered actor trees** via [`OrderedTree::new`]: per-actor supervision,
+//!   recursive actor-aware subtrees, arbitrary task children, and explicit
+//!   leader-owned scopes.
+//! - **Dynamic actor membership** via [`DynamicTree::new`]: an initially empty
+//!   `OneForOne` scope that accepts actor specs and subtrees at runtime. Its
+//!   handle is available before spawn for typed wiring.
+//!
+//! Fate sharing is selected with [`Strategy::OneForAll`] or tree shape; actor
+//! wiring does not choose execution topology.
 //!
 //! # Delivery contract: at-most-once
 //!
@@ -78,9 +92,19 @@
 //! hand-written [`host::RawActor`] loop can inspect remaining work with
 //! [`host::ActorContext::try_recv`].
 //!
-//! Actors can watch a peer with [`host::ActorContext::watch`]. Watches follow
-//! logical actor membership across restarts and deliver [`MonitorEvent`]s
-//! through the observer's ordinary mailbox.
+//! Restarts also lose queued messages: the new incarnation binds a fresh
+//! mailbox, so messages accepted behind a poison message are dropped with the
+//! failed run. Preserving that queue would redeliver the poison message and
+//! turn one failure into a restart loop. [`ActorRef::send`] can wait through an
+//! unbound restart window, but it cannot recover a message already accepted by
+//! the failed incarnation.
+//!
+//! Actors can watch a peer with [`host::ActorContext::watch`]. The watch follows
+//! logical membership across restarts and maps [`MonitorEvent`]s — `Up`,
+//! `Down`, terminal `Terminated`, or overload `Lagged` — into the observer's
+//! ordinary mailbox. Watches survive restarts of both actors;
+//! [`CancellationHandle::cancel`] stops future delivery, and permanent removal
+//! of either membership ends the watch.
 //!
 //! # Static declarations
 //!
@@ -149,15 +173,32 @@
 //! [`RuntimeHandle::actor_stats`]. Actors configured with
 //! [`ActorSpec::message_size`] also expose accepted-byte totals.
 //!
+//! # Runtime-independent boundaries
+//!
+//! Public mailbox errors, cancellation tokens, and snapshot receivers are
+//! crate-owned. Applications can build cancellation trees with
+//! [`CancellationToken`] and expose
+//! [`observe::SupervisorSnapshotReceiver`] without leaking the scheduler's
+//! channel or cancellation implementation into their own APIs.
+//!
 //! # Examples
 //!
 //! - `examples/supervised_actors.rs` — per-actor supervision.
 //! - `examples/supervision.rs` — cyclic typed wiring with actor slots.
+//! - `examples/drain_policy.rs` — draining queued messages during shutdown.
+//! - `examples/individual_actor_policies.rs` — per-actor policy overrides.
 //! - `examples/dynamic_actors.rs` — adding and removing actors at runtime.
+//! - `examples/directory.rs` — a typed, userland name directory.
 //! - `examples/ref_rebind.rs` — refs riding through supervised restarts.
+//! - `examples/graph_failures.rs` — supervisor policy around actor failures.
+//! - `examples/mailbox_backpressure.rs` and `examples/send_vs_try_send.rs` —
+//!   bounded mailboxes and send flavors.
 //! - `examples/builder_validation.rs` — tree validation at spawn.
+//! - `examples/blocking_work.rs` and `examples/blocking_lifecycle.rs` —
+//!   cooperative and detached blocking work.
 //! - `examples/actor_metrics.rs` and `examples/actor_tracing.rs` —
 //!   observability patterns.
+//! - `examples/json_edge.rs` — decoding byte-oriented JSON into typed messages.
 //!
 //! # Cargo features
 //!

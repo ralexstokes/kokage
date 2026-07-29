@@ -107,10 +107,12 @@ let worker = ActorSpec::new("worker", || Worker)
 # let _ = worker;
 ```
 
-An ordered scope also has a mailbox-capacity default. Explicit settings on a
-spec win. A zero capacity, an empty actor id, or duplicate ids in one scope are
-reported during tree lowering. The same local id in different sibling scopes
-is legal.
+An ordered scope has a default of 64 messages per actor. Explicit settings on
+a spec win. The default is scope-local: a nested subtree starts with 64 rather
+than inheriting its parent's setting, so configure the subtree explicitly when
+it needs a different default. A zero capacity, an empty actor id, or duplicate
+ids in one scope are reported during tree lowering. The same local id in
+different sibling scopes is legal.
 
 Bounded cyclic calls can still deadlock through backpressure. Prefer
 asynchronous `send`, offload bounded calls from the actor loop, or design a
@@ -118,7 +120,8 @@ directional request flow.
 
 ## Direct hosting
 
-`ActorSpec::into_runnable` validates and materializes one
-`host::RunnableActor` for tests or hosts with their own supervision story.
-Normal applications should place the spec in `OrderedTree` or
-`DynamicTree`.
+`ActorSpec::into_runnable` materializes one `host::RunnableActor` for tests or
+hosts with their own supervision story. A directly hosted spec with an
+explicit zero mailbox capacity panics; tree placement and dynamic insertion
+report that invalid declaration through their ordinary error types. Normal
+applications should place the spec in `OrderedTree` or `DynamicTree`.
