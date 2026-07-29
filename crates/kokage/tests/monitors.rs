@@ -914,7 +914,7 @@ impl RawActor for ManagedObserver {
 }
 
 #[tokio::test]
-async fn observer_membership_removal_cancels_its_watches() {
+async fn observer_membership_removal_finishes_its_watches_without_cancellation() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
@@ -957,9 +957,10 @@ async fn observer_membership_removal_cancels_its_watches() {
         .await
         .expect("observer task joined")
         .expect("observer stopped cleanly");
+    watch_finished(&watch).await;
     assert!(
-        watch.is_cancelled(),
-        "terminating the observer membership ends its outbound watch"
+        !watch.is_cancelled(),
+        "environmental observer termination is not explicit guard cancellation"
     );
 
     peer_task.abort();
@@ -1400,7 +1401,7 @@ impl RawActor for GatedObserver {
 }
 
 #[tokio::test]
-async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
+async fn cancelling_watch_cannot_retract_accepted_events() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
@@ -1437,7 +1438,6 @@ async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
     });
     started(&mut peer_started).await;
     let watch = recv_test_event(&mut watch_rx, "gated observer watch handle").await;
-    let clone = watch.clone();
     assert!(!watch.is_cancelled());
 
     peer_ref
@@ -1451,7 +1451,7 @@ async fn cloned_watch_cancels_and_cannot_retract_accepted_events() {
     })
     .await
     .expect("up and down accepted by observer mailbox");
-    clone.cancel();
+    watch.cancel();
     assert!(watch.is_cancelled());
     gate.notify_one();
     assert_eq!(next_event(&mut observed).await, up("peer", 0));

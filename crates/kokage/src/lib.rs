@@ -103,9 +103,10 @@
 //! `Down`, terminal `Terminated`, or overload `Lagged` — into the observer's
 //! ordinary mailbox. Watches survive restarts of both actors;
 //! [`Guard::cancel`] stops future delivery, and permanent removal of either
-//! membership ends the watch. Watches, mailbox timers, offloads, and
-//! lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
-//! operation; retain it or call [`Guard::detach`] to keep the work alive.
+//! membership ends the watch. Watches, mailbox timers, offloads, scope waits,
+//! and lifecycle/completion pumps return a [`Guard`]. Dropping it
+//! cancels the operation; retain it or call [`Guard::detach`] to keep the work
+//! alive.
 //!
 //! # Static declarations
 //!

@@ -13,7 +13,9 @@ use std::{
     time::Duration,
 };
 
-use kokage::{Actor, ActorResult, ActorSlot, ActorStatus, Context, Guard, Shutdown, StopContext};
+use kokage::{
+    Actor, ActorResult, ActorSlot, ActorStatus, Context, Guard, Restart, Shutdown, StopContext,
+};
 use tokio::sync::{Notify, mpsc};
 
 const WAIT: Duration = Duration::from_secs(3);
@@ -150,6 +152,7 @@ async fn pending_scope_wait_is_cancelled_before_discard_shutdown() {
 enum CancelMsg {
     Start,
     Completed,
+    Crash,
 }
 
 struct CancellableWait {
@@ -182,6 +185,7 @@ impl Actor for CancellableWait {
             CancelMsg::Completed => {
                 self.completions.send(()).expect("receiver open");
             }
+            CancelMsg::Crash => return Err(io::Error::other("restart actor").into()),
         }
         Ok(())
     }
@@ -219,6 +223,50 @@ async fn dropping_scope_wait_guard_cancels_and_is_accounted() {
     .await
     .expect("cancelled scope wait is reaped");
     assert!(completion_rx.try_recv().is_err());
+
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn incarnation_restart_finishes_scope_wait_without_cancelling_its_guard() {
+    let (started, mut starts) = mpsc::unbounded_channel();
+    let (dropped, mut drops) = mpsc::unbounded_channel();
+    let (handles, mut handle_rx) = mpsc::unbounded_channel();
+    let (completions, _completion_rx) = mpsc::unbounded_channel();
+    let mut graph = TreeBuilder::new();
+    let slot = ActorSlot::new("restarted-scope-wait");
+    let (slot, actor) = slot.actor_ref();
+    graph.define(slot, move || CancellableWait {
+        started: started.clone(),
+        dropped: dropped.clone(),
+        handles: handles.clone(),
+        completions: completions.clone(),
+    });
+    let runtime = graph
+        .build()
+        .default_restart(Restart::on_failure())
+        .spawn()
+        .expect("tree builds");
+
+    actor.send(CancelMsg::Start).await.expect("actor is live");
+    let guard = wait_for(&mut handle_rx, "scope-wait guard").await;
+    wait_for(&mut starts, "scope wait to start").await;
+    actor
+        .send(CancelMsg::Crash)
+        .await
+        .expect("actor accepts crash");
+    wait_for(&mut drops, "incarnation-aborted scope wait").await;
+    tokio::time::timeout(WAIT, async {
+        while !guard.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("incarnation abort finishes scope wait");
+    assert!(
+        !guard.is_cancelled(),
+        "incarnation abort is environmental, not explicit cancellation"
+    );
 
     runtime.shutdown_and_wait().await.expect("clean shutdown");
 }

@@ -12,7 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, Context, Guard, OrderedTree, TimerKey,
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, Guard, OrderedTree,
+    TimerKey,
     host::{BoxError, RawActor, RawContext},
 };
 use kokage_supervisor::Strategy;
@@ -702,6 +703,12 @@ struct DetachedCrossInterval {
     target: ActorRef<&'static str>,
 }
 
+struct ReportedCrossInterval {
+    target: ActorRef<&'static str>,
+    guards: mpsc::UnboundedSender<Guard>,
+    period: Duration,
+}
+
 impl Actor for DroppedCrossInterval {
     type Msg = ();
 
@@ -721,6 +728,20 @@ impl Actor for DetachedCrossInterval {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.interval(&self.target, "detached-tick", Duration::from_millis(10))
             .detach();
+        Ok(())
+    }
+
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+        Ok(())
+    }
+}
+
+impl Actor for ReportedCrossInterval {
+    type Msg = ();
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+        let guard = ctx.interval(&self.target, "tick", self.period);
+        self.guards.send(guard).expect("guard receiver alive");
         Ok(())
     }
 
@@ -781,6 +802,66 @@ async fn detached_interval_keeps_delivering() {
     }
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
+async fn target_termination_finishes_interval_without_cancelling_it() {
+    let (guard_tx, mut guard_rx) = mpsc::unbounded_channel();
+    let target_slot = ActorSlot::new("terminated-target");
+    let (target_slot, target) = target_slot.actor_ref();
+    drop(target_slot);
+    let mut builder = TreeBuilder::new();
+    builder.actor(ActorSpec::new("scheduler", {
+        let target = target.clone();
+        move || ReportedCrossInterval {
+            target: target.clone(),
+            guards: guard_tx.clone(),
+            period: Duration::from_millis(10),
+        }
+    }));
+    let runtime = builder
+        .build()
+        .strategy(Strategy::OneForOne)
+        .spawn()
+        .expect("runtime builds");
+    let guard = guard_rx.recv().await.expect("scheduler reports guard");
+
+    advance(Duration::from_millis(10)).await;
+    timeout(Duration::from_secs(1), async {
+        while !guard.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("target termination finishes interval");
+    assert!(
+        !guard.is_cancelled(),
+        "target termination is environmental, not explicit cancellation"
+    );
+
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
+async fn zero_period_interval_is_finished_without_cancellation() {
+    let (guard_tx, mut guard_rx) = mpsc::unbounded_channel();
+    let (runtime, _, _observed_rx) = build_cross_runtime(|target| {
+        move || ReportedCrossInterval {
+            target: target.clone(),
+            guards: guard_tx.clone(),
+            period: Duration::ZERO,
+        }
+    });
+    let runtime = runtime.spawn().expect("runtime builds");
+    let guard = guard_rx.recv().await.expect("scheduler reports guard");
+
+    assert!(guard.is_finished());
+    assert!(
+        !guard.is_cancelled(),
+        "invalid interval period did not explicitly cancel the guard"
+    );
+
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]

@@ -217,12 +217,13 @@ impl Drop for WatchQueueGuard {
 
 struct Watcher {
     cancellation: CancellationToken,
+    stop: CancellationToken,
     queue: Arc<WatchQueue>,
 }
 
 impl Watcher {
     fn is_live(&self) -> bool {
-        !self.cancellation.is_cancelled() && !self.queue.is_closed()
+        !self.cancellation.is_cancelled() && !self.stop.is_cancelled() && !self.queue.is_closed()
     }
 
     fn notify(&self, event: &MonitorEvent) -> bool {
@@ -280,6 +281,7 @@ impl MonitorHub {
     pub(crate) fn register_watch(
         &self,
         cancellation: CancellationToken,
+        stop: CancellationToken,
         finished: Finished,
     ) -> WatchQueueGuard {
         let queue = WatchQueue::new(&self.actor_id);
@@ -297,6 +299,7 @@ impl MonitorHub {
         }
         state.watchers.push(Watcher {
             cancellation: cancellation.clone(),
+            stop,
             queue: Arc::clone(&queue),
         });
         WatchQueueGuard { queue, finished }
@@ -402,6 +405,7 @@ impl Drop for MonitorExitGuard {
 struct MembershipWatch {
     subject: Weak<MonitorHub>,
     cancellation: CancellationToken,
+    stop: CancellationToken,
     finished: Finished,
 }
 
@@ -410,7 +414,7 @@ struct MembershipWatch {
 /// Unlike timers, this scope belongs to the restart-stable binding rather
 /// than an incarnation. Re-registering a watch from a replacement
 /// incarnation finds the existing observer/subject pair, while terminating
-/// the binding cancels every outbound watch.
+/// the binding ends every outbound watch.
 pub(crate) struct ActorMonitors {
     lifetime: CancellationToken,
     watches: Mutex<Vec<MembershipWatch>>,
@@ -429,10 +433,11 @@ impl ActorMonitors {
     pub(crate) fn register(
         &self,
         subject: &Arc<MonitorHub>,
-    ) -> (CancellationToken, Finished, bool) {
+    ) -> (CancellationToken, CancellationToken, Finished, bool) {
         let mut watches = self.watches.lock().unwrap_or_else(PoisonError::into_inner);
         watches.retain(|watch| {
             !watch.cancellation.is_cancelled()
+                && !watch.stop.is_cancelled()
                 && !watch.finished.is_signalled()
                 && watch.subject.strong_count() > 0
         });
@@ -442,17 +447,24 @@ impl ActorMonitors {
                 .upgrade()
                 .is_some_and(|registered| Arc::ptr_eq(&registered, subject))
         }) {
-            return (watch.cancellation.clone(), watch.finished.clone(), false);
+            return (
+                watch.cancellation.clone(),
+                watch.stop.clone(),
+                watch.finished.clone(),
+                false,
+            );
         }
 
-        let cancellation = self.lifetime.child_token();
+        let cancellation = CancellationToken::new();
+        let stop = self.lifetime.child_token();
         let finished = Finished::new();
         watches.push(MembershipWatch {
             subject: Arc::downgrade(subject),
             cancellation: cancellation.clone(),
+            stop: stop.clone(),
             finished: finished.clone(),
         });
-        (cancellation, finished, true)
+        (cancellation, stop, finished, true)
     }
 
     pub(crate) fn terminate(&self) {
@@ -538,7 +550,11 @@ mod tests {
     #[test]
     fn dropping_guard_closes_queue_and_prunes_watcher() {
         let hub = MonitorHub::new("peer");
-        let guard = hub.register_watch(CancellationToken::new(), Finished::new());
+        let guard = hub.register_watch(
+            CancellationToken::new(),
+            CancellationToken::new(),
+            Finished::new(),
+        );
         assert_eq!(hub.state().watchers.len(), 1);
 
         // A panicking `map` closure unwinds the forwarder, which drops the

@@ -38,9 +38,9 @@ impl CancelAction {
 ///
 /// Guards cancel their operation when dropped. Keep the guard for as long as
 /// the operation should remain live, or consume it with [`detach`](Self::detach)
-/// to make fire-and-forget ownership explicit. Clones refer to the same
-/// operation; dropping any non-detached clone cancels it.
-#[derive(Clone)]
+/// to make fire-and-forget ownership explicit. A guard is intentionally not
+/// cloneable: wrap it in [`Arc`](std::sync::Arc) when several owners need shared
+/// access to the same cancellation authority.
 #[must_use = "dropping the guard cancels the operation; call `.detach()` for explicit fire-and-forget"]
 pub struct Guard {
     cancellation: CancellationToken,
@@ -98,7 +98,13 @@ impl Guard {
         }
     }
 
-    /// Returns whether cancellation has been requested or observed.
+    /// Returns whether cancellation was explicitly requested through this
+    /// guard.
+    ///
+    /// Calling [`cancel`](Self::cancel) or dropping an armed guard marks the
+    /// operation cancelled. Normal completion and environmental termination,
+    /// such as an actor incarnation or target ending, leave this `false`; use
+    /// [`is_finished`](Self::is_finished) to observe those outcomes.
     pub fn is_cancelled(&self) -> bool {
         self.cancellation.is_cancelled()
     }
@@ -113,8 +119,8 @@ impl Guard {
 
     /// Leaves the operation running without retaining a guard.
     ///
-    /// This consumes and disarms this guard value. Other clones, if any,
-    /// continue to cancel the shared operation when dropped.
+    /// This consumes and disarms the guard so its drop does not cancel the
+    /// operation.
     pub fn detach(mut self) {
         self.cancel_on_drop = false;
     }
@@ -148,28 +154,24 @@ mod tests {
     use crate::CancellationToken;
 
     #[test]
-    fn dropping_any_armed_clone_cancels_the_shared_operation() {
-        let cancellation = CancellationToken::new();
-        let guard = Guard::from_probe(cancellation.clone(), || false);
-        let clone = guard.clone();
-
-        drop(clone);
-
-        assert!(guard.is_cancelled());
-        assert!(!guard.is_finished());
-    }
-
-    #[test]
-    fn detaching_one_clone_does_not_disarm_another() {
+    fn dropping_an_armed_guard_cancels_the_operation() {
         let cancellation = CancellationToken::new();
         let observed = cancellation.clone();
         let guard = Guard::from_probe(cancellation, || false);
-        let clone = guard.clone();
+
+        drop(guard);
+
+        assert!(observed.is_cancelled());
+    }
+
+    #[test]
+    fn detaching_a_guard_leaves_the_operation_running() {
+        let cancellation = CancellationToken::new();
+        let observed = cancellation.clone();
+        let guard = Guard::from_probe(cancellation, || false);
 
         guard.detach();
         assert!(!observed.is_cancelled());
-        drop(clone);
-        assert!(observed.is_cancelled());
     }
 
     #[test]
@@ -194,12 +196,9 @@ mod tests {
                 counted.fetch_add(1, Ordering::Relaxed);
             },
         );
-        let clone = guard.clone();
-
         guard.cancel();
-        clone.cancel();
+        guard.cancel();
         drop(guard);
-        drop(clone);
 
         assert_eq!(invocations.load(Ordering::Relaxed), 1);
     }
