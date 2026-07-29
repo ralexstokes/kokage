@@ -183,7 +183,7 @@ fn feed_options() -> ActorOptions<FeedMsg> {
 #[derive(Supervision)]
 #[supervision(
     strategy = Strategy::OneForOne,
-    restart_intensity = RestartConfig::new(5, Duration::from_secs(10)),
+    restart_config = RestartConfig::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
     #[supervision(label = "venue-a-feed", options = feed_options())]
