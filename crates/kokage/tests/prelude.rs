@@ -23,9 +23,9 @@ mod coverage_probe {
     mod advanced_root {
         use kokage::{
             ActorFactory, Backoff, BackoffParts, BlockingCancelled, CancellationHandle,
-            CancellationToken, ControlError, DownReason, DynamicRestrictedScope, DynamicRuntime,
+            CancellationToken, ControlError, DownReason, DynamicRestrictedScope,
             DynamicRuntimeHandle, DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline, Restart,
-            RestartMode, RestrictedScope, Runtime, RuntimeHandle, ScopeKind, SealedActorSlot,
+            RestartMode, RestrictedScope, Runtime, RuntimeHandle, SealedActorSlot,
             SealedActorSpec, Shutdown, ShutdownMode, Strategy, SupervisorBuildError,
             SupervisorError, TaskHandle, TimerKey, TreeNode,
         };
@@ -44,7 +44,8 @@ mod coverage_probe {
             ActorStats, ChildExitView, ChildMembershipView, ChildOutline, ChildSnapshot,
             ChildStateView, CompletionError, CompletionGuard, CompletionOutcome, LifecycleEvent,
             LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard,
-            SupervisionOutline, SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView,
+            ScopeKind, SupervisionOutline, SupervisorPathSegment, SupervisorSnapshot,
+            SupervisorStateView,
         };
     }
 }
@@ -128,10 +129,10 @@ fn policy_values_expose_their_declared_behavior() {
         }
     }
 
-    fn scope_name(kind: kokage::ScopeKind) -> &'static str {
+    fn scope_name(kind: kokage::observe::ScopeKind) -> &'static str {
         match kind {
-            kokage::ScopeKind::Ordered => "ordered",
-            kokage::ScopeKind::Dynamic => "dynamic",
+            kokage::observe::ScopeKind::Ordered => "ordered",
+            kokage::observe::ScopeKind::Dynamic => "dynamic",
         }
     }
 
@@ -153,7 +154,7 @@ fn policy_values_expose_their_declared_behavior() {
         "jittered-exponential"
     );
     assert_eq!(actor_status_name(ActorStatus::Running), "running");
-    assert_eq!(scope_name(kokage::ScopeKind::default()), "ordered");
+    assert_eq!(scope_name(kokage::observe::ScopeKind::default()), "ordered");
 }
 
 #[derive(Clone)]

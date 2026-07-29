@@ -1,5 +1,5 @@
 use kokage::{
-    Actor, ActorResult, ActorSpec, Context, DynamicRuntime, DynamicTree, OrderedTree,
+    Actor, ActorResult, ActorSpec, Context, DynamicTree, OrderedTree, Runtime,
     host::ChildSpec,
 };
 
@@ -13,7 +13,7 @@ impl Actor for Idle {
     }
 }
 
-async fn mutate(runtime: DynamicRuntime) {
+async fn mutate(runtime: Runtime) {
     let actor = ActorSpec::new("actor", || Idle);
     let child = ChildSpec::task("task", |_| async { Ok(()) });
     let _ = runtime.add_actor(actor).await;

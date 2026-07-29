@@ -246,7 +246,7 @@ pub mod observe {
     pub use kokage_supervisor::{
         ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
         CompletionGuard, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
-        LifecyclePathSegment, LifecycleWatch, SnapshotRecvError, SupervisorSnapshot,
+        LifecyclePathSegment, LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
     };
 }
@@ -282,8 +282,8 @@ pub use actor::{
     SealedActorSpec, SendError, StopContext, TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
-    Backoff, BackoffParts, CancellationToken, ControlError, Restart, RestartMode, ScopeKind,
-    Shutdown, ShutdownMode, Strategy, SupervisorBuildError, SupervisorError,
+    Backoff, BackoffParts, CancellationToken, ControlError, Restart, RestartMode, Shutdown,
+    ShutdownMode, Strategy, SupervisorBuildError, SupervisorError,
 };
-pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
+pub use runtime::{DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

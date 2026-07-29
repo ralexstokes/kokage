@@ -1344,6 +1344,8 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(
             ActorSpec::new("peer", move || StubbornPeer {
                 started: peer_started_tx.clone(),
@@ -1356,6 +1358,8 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(ActorSpec::new("observer", {
             let peer_ref = peer_ref.clone();
             move || UnitObserver {
@@ -1372,6 +1376,8 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
 
     runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .remove_child("peer")
         .await
         .expect("peer removed by abort");

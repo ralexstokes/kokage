@@ -1,8 +1,9 @@
 # Dynamic actors
 
 A `DynamicTree` is an initially empty one-for-one scope whose membership can
-change at runtime. It owns identity like an ordered tree and exposes a handle
-before spawn.
+change at runtime. It owns identity like an ordered tree and exposes its
+dynamic capability before spawn. Both tree kinds spawn the same `Runtime`
+owner; after spawn, recover that capability from `runtime.handle().dynamic()`.
 
 ## Standalone dynamic scope
 
@@ -26,8 +27,14 @@ impl Actor for Worker {
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-let runtime = DynamicTree::new().spawn()?;
-let dynamic = runtime.handle();
+let tree = DynamicTree::new();
+let pre_spawn = tree.handle();
+let runtime = tree.spawn()?;
+let dynamic = runtime
+    .handle()
+    .dynamic()
+    .expect("dynamic root");
+assert_eq!(pre_spawn.snapshot(), dynamic.snapshot());
 
 let worker = dynamic
     .add_actor(ActorSpec::new("worker", || Worker))

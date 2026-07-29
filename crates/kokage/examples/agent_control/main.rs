@@ -240,7 +240,7 @@ async fn build_app() -> Result<App, AnyError> {
     });
     let tool_host_actor = tool_host_slot.define(ToolHost::default);
     let router_actor = router_slot.define(RouterFactory {
-        mount: sessions_mount.clone().into(),
+        mount: sessions_mount.clone().into_runtime_handle(),
         journal: journal.clone(),
         budget: budget.clone(),
         tool_host: tool_host.clone(),

@@ -519,6 +519,8 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -528,6 +530,8 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(ActorSpec::new("tracked", || IdleActor))
         .await
         .expect("failed to add runtime actor");
