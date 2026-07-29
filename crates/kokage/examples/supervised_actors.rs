@@ -59,17 +59,17 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let (delivered_tx, mut delivered_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
     let worker_runs = Arc::new(AtomicUsize::new(0));
-    let worker = builder.actor("worker", move || Worker {
+    let worker = builder.actor(ActorSpec::new("worker", move || Worker {
         runs: worker_runs.clone(),
         delivered: delivered_tx.clone(),
         run: 0,
-    });
-    let orders = builder.actor("front-desk", move || Frontend {
+    }));
+    let orders = builder.actor(ActorSpec::new("front-desk", move || Frontend {
         worker: worker.clone(),
-    });
+    }));
 
-    let runtime_owner = OrderedTree::graph(builder.build()?).spawn()?;
-    let runtime = runtime_owner.handle();
+    let runtime = OrderedTree::graph(builder.build()?).spawn()?;
+    let handle = runtime.handle();
 
     orders.send("business cards x100".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));
@@ -77,8 +77,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
     // Crash the worker. Each run gets a fresh mailbox, so an order queued
     // behind the jam would be lost with it — wait for the supervisor to
     // restart the worker before sending more.
-    let baseline = runtime.snapshot().child("worker").unwrap().generation;
-    let mut restarted = runtime.subscribe_snapshots();
+    let baseline = handle.snapshot().child("worker").unwrap().generation;
+    let mut restarted = handle.subscribe_snapshots();
     orders.send("jam".to_owned()).await?;
     restarted
         .wait_for_child("worker", |child| {

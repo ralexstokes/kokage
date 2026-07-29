@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use kokage::{
-    ActorResult, GraphBuilder, TrySendError,
+    ActorResult, ActorSpec, GraphBuilder, TrySendError,
     host::{ActorContext, RawActor},
 };
 use tokio::sync::Notify;
@@ -35,13 +35,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     builder.name("backpressure");
     builder.mailbox_capacity(1);
     let actor_release = release.clone();
-    let (worker_slot, worker) = builder.slot("ParkBeforeRecv");
-    builder.define(worker_slot, move || ParkBeforeRecv {
-        release: actor_release.clone(),
-    });
+    let worker = builder.actor(
+        ActorSpec::new("ParkBeforeRecv", move || ParkBeforeRecv {
+            release: actor_release.clone(),
+        })
+        .mailbox_capacity(1),
+    );
     let graph = builder.build()?;
 
-    let handle = support::ActorTasks::start(&graph);
+    let handle = support::ActorTasks::start(graph);
 
     // `send` waits for the worker's mailbox to bind, so the first message
     // deterministically occupies the single mailbox slot; `try_send` before

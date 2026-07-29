@@ -12,14 +12,14 @@ pub struct ActorTasks {
 }
 
 impl ActorTasks {
-    pub fn start(graph: &Graph) -> Self {
+    pub fn start(graph: Graph) -> Self {
         let stop = CancellationToken::new();
         let tasks = graph
-            .actors()
-            .iter()
-            .cloned()
-            .map(|actor| {
+            .into_nodes()
+            .into_iter()
+            .map(|node| {
                 let stop = stop.clone();
+                let actor = node.into_runnable();
                 tokio::spawn(async move {
                     actor
                         .run_until(

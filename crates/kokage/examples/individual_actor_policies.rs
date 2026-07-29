@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
-    StartContext, host::BoxError,
+    Actor, ActorRef, ActorResult, ActorSpec, MessageContext, OrderedTree, StartContext,
+    host::BoxError,
 };
 use kokage_supervisor::RestartConfig;
 use tokio::sync::mpsc;
@@ -56,34 +56,29 @@ impl Actor for Worker {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
     let worker_runs = Arc::new(AtomicUsize::new(0));
-    let worker = builder.actor("worker", move || Worker {
+    let worker_spec = ActorSpec::new("worker", move || Worker {
         runs: worker_runs.clone(),
         observed: observed_tx.clone(),
         run: 0,
     });
-    let frontend = builder.actor("frontend", {
+    let worker = worker_spec.actor_ref();
+    let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
         move || Frontend {
             worker: worker.clone(),
         }
     });
-    let graph = builder.build()?;
-    let frontend_actor = graph.actor_for(&frontend)?;
-    let worker_actor = graph.actor_for(&worker)?;
+    let frontend = frontend_spec.actor_ref();
 
-    let runtime_owner = OrderedTree::new()
-        .actor(frontend_actor)
-        .actor(
-            ActorSpec::new(worker_actor)
-                .restart_config(RestartConfig::new(5, std::time::Duration::from_secs(5))),
-        )
+    let runtime = OrderedTree::new()
+        .actor(frontend_spec)
+        .actor(worker_spec.restart_config(RestartConfig::new(5, std::time::Duration::from_secs(5))))
         .spawn()?;
-    let runtime = runtime_owner.handle();
+    let handle = runtime.handle();
 
-    let baseline = runtime.snapshot().child("worker").unwrap().generation;
-    let mut restarted = runtime.subscribe_snapshots();
+    let baseline = handle.snapshot().child("worker").unwrap().generation;
+    let mut restarted = handle.subscribe_snapshots();
     frontend.send("fail-worker".to_owned()).await?;
     restarted
         .wait_for_child("worker", |child| {

@@ -50,26 +50,23 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
     let failing_runs = Arc::new(AtomicUsize::new(0));
     let healthy_runs = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("healthy");
-    builder.define(actor_slot, {
+    builder.actor(ActorSpec::new("healthy", {
         let healthy_runs = healthy_runs.clone();
         move || Healthy {
             runs: healthy_runs.clone(),
         }
-    });
-    let (actor_slot, _) = builder.slot("failing");
-    builder.define(actor_slot, {
+    }));
+    builder.actor(ActorSpec::new("failing", {
         let failing_runs = failing_runs.clone();
         move || FailsOnce {
             runs: failing_runs.clone(),
         }
-    });
+    }));
 
-    let handle_owner = OrderedTree::graph(builder.build()?)
+    let runtime = OrderedTree::graph(builder.build()?)
         .strategy(strategy)
         .default_restart(RestartPolicy::Always)
         .spawn()?;
-    let handle = handle_owner.handle();
 
     timeout(Duration::from_secs(1), async {
         loop {
@@ -88,7 +85,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         failing_runs.load(Ordering::SeqCst),
         healthy_runs.load(Ordering::SeqCst),
     );
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(counts)
 }
 

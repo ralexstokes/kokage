@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorResult, GraphBuilder, RestartPolicy, TrySendError,
+    ActorResult, ActorSpec, GraphBuilder, RestartPolicy, TrySendError,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::{
@@ -32,12 +32,16 @@ impl RawActor for OneMessageSink {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (sink_ref_slot, sink_ref) = builder.slot("OneMessageSink");
-    builder.define(sink_ref_slot, move || OneMessageSink {
+    let sink_ref = builder.actor(ActorSpec::new("OneMessageSink", move || OneMessageSink {
         observed: observed_tx.clone(),
-    });
+    }));
     let graph = builder.build()?;
-    let sink = graph.actors()[0].clone();
+    let sink = graph
+        .into_nodes()
+        .into_iter()
+        .next()
+        .expect("one actor")
+        .into_runnable();
 
     let first_run = tokio::spawn({
         let sink = sink.clone();
