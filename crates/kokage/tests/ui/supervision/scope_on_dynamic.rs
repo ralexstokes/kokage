@@ -1,7 +1,4 @@
-use kokage::{
-    ActorResult, DynamicScope, Supervision,
-    host::{ActorContext, RawActor},
-};
+use kokage::{ActorResult, DynamicScope, Supervision, host::{ActorContext, RawActor}};
 
 struct Worker;
 
