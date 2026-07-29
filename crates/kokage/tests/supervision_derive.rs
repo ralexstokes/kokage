@@ -106,7 +106,11 @@ async fn wire_runs_a_cyclic_pipeline_with_explicit_topology() {
     assert_eq!(refs.frontend.id(), "frontend");
     assert_eq!(refs.clone().parser.id(), "parser");
     let runtime = OrderedTree::graph(graph).spawn().expect("tree builds");
-    runtime.wait_started().await.expect("runtime starts");
+    runtime
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))
