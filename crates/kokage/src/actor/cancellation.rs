@@ -1,4 +1,4 @@
-use kokage_supervisor::CancellationToken;
+use crate::supervisor::CancellationToken;
 
 pub(crate) struct CancelOnDrop(CancellationToken);
 

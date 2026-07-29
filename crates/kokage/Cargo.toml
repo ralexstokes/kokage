@@ -11,14 +11,14 @@ categories = ["asynchronous", "concurrency"]
 [features]
 default = ["derive"]
 derive = ["dep:kokage-derive"]
-metrics = ["dep:metrics", "kokage-supervisor/metrics"]
-serde = ["dep:serde", "kokage-supervisor/serde"]
+metrics = ["dep:metrics"]
+serde = ["dep:serde"]
 
 [dependencies]
 kokage-derive = { workspace = true, optional = true }
-kokage-supervisor.workspace = true
 metrics = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+slab.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -26,6 +26,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
+metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -37,3 +38,7 @@ trybuild.workspace = true
 [[example]]
 name = "trading_engine"
 required-features = ["metrics"]
+
+[[bench]]
+name = "supervisor_common_flows"
+harness = false

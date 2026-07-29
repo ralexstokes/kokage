@@ -18,8 +18,7 @@ under `kokage::observe`.
 
 | Crate | Role |
 |---|---|
-| [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Typed actors placed directly in ordered or dynamic supervision trees. |
-| [`kokage-supervisor`](https://stokes.io/kokage/api/kokage_supervisor/index.html) | Actor-independent structured supervision for async tasks. |
+| [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Typed actors and raw task children placed directly in ordered or dynamic supervision trees. |
 | `kokage-derive` | The optional `ActorFactory` derive, re-exported by `kokage`. |
 | `kokage-console` | An experimental live view over snapshots. |
 

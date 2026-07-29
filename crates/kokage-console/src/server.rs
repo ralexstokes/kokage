@@ -8,7 +8,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use kokage_supervisor::SupervisorSnapshotReceiver;
+use kokage::observe::SupervisorSnapshotReceiver;
 use tokio::sync::watch;
 
 use crate::{ConsoleHandle, LifecycleSource, StatsSource, ws};

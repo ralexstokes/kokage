@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::actor::context::RawContext;
-pub(crate) use kokage_supervisor::BoxError;
+pub(crate) use crate::supervisor::BoxError;
 
 /// The result type returned by actor run, startup, and message functions.
 ///

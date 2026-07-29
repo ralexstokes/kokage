@@ -1,33 +1,7 @@
-error[E0432]: unresolved imports `kokage_supervisor::AttachedChild`, `kokage_supervisor::AttachedChildIdentity`
- --> tests/ui/public-api/private_attachments.rs:1:25
+error[E0432]: unresolved imports `kokage::AttachedChild`, `kokage::AttachedChildIdentity`
+ --> tests/ui/public-api/private_attachments.rs:1:14
   |
-1 | use kokage_supervisor::{AttachedChild, AttachedChildIdentity, ChildSpec, SupervisorHandle};
-  |                         ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^ no `AttachedChildIdentity` in the root
-  |                         |
-  |                         no `AttachedChild` in the root
-
-error[E0624]: method `attachment` is private
- --> tests/ui/public-api/private_attachments.rs:4:18
-  |
-4 |       let _ = spec.attachment(());
-  |                    ^^^^^^^^^^ private method
-  |
- ::: $WORKSPACE/crates/kokage-supervisor/src/child.rs
-  |
-  | /     pub(crate) fn attachment<T>(self, attachment: T) -> Self
-  | |     where
-  | |         T: Any + Send + Sync,
-  | |_____________________________- private method defined here
-
-error[E0624]: method `attached_children` is private
- --> tests/ui/public-api/private_attachments.rs:5:20
-  |
-5 |       let _ = handle.attached_children::<()>();
-  |                      ^^^^^^^^^^^^^^^^^ private method
-  |
- ::: $WORKSPACE/crates/kokage-supervisor/src/handle.rs
-  |
-  | /     pub(crate) fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
-  | |     where
-  | |         T: Any + Send + Sync,
-  | |_____________________________- private method defined here
+1 | use kokage::{AttachedChild, AttachedChildIdentity};
+  |              ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^ no `AttachedChildIdentity` in the root
+  |              |
+  |              no `AttachedChild` in the root

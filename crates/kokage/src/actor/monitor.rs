@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use kokage_supervisor::CancellationToken;
+use crate::supervisor::CancellationToken;
 use tokio::sync::{Notify, futures::Notified};
 
 /// Maximum number of undelivered events staged for a single watch.

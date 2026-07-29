@@ -9,13 +9,13 @@ use crate::{
         ActorNode, ActorOptionsValidationError, ActorStats, RunnableActor, RunnableActorBuilder,
         SupervisorPathSegment,
     },
-};
-use kokage_supervisor::{
-    __private::{self, AttachedChildIdentity, guard_from_probe},
-    CancellationToken, ChildSpec, CompletionError, CompletionOutcome, ControlError,
-    DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
-    Shutdown, ShutdownMode, SupervisorBuildError, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSnapshotReceiver,
+    supervisor::{
+        __private::{self, AttachedChildIdentity, guard_from_probe},
+        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOutcome, ControlError,
+        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
+        Shutdown, ShutdownMode, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+        SupervisorSnapshotReceiver,
+    },
 };
 
 #[derive(Debug)]
@@ -144,7 +144,7 @@ where
             if !event.is_child_transition()
                 && !matches!(
                     event.kind,
-                    kokage_supervisor::LifecycleEventKind::Lagged { .. }
+                    crate::supervisor::LifecycleEventKind::Lagged { .. }
                 )
             {
                 continue;
@@ -244,7 +244,7 @@ impl RuntimeHandle {
 
         UNAVAILABLE
             .get_or_init(|| {
-                let builder = kokage_supervisor::Supervisor::dynamic();
+                let builder = crate::supervisor::Supervisor::dynamic();
                 let supervisor = builder.handle();
                 drop(builder);
                 Self::new(
@@ -554,7 +554,7 @@ impl DynamicRuntimeHandle {
     /// tree is lowered and validated, then the parent validates insertion of
     /// the resulting child. For example, a duplicate actor binding fails the
     /// first phase, while an already-occupied child id fails the second. The
-    /// nested [`SupervisorBuildError`] identifies the validation rule, but a
+    /// nested [`BuildError`] identifies the validation rule, but a
     /// caller should not infer the phase solely from an error variant because
     /// some rules, such as duplicate child ids, can arise in either phase.
     /// Any error consumes the supplied tree and makes handles previously issued
@@ -613,7 +613,7 @@ impl DynamicRuntimeHandle {
         spec.actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
-                ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
+                ControlError::Rejected(BuildError::InvalidConfig(error.message()))
             })?;
         let (default_restart, default_shutdown) = self.handle.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
@@ -769,17 +769,15 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorResult, ActorSpec, Context, DynamicRuntimeHandle, DynamicTree, OrderedTree,
-        Restart, Runtime, RuntimeHandle, SupervisorBuildError,
+        Actor, ActorResult, ActorSpec, BuildError, Context, DynamicRuntimeHandle, DynamicTree,
+        OrderedTree, Restart, Runtime, RuntimeHandle,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
-        let ordered_spawn: fn(OrderedTree) -> Result<Runtime, SupervisorBuildError> =
-            OrderedTree::spawn;
+        let ordered_spawn: fn(OrderedTree) -> Result<Runtime, BuildError> = OrderedTree::spawn;
         let ordered_handle: fn(&OrderedTree) -> RuntimeHandle = OrderedTree::handle;
-        let dynamic_spawn: fn(DynamicTree) -> Result<Runtime, SupervisorBuildError> =
-            DynamicTree::spawn;
+        let dynamic_spawn: fn(DynamicTree) -> Result<Runtime, BuildError> = DynamicTree::spawn;
         let dynamic_handle: fn(&DynamicTree) -> DynamicRuntimeHandle = DynamicTree::handle;
 
         let _ = (ordered_spawn, ordered_handle, dynamic_spawn, dynamic_handle);

@@ -130,7 +130,7 @@ impl TreeBuilder {
         self.tree.take().expect("test tree builder is single-use")
     }
 
-    pub(crate) fn spawn(self) -> Result<kokage::Runtime, kokage::SupervisorBuildError> {
+    pub(crate) fn spawn(self) -> Result<kokage::Runtime, kokage::BuildError> {
         self.build().spawn()
     }
 }

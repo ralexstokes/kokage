@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time::sleep};
 
 use kokage::{
-    ActorSpec, DynamicTree, MailboxMode, Restart, Shutdown, Strategy, SupervisorBuildError,
+    ActorSpec, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy,
     host::{ChildSpec, RawActor, RawContext},
     observe::{ChildOutline, ScopeKind},
     prelude::*,
@@ -197,7 +197,7 @@ fn tree_placement_rejects_zero_actor_mailbox_capacity() {
 
     assert!(matches!(
         result,
-        Err(SupervisorBuildError::InvalidConfig(
+        Err(BuildError::InvalidConfig(
             "actor mailbox capacity must be non-zero"
         ))
     ));
@@ -212,7 +212,7 @@ fn tree_placement_rejects_zero_scope_mailbox_capacity() {
 
     assert!(matches!(
         result,
-        Err(SupervisorBuildError::InvalidConfig(
+        Err(BuildError::InvalidConfig(
             "actor mailbox capacity must be non-zero"
         ))
     ));

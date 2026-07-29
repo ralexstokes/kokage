@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use kokage::{
     ActorStatus, Restart, Strategy,
+    host::ChildSpec,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -22,13 +23,12 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, Backoff, BackoffParts, BlockingCancelled, CancellationToken,
+            ActorFactory, Backoff, BackoffParts, BlockingCancelled, BuildError, CancellationToken,
             ControlError, DownReason, DynamicRestrictedScope, DynamicRuntimeHandle, DynamicTree,
             Guard, MailboxMode, MonitorEvent, OffloadDeadline, Restart, RestartMode,
             RestrictedScope, Runtime, RuntimeHandle, SealedActorSlot, SealedActorSpec, Shutdown,
-            ShutdownMode, Strategy, SupervisorBuildError, SupervisorError, TimerKey, TreeNode,
+            ShutdownMode, Strategy, SupervisorError, TimerKey, TreeNode,
         };
-        use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
 
     mod host {
@@ -70,7 +70,7 @@ async fn named_task(ctx: kokage::host::ChildContext) -> kokage::host::ChildResul
 }
 
 #[test]
-fn host_task_surface_supports_a_named_factory_without_kokage_supervisor_imports() {
+fn host_task_surface_supports_a_named_factory_from_the_single_crate() {
     let _child = kokage::host::ChildSpec::task("worker", named_task);
 }
 
@@ -241,4 +241,131 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .shutdown_and_wait()
         .await
         .expect("shutdown should succeed");
+}
+
+#[test]
+fn task_policy_sets_remain_nameable_from_the_single_crate() {
+    fn strategy_name(strategy: Strategy) -> &'static str {
+        match strategy {
+            Strategy::OneForOne => "one-for-one",
+            Strategy::OneForAll => "one-for-all",
+            Strategy::RestForOne => "rest-for-one",
+        }
+    }
+
+    fn scope_name(kind: kokage::observe::ScopeKind) -> &'static str {
+        match kind {
+            kokage::observe::ScopeKind::Ordered => "ordered",
+            kokage::observe::ScopeKind::Dynamic => "dynamic",
+        }
+    }
+
+    assert_eq!(strategy_name(Strategy::default()), "one-for-one");
+    assert_eq!(scope_name(kokage::observe::ScopeKind::default()), "ordered");
+}
+
+#[tokio::test]
+async fn prelude_observes_raw_task_events_and_snapshots() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let tree = OrderedTree::new().task(ChildSpec::task("worker", move |ctx| {
+        let started_tx = started_tx.clone();
+        async move {
+            started_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    }));
+    let handle = tree.handle();
+    let mut events = handle.watch_lifecycle();
+    let runtime = tree.spawn().expect("task tree spawns");
+
+    assert_eq!(
+        timeout(EVENT_TIMEOUT, started_rx.recv())
+            .await
+            .expect("timed out waiting for task")
+            .expect("task reported startup"),
+        0
+    );
+    timeout(EVENT_TIMEOUT, async {
+        loop {
+            let event = events.next().await.expect("lifecycle remains open");
+            if matches!(
+                event.kind,
+                LifecycleEventKind::ChildStarted {
+                    ref child_id,
+                    generation: 0,
+                    ..
+                } if child_id == "worker"
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for task startup event");
+    assert!(
+        handle
+            .snapshot()
+            .child("worker")
+            .expect("task child exists")
+            .state
+            .is_running()
+    );
+
+    runtime
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown succeeds");
+}
+
+#[tokio::test]
+async fn prelude_snapshots_walk_nested_task_children() {
+    let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
+    let nested = OrderedTree::new().task(ChildSpec::task("leaf", move |ctx| {
+        let leaf_started_tx = leaf_started_tx.clone();
+        async move {
+            leaf_started_tx.send(()).expect("test receiver dropped");
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    }));
+    let tree = OrderedTree::new()
+        .task(ChildSpec::task("anchor", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .subtree("nested", nested);
+    let handle = tree.handle();
+    let runtime = tree.spawn().expect("nested task tree spawns");
+
+    timeout(EVENT_TIMEOUT, leaf_started_rx.recv())
+        .await
+        .expect("timed out waiting for nested task")
+        .expect("nested task reported startup");
+    let snapshot = handle.snapshot();
+    assert!(snapshot.descendant(["nested", "leaf"]).is_some());
+
+    runtime
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown succeeds");
+}
+
+#[test]
+fn task_policy_types_cover_common_configuration() {
+    assert_eq!(kokage::Shutdown::abort(), kokage::Shutdown::abort());
+    assert_eq!(
+        Restart::on_failure().limit(3, Duration::from_secs(10)),
+        Restart::on_failure().limit(3, Duration::from_secs(10))
+    );
+    assert_eq!(
+        Restart::on_failure()
+            .limit(2, Duration::from_secs(5))
+            .backoff(kokage::Backoff::fixed(Duration::from_millis(50))),
+        Restart::on_failure()
+            .limit(2, Duration::from_secs(5))
+            .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
+    );
 }

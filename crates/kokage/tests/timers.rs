@@ -13,10 +13,9 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, Guard, OrderedTree,
-    TimerKey,
+    Strategy, TimerKey,
     host::{BoxError, RawActor, RawContext},
 };
-use kokage_supervisor::Strategy;
 use tokio::{
     sync::{Notify, mpsc},
     time::{Instant, advance, timeout},

@@ -15,9 +15,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, ControlError, DownReason,
-    DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, Runtime, RuntimeHandle,
-    SendError, Shutdown, StopContext, SupervisorBuildError, SupervisorError, TrySendError,
+    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context, ControlError,
+    DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, Runtime,
+    RuntimeHandle, SendError, Shutdown, StopContext, SupervisorError, TrySendError,
     host::{BoxError, ChildSpec, RawActor, RawContext},
     observe::ChildMembershipView,
 };
@@ -1153,7 +1153,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
 
     assert!(matches!(
         result,
-        Err(ControlError::Rejected(SupervisorBuildError::InvalidConfig(
+        Err(ControlError::Rejected(BuildError::InvalidConfig(
             "actor mailbox capacity must be non-zero"
         )))
     ));

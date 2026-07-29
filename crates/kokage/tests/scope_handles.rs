@@ -12,8 +12,7 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSpec, Context, ControlError, DynamicRuntimeHandle, DynamicTree, Guard,
-    OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext, Strategy,
-    SupervisorBuildError,
+    BuildError, OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext, Strategy,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
@@ -603,7 +602,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
             .add_subtree("invalid", invalid)
             .await,
         Err(ControlError::Rejected(
-            SupervisorBuildError::DuplicateChildId(label)
+            BuildError::DuplicateChildId(label)
         )) if label == "duplicate-binding"
     ));
     assert_snapshot_receiver_closes(rejected_snapshots).await;
@@ -619,7 +618,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
         support::dynamic_root(&parent)
             .add_subtree("occupied", duplicate)
             .await,
-        Err(ControlError::Rejected(SupervisorBuildError::DuplicateChildId(id)))
+        Err(ControlError::Rejected(BuildError::DuplicateChildId(id)))
             if id == "occupied"
     ));
     assert_snapshot_receiver_closes(rejected_snapshots).await;
@@ -1010,7 +1009,7 @@ async fn duplicate_actor_bindings_are_rejected_during_tree_lowering() {
 
     assert!(matches!(
         tree.spawn(),
-        Err(SupervisorBuildError::DuplicateChildId(label)) if label == "actor"
+        Err(BuildError::DuplicateChildId(label)) if label == "actor"
     ));
     assert_snapshot_stream_closes(&handle).await;
 }

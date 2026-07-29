@@ -1,5 +1,0 @@
-error[E0599]: no method named `child` found for struct `DynamicSupervisorBuilder` in the current scope
- --> tests/ui/builder/dynamic_declared_child.rs:4:35
-  |
-4 |     let _ = Supervisor::dynamic().child(ChildSpec::task("worker", |_| async { Ok(()) }));
-  |                                   ^^^^^ method not found in `DynamicSupervisorBuilder`

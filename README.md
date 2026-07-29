@@ -10,12 +10,10 @@ The core idea is the one that has kept telecom switches running for decades:
 organize your program into small, isolated tasks and let a *supervisor*
 restart the ones that fail.
 
-The actor product needs one dependency. Its prelude covers the day-one actor
+Kokage needs one dependency. Its prelude covers the day-one actor
 surface; hosting and observation APIs are grouped under `kokage::host` and
 `kokage::observe`, while advanced actor APIs remain at the crate root. Actor
-applications can place raw task children with `kokage::host::ChildSpec`; only
-applications using the lower-level supervisor crate directly need a separate
-`kokage-supervisor` dependency:
+applications can place raw task children with `kokage::host::ChildSpec`:
 
 ```toml
 [dependencies]
@@ -95,15 +93,13 @@ The full runnable version is
 
 ## The crates
 
-`kokage` is the product: typed actors plus the runtime that
-supervises them, in one crate. `kokage-supervisor` underneath is deliberately
-independent — it knows nothing about actors and is useful on its own for
-supervising plain async tasks.
+`kokage` is the product: typed actors, raw task children, and the runtime that
+supervises both in one crate. The implementation layer stays private so trees
+remain the only construction front door.
 
 | Crate | Role |
 |-------|------|
-| [`kokage`](crates/kokage) | The front door: communicating actors with typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, and cooperative blocking work, with each actor running as its own supervised child under single-use ordered or dynamic trees. |
-| [`kokage-supervisor`](crates/kokage-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
+| [`kokage`](crates/kokage) | The front door: communicating actors with typed mailboxes, raw task children, restart-stable handles, restart policies and strategies, graceful shutdown, and single-use ordered or dynamic supervision trees. |
 | [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories; re-exported by `kokage` under the default `derive` feature. |
 | [`kokage-console`](crates/kokage-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `kokage` feature and dependency surface. |
 
@@ -114,7 +110,7 @@ supervising plain async tasks.
   Start at [`docs/src/introduction.md`](docs/src/introduction.md), or run
   `just serve-book` for a local copy.
 - **API docs** — `just doc` builds and opens the rustdoc for the workspace.
-- **Examples** — each crate ships runnable examples under its `examples/`
+- **Examples** — runnable examples live under each package's `examples/`
   directory, e.g. `cargo run -p kokage --example supervised_actors`. Try
   the console locally with `cargo run -p kokage-console --example console`.
 

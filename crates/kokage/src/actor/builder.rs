@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use kokage_supervisor::{Restart, Shutdown};
+use crate::supervisor::{Restart, Shutdown};
 
 use crate::actor::{
     binding::{BindingCore, MailboxMode},
@@ -329,7 +329,7 @@ impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
     ///
     /// This conversion stores configuration without applying supervision-tree
     /// validation. Supervised placement rejects a zero mailbox capacity with
-    /// [`SupervisorBuildError`](crate::SupervisorBuildError); a direct host
+    /// [`BuildError`](crate::BuildError); a direct host
     /// sees the same rejection as
     /// [`ActorRunError::ZeroMailboxCapacity`](crate::host::ActorRunError::ZeroMailboxCapacity)
     /// when the run starts.

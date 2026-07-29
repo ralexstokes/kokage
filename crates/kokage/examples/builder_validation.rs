@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use kokage::{
-    ActorResult, ActorSlot, ActorSpec, OrderedTree, SupervisorBuildError,
+    ActorResult, ActorSlot, ActorSpec, BuildError, OrderedTree,
     host::{RawActor, RawContext},
 };
 
@@ -22,7 +22,7 @@ impl<M: Send + 'static> RawActor for Idle<M> {
     }
 }
 
-fn report(label: &str, result: Result<kokage::Runtime, SupervisorBuildError>) {
+fn report(label: &str, result: Result<kokage::Runtime, BuildError>) {
     match result {
         Ok(_) => panic!("{label} unexpectedly spawned"),
         Err(error) => println!("{label}: {error}"),
