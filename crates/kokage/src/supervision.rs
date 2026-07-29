@@ -126,22 +126,15 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut graph = GraphBuilder::new();
-/// let (ingest_slot, ingest) = graph.slot("ingest");
-/// graph.define(ingest_slot, || Worker);
-/// let (parse_slot, parse) = graph.slot("parse");
-/// graph.define(parse_slot, || Worker);
-/// let graph = graph.build()?;
+/// let ingest = ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never);
+/// let parse = ActorSpec::new("parse", || Worker);
 ///
 /// let tree = OrderedTree::new()
 ///     .strategy(Strategy::RestForOne)
-///     .actor(
-///         ActorSpec::new(graph.actor_for(&ingest)?)
-///             .restart(RestartPolicy::Never),
-///     )
+///     .actor(ingest)
 ///     .subtree(
 ///         "workers",
-///         OrderedTree::new().actor(graph.actor_for(&parse)?),
+///         OrderedTree::new().actor(parse),
 ///     );
 ///
 /// assert_eq!(tree.outline().child_ids(), ["ingest", "workers"]);
@@ -766,7 +759,7 @@ impl SupervisionChild {
                 .child_id(child_id)
                 .remove_on_exit(matches!(
                     terminal_membership,
-                    Some(crate::TerminalMembership::Remove)
+                    crate::TerminalMembership::Remove
                 )),
             )),
             Self::Task(child) => builder.child(child),
@@ -812,7 +805,7 @@ impl SupervisionChild {
                     .child_id(child_id)
                     .remove_on_exit(matches!(
                         terminal_membership,
-                        Some(crate::TerminalMembership::Remove)
+                        crate::TerminalMembership::Remove
                     ))
                     .children(children_handle),
                 );

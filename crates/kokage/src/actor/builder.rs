@@ -19,24 +19,7 @@ use crate::actor::{
     raw::RawActor,
 };
 
-/// Per-actor registration options.
-///
-/// Options compose independently, so an actor can use a non-default mailbox
-/// and message-size observation together:
-///
-/// ```
-/// use kokage::{ActorOptions, MailboxMode};
-///
-/// struct Snapshot(Vec<u8>);
-///
-/// fn snapshot_size(message: &Snapshot) -> usize {
-///     message.0.len()
-/// }
-///
-/// let options: ActorOptions<Snapshot> = ActorOptions::new()
-///     .mailbox(MailboxMode::conflate())
-///     .message_size(snapshot_size);
-/// ```
+/// Internal mailbox portion of the public [`ActorSpec`] vocabulary.
 pub(crate) struct ActorOptions<M> {
     pub(crate) mailbox_mode: MailboxMode<M>,
     pub(crate) size_hint: Option<fn(&M) -> usize>,
@@ -140,6 +123,8 @@ impl<M> Default for ActorOptions<M> {
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
 /// the declaration through [`GraphBuilder::actor`],
 /// [`crate::OrderedTree::actor`], or [`crate::DynamicRuntime::add_actor`].
+/// Terminal memberships are retained by default in every destination. Select
+/// [`TerminalMembership::Remove`] explicitly for an ephemeral dynamic actor.
 pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_id: Arc<str>,
     pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,
@@ -149,11 +134,14 @@ pub struct ActorSpec<M: Send + 'static> {
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<ShutdownPolicy>,
     pub(crate) restart_config: Option<RestartConfig>,
-    pub(crate) terminal_membership: Option<TerminalMembership>,
+    pub(crate) terminal_membership: TerminalMembership,
 }
 
 impl<M: Send + 'static> ActorSpec<M> {
     /// Creates a declaration for `factory` under `actor_id`.
+    ///
+    /// The declaration uses [`TerminalMembership::Retain`] unless changed
+    /// with [`terminal_membership`](Self::terminal_membership).
     pub fn new<F>(actor_id: impl Into<String>, factory: F) -> Self
     where
         F: ActorFactory,
@@ -168,7 +156,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             restart: None,
             shutdown: None,
             restart_config: None,
-            terminal_membership: None,
+            terminal_membership: TerminalMembership::Retain,
         }
     }
 
@@ -239,7 +227,7 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// Selects what happens to this child after a terminal exit.
     #[must_use]
     pub fn terminal_membership(mut self, membership: TerminalMembership) -> Self {
-        self.terminal_membership = Some(membership);
+        self.terminal_membership = membership;
         self
     }
 
@@ -315,7 +303,7 @@ pub struct ActorNode {
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<ShutdownPolicy>,
     pub(crate) restart_config: Option<RestartConfig>,
-    pub(crate) terminal_membership: Option<TerminalMembership>,
+    pub(crate) terminal_membership: TerminalMembership,
 }
 
 impl ActorNode {
@@ -366,7 +354,7 @@ pub struct ActorSlot<M: Send + 'static> {
     restart: Option<RestartPolicy>,
     shutdown: Option<ShutdownPolicy>,
     restart_config: Option<RestartConfig>,
-    terminal_membership: Option<TerminalMembership>,
+    terminal_membership: TerminalMembership,
 }
 
 impl<M: Send + 'static> ActorSlot<M> {
@@ -380,7 +368,7 @@ impl<M: Send + 'static> ActorSlot<M> {
             restart: None,
             shutdown: None,
             restart_config: None,
-            terminal_membership: None,
+            terminal_membership: TerminalMembership::Retain,
         }
     }
 
@@ -446,7 +434,7 @@ impl<M: Send + 'static> ActorSlot<M> {
     /// Selects what happens to this child after a terminal exit.
     #[must_use]
     pub fn terminal_membership(mut self, membership: TerminalMembership) -> Self {
-        self.terminal_membership = Some(membership);
+        self.terminal_membership = membership;
         self
     }
 
@@ -506,7 +494,7 @@ struct Slot {
     restart: Option<RestartPolicy>,
     shutdown: Option<ShutdownPolicy>,
     restart_config: Option<RestartConfig>,
-    terminal_membership: Option<TerminalMembership>,
+    terminal_membership: TerminalMembership,
 }
 
 pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
@@ -699,7 +687,7 @@ impl GraphBuilder {
             restart: None,
             shutdown: None,
             restart_config: None,
-            terminal_membership: None,
+            terminal_membership: TerminalMembership::Retain,
         });
         Some((index, actor_ref))
     }

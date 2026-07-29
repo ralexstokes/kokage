@@ -11,7 +11,7 @@ spec structs are useful when durable configuration deserves its own type.
 
 ```rust,no_run
 use kokage::{
-    Actor, ActorRef, ActorResult, DynamicActorOptions, MessageContext, DynamicTree,
+    Actor, ActorRef, ActorResult, ActorSpec, MessageContext, DynamicTree,
 };
 
 struct FrontDesk {
@@ -61,14 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = DynamicTree::new().spawn()?;
 
     let orders = runtime
-        .add_actor("front-desk", || FrontDesk { rush: None })
+        .add_actor(ActorSpec::new("front-desk", || FrontDesk { rush: None }))
         .await?;
     let rush = runtime
-        .add_actor_with(
-            "rush-press",
-            || RushPress,
-            DynamicActorOptions::default().mailbox_capacity(32),
-        )
+        .add_actor(ActorSpec::new("rush-press", || RushPress).mailbox_capacity(32))
         .await?;
 
     // Distribute the ref by message — the mailbox is the discovery channel.
@@ -83,29 +79,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`DynamicActorOptions` carries the new child's restart policy, shutdown policy,
-optional restart configuration, and terminal-removal behavior. A
-runtime's restart and shutdown defaults are inherited unless the options use
-the `restart(...)` or `shutdown(...)` builder methods to override them. Those
+`ActorSpec` is the same declaration used for graph registration and tree
+placement. It carries the new child's factory, mailbox settings, restart and
+shutdown policies, optional restart configuration, and terminal-membership
+behavior. A runtime's restart and shutdown defaults are inherited unless the
+declaration uses the `restart(...)` or `shutdown(...)` builder methods to override them. Those
 methods are how the runtime distinguishes an explicit override from an
 inherited default.
 
-Mailbox configuration uses the same setters as `ActorOptions`, forwarded
-directly by `DynamicActorOptions`. The hosting runtime scope's mailbox
+The hosting runtime scope's mailbox
 capacity is the default: graph-backed scopes inherit their graph builder's
 setting, while graphless scopes use the library default.
-`ActorOptions::mailbox_capacity` overrides that default for one actor, and
+`ActorSpec::mailbox_capacity` overrides that default for one actor, and
 unkeyed `MailboxMode::conflate()` always stores one unread message and ignores
-either capacity. A zero per-actor capacity is rejected by `add_actor_with`.
+either capacity. A zero per-actor capacity is rejected by `add_actor`.
 
-Dynamic actors are removed automatically after a terminal exit by default,
-independent of their restart policy. An exit is terminal only when the policy
-declines to restart it, so default removal never interrupts a restart cycle.
-Use `remove_on_exit(false)` to retain a terminal child in the supervisor
-snapshot instead. Watches still receive `Down` followed by `Terminated` before
-the membership disappears. The child id becomes reusable when removal
-completes, not merely when `Terminated` is observed; wait for the snapshot to
-drop the membership before re-adding the same id.
+`ActorSpec` retains terminal memberships by default everywhere, including in
+dynamic scopes. For an ephemeral dynamic child, select
+`terminal_membership(TerminalMembership::Remove)` explicitly. An exit is
+terminal only when the restart policy declines to restart it, so removal never
+interrupts a restart cycle. Watches still receive `Down` followed by
+`Terminated` before the membership disappears. The child id becomes reusable
+when removal completes; wait for the snapshot to drop the membership before
+re-adding the same id.
 
 Dynamic scopes always use `Strategy::OneForOne`, so one actor's exit, restart,
 or removal never starts a sibling restart cycle. Once terminal removal
