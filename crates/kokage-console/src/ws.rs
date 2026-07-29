@@ -3,11 +3,8 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use kokage_supervisor::{LifecycleEvent, SupervisorSnapshot};
-use tokio::{
-    sync::watch,
-    time::{self, Duration},
-};
+use kokage_supervisor::{LifecycleEvent, SupervisorSnapshot, SupervisorSnapshotReceiver};
+use tokio::time::{self, Duration};
 
 use crate::{ActorStatsView, server::AppState};
 
@@ -72,11 +69,8 @@ fn stats_message(stats: &[ActorStatsView]) -> Message {
     )
 }
 
-async fn send_snapshot(
-    socket: &mut WebSocket,
-    snapshots: &mut watch::Receiver<SupervisorSnapshot>,
-) -> bool {
-    let snapshot = snapshots.borrow_and_update().clone();
+async fn send_snapshot(socket: &mut WebSocket, snapshots: &mut SupervisorSnapshotReceiver) -> bool {
+    let snapshot = snapshots.take_latest();
     socket.send(snapshot_message(snapshot)).await.is_ok()
 }
 

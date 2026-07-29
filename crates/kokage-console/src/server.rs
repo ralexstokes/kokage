@@ -8,7 +8,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use kokage_supervisor::SupervisorSnapshot;
+use kokage_supervisor::SupervisorSnapshotReceiver;
 use tokio::sync::watch;
 
 use crate::{ConsoleHandle, LifecycleSource, StatsSource, ws};
@@ -17,7 +17,7 @@ const INDEX_HTML: &str = include_str!("../assets/index.html");
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) snapshots: watch::Receiver<SupervisorSnapshot>,
+    pub(crate) snapshots: SupervisorSnapshotReceiver,
     pub(crate) lifecycle: LifecycleSource,
     pub(crate) stats: StatsSource,
 }
@@ -191,7 +191,7 @@ async fn index() -> Html<&'static str> {
 }
 
 async fn bind_app(
-    snapshots: watch::Receiver<SupervisorSnapshot>,
+    snapshots: SupervisorSnapshotReceiver,
     lifecycle: LifecycleSource,
     stats: StatsSource,
     bind: SocketAddr,
@@ -238,7 +238,7 @@ async fn shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
 }
 
 pub(crate) async fn spawn(
-    snapshots: watch::Receiver<SupervisorSnapshot>,
+    snapshots: SupervisorSnapshotReceiver,
     lifecycle: LifecycleSource,
     stats: StatsSource,
     bind: SocketAddr,
@@ -274,7 +274,7 @@ pub(crate) async fn spawn(
 }
 
 pub(crate) async fn run(
-    snapshots: watch::Receiver<SupervisorSnapshot>,
+    snapshots: SupervisorSnapshotReceiver,
     lifecycle: LifecycleSource,
     stats: StatsSource,
     bind: SocketAddr,

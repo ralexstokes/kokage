@@ -14,9 +14,10 @@ use kokage_supervisor::{
     BoxError, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSnapshot, ChildSpec,
     ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig,
     RestartPolicy, SupervisorError, SupervisorHandle, SupervisorLifecycleEvent, SupervisorSnapshot,
+    SupervisorSnapshotReceiver,
 };
 use tokio::{
-    sync::{Notify, mpsc, watch},
+    sync::{Notify, mpsc},
     time::timeout,
 };
 
@@ -385,7 +386,7 @@ pub fn failing_child(
 }
 
 pub async fn wait_for_child_running(
-    snapshots: &mut watch::Receiver<SupervisorSnapshot>,
+    snapshots: &mut SupervisorSnapshotReceiver,
     id: &str,
     generation: u64,
 ) -> ChildSnapshot {
@@ -401,28 +402,13 @@ pub async fn wait_for_child_running(
 }
 
 pub async fn wait_for_snapshot(
-    snapshots: &mut watch::Receiver<SupervisorSnapshot>,
+    snapshots: &mut SupervisorSnapshotReceiver,
     predicate: impl Fn(&SupervisorSnapshot) -> bool,
 ) -> SupervisorSnapshot {
-    timeout(EVENT_TIMEOUT, async {
-        if predicate(&snapshots.borrow()) {
-            return snapshots.borrow().clone();
-        }
-
-        loop {
-            snapshots
-                .changed()
-                .await
-                .expect("snapshot stream closed unexpectedly");
-
-            let snapshot = snapshots.borrow().clone();
-            if predicate(&snapshot) {
-                return snapshot;
-            }
-        }
-    })
-    .await
-    .expect("timed out waiting for matching supervisor snapshot")
+    timeout(EVENT_TIMEOUT, snapshots.wait_for(predicate))
+        .await
+        .expect("timed out waiting for matching supervisor snapshot")
+        .expect("snapshot stream closed unexpectedly")
 }
 
 pub async fn shutdown(handle: &SupervisorHandle) {

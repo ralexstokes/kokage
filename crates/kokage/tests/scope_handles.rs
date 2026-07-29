@@ -11,12 +11,9 @@ use kokage::{
     OrderedTree, RestartConfig, RestartPolicy, RestrictedScope, RuntimeHandle, ScopeKind,
     StartContext, StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
-    observe::{ChildStateView, ExitStatusView, SupervisorSnapshot},
+    observe::{ChildStateView, ExitStatusView, SupervisorSnapshotReceiver},
 };
-use tokio::{
-    sync::{mpsc, watch},
-    time::timeout,
-};
+use tokio::{sync::mpsc, time::timeout};
 
 const WAIT: Duration = Duration::from_secs(3);
 
@@ -228,7 +225,7 @@ async fn assert_snapshot_stream_closes(handle: &RuntimeHandle) {
     assert_snapshot_receiver_closes(handle.subscribe_snapshots()).await;
 }
 
-async fn assert_snapshot_receiver_closes(mut snapshots: watch::Receiver<SupervisorSnapshot>) {
+async fn assert_snapshot_receiver_closes(mut snapshots: SupervisorSnapshotReceiver) {
     timeout(
         WAIT,
         async move { while snapshots.changed().await.is_ok() {} },
@@ -371,7 +368,7 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
     let handle = tree.handle();
     let mut snapshots = handle.subscribe_snapshots();
     let declared = snapshots
-        .borrow()
+        .latest()
         .child("worker")
         .expect("worker is projected before spawn")
         .clone();

@@ -4,9 +4,11 @@ use std::sync::{
 };
 
 use tokio::{task::AbortHandle, time::Instant};
-use tokio_util::sync::CancellationToken;
 
-use crate::{child::ChildDefinition, restart::RestartConfig, runtime::intensity::RestartTracker};
+use crate::{
+    CancellationToken, child::ChildDefinition, restart::RestartConfig,
+    runtime::intensity::RestartTracker,
+};
 
 const COMPLETION_PENDING: u8 = 0;
 const COMPLETION_CANCELLED: u8 = 1;

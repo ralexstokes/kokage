@@ -1,9 +1,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
-use crate::SupervisorHandle;
+use crate::{CancellationToken, SupervisorHandle};
 
 #[derive(Debug)]
 pub(crate) struct ChildReady {
@@ -81,9 +80,8 @@ impl ChildContext {
 
     /// Returns the cancellation token for this specific child instance.
     ///
-    /// The supervisor cancels it when the child should stop. The returned type
-    /// is deliberately Tokio Util's [`CancellationToken`], allowing child code
-    /// to compose it directly with existing cancellation trees.
+    /// The supervisor cancels it when the child should stop. Child code can
+    /// clone it or derive child tokens for its own cancellation tree.
     pub fn shutdown_token(&self) -> &CancellationToken {
         &self.token
     }

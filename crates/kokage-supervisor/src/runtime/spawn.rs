@@ -1,6 +1,7 @@
 use std::sync::{Arc, atomic::Ordering};
 
 use crate::{
+    CancellationToken,
     child::{ChildKind, ChildReadiness},
     context::{ChildContext, ChildReady, ReadySignal},
     error::SupervisorError,
@@ -13,7 +14,6 @@ use crate::{
     snapshot::{NestedSnapshotState, SnapshotCell},
     supervisor::ParentLink,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info_span};
 
 struct SpawnPlan {

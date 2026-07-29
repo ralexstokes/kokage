@@ -19,6 +19,7 @@ mod raw;
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::ActorOptionsValidationError;
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder};
+pub(crate) use cancellation::CancelOnDrop;
 pub use cancellation::CancellationHandle;
 pub use context::{
     ActorContext, ActorRef, ActorStatus, DynamicRestrictedScope, LiveContext, MessageContext,

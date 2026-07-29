@@ -212,24 +212,13 @@
 //! Install subscribers and samplers at the application boundary, not inside
 //! the library.
 //!
-//! # Deliberate dependency coupling
+//! # Runtime-independent boundaries
 //!
-//! Public mailbox errors are crate-owned, so changing the underlying channel
-//! implementation does not change the actor API. Cancellation is deliberately
-//! different: [`CancellationToken`] is the shared shutdown vocabulary at the
-//! Tokio ecosystem boundary. [`host::ActorContext::shutdown_token`],
-//! [`host::ActorContext::run_blocking`], and the shutdown futures passed to
-//! [`host::RunnableActor::run_until`] compose directly with that exact
-//! `tokio_util::sync::CancellationToken` type. Applications can therefore
-//! connect actor shutdown to existing cancellation trees without adapters. The
-//! token is re-exported at this crate's root so applications do not need an
-//! additional dependency path.
-//!
-//! Snapshot subscriptions deliberately expose Tokio's
-//! [`watch::Receiver`](tokio::sync::watch::Receiver). Both
-//! [`RuntimeHandle::subscribe_snapshots`] and
-//! [`RestrictedScope::subscribe_snapshots`] return the ecosystem type so
-//! consumers can use its conflating delivery and `wait_for` API directly.
+//! Public mailbox errors, cancellation tokens, and supervisor snapshot
+//! receivers are crate-owned. Applications can build cancellation trees with
+//! [`CancellationToken`] and observe conflating snapshot updates through
+//! [`observe::SupervisorSnapshotReceiver`] without exposing the scheduler's
+//! channel or cancellation implementation in their own APIs.
 //!
 //! # Examples
 //!
@@ -302,7 +291,8 @@ pub mod observe {
         ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch,
         ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard, CompletionOutcome,
         ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
-        SupervisorLifecycleEvent, SupervisorSnapshot, SupervisorStateView,
+        SnapshotRecvError, SupervisorLifecycleEvent, SupervisorSnapshot,
+        SupervisorSnapshotReceiver, SupervisorStateView,
     };
 }
 
@@ -345,10 +335,9 @@ pub use actor::{
     StartContext, StopContext, TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
-    BackoffPolicy, ControlError, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,
-    SupervisorBuildError, SupervisorError,
+    BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
+    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
 };
 pub use runtime::{DynamicActorOptions, DynamicRuntime, Runtime, RuntimeHandle};
 pub use supervision::{ActorSpec, DynamicTree, OrderedTree, TreeNode};
 pub use supervision_derive::DynamicScope;
-pub use tokio_util::sync::CancellationToken;

@@ -138,7 +138,7 @@ async fn wait_for_child(handle: &RuntimeHandle, id: &str, present: bool) {
     timeout(Duration::from_secs(1), async {
         let mut snapshots = handle.subscribe_snapshots();
         loop {
-            if snapshots.borrow().child(id).is_some() == present {
+            if snapshots.latest().child(id).is_some() == present {
                 return;
             }
             snapshots
@@ -160,7 +160,7 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
         let mut snapshots = handle.subscribe_snapshots();
         loop {
             if snapshots
-                .borrow()
+                .latest()
                 .child(id)
                 .is_some_and(|child| child.state.last_exit().map(|exit| &exit.status).is_some())
             {
@@ -555,7 +555,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     timeout(Duration::from_secs(1), async {
         loop {
             if snapshots
-                .borrow()
+                .latest()
                 .child("removable")
                 .is_some_and(|child| child.membership == ChildMembershipView::Removing)
             {
@@ -585,7 +585,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         RemovalEvent::OnStopStarted
     );
     assert!(!removal.is_finished(), "removal waits for on_stop");
-    assert!(snapshots.borrow().child("removable").is_some());
+    assert!(snapshots.latest().child("removable").is_some());
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
         Err(TrySendError::Closed { actor_id , .. }) if actor_id == "removable"
@@ -684,7 +684,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
     timeout(Duration::from_secs(1), async {
         loop {
             if snapshots
-                .borrow()
+                .latest()
                 .child("discarding")
                 .is_some_and(|child| child.membership == ChildMembershipView::Removing)
             {
@@ -1129,7 +1129,7 @@ async fn default_remove_on_exit_does_not_remove_an_actor_that_restarts() {
         let mut snapshots = handle.subscribe_snapshots();
         loop {
             if snapshots
-                .borrow()
+                .latest()
                 .child("restart-once")
                 .is_some_and(|child| child.generation >= 1)
             {
