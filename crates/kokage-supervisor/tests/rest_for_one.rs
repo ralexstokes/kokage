@@ -40,7 +40,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
     .restart(RestartPolicy::OnFailure);
 
     let downstream = reporting_child("downstream", started_tx);
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(upstream)
         .child(middle)
@@ -48,6 +48,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(
         common::recv_n(&mut started_rx, 3).await,
@@ -91,7 +92,7 @@ async fn last_child_failure_restarts_only_itself() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(first)
         .child(middle)
@@ -99,6 +100,7 @@ async fn last_child_failure_restarts_only_itself() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(
         common::recv_n(&mut started_rx, 3).await,
@@ -157,13 +159,14 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
         grace: common::SHORT_GRACE,
     });
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(trigger)
         .child(peer)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut started_rx).await, ("trigger", 0));
     assert_eq!(common::recv_event(&mut peer_rx).await, 0);
@@ -255,7 +258,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
         grace: Duration::from_secs(1),
     });
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(upstream)
         .child(middle)
@@ -263,6 +266,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(
         common::recv_n(&mut started_rx, 3).await,
@@ -336,7 +340,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
     .restart(RestartPolicy::Never);
     let eligible = reporting_child("eligible", started_tx);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(trigger)
         .child(never)
@@ -344,6 +348,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(
         common::recv_n(&mut started_rx, 3).await,
@@ -422,7 +427,7 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
         grace: Duration::from_secs(1),
     });
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(a)
         .child(b)
@@ -431,6 +436,7 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(
         common::recv_n(&mut started_rx, 4).await,

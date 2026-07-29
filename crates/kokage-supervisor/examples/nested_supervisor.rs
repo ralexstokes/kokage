@@ -44,7 +44,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::Always);
 
-    let running = Supervisor::dynamic().spawn()?;
+    let running_owner = Supervisor::dynamic().spawn()?;
+    let running = running_owner.handle();
     running
         .dynamic()
         .expect("dynamic supervisor")

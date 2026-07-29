@@ -104,6 +104,7 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_actor_with(
@@ -123,6 +124,7 @@ async fn runtime_with_watched_subtree() -> (
     let (crasher_slot, crasher) = graph.slot("crasher");
     graph.define(crasher_slot, || Crasher);
     let watched = handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_subtree(
@@ -133,7 +135,7 @@ async fn runtime_with_watched_subtree() -> (
         )
         .await
         .expect("watched subtree added");
-    timeout(Duration::from_secs(2), handle.wait_started())
+    timeout(Duration::from_secs(2), handle.handle().wait_started())
         .await
         .expect("runtime startup timed out")
         .expect("runtime starts");
@@ -246,7 +248,7 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     sink.send(SinkMsg::Crash)
         .await
         .expect("sink crash request delivered");
-    wait_for_generation(&handle, "sink", 1).await;
+    wait_for_generation(&handle.handle(), "sink", 1).await;
 
     let second = crash_and_receive_events(&crasher, &mut observed).await;
     assert_eq!(second[0].0, 1);
@@ -266,7 +268,7 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     )
     .await;
 
-    shutdown_runtime(&handle, "lifecycle replay test shutdown").await;
+    shutdown_runtime(&handle.handle(), "lifecycle replay test shutdown").await;
 }
 
 #[tokio::test]
@@ -308,7 +310,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     .await;
     guard.cancel();
 
-    shutdown_runtime(&handle, "lifecycle guard test shutdown").await;
+    shutdown_runtime(&handle.handle(), "lifecycle guard test shutdown").await;
 }
 
 #[tokio::test]
@@ -316,6 +318,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .remove_child("watched")
@@ -335,6 +338,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     .expect("pump stops with watched identity");
 
     let replacement = handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_subtree("replacement", OrderedTree::new())
@@ -342,6 +346,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .expect("replacement subtree added");
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .remove_child("sink")
@@ -355,7 +360,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     .await
     .expect("pump stops with target identity");
 
-    shutdown_runtime(&handle, "lifecycle terminality test shutdown").await;
+    shutdown_runtime(&handle.handle(), "lifecycle terminality test shutdown").await;
 }
 
 #[tokio::test]
@@ -363,6 +368,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     let handle = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_actor("sink", move || RestrictedSink {
@@ -372,6 +378,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         .await
         .expect("restricted sink added");
     let crasher = handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_actor_with(
@@ -381,7 +388,11 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         )
         .await
         .expect("crasher added");
-    handle.wait_started().await.expect("runtime starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
     crasher.send(()).await.expect("crash delivered");
     let scheduled = timeout(Duration::from_secs(2), async {
@@ -399,5 +410,5 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     .expect("restricted-scope lifecycle event arrives");
     assert_eq!(scheduled.child_id, "crasher");
 
-    shutdown_runtime(&handle, "restricted-scope lifecycle pump shutdown").await;
+    shutdown_runtime(&handle.handle(), "restricted-scope lifecycle pump shutdown").await;
 }

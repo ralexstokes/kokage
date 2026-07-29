@@ -61,7 +61,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
     });
     let graph = builder.build()?;
 
-    let runtime = OrderedTree::graph(graph).spawn()?;
+    let runtime_owner = OrderedTree::graph(graph).spawn()?;
+    let runtime = runtime_owner.handle();
     worker.send(Msg::Hold).await?;
     started_rx.recv().await.expect("worker entered hold");
 

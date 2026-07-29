@@ -68,7 +68,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
         worker: worker.clone(),
     });
 
-    let runtime = OrderedTree::graph(builder.build()?).spawn()?;
+    let runtime_owner = OrderedTree::graph(builder.build()?).spawn()?;
+    let runtime = runtime_owner.handle();
 
     orders.send("business cards x100".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));

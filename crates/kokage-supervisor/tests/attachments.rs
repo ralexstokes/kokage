@@ -16,7 +16,7 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
         ))
         .build()
         .expect("nested supervisor builds");
-    let root = Supervisor::ordered()
+    let root_owner = Supervisor::ordered()
         .child(__private::attach(
             waiting_child("worker"),
             "worker metadata".to_owned(),
@@ -28,6 +28,7 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
         .build()
         .expect("root supervisor builds")
         .spawn();
+    let root = root_owner.handle();
     root.wait_started().await.expect("tree starts");
 
     let attached = __private::attached_children::<String>(&root);
@@ -57,10 +58,11 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
 
 #[tokio::test]
 async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     let old_lineage = handle
         .dynamic()
         .expect("dynamic supervisor")
@@ -98,7 +100,7 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
 #[cfg(feature = "serde")]
 #[tokio::test]
 async fn attachments_are_absent_from_serialized_snapshots() {
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(__private::attach(
             waiting_child("worker"),
             "not serialized".to_owned(),
@@ -106,6 +108,7 @@ async fn attachments_are_absent_from_serialized_snapshots() {
         .build()
         .expect("supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("supervisor starts");
 
     let snapshot = serde_json::to_string(&handle.snapshot()).expect("snapshot serializes");

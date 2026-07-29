@@ -36,7 +36,8 @@ async fn retained_builder_handle_preserves_kind_then_binds_to_the_spawned_root()
     assert!(!worker.state.started());
 
     let supervisor = builder.build().expect("builder is valid");
-    let spawned = supervisor.spawn();
+    let spawned_owner = supervisor.spawn();
+    let spawned = spawned_owner.handle();
     handle.wait_started().await.expect("retained handle binds");
     assert!(spawned.snapshot().child("worker").is_some());
 
@@ -84,7 +85,8 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle.snapshot();
     let declared = baseline.child("worker").expect("worker is declared");
-    let spawned = builder.build().expect("builder is valid").spawn();
+    let spawned_owner = builder.build().expect("builder is valid").spawn();
+    let spawned = spawned_owner.handle();
 
     let added = timeout(EVENT_TIMEOUT, lifecycle.next())
         .await
@@ -149,10 +151,11 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
 
 #[tokio::test]
 async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
-    let parent = Supervisor::dynamic()
+    let parent_owner = Supervisor::dynamic()
         .build()
         .expect("dynamic parent builds")
         .spawn();
+    let parent = parent_owner.handle();
     parent
         .dynamic()
         .expect("dynamic supervisor")
@@ -187,10 +190,11 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
 
 #[tokio::test]
 async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_scope() {
-    let parent = Supervisor::dynamic()
+    let parent_owner = Supervisor::dynamic()
         .build()
         .expect("dynamic parent builds")
         .spawn();
+    let parent = parent_owner.handle();
     parent.wait_started().await.expect("dynamic parent starts");
     let (stopped_tx, mut stopped_rx) = mpsc::unbounded_channel();
     let nested_builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {
@@ -240,85 +244,6 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
 }
 
 #[tokio::test]
-async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
-    let leaf = Supervisor::dynamic()
-        .build()
-        .expect("leaf supervisor builds");
-    let middle = Supervisor::ordered()
-        .child(ChildSpec::supervisor("leaf", leaf))
-        .build()
-        .expect("middle supervisor builds");
-    let original = Supervisor::ordered()
-        .child(ChildSpec::supervisor("middle", middle))
-        .build()
-        .expect("supervisor builds");
-    let original_pre_spawn = original.handle();
-    let original_middle = original_pre_spawn
-        .supervisor("middle")
-        .expect("original middle identity is declared");
-    let original_leaf = original_middle
-        .supervisor("leaf")
-        .expect("original leaf identity is declared");
-    let cloned = original.clone();
-    let cloned_pre_spawn = cloned.handle();
-    let cloned_middle = cloned_pre_spawn
-        .supervisor("middle")
-        .expect("cloned middle identity is declared");
-    let cloned_leaf = cloned_middle
-        .supervisor("leaf")
-        .expect("cloned leaf identity is declared");
-
-    let original = original.spawn();
-    let cloned = cloned.spawn();
-    original_pre_spawn
-        .wait_started()
-        .await
-        .expect("original identity binds");
-    cloned_pre_spawn
-        .wait_started()
-        .await
-        .expect("cloned identity binds separately");
-    original_middle
-        .wait_started()
-        .await
-        .expect("original middle identity binds");
-    cloned_middle
-        .wait_started()
-        .await
-        .expect("cloned middle identity binds separately");
-    original_leaf
-        .wait_started()
-        .await
-        .expect("original leaf identity binds");
-    cloned_leaf
-        .wait_started()
-        .await
-        .expect("cloned leaf identity binds separately");
-
-    original_leaf
-        .dynamic()
-        .expect("dynamic supervisor")
-        .add_child(waiting_child("original-only"))
-        .await
-        .expect("original leaf identity accepts its own child");
-    assert!(original_leaf.snapshot().child("original-only").is_some());
-    assert!(cloned_leaf.snapshot().child("original-only").is_none());
-
-    original.shutdown_and_wait().await.expect("original stops");
-    assert_eq!(
-        cloned.snapshot().state,
-        kokage_supervisor::SupervisorStateView::Running
-    );
-    cloned_leaf
-        .dynamic()
-        .expect("dynamic supervisor")
-        .add_child(waiting_child("clone-only"))
-        .await
-        .expect("original shutdown does not terminalize cloned descendants");
-    cloned.shutdown_and_wait().await.expect("clone stops");
-}
-
-#[tokio::test]
 async fn wait_on_a_reserved_handle_waits_for_the_scope_to_run_and_stop() {
     let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
@@ -333,7 +258,8 @@ async fn wait_on_a_reserved_handle_waits_for_the_scope_to_run_and_stop() {
         "wait must not resolve before the reserved identity binds"
     );
 
-    let spawned = builder.build().expect("builder is valid").spawn();
+    let spawned_owner = builder.build().expect("builder is valid").spawn();
+    let spawned = spawned_owner.handle();
     handle
         .wait_started()
         .await
@@ -374,7 +300,8 @@ async fn recursive_lifecycle_watch_created_before_build_reaches_the_spawned_scop
     let handle = builder.handle();
     let mut events = common::event_watch(&handle);
 
-    let spawned = builder.build().expect("builder is valid").spawn();
+    let spawned_owner = builder.build().expect("builder is valid").spawn();
+    let spawned = spawned_owner.handle();
     handle.wait_started().await.expect("scope starts");
 
     timeout(EVENT_TIMEOUT, events.recv())

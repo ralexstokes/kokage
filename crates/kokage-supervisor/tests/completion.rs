@@ -49,7 +49,8 @@ async fn a_completed_child_stops_siblings_and_supervisor() {
     let _finished = builder.handle().shutdown_on_completion(["trigger"]);
     let supervisor = builder.build().expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
     handle.wait().await.expect("completion should stop cleanly");
     common::recv_event(&mut cancelled_rx).await;
@@ -99,7 +100,8 @@ async fn a_completion_set_waits_for_its_last_child() {
     let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
     let supervisor = builder.build().expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     first_tx.send(()).expect("first child dropped");
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
@@ -128,10 +130,9 @@ async fn a_failure_restarts_before_a_clean_exit_completes() {
     }));
     let _finished = builder.handle().shutdown_on_completion(["trigger"]);
 
-    builder
-        .build()
-        .expect("valid supervisor")
-        .spawn()
+    let running = builder.build().expect("valid supervisor").spawn();
+    running
+        .handle()
         .wait()
         .await
         .expect("second clean exit should stop supervisor");
@@ -145,7 +146,8 @@ async fn wait_completed_reports_a_supervisor_that_stopped_first() {
         Ok(())
     }));
     let handle = builder.handle();
-    let spawned = builder.build().expect("valid supervisor").spawn();
+    let spawned_owner = builder.build().expect("valid supervisor").spawn();
+    let spawned = spawned_owner.handle();
 
     let waiter = tokio::spawn(async move { handle.wait_completed(["worker"]).await });
     spawned
@@ -167,7 +169,8 @@ async fn an_empty_completion_set_is_already_satisfied() {
         Ok(())
     }));
     let handle = builder.handle();
-    let spawned = builder.build().expect("valid supervisor").spawn();
+    let spawned_owner = builder.build().expect("valid supervisor").spawn();
+    let spawned = spawned_owner.handle();
 
     let outcome = timeout(
         common::EVENT_TIMEOUT,
@@ -184,7 +187,7 @@ async fn an_empty_completion_set_is_already_satisfied() {
 
 #[tokio::test]
 async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             ChildSpec::task("worker", |_| async { Ok(()) })
                 .restart(RestartPolicy::Never)
@@ -193,6 +196,7 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert!(matches!(
         timeout(common::EVENT_TIMEOUT, handle.wait_started())
@@ -232,7 +236,8 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
         .build()
         .expect("valid parent supervisor");
 
-    let handle = parent.spawn();
+    let handle_owner = parent.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
     let event = loop {
         let event = common::recv_supervisor_event(&mut events).await;
@@ -267,10 +272,12 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
     let parent_builder = Supervisor::ordered().child(ChildSpec::supervisor("job", inner));
     let _parent_finished = parent_builder.handle().shutdown_on_completion(["job"]);
 
-    parent_builder
+    let running = parent_builder
         .build()
         .expect("valid parent supervisor")
-        .spawn()
+        .spawn();
+    running
+        .handle()
         .wait()
         .await
         .expect("nested completion should stop the parent");
@@ -282,7 +289,8 @@ async fn a_dynamic_scope_can_await_completion() {
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
     let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
-    let spawned = builder.build().expect("valid dynamic supervisor").spawn();
+    let spawned_owner = builder.build().expect("valid dynamic supervisor").spawn();
+    let spawned = spawned_owner.handle();
 
     let gate = Arc::new(Notify::new());
     spawned
@@ -333,7 +341,8 @@ async fn a_failed_never_child_never_completes() {
         .shutdown_on_completion(["failed", "completed"]);
     let supervisor = builder.build().expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
         "a failed Never child must not count as finished work"
@@ -405,7 +414,8 @@ async fn a_group_restart_invalidates_a_stale_completion() {
         .child(b)
         .child(failing);
     let _finished = builder.handle().shutdown_on_completion(["a", "b"]);
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
 
     fail_group.notify_one();
     let mut restarted = common::recv_n(&mut restarted_rx, 2).await;
@@ -477,7 +487,8 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
     let _finished = builder
         .handle()
         .shutdown_on_completion(["natural", "restarted"]);
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
 
     common::recv_event(&mut restarted_rx).await;
     assert!(
@@ -526,13 +537,14 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
         }
     });
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(always)
         .child(failing)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut restarted_rx).await, 1);
     common::assert_no_event(&mut restarted_rx).await;
@@ -552,7 +564,8 @@ async fn a_dropped_guard_leaves_the_supervisor_running() {
         }));
     let guard = builder.handle().shutdown_on_completion(["trigger"]);
     drop(guard);
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
 
     assert!(
         timeout(common::QUIET_TIMEOUT, handle.wait()).await.is_err(),
@@ -612,11 +625,12 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         }
     });
 
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")

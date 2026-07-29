@@ -111,10 +111,11 @@ async fn spawn_shutdown_flow(children: usize) {
         ));
     }
 
-    let handle = builder
+    let handle_owner = builder
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
+    let handle = handle_owner.handle();
     let mut events = handle.watch_lifecycle();
     let started = wait_for_child_start_count(&mut events, children).await;
     black_box(started);
@@ -153,10 +154,11 @@ async fn one_for_one_restart_flow() {
         }));
     }
 
-    let handle = builder
+    let handle_owner = builder
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
+    let handle = handle_owner.handle();
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
@@ -204,10 +206,11 @@ async fn one_for_all_restart_flow() {
         );
     }
 
-    let handle = builder
+    let handle_owner = builder
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
+    let handle = handle_owner.handle();
     let mut events = handle.watch_lifecycle();
     let restarted = wait_for_restart_count(&mut events, 4).await;
     black_box(restarted);
@@ -217,10 +220,11 @@ async fn one_for_all_restart_flow() {
 }
 
 async fn dynamic_add_remove_flow() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
+    let handle = handle_owner.handle();
     let mut events = handle.watch_lifecycle();
 
     handle

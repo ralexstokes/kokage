@@ -724,7 +724,7 @@ async fn assert_scope_wait_panic_is_supervised(panic_site: PanicSite, phase: &st
 
     tokio::time::timeout(WAIT, async {
         loop {
-            let snapshot = runtime.snapshot();
+            let snapshot = runtime.handle().snapshot();
             let child = snapshot.child("panic-once").expect("child exists");
             if child.generation >= 1 {
                 assert_eq!(

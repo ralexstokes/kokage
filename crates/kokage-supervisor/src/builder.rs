@@ -340,23 +340,6 @@ mod tests {
     }
 
     #[test]
-    fn cloning_a_nested_child_spec_reserves_a_fresh_supervisor_identity() {
-        let nested = Supervisor::ordered()
-            .build()
-            .expect("valid nested supervisor");
-        let original = ChildSpec::supervisor("nested", nested);
-        let cloned = original.clone();
-
-        let ChildKind::Supervisor(original) = &original.inner.kind else {
-            panic!("nested child keeps its kind");
-        };
-        let ChildKind::Supervisor(cloned) = &cloned.inner.kind else {
-            panic!("cloned nested child keeps its kind");
-        };
-        assert!(!Arc::ptr_eq(&original.channels, &cloned.channels));
-    }
-
-    #[test]
     fn ordered_defaults_apply_to_nested_children_without_replacing_their_identity() {
         let inherited_shutdown = ShutdownPolicy::Cooperative {
             grace: Duration::from_millis(20),

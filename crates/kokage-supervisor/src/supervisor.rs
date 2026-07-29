@@ -31,30 +31,14 @@ use crate::{
     strategy::Strategy,
 };
 
-/// A configured supervisor, ready to be spawned or nested as a first-class
-/// supervisor child.
-///
-/// # Cloning reserves a new identity
+/// A single-use configured supervisor, ready to be spawned or nested as a
+/// first-class supervisor child.
 ///
 /// A `Supervisor` owns the stable identity behind [`handle`](Self::handle),
-/// reserved when its builder was created. Cloning copies the *configuration*
-/// and reserves a **separate** identity for the copy, so a handle taken before
-/// the clone continues to address the original:
-///
-/// ```no_run
-/// # use kokage_supervisor::Supervisor;
-/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let supervisor = Supervisor::ordered().build()?;
-/// let handle = supervisor.handle();
-///
-/// let _running = supervisor.clone().spawn(); // owns the clone's identity
-/// drop(supervisor);           // abandons `handle`'s identity: it goes terminal
-/// # Ok(())
-/// # }
-/// ```
-///
-/// Spawn or nest the same value the handle came from. Handle *clones* are
-/// unaffected — they all address one identity.
+/// reserved when its builder was created. Moving the declaration into
+/// [`spawn`](Self::spawn) or [`ChildSpec::supervisor`](crate::ChildSpec::supervisor)
+/// transfers that identity. Clone the handle, not the declaration, when
+/// multiple observers or controllers need to address it.
 pub struct Supervisor {
     pub(crate) config: SupervisorConfig,
     pub(crate) channels: Arc<StableSupervisorChannels>,
@@ -70,8 +54,6 @@ pub struct Supervisor {
 /// graceful shutdown, while any [`SupervisorHandle`] values obtained through
 /// [`handle`](Self::handle) remain non-owning and may be dropped freely.
 /// Retain the owner for as long as the root supervisor should keep running.
-/// Calling `clone()` through [`Deref`](std::ops::Deref) clones only the
-/// non-owning [`SupervisorHandle`]; it does not create another owner.
 #[must_use = "dropping the running supervisor requests graceful shutdown"]
 pub struct RunningSupervisor {
     handle: SupervisorHandle,
@@ -96,14 +78,6 @@ impl RunningSupervisor {
     /// Waits for the supervisor to stop.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.handle.wait().await
-    }
-}
-
-impl std::ops::Deref for RunningSupervisor {
-    type Target = SupervisorHandle;
-
-    fn deref(&self) -> &Self::Target {
-        &self.handle
     }
 }
 
@@ -467,11 +441,13 @@ impl Supervisor {
     }
 }
 
-impl Clone for Supervisor {
-    /// Copies the configuration and reserves an independent stable identity.
-    /// See the [type-level note](Supervisor#cloning-reserves-a-new-identity):
-    /// a handle taken before the clone still addresses the original.
-    fn clone(&self) -> Self {
+impl Supervisor {
+    /// Re-instantiates private runtime configuration for a new incarnation.
+    ///
+    /// This is deliberately not a public declaration-cloning API. Public
+    /// declarations own one stable identity; the runtime needs only a fresh
+    /// executable value when restarting a nested supervisor.
+    pub(crate) fn instantiate_runtime(&self) -> Self {
         let mut config = self.config.clone();
         config.children = self
             .config

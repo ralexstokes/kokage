@@ -24,10 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
         .spawn()?;
-    let mut snapshots = running.subscribe_snapshots();
+    let handle = running.handle();
+    let mut snapshots = handle.subscribe_snapshots();
 
     println!("initial snapshot:");
-    print_snapshot(&running.snapshot(), 0);
+    print_snapshot(&handle.snapshot(), 0);
 
     let observer = tokio::spawn(async move {
         loop {
@@ -44,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    running.shutdown_and_wait().await?;
+    handle.shutdown_and_wait().await?;
     observer.await??;
 
     Ok(())

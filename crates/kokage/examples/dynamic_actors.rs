@@ -53,7 +53,8 @@ impl Actor for RushPress {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let runtime = DynamicTree::new().spawn()?;
+    let runtime_owner = DynamicTree::new().spawn()?;
+    let runtime = runtime_owner.handle();
 
     let orders = runtime
         .dynamic()

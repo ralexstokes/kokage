@@ -73,13 +73,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let frontend_actor = graph.actor_for(&frontend)?;
     let worker_actor = graph.actor_for(&worker)?;
 
-    let runtime = OrderedTree::new()
+    let runtime_owner = OrderedTree::new()
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor)
                 .restart_config(RestartConfig::new(5, std::time::Duration::from_secs(5))),
         )
         .spawn()?;
+    let runtime = runtime_owner.handle();
 
     let restarted = runtime.restart_of("worker");
     frontend.send("fail-worker".to_owned()).await?;

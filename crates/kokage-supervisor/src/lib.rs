@@ -192,7 +192,7 @@
 //! let handle = running.handle();
 //! let _lifecycle = handle.watch_lifecycle();
 //! let _snapshot = handle.snapshot();
-//! # running.shutdown_and_wait().await?;
+//! # handle.shutdown_and_wait().await?;
 //! # Ok(())
 //! # }
 //! ```

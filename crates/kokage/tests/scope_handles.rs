@@ -250,7 +250,7 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
         .add_actor("worker", || Idle)
         .await
         .expect("pre-spawn handle controls the spawned scope");
-    assert!(spawned.snapshot().child("worker").is_some());
+    assert!(spawned.handle().snapshot().child("worker").is_some());
 
     pre_spawn
         .shutdown_and_wait()
@@ -276,7 +276,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     runtime.shutdown_and_wait().await.expect("runtime stops");
 
     let dynamic_root = DynamicTree::new().spawn().expect("dynamic root builds");
-    assert!(dynamic_root.dynamic().is_some());
+    assert!(dynamic_root.handle().dynamic().is_some());
     dynamic_root
         .shutdown_and_wait()
         .await
@@ -390,7 +390,7 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
     .expect("pre-spawn subscription observes startup")
     .expect("same snapshot stream remains open");
 
-    assert_eq!(handle.snapshot(), spawned.snapshot());
+    assert_eq!(handle.snapshot(), spawned.handle().snapshot());
     spawned
         .shutdown_and_wait()
         .await
@@ -475,14 +475,18 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     assert_snapshot_receiver_closes(failed_dynamic_snapshots).await;
 
     let parent = OrderedTree::new().spawn().expect("ordered parent builds");
-    assert!(parent.dynamic().is_none());
+    assert!(parent.handle().dynamic().is_none());
     parent
         .shutdown_and_wait()
         .await
         .expect("ordered parent stops");
 
     let parent = DynamicTree::new().spawn().expect("dynamic parent builds");
-    parent.wait_started().await.expect("dynamic parent starts");
+    parent
+        .handle()
+        .wait_started()
+        .await
+        .expect("dynamic parent starts");
 
     let mut graph = GraphBuilder::new();
     let (slot, _) = graph.slot("duplicate-binding");
@@ -493,7 +497,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = invalid.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.dynamic().expect("dynamic scope").add_subtree("invalid", invalid).await,
+        parent.handle().dynamic().expect("dynamic scope").add_subtree("invalid", invalid).await,
         Err(ControlError::Rejected(
             SupervisorBuildError::DuplicateActorBinding(label)
         )) if label == "duplicate-binding"
@@ -501,6 +505,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     assert_snapshot_receiver_closes(rejected_snapshots).await;
 
     parent
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_subtree("occupied", DynamicTree::new())
@@ -510,7 +515,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = duplicate.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.dynamic().expect("dynamic scope").add_subtree("occupied", duplicate).await,
+        parent.handle().dynamic().expect("dynamic scope").add_subtree("occupied", duplicate).await,
         Err(ControlError::Rejected(SupervisorBuildError::DuplicateChildId(id)))
             if id == "occupied"
     ));
@@ -524,10 +529,15 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
 #[tokio::test]
 async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
     let outer = DynamicTree::new().spawn().expect("dynamic outer builds");
-    outer.wait_started().await.expect("dynamic outer starts");
+    outer
+        .handle()
+        .wait_started()
+        .await
+        .expect("dynamic outer starts");
 
     let (awaited_tx, mut awaited_rx) = mpsc::unbounded_channel();
     let awaited = outer
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_subtree("awaited", single_use_mount(awaited_tx))
@@ -540,7 +550,7 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
     assert_eq!(next_report(&mut awaited_rx).await, "mounted");
 
     let (pipelined_tx, mut pipelined_rx) = mpsc::unbounded_channel();
-    let pipelined_outer = outer.clone();
+    let pipelined_outer = outer.handle();
     let pipelined = tokio::spawn(async move {
         pipelined_outer
             .dynamic()
@@ -571,7 +581,7 @@ async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
     let handle = OrderedTree::graph(graph.build().expect("graph builds"))
         .spawn()
         .expect("runtime builds");
-    handle.wait_started().await.expect("actor starts");
+    handle.handle().wait_started().await.expect("actor starts");
     assert_eq!(next_report(&mut reports_rx).await, "ordered-supervisor");
     assert_eq!(next_report(&mut reports_rx).await, "none");
     handle.shutdown_and_wait().await.expect("runtime stops");
@@ -609,6 +619,7 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
         "unavailable-before-ready"
     );
     handle
+        .handle()
         .wait_started()
         .await
         .expect("owned node becomes ready");
@@ -619,12 +630,13 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
         .expect("leader receives handler command");
     assert_eq!(next_report(&mut reports_rx).await, "handler-added");
     let children = handle
+        .handle()
         .subtree("owned")
         .and_then(|owned| owned.subtree("children"))
         .expect("owned dynamic scope is registered");
     assert!(children.snapshot().child("from-on-start").is_some());
     assert!(children.snapshot().child("from-handler").is_some());
-    let snapshot = handle.snapshot();
+    let snapshot = handle.handle().snapshot();
     let owned = snapshot
         .child("owned")
         .and_then(|child| child.supervisor.as_deref())
@@ -662,7 +674,7 @@ async fn restricted_scope_add_child_returns_the_inserted_lineage() {
         )
         .spawn()
         .expect("tree builds");
-    handle.wait_started().await.expect("tree starts");
+    handle.handle().wait_started().await.expect("tree starts");
 
     adder.send(()).await.expect("adder receives command");
     let lineage = timeout(WAIT, lineage_rx.recv())
@@ -675,6 +687,7 @@ async fn restricted_scope_add_child_returns_the_inserted_lineage() {
         .expect("subtree channel remains open");
     assert!(restricted_subtree.dynamic().is_none());
     let children = handle
+        .handle()
         .subtree("owned")
         .and_then(|owned| owned.subtree("children"))
         .expect("owned dynamic scope is registered");
@@ -725,9 +738,13 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     let handle = runtime.spawn().expect("ordered ActorWithScope builds");
     assert_eq!(next_report(&mut reports_rx).await, "some");
     assert_eq!(next_report(&mut reports_rx).await, "ordered-children");
-    handle.wait_started().await.expect("ordered child starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("ordered child starts");
     assert_eq!(starts.load(Ordering::SeqCst), 1);
-    let snapshot = handle.snapshot();
+    let snapshot = handle.handle().snapshot();
     let inner = snapshot
         .child("owned")
         .and_then(|child| child.supervisor.as_deref())
@@ -814,7 +831,7 @@ async fn actor_with_scope_uses_explicit_rest_for_one() {
         })
     ));
     let handle = tree.spawn().expect("tree builds");
-    handle.wait_started().await.expect("tree starts");
+    handle.handle().wait_started().await.expect("tree starts");
 
     worker.send(LeaderMsg::Crash).await.expect("worker crashes");
     wait_count(&worker_starts, 2).await;
@@ -859,7 +876,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
         )
         .spawn()
         .expect("tree builds");
-    handle.wait_started().await.expect("tree starts");
+    handle.handle().wait_started().await.expect("tree starts");
 
     worker.send(LeaderMsg::Crash).await.expect("first crash");
     wait_count(&worker_starts, 2).await;
@@ -878,7 +895,7 @@ async fn consuming_a_graph_into_a_tree_preserves_issued_actor_refs() {
 
     let tree = OrderedTree::graph(graph);
     let spawned = tree.spawn().expect("tree builds and spawns");
-    spawned.wait_started().await.expect("tree starts");
+    spawned.handle().wait_started().await.expect("tree starts");
     actor_ref.send(()).await.expect("issued ref remains bound");
 
     spawned
@@ -916,13 +933,17 @@ async fn actor_binding_cloned_across_trees_fails_on_the_second_concurrent_run() 
         .actor(actor.clone())
         .spawn()
         .expect("first tree lowers");
-    first.wait_started().await.expect("first actor starts");
+    first
+        .handle()
+        .wait_started()
+        .await
+        .expect("first actor starts");
 
     let second = OrderedTree::new()
         .actor(ActorSpec::new(actor).restart(RestartPolicy::Never))
         .spawn()
         .expect("a separate tree lowers before the runtime conflict");
-    let mut snapshots = second.subscribe_snapshots();
+    let mut snapshots = second.handle().subscribe_snapshots();
     let stopped = timeout(
         WAIT,
         snapshots.wait_for(|snapshot| {

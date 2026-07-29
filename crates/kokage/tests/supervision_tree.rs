@@ -175,6 +175,7 @@ async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
         7
     );
     let mut labels: Vec<_> = handle
+        .handle()
         .actor_stats()
         .into_iter()
         .map(|stats| stats.actor_id.to_string())
@@ -221,8 +222,12 @@ async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     assert_eq!(*strategy, Strategy::RestForOne);
 
     let handle = tree.spawn().expect("ActorWithScope lowers");
-    handle.wait_started().await.expect("generated scope starts");
-    let snapshot = handle.snapshot();
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("generated scope starts");
+    let snapshot = handle.handle().snapshot();
     let owned = snapshot
         .child("owned")
         .and_then(|child| child.supervisor.as_ref())
@@ -269,10 +274,15 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
         )
         .spawn()
         .expect("ActorWithScope builds");
-    handle.wait_started().await.expect("generated scope starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("generated scope starts");
 
     fail.notify_one();
     handle
+        .handle()
         .subscribe_snapshots()
         .wait_for(|snapshot| {
             snapshot
@@ -294,7 +304,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
     // Give that zero-delay transition room to occur before inspecting the
     // stable state promised by the inherited `Never` policy.
     sleep(Duration::from_millis(50)).await;
-    let snapshot = handle.snapshot();
+    let snapshot = handle.handle().snapshot();
     let owned_edge = snapshot.child("owned").expect("owned edge remains visible");
     assert!(owned_edge.state.is_running());
     let children_edge = owned_edge

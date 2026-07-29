@@ -37,7 +37,8 @@ async fn transient_child_panic_causes_restart() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
     assert!(matches!(
@@ -90,13 +91,14 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(peer)
         .child(trigger)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
 
     assert_eq!(common::recv_event(&mut peer_starts_rx).await, 0);
@@ -137,7 +139,8 @@ async fn transient_factory_panic_causes_restart() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
 
@@ -187,7 +190,8 @@ async fn one_for_all_panic_restarts_the_whole_group() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut panic_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut peer_rx, 2).await, vec![0, 1]);
@@ -236,7 +240,8 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut panic_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut peer_rx, 2).await, vec![0, 1]);

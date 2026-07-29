@@ -241,9 +241,8 @@ and closes retained streams.
 
 The same rule applies to the builders returned by `Supervisor::ordered()` and
 `Supervisor::dynamic()`, whose `handle()` returns a raw
-`SupervisorHandle`. A `Supervisor` clone is a new runnable declaration and
-therefore reserves an independent identity; handle clones continue to address
-one identity.
+`SupervisorHandle`. Supervisor declarations are single-use; handle clones
+continue to address one identity.
 
 ## Scope handles inside actors
 

@@ -1,9 +1,9 @@
-use std::{sync::Arc, time::Duration};
+use std::{ops::Deref, sync::Arc, time::Duration};
 
 use kokage_supervisor::{
     ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView, RestartConfig,
     RestartPolicy, RunningSupervisor, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError,
-    SupervisorError, TerminalMembership,
+    SupervisorError, SupervisorHandle, TerminalMembership,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -16,8 +16,9 @@ use common::ObservedEvent;
 async fn spawn_dynamic(
     builder: DynamicSupervisorBuilder,
     children: impl IntoIterator<Item = ChildSpec>,
-) -> RunningSupervisor {
-    let handle = builder.build().expect("valid dynamic supervisor").spawn();
+) -> SpawnedSupervisor {
+    let owner = builder.build().expect("valid dynamic supervisor").spawn();
+    let handle = owner.handle();
     for child in children {
         handle
             .dynamic()
@@ -26,7 +27,26 @@ async fn spawn_dynamic(
             .await
             .expect("initial dynamic child should be accepted");
     }
-    handle
+    SpawnedSupervisor {
+        _owner: owner,
+        handle,
+    }
+}
+
+/// Test fixture that retains the linear owner while exercising a cloned
+/// handle. Production callers make this transition explicitly with
+/// `RunningSupervisor::handle`.
+struct SpawnedSupervisor {
+    _owner: RunningSupervisor,
+    handle: SupervisorHandle,
+}
+
+impl Deref for SpawnedSupervisor {
+    type Target = SupervisorHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 #[test]
@@ -41,7 +61,7 @@ fn empty_supervisors_are_valid() {
 
 #[tokio::test]
 async fn ordered_handles_have_no_membership_capability() {
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("declared", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -49,6 +69,7 @@ async fn ordered_handles_have_no_membership_capability() {
         .build()
         .expect("ordered supervisor builds")
         .spawn();
+    let handle = running.handle();
 
     assert_eq!(handle.snapshot().kind, ScopeKind::Ordered);
     assert!(handle.dynamic().is_none());
@@ -63,7 +84,8 @@ async fn empty_supervisor_starts_empty_and_accepts_children() {
     let supervisor = Supervisor::dynamic()
         .build()
         .expect("empty supervisor builds");
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     assert!(handle.snapshot().children.is_empty());
@@ -131,11 +153,12 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
         }
     })
     .restart(RestartPolicy::Never);
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .default_restart(RestartPolicy::Always)
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
 
     handle
         .dynamic()
@@ -163,7 +186,8 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
     let supervisor = Supervisor::dynamic()
         .build()
         .expect("empty supervisor builds");
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     handle
@@ -230,7 +254,8 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
         )
         .build()
         .expect("ordered group supervisor builds");
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     trigger.notify_one();
@@ -292,7 +317,8 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
         )
         .build()
         .expect("ordered group supervisor builds");
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     assert_eq!(common::recv_event(&mut temporary_starts_rx).await, 0);
@@ -363,7 +389,8 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
         )
         .build()
         .expect("ordered group supervisor builds");
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut temporary_starts_rx).await, 0);
     fail_trigger.notify_one();
@@ -1253,7 +1280,7 @@ async fn remove_child_preempts_zero_delay_restart() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .restart_config(kokage_supervisor::RestartConfig::new(
             8,
             std::time::Duration::from_secs(1),
@@ -1261,6 +1288,7 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
         .build()
         .expect("valid dynamic supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
     handle
         .dynamic()

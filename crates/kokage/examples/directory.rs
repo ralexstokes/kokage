@@ -66,9 +66,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         entries: HashMap::new(),
     });
     let graph = graph.build()?;
-    let handle = OrderedTree::graph(graph)
+    let handle_owner = OrderedTree::graph(graph)
         .subtree("dynamic", DynamicTree::new())
         .spawn()?;
+    let handle = handle_owner.handle();
     handle.wait_started().await?;
     let dynamic = handle
         .subtree("dynamic")
