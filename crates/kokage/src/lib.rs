@@ -28,12 +28,10 @@
 //! let echo = graph.actor("Echo", || Echo);
 //!
 //! let graph = graph.build()?;
-//! let handle = OrderedTree::graph(graph)
-//!     .strategy(Strategy::OneForOne)
-//!     .spawn()?;
+//! let runtime = OrderedTree::graph(graph).spawn()?;
 //!
 //! echo.send("hello".to_owned()).await?;
-//! handle.shutdown_and_wait().await?;
+//! runtime.shutdown_and_wait().await?;
 //! # Ok(())
 //! # }
 //! ```

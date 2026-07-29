@@ -45,7 +45,7 @@ hidden in example scaffolding, per the Milestone 2 rule:
   correlated-failure detection.
 - **Recursive runtime subtrees.** `OrderedTree::subtree` composes nested
   actor scopes with reconciled recursive actor stats. Static subtrees and
-  runtime-added `RuntimeHandle::add_subtree` memberships now share the same
+  runtime-added `DynamicRuntime::add_subtree` memberships now share the same
   actor-registry mechanism.
 - **Lifecycle-bound cross-actor timers.** `send_after_to` and `interval_to`
   schedule messages to other actors with timers bound to the scheduling

@@ -28,7 +28,9 @@ supervisor restarts it — and the `orders` ref keeps working across the
 restart, transparently reconnecting to the replacement:
 
 ```rust
-use kokage::prelude::*;
+use kokage::prelude::{
+    Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, OrderedTree,
+};
 
 struct FrontDesk {
     press: ActorRef<String>,

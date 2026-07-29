@@ -1796,8 +1796,8 @@ impl SupervisorHandle {
     ///     }))
     ///     .build()?;
     ///
-    /// let handle = supervisor.spawn();
-    /// handle
+    /// let running = supervisor.spawn();
+    /// running
     ///     .subscribe_snapshots()
     ///     .wait_for(|snapshot| {
     ///         snapshot
@@ -1806,8 +1806,8 @@ impl SupervisorHandle {
     ///             .all(|child| child.state.is_running())
     ///     })
     ///     .await?;
-    /// # handle.shutdown();
-    /// # handle.wait().await?;
+    /// # running.shutdown();
+    /// # running.wait().await?;
     /// # Ok(())
     /// # }
     /// ```
