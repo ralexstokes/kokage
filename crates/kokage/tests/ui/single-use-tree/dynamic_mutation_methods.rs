@@ -1,6 +1,6 @@
 use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy, host::ChildSpec};
 
-fn actor() -> ActorSpec {
+fn actor() -> ActorSpec<()> {
     loop {}
 }
 

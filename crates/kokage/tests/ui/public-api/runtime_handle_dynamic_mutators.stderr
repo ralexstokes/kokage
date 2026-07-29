@@ -1,25 +1,25 @@
 error[E0599]: no method named `add_actor` found for reference `&RuntimeHandle` in the current scope
   --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:21:20
    |
-21 |     let _ = handle.add_actor("actor", || Idle);
+21 |     let _ = handle.add_actor(ActorSpec::new("actor", || Idle));
    |                    ^^^^^^^^^ method not found in `&RuntimeHandle`
 
 error[E0599]: no method named `add_actor_with` found for reference `&RuntimeHandle` in the current scope
   --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:22:20
    |
-22 |     let _ = handle.add_actor_with(
-   |             -------^^^^^^^^^^^^^^ method not found in `&RuntimeHandle`
+22 |     let _ = handle.add_actor_with("actor", || Idle);
+   |                    ^^^^^^^^^^^^^^ method not found in `&RuntimeHandle`
 
 error[E0599]: no method named `add_child` found for reference `&RuntimeHandle` in the current scope
-  --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:27:20
+  --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:23:20
    |
-27 |     let _ = handle.add_child(ChildSpec::task("task", |_| async { Ok(()) }));
+23 |     let _ = handle.add_child(ChildSpec::task("task", |_| async { Ok(()) }));
    |                    ^^^^^^^^^ method not found in `&RuntimeHandle`
 
 error[E0599]: no method named `add_subtree` found for reference `&RuntimeHandle` in the current scope
-  --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:28:20
+  --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:24:20
    |
-28 |     let _ = handle.add_subtree("subtree", DynamicTree::new());
+24 |     let _ = handle.add_subtree("subtree", DynamicTree::new());
    |                    ^^^^^^^^^^^
    |
 help: there is a method `subtree` with a similar name, but with different arguments
@@ -29,7 +29,7 @@ help: there is a method `subtree` with a similar name, but with different argume
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error[E0599]: no method named `remove_child` found for reference `&RuntimeHandle` in the current scope
-  --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:29:20
+  --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:25:20
    |
-29 |     let _ = handle.remove_child("child");
+25 |     let _ = handle.remove_child("child");
    |                    ^^^^^^^^^^^^ method not found in `&RuntimeHandle`
