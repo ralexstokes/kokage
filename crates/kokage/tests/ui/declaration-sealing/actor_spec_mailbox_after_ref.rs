@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, ActorSpec, MailboxMode, Context};
+use kokage::{Actor, ActorResult, ActorSpec, Context, MailboxMode};
 
 struct Idle;
 

@@ -24,8 +24,8 @@ enum LoopEvent<M> {
 /// Handler actors do not receive the mailbox-owning [`RawContext`]. The
 /// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
 /// hook a [`Context`] instead. It provides loop-owned timers, continuations,
-/// watches, offloads, and actor-owned scope waits that a custom raw loop must
-/// express directly.
+/// and actor-owned scope waits that a custom raw loop must express directly.
+/// Watches and offloads remain available on [`RawContext`].
 ///
 /// A [`Context::stop`] exit is normal for monitoring and supervision. A
 /// [`Restart::always`](kokage_supervisor::Restart::always) child restarts
@@ -60,9 +60,10 @@ pub trait Actor: Send + 'static {
 
     /// Runs once before the first message of each actor run.
     ///
-    /// This is the place to acquire per-incarnation resources. Calling
-    /// [`ctx.stop()`](Context::stop) requests a clean stop before
-    /// the ordinary receive loop.
+    /// This is the place to acquire per-incarnation resources. The framework
+    /// reports readiness after this hook returns successfully. Calling
+    /// [`ctx.stop()`](Context::stop) requests a clean stop before the ordinary
+    /// receive loop.
     /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current)
     /// drops messages queued during startup, while
     /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) handles the accepted queue;

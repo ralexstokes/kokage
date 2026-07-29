@@ -666,9 +666,9 @@ impl Drop for ActorLifetime {
 ///
 /// Handler-style [`Actor`](crate::Actor) implementations do not see this type.
 /// The framework owns their loop and hands live hooks a [`Context`] and the
-/// shutdown hook a [`StopContext`]. Those views omit what the stage cannot act on, so
-/// mailbox-stealing `recv` calls and no-op `continue_with` calls are compile
-/// errors rather than silent misbehavior.
+/// shutdown hook a [`StopContext`]. Those views omit what the stage cannot act
+/// on, so mailbox-stealing `recv` calls and no-op `continue_with` calls are
+/// compile errors rather than silent misbehavior.
 pub struct RawContext<M> {
     pub(crate) id: Arc<str>,
     pub(crate) mailbox: MailboxReceiver<M>,
@@ -1275,6 +1275,18 @@ impl<M> Drop for RawContext<M> {
 /// The parameter is the actor, not its message: a hook signature writes
 /// `&mut Context<'_, Self>` and the message type is projected from
 /// [`Actor::Msg`](crate::Actor::Msg).
+/// A helper shared across actor types names that actor generically:
+///
+/// ```no_run
+/// use kokage::{Actor, Context, TimerKey};
+/// use std::time::Duration;
+///
+/// # enum Msg { Tick }
+/// const TICK: TimerKey = TimerKey::new("tick");
+/// fn arm<A: Actor<Msg = Msg> + ?Sized>(ctx: &mut Context<'_, A>) {
+///     ctx.set_timeout(TICK, Msg::Tick, Duration::from_secs(5));
+/// }
+/// ```
 pub struct Context<'a, A: Actor + ?Sized> {
     cx: &'a mut RawContext<A::Msg>,
     draining: bool,
@@ -1316,6 +1328,8 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     }
 
     /// Runs blocking work on Tokio's blocking pool.
+    ///
+    /// See [`RawContext::run_blocking`].
     pub fn run_blocking<F, R>(
         &self,
         f: F,
@@ -1729,6 +1743,8 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 
     /// Runs blocking work on Tokio's blocking pool.
+    ///
+    /// See [`RawContext::run_blocking`].
     pub fn run_blocking<F, R>(
         &self,
         f: F,

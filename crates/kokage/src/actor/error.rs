@@ -6,7 +6,7 @@ use thiserror::Error;
 #[error("blocking task was cancelled during runtime shutdown")]
 pub struct BlockingCancelled;
 
-/// Indicates that an [`RawContext::offload`](crate::host::RawContext::offload)
+/// Indicates that a [`RawContext::offload`](crate::host::RawContext::offload)
 /// future did not complete before its required deadline.
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 #[error("actor offload deadline elapsed")]
