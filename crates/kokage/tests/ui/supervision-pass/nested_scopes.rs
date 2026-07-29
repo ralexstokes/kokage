@@ -27,7 +27,6 @@ struct Workers {
 #[supervision(strategy = Strategy::RestForOne)]
 struct Pool {
     manager: Worker,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 

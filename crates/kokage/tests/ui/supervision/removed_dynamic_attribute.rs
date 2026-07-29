@@ -13,7 +13,7 @@ impl RawActor for Worker {
 #[derive(Supervision)]
 struct App {
     manager: Worker,
-    #[supervision(scope, dynamic)]
+    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 

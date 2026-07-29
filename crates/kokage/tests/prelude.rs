@@ -48,7 +48,7 @@ mod coverage_probe {
     }
 
     mod derive_private {
-        use kokage::__private::{SupervisionFactories, qualified_label};
+        use kokage::__private::{Supervision, SupervisionFactories, qualified_label};
     }
 }
 

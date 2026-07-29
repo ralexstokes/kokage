@@ -187,7 +187,6 @@ struct App {
     ingest: Ingest,
     #[supervision(scope)]
     workers: Workers,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 
@@ -225,13 +224,13 @@ Field order is semantic here in a way it is not for a graph alone: an ordered
 scope starts children in declaration order, and `Strategy::RestForOne` restarts
 the ones that follow. Reordering fields changes restart behaviour.
 
-Two field attributes select what a field is:
+Nested and dynamic scopes are selected in two different ways:
 
 - `#[supervision(scope)]` — a nested derived struct, becoming a named child
   scope.
-- `#[supervision(dynamic)]` — an empty scope whose membership is written at
-  runtime. The field type is the `DynamicScope` marker, which is never
-  constructed; its wiring entry is a `DynamicTree`. Supplying the tree is what
+- A field whose type is `DynamicScope` — an empty scope whose membership is
+  written at runtime. The marker is never constructed; its wiring entry is a
+  `DynamicTree`. Supplying the tree is what
   makes the scope's mount handle available *before* wiring, so
   an actor can hold it as a durable factory field instead of looking the scope
   up after spawn. Policy comes from the tree

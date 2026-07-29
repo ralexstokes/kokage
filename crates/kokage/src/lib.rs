@@ -311,7 +311,7 @@ pub mod observe {
 /// Implementation bridge used by `kokage` derive expansions.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::supervision_derive::{SupervisionFactories, qualified_label};
+    pub use crate::supervision_derive::{Supervision, SupervisionFactories, qualified_label};
 }
 
 /// Common imports for `kokage` consumers.
@@ -321,8 +321,8 @@ pub mod __private {
 /// send/call errors. Observation and raw-hosting surfaces live in
 /// [`observe`] and [`host`] without being injected by a glob import.
 ///
-/// Derive traits and macros are explicit root imports rather than prelude
-/// members. Add `use kokage::{ActorFactory, Supervision};` for unqualified
+/// Derive macros are explicit root imports rather than prelude members. Add
+/// `use kokage::{ActorFactory, Supervision};` for unqualified
 /// `#[derive(ActorFactory)]` and `#[derive(Supervision)]`, or use their fully
 /// qualified `kokage::...` names.
 pub mod prelude {
@@ -350,5 +350,5 @@ pub use kokage_supervisor::{
 };
 pub use runtime::{DynamicActorOptions, RuntimeHandle};
 pub use supervision::{ActorSpec, DynamicTree, OrderedTree, TreeNode};
-pub use supervision_derive::{DynamicScope, Supervision};
+pub use supervision_derive::DynamicScope;
 pub use tokio_util::sync::CancellationToken;

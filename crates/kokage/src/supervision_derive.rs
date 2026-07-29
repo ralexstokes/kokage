@@ -1,19 +1,16 @@
 //! The plumbing a derived supervision struct lowers onto.
 //!
 //! `#[derive(Supervision)]` generates implementations of the traits declared
-//! here. `Supervision` remains public so downstream generated code can name it
-//! and applications can import the derive macro through the same root name.
-//! Its members and the factories contract are implementation plumbing;
-//! application code uses the generated `tree` and `tree_with` constructors.
+//! here. They are re-exported only through `__private` so downstream generated
+//! code can name them; application code uses the generated refs, factories,
+//! `tree`, and `tree_with` surface.
 
 use crate::{Graph, GraphBuilder, GraphLookupError, OrderedTree};
 
 /// Derive support for a group of actors and its supervision scope.
 ///
-/// Applications should implement this trait with `#[derive(Supervision)]`
-/// rather than by hand, then use the generated `tree` or `tree_with`
-/// constructor. The associated types and methods are hidden implementation
-/// plumbing required by generated code across crate boundaries.
+/// Generated implementation plumbing for `#[derive(Supervision)]`.
+#[doc(hidden)]
 pub trait Supervision: Sized {
     /// Restart-stable typed refs for every actor this struct declares,
     /// including those declared by nested scopes.
@@ -24,8 +21,8 @@ pub trait Supervision: Sized {
     #[doc(hidden)]
     type Slots;
 
-    /// Identity-owning dynamic trees, one per `#[supervision(dynamic)]` field,
-    /// plus one nested bundle per nested scope.
+    /// Identity-owning dynamic trees, one per `DynamicScope` field, plus one
+    /// nested bundle per nested scope.
     ///
     /// A dynamic scope is supplied as a [`DynamicTree`](crate::DynamicTree)
     /// through the factories bundle, so its mount handle can be taken with
@@ -68,9 +65,8 @@ pub trait SupervisionFactories<T: Supervision> {
 /// A field of this type carries no actor and is never constructed; it declares
 /// a [`DynamicTree`](crate::DynamicTree) scope whose
 /// membership is written at runtime.
-/// The field must be marked `#[supervision(dynamic)]`, and its wiring entry is a
-/// [`DynamicTree`](crate::DynamicTree) rather than an actor factory — which is
-/// what makes
+/// Its wiring entry is a [`DynamicTree`](crate::DynamicTree) rather than an
+/// actor factory — which is what makes
 /// the scope's mount handle available before any actor is constructed, so a
 /// factory can capture it:
 ///
@@ -92,7 +88,6 @@ pub trait SupervisionFactories<T: Supervision> {
 /// #[derive(kokage::Supervision)]
 /// struct App {
 ///     manager: Manager,
-///     #[supervision(dynamic)]
 ///     sessions: DynamicScope,
 /// }
 ///

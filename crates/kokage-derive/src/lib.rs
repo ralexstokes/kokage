@@ -9,7 +9,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 
-use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Spanned};
+use syn::{Data, DeriveInput, Expr, Field, Fields, Type, parse_macro_input, spanned::Spanned};
 
 /// Derives a reusable factory from an actor's named fields.
 ///
@@ -199,17 +199,14 @@ fn parse_factory_attributes(
 /// `#[derive(Supervision)]` form, or write
 /// `#[derive(kokage::Supervision)]`.
 ///
-/// Each field declares one actor type in the graph. Every field type must
-/// implement `kokage::host::RawActor`; any `Actor` qualifies through the blanket
-/// impl. For a struct named `Pipeline`, the derive generates:
+/// Each ordinary field declares one actor type in the graph and must implement
+/// `kokage::host::RawActor`; any `Actor` qualifies through the blanket impl.
+/// Nested and dynamic scope fields are described below. For a struct named
+/// `Pipeline`, the derive generates:
 ///
-/// * a `PipelineRefs` struct with one field per struct field, typed
-///   `ActorRef<<FieldType as RawActor>::Msg>`;
-/// * a generic `PipelineFactories` struct with one factory field per struct
-///   field and an internal implementation that populates the graph slots;
-/// * a `PipelineSlots` struct holding the unfilled graph slots;
-/// * a `PipelineScopes` struct holding the dynamic trees;
-/// * an implementation of the `kokage::Supervision` trait; and
+/// * a `PipelineRefs` struct containing typed actor refs, including nested refs;
+/// * a generic `PipelineFactories` struct with actor factories and any nested
+///   factories or dynamic trees needed to wire the declaration; and
 /// * `Pipeline::tree(wire)` and `Pipeline::tree_with(config, wire)`
 ///   constructors, producing a non-cloneable `OrderedTree` declaration over
 ///   the graph, including any pre-wired dynamic-scope identities.
@@ -346,9 +343,9 @@ fn parse_factory_attributes(
 /// * returning the wrong actor type from a field factory fails to compile;
 /// * filling the same slot twice is unrepresentable — the generated code owns
 ///   exactly one slot token per field;
-/// * a `#[supervision(dynamic)]` field whose type is not `DynamicScope` fails to
-///   compile;
-/// * `scope` and `dynamic` on one field is rejected;
+/// * a `DynamicScope` field declares a dynamic scope without an attribute;
+/// * the removed `#[supervision(dynamic)]` attribute is rejected;
+/// * marking a `DynamicScope` field as a nested `scope` is rejected;
 /// * a `label` that is empty or contains `.` is rejected; and
 /// * two nodes sharing a name — whether from field names or `label`
 ///   overrides — are rejected.
@@ -362,11 +359,9 @@ fn parse_factory_attributes(
 ///
 /// # Panics
 ///
-/// The generated constructors panic if a handwritten nested `Supervision`
-/// implementation returns `GraphLookupError::ForeignActorRef` from `node` for
-/// the refs that its own `open` implementation created. That violates the
-/// lower-level `Supervision` contract; correctly derived and handwritten
-/// implementations do not panic.
+/// The generated constructors panic if their private nested-scope plumbing
+/// rejects refs created while opening the same derived graph. Correctly
+/// generated implementations preserve that invariant.
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
@@ -435,7 +430,6 @@ fn parse_factory_attributes(
 ///     ingest: Worker,
 ///     #[supervision(scope)]
 ///     workers: Workers,
-///     #[supervision(dynamic)]
 ///     sessions: DynamicScope,
 /// }
 ///
@@ -473,15 +467,15 @@ fn parse_factory_attributes(
 /// `label = "..."` renames a node. `options = <expression>` configures an
 /// actor's mailbox. `restart`, `shutdown`, and `restart_intensity` override
 /// the enclosing scope's defaults for one actor. A nested scope declares those
-/// three on its own struct instead. The remaining keys select what a field is:
+/// three on its own struct instead. `scope` selects a nested derived struct:
 ///
 /// * `scope` — a nested derived struct, contributing a named child scope.
-/// * `dynamic` — an empty scope whose membership is written at runtime. The
-///   field type must be `DynamicScope`, a marker that is never constructed.
-///   Its wiring entry is a `DynamicTree` rather than an actor factory.
-///   Construct one with `DynamicTree::new()`; it
-///   configures the scope and makes its mount handle available before any actor
-///   is built, so a factory can capture it.
+///
+/// A field whose type is `DynamicScope` declares an empty scope whose
+/// membership is written at runtime. The marker is never constructed. Its
+/// wiring entry is a `DynamicTree` rather than an actor factory. Construct one
+/// with `DynamicTree::new()`; it configures the scope and makes its mount handle
+/// available before any actor is built, so a factory can capture it.
 ///
 #[proc_macro_derive(Supervision, attributes(supervision))]
 pub fn derive_supervision(input: TokenStream) -> TokenStream {
@@ -578,6 +572,10 @@ fn parse_scope_attributes(attrs: &[syn::Attribute]) -> syn::Result<ScopeAttrs> {
 
 fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
     let mut parsed = FieldAttrs::default();
+    let dynamic_marker = is_dynamic_scope(&field.ty);
+    if dynamic_marker {
+        parsed.kind = FieldKind::Dynamic;
+    }
     let mut kind_span = None;
 
     for attr in field
@@ -586,18 +584,25 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
         .filter(|attr| attr.path().is_ident("supervision"))
     {
         attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("scope") || meta.path.is_ident("dynamic") {
-                let kind = if meta.path.is_ident("scope") {
-                    FieldKind::Scope
-                } else {
-                    FieldKind::Dynamic
-                };
+            if meta.path.is_ident("scope") {
+                if dynamic_marker {
+                    return Err(meta.error(
+                        "a `DynamicScope` field declares a dynamic scope without an attribute; \
+                         it cannot also be marked `scope`",
+                    ));
+                }
                 if kind_span.is_some() {
-                    return Err(meta.error("`scope` and `dynamic` are mutually exclusive"));
+                    return Err(meta.error("duplicate `scope` option"));
                 }
                 kind_span = Some(attr.span());
-                parsed.kind = kind;
+                parsed.kind = FieldKind::Scope;
                 return Ok(());
+            }
+            if meta.path.is_ident("dynamic") {
+                return Err(meta.error(
+                    "`dynamic` is no longer supported; use a `DynamicScope` field without this \
+                     attribute",
+                ));
             }
             if meta.path.is_ident("label") {
                 if parsed.label.is_some() {
@@ -630,7 +635,7 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
                 return take_expr(&mut parsed.restart_intensity, &meta, "restart_intensity");
             }
             Err(meta.error(
-                "expected `scope`, `dynamic`, `label = \"...\"`, \
+                "expected `scope`, `label = \"...\"`, \
                  or `options`/`restart`/`shutdown`/`restart_intensity` = <expression>",
             ))
         })?;
@@ -639,7 +644,7 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
     if parsed.kind != FieldKind::Actor && parsed.options.is_some() {
         return Err(syn::Error::new_spanned(
             field,
-            "`options` applies only to actor fields; a nested scope configures its own",
+            "`options` applies only to actor fields; a scope configures its own",
         ));
     }
     if parsed.kind == FieldKind::Scope
@@ -666,6 +671,17 @@ fn parse_supervision_field(field: &Field) -> syn::Result<FieldAttrs> {
     }
 
     Ok(parsed)
+}
+
+fn is_dynamic_scope(ty: &Type) -> bool {
+    match ty {
+        Type::Group(group) => is_dynamic_scope(&group.elem),
+        Type::Paren(paren) => is_dynamic_scope(&paren.elem),
+        Type::Path(path) if path.qself.is_none() => path.path.segments.last().is_some_and(|part| {
+            part.ident == "DynamicScope" && matches!(part.arguments, syn::PathArguments::None)
+        }),
+        _ => false,
+    }
 }
 
 fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
@@ -833,10 +849,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                     .as_ref()
                     .expect("scope field parameter");
                 let ref_ty = quote_spanned! {ty.span()=>
-                    <#ty as ::kokage::Supervision>::Refs
+                    <#ty as ::kokage::__private::Supervision>::Refs
                 };
                 let slot_ty = quote_spanned! {ty.span()=>
-                    <#ty as ::kokage::Supervision>::Slots
+                    <#ty as ::kokage::__private::Supervision>::Slots
                 };
                 slot_fields.push(quote! { #field_vis #ident: #slot_ty });
                 refs_fields.push(quote! {
@@ -851,13 +867,13 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                     .push(quote! { #param: ::kokage::__private::SupervisionFactories<#ty> });
                 bound_idents.push(ident);
                 open_stmts.push(quote_spanned! {ty.span()=>
-                    let (#slot_ident, #ident) = <#ty as ::kokage::Supervision>::open(
+                    let (#slot_ident, #ident) = <#ty as ::kokage::__private::Supervision>::open(
                         builder,
                         &::kokage::__private::qualified_label(prefix, #name),
                     );
                 });
                 scope_fields.push(quote! {
-                    #field_vis #ident: <#ty as ::kokage::Supervision>::Scopes
+                    #field_vis #ident: <#ty as ::kokage::__private::Supervision>::Scopes
                 });
                 scope_ctor.push(ident);
                 define_stmts.push(quote! {
@@ -920,7 +936,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             }
             FieldKind::Scope => {
                 scope_stmts.push(quote! {
-                    let tree = tree.subtree(#name, <#ty as ::kokage::Supervision>::node(
+                    let tree = tree.subtree(#name, <#ty as ::kokage::__private::Supervision>::node(
                         graph,
                         &refs.#ident,
                         scopes.#ident,
@@ -963,7 +979,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             #[doc = ""]
             #[doc = "# Panics"]
             #[doc = ""]
-            #[doc = "Panics if a handwritten nested `Supervision` implementation rejects refs created by its own `open` implementation. This indicates that the nested implementation violated the `Supervision::node` contract."]
+            #[doc = "Panics if private nested-scope plumbing rejects refs created while opening the same derived graph."]
             #vis fn tree<#(#all_params),*>(
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
@@ -980,7 +996,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             #[doc = ""]
             #[doc = "# Panics"]
             #[doc = ""]
-            #[doc = "Panics if a handwritten nested `Supervision` implementation rejects refs created by its own `open` implementation. This indicates that the nested implementation violated the `Supervision::node` contract."]
+            #[doc = "Panics if private nested-scope plumbing rejects refs created while opening the same derived graph."]
             #vis fn tree_with<#(#all_params),*>(
                 config: ::kokage::GraphConfig,
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
@@ -1013,10 +1029,12 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             }
         }
 
+        #[doc(hidden)]
         #vis struct #slots {
             #(#slot_fields,)*
         }
 
+        #[doc(hidden)]
         #vis struct #scopes {
             #(#scope_fields,)*
         }
@@ -1033,14 +1051,14 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             fn define(
                 self,
                 builder: &mut ::kokage::GraphBuilder,
-                slots: <#declared as ::kokage::Supervision>::Slots,
-            ) -> <#declared as ::kokage::Supervision>::Scopes {
+                slots: <#declared as ::kokage::__private::Supervision>::Slots,
+            ) -> <#declared as ::kokage::__private::Supervision>::Scopes {
                 #(#define_stmts)*
                 #scopes { #(#scope_ctor,)* }
             }
         }
 
-        impl ::kokage::Supervision for #declared {
+        impl ::kokage::__private::Supervision for #declared {
             type Refs = #refs;
             type Slots = #slots;
             type Scopes = #scopes;
@@ -1104,7 +1122,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 #(#factory_bounds,)*
             {
                 let (slots, refs) =
-                    <Self as ::kokage::Supervision>::open(&mut builder, "");
+                    <Self as ::kokage::__private::Supervision>::open(&mut builder, "");
                 let factories = wire(&refs);
                 let scopes =
                     ::kokage::__private::SupervisionFactories::<Self>::define(

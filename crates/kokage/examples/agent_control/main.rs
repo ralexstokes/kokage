@@ -46,8 +46,8 @@
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
 //! └── sessions  empty subtree mount; per-conversation subtrees at runtime
-//!               (a `#[supervision(dynamic)]` field, so the router can capture its
-//!                mount handle at wiring time)
+//!               (a `DynamicScope` field, so the router can capture its mount
+//!                handle at wiring time)
 //!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
 //!         │                        every incarnation's id unique, so respawn
 //!         │                        never races a predecessor's removal
@@ -198,7 +198,6 @@ struct AgentControl {
     gateway: Gateway,
     #[supervision(scope)]
     core: Core,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 

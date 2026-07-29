@@ -4,8 +4,10 @@
 use std::time::Duration;
 
 use kokage::{
-    __private::SupervisionFactories, DynamicScope, GraphLookupError, ScopeKind, Supervision,
-    observe::ChildOutline, prelude::*,
+    __private::{Supervision as SupervisionPlumbing, SupervisionFactories},
+    DynamicScope, GraphLookupError, ScopeKind, Supervision,
+    observe::ChildOutline,
+    prelude::*,
 };
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -165,7 +167,6 @@ fn a_label_attribute_overrides_the_field_name_in_paths_and_child_ids() {
 #[derive(Supervision)]
 struct WithDynamic {
     manager: Worker,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 
@@ -242,7 +243,7 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
     // `node` resolves each declared actor out of the graph `open` populated.
     // Handing it a different graph returns an ordinary graph build error.
     let mut builder = GraphBuilder::new();
-    let (slots, refs) = <Flat as Supervision>::open(&mut builder, "");
+    let (slots, refs) = <Flat as SupervisionPlumbing>::open(&mut builder, "");
     let scopes = FlatFactories {
         ingest: || Worker,
         parse: || Worker,
@@ -256,7 +257,7 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
     let foreign = foreign.build().expect("foreign graph builds");
 
     assert!(matches!(
-        <Flat as Supervision>::node(&foreign, &refs, scopes),
+        <Flat as SupervisionPlumbing>::node(&foreign, &refs, scopes),
         Err(GraphLookupError::ForeignActorRef { actor_id, .. }) if actor_id == "ingest"
     ));
 }
@@ -287,14 +288,13 @@ impl Actor for Mounter {
 #[derive(Supervision)]
 struct Mounted {
     mounter: Mounter,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 
 #[tokio::test]
 async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
-    // The identity-owning tree is what a `#[supervision(dynamic)]` field buys
-    // over appending the scope afterwards: the handle exists early enough to become
+    // The identity-owning tree is what a `DynamicScope` field buys over
+    // appending the scope afterwards: the handle exists early enough to become
     // a durable factory field, so it survives restarts of the actor holding it.
     let sessions = DynamicTree::new();
     let mount = sessions.handle();

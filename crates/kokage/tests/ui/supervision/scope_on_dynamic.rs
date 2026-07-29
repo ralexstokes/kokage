@@ -1,4 +1,4 @@
-use kokage::{ActorContext, ActorResult, Supervision, host::RawActor};
+use kokage::{ActorContext, ActorResult, DynamicScope, Supervision, host::RawActor};
 
 struct Worker;
 
@@ -13,8 +13,8 @@ impl RawActor for Worker {
 #[derive(Supervision)]
 struct App {
     manager: Worker,
-    #[supervision(dynamic)]
-    sessions: Worker,
+    #[supervision(scope)]
+    sessions: DynamicScope,
 }
 
 fn main() {}
