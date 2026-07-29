@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("http-server", |ctx| async move {
             println!("http-server started");
 
@@ -20,9 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }))
-        .build()?;
-
-    let handle = supervisor.spawn();
+        .spawn()?;
 
     let app_shutdown = CancellationToken::new();
     let trigger = tokio::spawn({
@@ -35,9 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     app_shutdown.cancelled().await;
-    handle.shutdown();
-
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     trigger.await?;

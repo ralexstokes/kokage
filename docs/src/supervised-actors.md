@@ -56,35 +56,23 @@ impl Actor for Press {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = GraphBuilder::new();
-    let (press_slot, press_ref) =
-        builder.slot::<String>("press");
-    let (orders_slot, orders) =
-        builder.slot("front-desk");
-    builder.define(orders_slot, {
-        let press_ref = press_ref.clone();
-        move || FrontDesk { press: press_ref.clone() }
-    });
     let runs = Arc::new(AtomicUsize::new(0));
-    builder.define(press_slot, move || Press { runs: runs.clone(), run: 0 });
-    let graph = builder.build()?;
+    let press = builder.actor("press", move || Press { runs: runs.clone(), run: 0 });
+    let orders = builder.actor("front-desk", move || FrontDesk { press: press.clone() });
 
-    let handle = OrderedTree::graph(graph)
-        .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::OnFailure)
+    let runtime = OrderedTree::graph(builder.build()?)
         .restart_config(RestartConfig::new(5, Duration::from_secs(60)))
         .spawn()?;
 
     orders.send("business cards x100".into()).await?;
-    let mut lifecycle = handle.watch_lifecycle();
-    let baseline = handle.snapshot().child("press").unwrap().generation;
+    let restarted = runtime.restart_of("press");
     orders.send("origami cranes x1000".into()).await?;
-    lifecycle
-        .started_after("press", baseline)
+    restarted
         .await
         .expect("press restart is observed");
     orders.send("flyers x500".into()).await?;
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
@@ -99,19 +87,16 @@ boundaries, then compose them directly as a tree:
 
 ```rust,ignore
 let tree = OrderedTree::graph(core_graph)
-    .strategy(Strategy::OneForOne)
-    .subtree(
-        "venues",
-        OrderedTree::graph(venue_graph)
-            .strategy(Strategy::OneForOne),
-    );
-let handle = tree.spawn()?;
+    .subtree("venues", OrderedTree::graph(venue_graph));
+let runtime = tree.spawn()?;
 ```
 
 The tree's declaration order is its startup order and reverses for shutdown.
 `RuntimeHandle::actor_stats()` recursively includes both graphs.
-`handle.subtree("venues")` returns a scoped actor-aware runtime handle with
-the same observation, completion, shutdown, and dynamic-insertion operations.
+`runtime.subtree("venues")` returns a scoped actor-aware runtime handle with
+the same observation, completion, and shutdown operations. When that scope is
+dynamic, the scoped handle's `dynamic()` method returns its
+membership-mutation capability.
 
 Actor children use `on_start` as their readiness boundary. Ordered runtimes do
 not spawn the next declared actor until that boundary is crossed; snapshots
@@ -126,12 +111,14 @@ waits until the named child has exited successfully without a pending restart.
 the scope down at the same boundary; take the runtime's handle before spawning
 to avoid racing a fast child, and retain the returned guard.
 
-The lifecycle watch before sending `origami cranes x1000` is deliberate.
+Arming `restart_of` before sending `origami cranes x1000` is deliberate.
 A worker gets a fresh mailbox on restart; anything queued behind the crashing
 `origami` order would be dropped with the old mailbox. `send` waits while the
 actor is unbound, but it cannot recover messages already accepted by the
-failed run. Waiting for `Started` with a generation above the captured
-baseline gives a one-shot recovery boundary without a separate monitor type.
+failed run. `restart_of` subscribes and captures the baseline generation when
+called, before its returned future is polled, then resolves with the replacement
+generation. That gives a one-shot recovery boundary without a lost-wakeup
+window or a separate monitor type.
 
 Per-actor policies — say a tighter restart budget for the press alone — belong
 on that actor's `ActorSpec`. Scope methods set inherited defaults, while an
@@ -139,14 +126,12 @@ on that actor's `ActorSpec`. Scope methods set inherited defaults, while an
 
 ```rust,ignore
 let tree = OrderedTree::new()
-    .strategy(Strategy::OneForOne)
-    .default_restart(RestartPolicy::OnFailure)
     .actor(graph.actor_for(&orders)?)
     .actor(
         ActorSpec::new(graph.actor_for(&press_ref)?)
             .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
     );
-let handle = tree.spawn()?;
+let runtime = tree.spawn()?;
 ```
 
 Use `OrderedTree::task` to mix an arbitrary non-actor `host::ChildSpec` into an
@@ -180,7 +165,6 @@ struct Workers {
 }
 
 #[derive(Supervision)]
-#[supervision(strategy = Strategy::OneForOne)]
 struct App {
     #[supervision(restart = RestartPolicy::Never)]
     ingest: Ingest,
@@ -201,7 +185,7 @@ let (tree, refs) = App::tree(|_refs| AppFactories {
     },
     sessions,
 })?;
-let handle = tree.spawn()?;
+let runtime = tree.spawn()?;
 ```
 
 All three actors join **one** graph, so refs cross scope boundaries freely and
@@ -235,7 +219,7 @@ Nested and dynamic scopes are selected in two different ways:
   up after spawn. Policy comes from the tree
   (`DynamicTree::new().default_restart(..)`), not from attributes.
 
-Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
+Per-actor `restart`, `shutdown`, and `restart_config` overrides go on the
 field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
 the non-`Clone` `OrderedTree` declaration — paired, like every generated
 constructor, with the refs bundle — without spawning it. The tree carries the

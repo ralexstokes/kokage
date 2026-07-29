@@ -138,7 +138,6 @@ fn telemetry_runtime() -> OrderedTree {
     let exporters = OrderedTree::new().task(exporter);
 
     OrderedTree::new()
-        .strategy(Strategy::OneForOne)
         .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
         .task(heartbeat.restart(RestartPolicy::Always))
         .task(migration.restart(RestartPolicy::Never))
@@ -150,19 +149,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut worker_restart = RestartConfig::new(60, Duration::from_secs(60));
     worker_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(1500));
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
-    let frontend_worker = worker_ref.clone();
-    let (frontend_slot, frontend) = builder.slot("frontend");
-    builder.define(frontend_slot, move || Frontend {
-        worker: frontend_worker.clone(),
+    let worker = builder.actor("worker", || Worker);
+    let frontend = builder.actor("frontend", {
+        let worker = worker.clone();
+        move || Frontend {
+            worker: worker.clone(),
+        }
     });
-    builder.define(worker_slot, || Worker);
     let graph = builder.build()?;
     let frontend_actor = graph.actor_for(&frontend)?;
-    let worker_actor = graph.actor_for(&worker_ref)?;
+    let worker_actor = graph.actor_for(&worker)?;
 
-    let handle = OrderedTree::new()
-        .strategy(Strategy::OneForOne)
+    let runtime = OrderedTree::new()
         .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
         .actor(frontend_actor)
         .actor(ActorSpec::new(worker_actor).restart_config(worker_restart))
@@ -171,7 +169,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .subtree("dynamic", DynamicTree::new())
         .spawn()?;
 
-    let console = Console::for_runtime(&handle)
+    let console = Console::for_runtime(&runtime)
         .bind(([127, 0, 0, 1], 0))
         .build()?;
     let console = match console.spawn().await {
@@ -188,7 +186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Periodically add a dynamic actor, feed it, and remove it again, so the
     // console shows children joining and leaving the tree.
-    let dynamic = handle
+    let dynamic = runtime
         .subtree("dynamic")
         .and_then(|scope| scope.dynamic())
         .expect("declared dynamic scope");
@@ -233,7 +231,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!("shutting down");
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     if let Some(console) = console {
         console.shutdown();
     }

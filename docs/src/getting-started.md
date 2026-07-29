@@ -33,7 +33,7 @@ use kokage_supervisor::{ChildSpec, Supervisor};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("heartbeat", |ctx| async move {
             let mut ticker = tokio::time::interval(Duration::from_millis(500));
             loop {
@@ -48,9 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }))
-        .build()?;
-
-    let running = supervisor.spawn();
+        .spawn()?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 

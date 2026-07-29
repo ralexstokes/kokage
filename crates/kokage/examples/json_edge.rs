@@ -31,9 +31,8 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let (printer_slot, printer) = graph.slot("Printer");
-    graph.define(printer_slot, || Printer);
-    let handle = OrderedTree::graph(graph.build()?).spawn()?;
+    let printer = graph.actor("Printer", || Printer);
+    let runtime = OrderedTree::graph(graph.build()?).spawn()?;
 
     // A socket or file framing layer can supply the same byte slices.
     let input = b"{\"item\":\"labels\",\"quantity\":4}\n{\"item\":\"boxes\",\"quantity\":2}\n";
@@ -45,6 +44,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }

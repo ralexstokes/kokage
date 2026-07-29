@@ -20,14 +20,14 @@ watches and supervision. `RestartPolicy::Always` restarts it; `OnFailure` and
 `Never` do not.
 
 The usual static graph is a struct whose fields are the actors. Deriving
-`Supervision` gives that struct a `graph` method; its wiring closure receives a
+`Supervision` gives that struct a `tree` method; its wiring closure receives a
 cloneable refs struct with one typed `ActorRef` per field, so cycles and
 forward references do not require string lookup. The method returns that same
-refs bundle alongside the graph, for use as application entry points:
+refs bundle alongside the single-use tree, for use as application entry points:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::{ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision, host::ActorContext};
+use kokage::{ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
-    let handle = tree.spawn()?;
+    let runtime = tree.spawn()?;
 
     refs.front_desk
         .send(Order("business cards x100".into()))
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("shipped {shipped} jobs");
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
@@ -214,9 +214,8 @@ The derive keeps that shape in the type system:
   compile error
 
 Configure an individual actor's mailbox or message-size observation with a
-normal Rust expression in `#[supervision(options = ...)]`. Annotated fields use
-generated `GraphBuilder::slot_with`; plain fields use `GraphBuilder::slot` and
-retain the default FIFO mailbox without message-size observation:
+normal Rust expression in `#[supervision(options = ...)]`. Fields without the
+attribute retain the default FIFO mailbox without message-size observation:
 
 ```rust,ignore
 use kokage::{ActorOptions, MailboxMode, Supervision};

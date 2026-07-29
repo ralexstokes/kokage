@@ -11,7 +11,7 @@ use kokage::{
     Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
     StartContext, host::BoxError,
 };
-use kokage_supervisor::{RestartConfig, RestartPolicy, Strategy};
+use kokage_supervisor::RestartConfig;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -57,48 +57,38 @@ impl Actor for Worker {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
-    let (frontend_slot, frontend) = builder.slot("frontend");
-    builder.define(frontend_slot, {
-        let worker_ref = worker_ref.clone();
-        move || Frontend {
-            worker: worker_ref.clone(),
-        }
-    });
     let worker_runs = Arc::new(AtomicUsize::new(0));
-    builder.define(worker_slot, move || Worker {
+    let worker = builder.actor("worker", move || Worker {
         runs: worker_runs.clone(),
         observed: observed_tx.clone(),
         run: 0,
     });
+    let frontend = builder.actor("frontend", {
+        let worker = worker.clone();
+        move || Frontend {
+            worker: worker.clone(),
+        }
+    });
     let graph = builder.build()?;
     let frontend_actor = graph.actor_for(&frontend)?;
-    let worker_actor = graph.actor_for(&worker_ref)?;
+    let worker_actor = graph.actor_for(&worker)?;
 
-    let handle = OrderedTree::new()
-        .strategy(Strategy::OneForOne)
+    let runtime = OrderedTree::new()
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor)
-                .restart(RestartPolicy::OnFailure)
                 .restart_config(RestartConfig::new(5, std::time::Duration::from_secs(5))),
         )
         .spawn()?;
 
-    let mut lifecycle = handle.watch_lifecycle();
-    let baseline = handle
-        .snapshot()
-        .child("worker")
-        .expect("worker is supervised")
-        .generation;
+    let restarted = runtime.restart_of("worker");
     frontend.send("fail-worker".to_owned()).await?;
-    lifecycle
-        .started_after("worker", baseline)
+    restarted
         .await
         .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;
     println!("observed {}", observed_rx.recv().await.expect("message"));
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }

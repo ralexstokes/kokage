@@ -32,7 +32,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             }
         })
-        .restart(RestartPolicy::OnFailure)
     };
 
     let nested_supervisor = Supervisor::ordered().child(nested_worker).build()?;
@@ -45,20 +44,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = Supervisor::dynamic().build()?;
-
-    let handle = supervisor.spawn();
-    handle
+    let running = Supervisor::dynamic().spawn()?;
+    running
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(metrics)
         .await?;
-    handle
+    running
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested-pipeline", nested_supervisor))
         .await?;
-    let nested_handle = handle
+    let nested_handle = running
         .supervisor("nested-pipeline")
         .expect("newly added nested supervisor has a stable handle");
     let mut nested_lifecycle = nested_handle.watch_lifecycle();
@@ -78,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let metrics = handle
+    let metrics = running
         .snapshot()
         .child("metrics")
         .expect("metrics remains present")
@@ -86,8 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(metrics.generation, 0);
     println!("nested subtree recovered internally without restarting outer siblings");
 
-    handle.shutdown();
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

@@ -122,22 +122,25 @@ Stream closure is terminality, not an event, and is never dropped.
 
 ### Waiting for one restart
 
-`ChildLifecycleWatch::started_after(id, after_generation)` collapses the common
-direct-child one-shot wait into a single call, returning the generation that
-started:
+`RuntimeHandle::restart_of(id)` is the direct-child one-shot helper. Call it
+before triggering the failure, then await the returned future afterward:
 
 ```rust,ignore
-let mut lifecycle = handle.watch_lifecycle();
-let baseline = handle.snapshot().child("press").unwrap().generation;
-
-lifecycle.started_after("press", baseline).await;
+let restarted = handle.restart_of("press");
+press.send(PrintMsg::Jam).await?;
+let generation = restarted.await;
 ```
 
-It returns `None` once that start can no longer be observed on this watch —
-the membership was removed, the scope became terminal, or a `Lagged` marker
-discarded a prefix that may have carried it. `None` means waiting longer is
-futile, not which of the three happened; realign from a snapshot to tell them
-apart. Consumers maintaining derived state should drive `next()` directly.
+This is a regular method returning a future, rather than an `async fn`: the
+method synchronously subscribes and captures the baseline generation, so the
+wait is armed even if the returned future has not been polled when the crash
+happens. It resolves with the replacement generation, or `None` when the
+membership is removed, the scope becomes terminal, or lifecycle lag makes the
+start unobservable.
+
+`ChildLifecycleWatch::started_after(id, baseline)` remains the lower-level
+form for consumers that already own a watch. Consumers maintaining derived
+state should drive `next()` directly and realign from a snapshot after lag.
 
 ### Pumping transitions into an actor
 
@@ -236,9 +239,11 @@ fn upload_size(message: &Upload) -> usize {
     message.payload.len()
 }
 
-let (uploads_slot, uploads) =
-    graph.slot_with("uploads", ActorOptions::new().message_size(upload_size));
-graph.define(uploads_slot, UploadActor::new);
+let uploads = graph.actor_with(
+    "uploads",
+    ActorOptions::new().message_size(upload_size),
+    UploadActor::new,
+);
 ```
 
 The same mailbox vocabulary configures dynamic actors through direct forwarding
@@ -291,8 +296,8 @@ The separate `kokage-console` workspace crate can launch a web console
 backed by the runtime's public snapshots, events, and actor stats:
 
 ```rust,ignore
-let handle = tree.spawn()?;
-let console = kokage_console::Console::for_runtime(&handle)
+let runtime = tree.spawn()?;
+let console = kokage_console::Console::for_runtime(&runtime)
     .bind(([127, 0, 0, 1], 8080))
     .build()?
     .spawn()
@@ -312,7 +317,7 @@ Non-loopback binds require an access token. Add the externally visible host
 when it differs from the listener address:
 
 ```rust,ignore
-let console = kokage_console::Console::for_runtime(&handle)
+let console = kokage_console::Console::for_runtime(&runtime)
     .bind(([0, 0, 0, 0], 8080))
     .access_token("replace-with-a-random-url-safe-token")
     .allowed_host("console.internal:8080")

@@ -30,8 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("flaky-worker observed shutdown");
             Ok(())
         }
-    })
-    .restart(RestartPolicy::OnFailure);
+    });
 
     let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -40,14 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
 
-    let supervisor = Supervisor::ordered()
-        .strategy(Strategy::OneForOne)
-        .child(flaky)
-        .child(metrics)
-        .build()?;
-
-    let handle = supervisor.spawn();
-    let mut lifecycle = handle.watch_lifecycle();
+    let running = Supervisor::ordered().child(flaky).child(metrics).spawn()?;
+    let mut lifecycle = running.watch_lifecycle();
 
     loop {
         let event = timeout(Duration::from_secs(2), lifecycle.next())
@@ -63,8 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    handle.shutdown();
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

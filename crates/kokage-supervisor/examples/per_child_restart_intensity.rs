@@ -42,7 +42,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
     .restart_config(warm_cache_restart);
 
     let metrics = ChildSpec::task("metrics", |ctx| async move {
@@ -53,14 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
-        .build()?;
-
-    let handle = supervisor.spawn();
-    let mut events = handle.watch_lifecycle_recursive();
+        .spawn()?;
+    let mut events = running.watch_lifecycle_recursive();
 
     loop {
         let event = timeout(Duration::from_secs(2), events.next())
@@ -99,8 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    handle.shutdown();
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

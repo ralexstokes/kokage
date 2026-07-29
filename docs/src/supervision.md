@@ -24,7 +24,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(Duration::from_millis(200)).await;
         Err("paper jam".into())
     })
-    .restart(RestartPolicy::OnFailure)
     .restart_config(press_restart)
     .shutdown(ShutdownPolicy::Cooperative { grace: Duration::from_secs(1) });
 
@@ -36,7 +35,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .restart(RestartPolicy::Always);
 
     let running = Supervisor::ordered()
-        .strategy(Strategy::OneForOne)
         .child(press)
         .child(front_desk)
         .spawn()?;
@@ -240,7 +238,7 @@ that finishes immediately is still observed:
 
 ```rust,ignore
 let builder = Supervisor::ordered()
-    .child(source.restart(RestartPolicy::OnFailure))
+    .child(source)
     .child(indexer.restart(RestartPolicy::Never))
     .child(metrics_reporter);
 

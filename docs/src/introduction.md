@@ -18,6 +18,12 @@ the crate root. Wire actors in a `Graph` and move it into an `OrderedTree`;
 ordered scope. Raw task supervision requires a direct `kokage-supervisor`
 dependency.
 
+Spawning a tree returns an owning [`Runtime`]. Keep it alive for as long as
+the application should run; `RuntimeHandle` values cloned from it are
+non-owning control and observation capabilities. Dropping the owner requests
+graceful shutdown, while dropping any number of handles does nothing to the
+runtime lifetime.
+
 The tiers describe roles rather than enforcing a small root by symbol count.
 Actor and tree configuration types, plus the result and error types named by
 their primary methods, stay at the root even when they are advanced. `host`
@@ -49,7 +55,7 @@ If you have used Erlang/OTP or Elixir, the mapping is direct:
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
 | `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
 | Restart intensity (`MaxR`/`MaxT`) | `RestartConfig::new(max_restarts, within)` |
-| GenServer-ish process with a mailbox | An actor with an [`ActorContext`] |
+| GenServer-ish process with a mailbox | An actor with stage-specific `StartContext` / `MessageContext` callbacks |
 | Registered process name | A typed `ActorRef<M>`, minted at wiring time and passed around (labels are display names, not addresses) |
 
 If you have not: don't worry. This tutorial builds everything up from scratch.
@@ -86,4 +92,4 @@ next](next-steps.md)).
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
 [`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
-[`ActorContext`]: https://stokes.io/kokage/api/kokage/host/struct.ActorContext.html
+[`Runtime`]: https://stokes.io/kokage/api/kokage/struct.Runtime.html

@@ -32,25 +32,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::OnFailure)
             .restart_config(nested_restart),
         )
         .build()?;
 
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
         .child(ChildSpec::supervisor("nested", nested))
-        .build()?;
-
-    let handle = supervisor.spawn();
+        .spawn()?;
 
     sleep(Duration::from_millis(300)).await;
-    handle.shutdown();
-
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
 
     Ok(())
 }

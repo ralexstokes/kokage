@@ -6,12 +6,10 @@ use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = Supervisor::dynamic().build()?;
+    let running = Supervisor::dynamic().spawn()?;
+    let mut events = running.watch_lifecycle_recursive();
 
-    let handle = supervisor.spawn();
-    let mut events = handle.watch_lifecycle_recursive();
-
-    handle
+    running
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(ChildSpec::task("api", |ctx| async move {
@@ -24,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     wait_for_child_started(&mut events, "api").await?;
 
-    handle
+    running
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(ChildSpec::task("cache-warmer", |ctx| async move {
@@ -50,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    handle
+    running
         .dynamic()
         .expect("dynamic supervisor")
         .remove_child("cache-warmer")
@@ -60,13 +58,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let nested = Supervisor::dynamic().build()?;
 
-    handle
+    running
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await?;
     wait_for_nested_supervisor_started(&mut events, "nested").await?;
-    let nested = handle
+    let nested = running
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
     nested
@@ -116,8 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_nested_child_removed(&mut events, "nested", "nested-cache").await?;
     println!("nested-cache removed from nested supervisor");
 
-    handle.shutdown();
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

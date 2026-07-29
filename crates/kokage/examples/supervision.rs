@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             out: out_tx.clone(),
         },
     })?;
-    let handle = tree.spawn()?;
+    let runtime = tree.spawn()?;
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))
@@ -113,6 +113,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     acked_rx.recv().await.expect("frontend ack");
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }

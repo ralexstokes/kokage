@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `DynamicActorOptions` carries the new child's restart policy, shutdown policy,
-optional restart intensity, and terminal-removal behavior. A
+optional restart configuration, and terminal-removal behavior. A
 runtime's restart and shutdown defaults are inherited unless the options use
 the `restart(...)` or `shutdown(...)` builder methods to override them. Those
 methods are how the runtime distinguishes an explicit override from an
@@ -211,13 +211,11 @@ Every tree owns a stable identity immediately. Call `handle()` when an actor
 factory must capture the scope it will later own or reconcile:
 
 ```rust,ignore
-let sessions_tree = DynamicTree::new()
-    .default_restart(RestartPolicy::OnFailure);
+let sessions_tree = DynamicTree::new();
 let sessions = sessions_tree.handle();
 
 let mut graph = GraphBuilder::new();
-let (router_slot, router) = graph.slot("router");
-graph.define(router_slot, move || Router::new(sessions.clone()));
+let router = graph.actor("router", move || Router::new(sessions.clone()));
 let graph = graph.build()?;
 
 let app_tree = OrderedTree::new()
@@ -252,13 +250,16 @@ one identity.
 Every actor stage has the same safe scope surface: `host::ActorContext`,
 `StartContext`, `MessageContext`, and `StopContext` return `RestrictedScope`
 from `supervisor()` and `children()`. Observation always works. Insertion
-(`add_actor`, `add_subtree`) schedules startup rather than waiting for it, so
-it remains available and works only for dynamic scopes. `subtree()` returns
-another `RestrictedScope`, so navigation cannot widen the surface.
+(`add_actor`, `add_subtree`) schedules startup rather than waiting for it and
+lives on the capability returned by `RestrictedScope::dynamic()`. Ordered
+scopes return `None`. `subtree()` returns another `RestrictedScope`, so
+navigation cannot widen the surface or expose a full `RuntimeHandle`.
 
-Lifecycle waits and membership removal are withheld because their progress may
-depend on the current actor returning from startup, its receive loop, a handler,
-or teardown. During `on_start` or `handle`, use
+Lifecycle waits are withheld because their progress may depend on the current
+actor returning from startup, its receive loop, a handler, or teardown. Dynamic
+membership removal is available, but awaiting removal of the current actor (or
+another child whose teardown depends on this callback returning) has the same
+cycle and must be avoided. During `on_start` or `handle`, use
 `LiveContext::spawn_scope_wait` when a lifecycle wait must happen. The wait
 runs outside the actor task and its result returns through the actor's ordinary
 mailbox:
@@ -270,6 +271,8 @@ ctx.spawn_scope_wait(
     |children| async move {
         children.wait_started().await.map_err(|_| ())?;
         children
+            .dynamic()
+            .ok_or(())?
             .add_actor("worker", || Worker)
             .await
             .map_err(|_| ())?;
@@ -320,8 +323,9 @@ starts after the leader reports ready and stops before the leader is cancelled.
 Consequently, work launched during `on_start` must be pipelined: let `on_start`
 return, wait for `children.wait_started()` in the pipelined work, then add
 members. Every stage yields a `RestrictedScope`; insertion itself is available
-directly because it only schedules startup, while lifecycle waits require
-`spawn_scope_wait` during the live stages. Shutdown cannot start such work.
+through `dynamic()` because it only schedules startup, while lifecycle waits
+require `spawn_scope_wait` during the live stages. Shutdown cannot start such
+work.
 
 `actor_with_scope` takes the restart relationship explicitly. `RestForOne`
 means leader failure recycles the leader and owned scope, while a worker

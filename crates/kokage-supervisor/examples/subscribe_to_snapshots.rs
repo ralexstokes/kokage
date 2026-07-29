@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .build()?;
 
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
@@ -23,13 +23,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }))
         .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
-        .build()?;
-
-    let handle = supervisor.spawn();
-    let mut snapshots = handle.subscribe_snapshots();
+        .spawn()?;
+    let mut snapshots = running.subscribe_snapshots();
 
     println!("initial snapshot:");
-    print_snapshot(&handle.snapshot(), 0);
+    print_snapshot(&running.snapshot(), 0);
 
     let observer = tokio::spawn(async move {
         loop {
@@ -47,9 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    handle.shutdown();
-
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     observer.await??;
 
     Ok(())
