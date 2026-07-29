@@ -5,6 +5,9 @@ authors = ["Alex Stokes"]
 language = "en"
 src = "src"
 
+[rust]
+edition = "2024"
+
 [output.html]
 git-repository-url = "https://github.com/ralexstokes/kokage"
 additional-css = ["api-link.css"]

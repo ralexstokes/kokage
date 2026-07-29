@@ -35,12 +35,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sink_ref = builder.actor(ActorSpec::new("OneMessageSink", move || OneMessageSink {
         observed: observed_tx.clone(),
     }));
-    let graph = builder.build()?;
-    let sink = graph
-        .into_nodes()
-        .into_iter()
-        .next()
-        .expect("one actor")
+    let sink = builder
+        .build()?
+        .into_nodes_by_label()
+        .remove("OneMessageSink")
+        .expect("OneMessageSink actor")
         .into_runnable();
 
     let first_run = tokio::spawn({

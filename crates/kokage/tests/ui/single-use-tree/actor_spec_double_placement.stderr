@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `spec`
+  --> tests/ui/single-use-tree/actor_spec_double_placement.rs:15:54
+   |
+14 |     let spec = ActorSpec::new("idle", || Idle);
+   |         ---- move occurs because `spec` has type `ActorSpec<()>`, which does not implement the `Copy` trait
+15 |     let _tree = OrderedTree::new().actor(spec).actor(spec);
+   |                                          ----        ^^^^ value used here after move
+   |                                          |
+   |                                          value moved here

@@ -129,9 +129,9 @@ use std::{
 };
 
 use kokage::{
-    ActorNode, ActorSlot, CancellationToken, DownReason, MailboxMode, RestartConfig, RuntimeHandle,
+    ActorSlot, CancellationToken, DownReason, MailboxMode, RestartConfig, RuntimeHandle,
     Supervision,
-    observe::{LifecycleEventKind, LifecycleWatch, LifecycleWatchGuard},
+    observe::{LifecycleWatchGuard, SupervisorSnapshotReceiver},
     prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -153,12 +153,6 @@ const PHASE_TIMEOUT: Duration = Duration::from_secs(3);
 const URGENT_BOUND: Duration = Duration::from_secs(2);
 
 type AnyError = Box<dyn Error + Send + Sync>;
-
-fn take_node(nodes: &mut HashMap<String, ActorNode>, label: &str) -> ActorNode {
-    nodes
-        .remove(label)
-        .unwrap_or_else(|| panic!("graph contains `{label}`"))
-}
 
 fn feed_message_key(message: &FeedMsg) -> &'static str {
     match message {
@@ -349,24 +343,40 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     );
 
     let graph = builder.build()?;
-    let mut nodes: HashMap<_, _> = graph
-        .into_nodes()
-        .into_iter()
-        .map(|node| (node.label().to_owned(), node))
-        .collect();
+    let mut nodes = graph.into_nodes_by_label();
     let venues = OrderedTree::new()
         .restart_config(RestartConfig::new(5, Duration::from_secs(10)))
-        .actor(take_node(&mut nodes, "venues.venue-a-feed").child_id("venue-a-feed"))
-        .actor(take_node(&mut nodes, "venues.venue-a-gateway").child_id("venue-a-gateway"))
-        .actor(take_node(&mut nodes, "venues.venue-b-feed").child_id("venue-b-feed"))
-        .actor(take_node(&mut nodes, "venues.venue-b-gateway").child_id("venue-b-gateway"));
+        .actor(
+            nodes
+                .remove("venues.venue-a-feed")
+                .expect("venue-a-feed node")
+                .child_id("venue-a-feed"),
+        )
+        .actor(
+            nodes
+                .remove("venues.venue-a-gateway")
+                .expect("venue-a-gateway node")
+                .child_id("venue-a-gateway"),
+        )
+        .actor(
+            nodes
+                .remove("venues.venue-b-feed")
+                .expect("venue-b-feed node")
+                .child_id("venue-b-feed"),
+        )
+        .actor(
+            nodes
+                .remove("venues.venue-b-gateway")
+                .expect("venue-b-gateway node")
+                .child_id("venue-b-gateway"),
+        );
     let tree = OrderedTree::new()
         .subtree("venues", venues)
-        .actor(take_node(&mut nodes, "reconciler"))
-        .actor(take_node(&mut nodes, "ledger"))
-        .actor(take_node(&mut nodes, "order-router"))
-        .actor(take_node(&mut nodes, "control"))
-        .actor(take_node(&mut nodes, "health"));
+        .actor(nodes.remove("reconciler").expect("reconciler node"))
+        .actor(nodes.remove("ledger").expect("ledger node"))
+        .actor(nodes.remove("order-router").expect("order-router node"))
+        .actor(nodes.remove("control").expect("control node"))
+        .actor(nodes.remove("health").expect("health node"));
     assert!(nodes.is_empty(), "every graph actor is placed exactly once");
 
     let runtime = tree.spawn()?;
@@ -375,17 +385,23 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let sampler = tokio::spawn(telemetry::sample(runtime.handle(), background_stop.clone()));
     // The aggregate restart breaker is fed from the lifecycle stream's
     // cumulative counters rather than inferring restarts from event pairs.
-    // Every event carries the venues supervisor's cumulative restart counter;
-    // even a `Lagged` gap loses transition detail but not the next count. The
-    // scope is direct children, so nested per-venue supervisors would each
-    // need their own lifecycle pump.
-    let lifecycle_watch = runtime
+    // Child transitions carry the venues supervisor's cumulative restart
+    // counter. A `Lagged` marker carries no counter, so retain the last value
+    // until the next child transition. The scope is direct children; nested
+    // per-venue supervisors would each need their own lifecycle pump.
+    let venues_runtime = runtime
         .handle()
         .subtree("venues")
-        .expect("venues runtime subtree")
-        .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
-            total: event.total_restarts().unwrap_or_default(),
-        });
+        .expect("venues runtime subtree");
+    let mut venue_restarts = venues_runtime.snapshot().total_restarts;
+    let lifecycle_watch = venues_runtime.watch_lifecycle_to(&health, move |event| {
+        if let Some(total) = event.total_restarts() {
+            venue_restarts = total;
+        }
+        HealthMsg::RestartsObserved {
+            total: venue_restarts,
+        }
+    });
 
     Ok(App {
         runtime,
@@ -811,30 +827,23 @@ where
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
-    let lifecycle = handle.watch_lifecycle().direct_children();
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+    let snapshots = handle.subscribe_snapshots();
     let generation = handle
         .snapshot()
         .child(id)
         .unwrap_or_else(|| panic!("{id} is supervised"))
         .generation;
-    (lifecycle, generation)
+    (snapshots, generation)
 }
 
-async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
-    while let Some(event) = lifecycle.next().await {
-        if matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation,
-                ..
-            } if child_id == id && generation > baseline
-        ) {
-            return;
-        }
-    }
-    panic!("lifecycle closed before {id} restarted");
+async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, baseline: u64) {
+    snapshots
+        .wait_for_child(id, |child| {
+            child.generation > baseline && child.state.is_running()
+        })
+        .await
+        .unwrap_or_else(|_| panic!("snapshot stream closed before {id} restarted"));
 }
 
 async fn await_until<F, Fut>(mut predicate: F) -> Result<(), AnyError>

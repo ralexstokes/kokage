@@ -5,11 +5,11 @@
 # Tutorial
 
 - [Getting started](getting-started.md)
-- [Task children and supervision](supervision.md)
 - [Actor graphs](actor-graphs.md)
 - [Bounded request/reply](request-reply.md)
 - [Bounded actor offloads](actor-offloads.md)
 - [Supervised actors](supervised-actors.md)
+- [Task children and supervision](supervision.md)
 - [Inspectable supervision trees](supervision-trees.md)
 - [Actor timers](actor-timers.md)
 - [Watching actors](actor-monitors.md)

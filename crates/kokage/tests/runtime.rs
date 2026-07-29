@@ -387,6 +387,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 
     let graph = graph.build().expect("graph builds");
     let subtree = root
+        .handle()
         .add_subtree(
             "workers",
             OrderedTree::graph(graph).subtree("dynamic", DynamicTree::new()),
@@ -430,6 +431,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
     let middle = root
+        .handle()
         .add_subtree("middle", DynamicTree::new())
         .await
         .expect("middle subtree added");
@@ -449,7 +451,8 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 
     assert_eq!(root.handle().actor_stats().len(), 1);
     assert!(middle.subtree("leaf").is_some());
-    root.remove_child("middle")
+    root.handle()
+        .remove_child("middle")
         .await
         .expect("middle subtree removed");
     assert!(root.handle().subtree("middle").is_none());
@@ -476,7 +479,8 @@ async fn subtree_validation_phases_report_rejected() {
         .task(ChildSpec::task("duplicate", |_| async { Ok(()) }))
         .task(ChildSpec::task("duplicate", |_| async { Ok(()) }));
     assert_eq!(
-        root.add_subtree("invalid", invalid)
+        root.handle()
+            .add_subtree("invalid", invalid)
             .await
             .expect_err("invalid subtree fails before insertion"),
         ControlError::Rejected(SupervisorBuildError::DuplicateChildId(
@@ -485,6 +489,7 @@ async fn subtree_validation_phases_report_rejected() {
     );
 
     let first = root
+        .handle()
         .add_subtree("workers", DynamicTree::new())
         .await
         .expect("first subtree added");
@@ -496,6 +501,7 @@ async fn subtree_validation_phases_report_rejected() {
         .expect("actor added");
 
     let error = root
+        .handle()
         .add_subtree("workers", DynamicTree::new())
         .await
         .expect_err("duplicate subtree rejected");
@@ -556,6 +562,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     let handle = DynamicTree::new().spawn().expect("runtime builds");
     let tracked = handle
+        .handle()
         .add_actor(ActorSpec::new("worker", Drain::<()>::new))
         .await
         .expect("tracked actor added");
@@ -585,10 +592,12 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
     });
 
     handle
+        .handle()
         .remove_child("worker")
         .await
         .expect("tracked actor removed through runtime handle");
     handle
+        .handle()
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -731,6 +740,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
     let graph = graph.build().expect("graph builds");
     let subtree = root
+        .handle()
         .add_subtree(
             "workers",
             OrderedTree::graph(graph)

@@ -77,7 +77,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .spawn()?;
     let handle = runtime.handle();
 
-    let baseline = handle.snapshot().child("worker").unwrap().generation;
+    let baseline = handle
+        .snapshot()
+        .child("worker")
+        .expect("worker is declared")
+        .generation;
     let mut restarted = handle.subscribe_snapshots();
     frontend.send("fail-worker".to_owned()).await?;
     restarted

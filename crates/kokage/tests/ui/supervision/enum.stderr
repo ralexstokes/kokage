@@ -1,0 +1,5 @@
+error: Supervision can only be derived for structs with named fields
+ --> tests/ui/supervision/enum.rs:4:6
+  |
+4 | enum Application {
+  |      ^^^^^^^^^^^

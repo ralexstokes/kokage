@@ -31,6 +31,72 @@ pub(crate) enum ActorOptionsValidationError {
     ZeroMailboxCapacity,
 }
 
+trait DeferredActorFactory: Send {
+    fn label(&self) -> &str;
+
+    fn materialize(
+        self: Box<Self>,
+        builder: &RunnableActorBuilder,
+    ) -> Result<RunnableActor, ActorOptionsValidationError>;
+}
+
+struct DeferredActorSpec<M: Send + 'static> {
+    actor_id: Arc<str>,
+    binding: OnceLock<Arc<BindingCore<M>>>,
+    factory: Box<dyn ErasedActorFactory<M>>,
+    actor_options: ActorOptions<M>,
+}
+
+impl<M: Send + 'static> DeferredActorFactory for DeferredActorSpec<M> {
+    fn label(&self) -> &str {
+        &self.actor_id
+    }
+
+    fn materialize(
+        self: Box<Self>,
+        builder: &RunnableActorBuilder,
+    ) -> Result<RunnableActor, ActorOptionsValidationError> {
+        let Self {
+            actor_id,
+            binding,
+            factory,
+            actor_options,
+        } = *self;
+        actor_options.validate()?;
+        let binding = binding
+            .into_inner()
+            .unwrap_or_else(|| match actor_options.size_hint {
+                Some(size_hint) => Arc::new(BindingCore::with_message_size(
+                    Arc::clone(&actor_id),
+                    size_hint,
+                )),
+                None => Arc::new(BindingCore::new(Arc::clone(&actor_id))),
+            });
+        Ok(builder.actor_from_parts(
+            actor_id,
+            binding,
+            factory,
+            actor_options.mailbox_mode,
+            actor_options.mailbox_capacity,
+        ))
+    }
+}
+
+pub(crate) struct DeferredActor(Box<dyn DeferredActorFactory>);
+
+impl DeferredActor {
+    fn label(&self) -> &str {
+        self.0.label()
+    }
+
+    fn materialize(
+        self,
+        builder: &RunnableActorBuilder,
+    ) -> Result<RunnableActor, ActorOptionsValidationError> {
+        self.0.materialize(builder)
+    }
+}
+
 impl ActorOptionsValidationError {
     pub(crate) fn message(self) -> &'static str {
         match self {
@@ -122,7 +188,7 @@ impl<M> Default for ActorOptions<M> {
 /// all per-actor configuration. It is intentionally not [`Clone`]. Obtain a
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
 /// the declaration through [`GraphBuilder::actor`],
-/// [`crate::OrderedTree::actor`], or [`crate::DynamicRuntime::add_actor`].
+/// [`crate::OrderedTree::actor`], or [`crate::DynamicRuntimeHandle::add_actor`].
 /// Terminal memberships are retained by default in every destination. Select
 /// [`TerminalMembership::Remove`] explicitly for an ephemeral dynamic actor.
 pub struct ActorSpec<M: Send + 'static> {
@@ -193,6 +259,12 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// Enables accepted-message byte observation.
     ///
     /// Configure this before calling [`actor_ref`](Self::actor_ref).
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`actor_ref`](Self::actor_ref) has already initialized the
+    /// stable binding, because changing the observation mode afterwards would
+    /// make the existing ref disagree with the declaration.
     #[must_use]
     pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
         assert!(
@@ -241,6 +313,12 @@ impl<M: Send + 'static> ActorSpec<M> {
     }
 
     pub(crate) fn into_node(self, builder: &RunnableActorBuilder) -> ActorNode {
+        self.into_deferred_node()
+            .materialize(builder)
+            .expect("ActorSpec must be validated before direct materialization")
+    }
+
+    pub(crate) fn into_deferred_node(self) -> ActorNode {
         let Self {
             actor_id,
             binding,
@@ -252,24 +330,15 @@ impl<M: Send + 'static> ActorSpec<M> {
             restart_config,
             terminal_membership,
         } = self;
-        let binding = binding
-            .into_inner()
-            .unwrap_or_else(|| match actor_options.size_hint {
-                Some(size_hint) => Arc::new(BindingCore::with_message_size(
-                    Arc::clone(&actor_id),
-                    size_hint,
-                )),
-                None => Arc::new(BindingCore::new(Arc::clone(&actor_id))),
-            });
-        let actor = builder.actor_from_parts(
+        let deferred = DeferredActor(Box::new(DeferredActorSpec {
             actor_id,
             binding,
             factory,
-            actor_options.mailbox_mode,
-            actor_options.mailbox_capacity,
-        );
+            actor_options,
+        }));
         ActorNode {
-            actor,
+            actor: None,
+            deferred: Some(deferred),
             child_id,
             restart,
             shutdown,
@@ -298,7 +367,8 @@ impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
 /// explicitly leave the supervision vocabulary with
 /// [`into_runnable`](Self::into_runnable).
 pub struct ActorNode {
-    pub(crate) actor: RunnableActor,
+    pub(crate) actor: Option<RunnableActor>,
+    pub(crate) deferred: Option<DeferredActor>,
     pub(crate) child_id: Option<String>,
     pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<ShutdownPolicy>,
@@ -309,7 +379,11 @@ pub struct ActorNode {
 impl ActorNode {
     /// Returns the actor label carried by this placement token.
     pub fn label(&self) -> &str {
-        self.actor.label()
+        match (&self.actor, &self.deferred) {
+            (Some(actor), None) => actor.label(),
+            (None, Some(deferred)) => deferred.label(),
+            _ => unreachable!("an actor node has exactly one payload"),
+        }
     }
 
     /// Overrides the supervisor-local child id while retaining the graph-wide
@@ -323,7 +397,20 @@ impl ActorNode {
 
     /// Converts this placement token into the advanced custom-host actor.
     pub fn into_runnable(self) -> RunnableActor {
-        self.actor
+        self.materialize(&RunnableActorBuilder::new())
+            .expect("ActorSpec mailbox capacity must be non-zero")
+            .actor
+            .expect("materialized actor node carries its runnable actor")
+    }
+
+    pub(crate) fn materialize(
+        mut self,
+        builder: &RunnableActorBuilder,
+    ) -> Result<Self, ActorOptionsValidationError> {
+        if let Some(deferred) = self.deferred.take() {
+            self.actor = Some(deferred.materialize(builder)?);
+        }
+        Ok(self)
     }
 
     pub(crate) fn actor_label(&self) -> &str {
@@ -331,9 +418,7 @@ impl ActorNode {
     }
 
     pub(crate) fn resolved_id(&self) -> &str {
-        self.child_id
-            .as_deref()
-            .unwrap_or_else(|| self.actor.label())
+        self.child_id.as_deref().unwrap_or_else(|| self.label())
     }
 }
 
@@ -412,6 +497,12 @@ impl<M: Send + 'static> ActorSlot<M> {
     }
 
     /// Enables accepted-message byte observation for this slot.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`actor_ref`](Self::actor_ref) has already initialized the
+    /// stable binding, because changing the observation mode afterwards would
+    /// make the existing ref disagree with the declaration.
     #[must_use]
     pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
         assert!(
@@ -641,7 +732,8 @@ impl GraphBuilder {
                 observability: observability.clone(),
             });
             actors.push(ActorNode {
-                actor,
+                actor: Some(actor),
+                deferred: None,
                 child_id: slot.child_id,
                 restart: slot.restart,
                 shutdown: slot.shutdown,

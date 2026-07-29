@@ -258,18 +258,24 @@ pub(crate) async fn spawn(
 
     tracing::info!(%local_addr, "kokage-console listening");
 
-    tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, app)
+    let task_shutdown_tx = shutdown_tx.clone();
+    let task = tokio::spawn(async move {
+        // Keep the shutdown channel open when the public handle is dropped so
+        // fire-and-forget spawning detaches rather than immediately stopping.
+        let _task_shutdown_tx = task_shutdown_tx;
+        let result = axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal(shutdown_rx))
-            .await
-        {
+            .await;
+        if let Err(error) = &result {
             tracing::warn!(%error, "kokage-console server stopped with error");
         }
+        result
     });
 
     Ok(ConsoleHandle {
         shutdown_tx,
         local_addr,
+        task,
     })
 }
 

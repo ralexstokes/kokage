@@ -1,5 +1,7 @@
 use std::future::Future;
 
+use tokio::sync::watch;
+
 /// A cloneable cancellation token used throughout Kokage supervision trees.
 ///
 /// Cancelling a token wakes tasks waiting on [`cancelled`](Self::cancelled).
@@ -8,13 +10,16 @@ use std::future::Future;
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
     inner: tokio_util::sync::CancellationToken,
+    liveness: watch::Sender<()>,
 }
 
 impl CancellationToken {
     /// Creates a token in the non-cancelled state.
     pub fn new() -> Self {
+        let (liveness, _) = watch::channel(());
         Self {
             inner: tokio_util::sync::CancellationToken::new(),
+            liveness,
         }
     }
 
@@ -39,12 +44,14 @@ impl CancellationToken {
     where
         F: Future + Send + 'static,
     {
-        let token = self.clone();
-        let cancellation = token.clone();
+        let token = self.inner.clone();
+        let cancellation = self.inner.clone();
+        let mut liveness = self.liveness.subscribe();
         std::mem::drop(tokio::spawn(async move {
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => {}
+                _ = liveness.changed() => {}
                 _ = future => token.cancel(),
             }
         }));
@@ -55,8 +62,10 @@ impl CancellationToken {
     /// A child observes cancellation of its parent, but cancelling the child
     /// does not cancel the parent.
     pub fn child_token(&self) -> Self {
+        let (liveness, _) = watch::channel(());
         Self {
             inner: self.inner.child_token(),
+            liveness,
         }
     }
 
@@ -178,5 +187,23 @@ mod tests {
             .expect("linked future was not dropped")
             .expect("drop signal sender disappeared without running Drop");
         assert!(!was_polled.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn dropping_the_last_token_drops_a_pending_linked_future() {
+        let token = CancellationToken::new();
+        let (dropped, was_dropped) = oneshot::channel();
+        let drop_signal = DropSignal(Some(dropped));
+        token.cancel_when(async move {
+            let _drop_signal = drop_signal;
+            std::future::pending::<()>().await;
+        });
+
+        drop(token);
+
+        tokio::time::timeout(Duration::from_secs(1), was_dropped)
+            .await
+            .expect("linked future was not dropped with the last token")
+            .expect("drop signal sender disappeared without running Drop");
     }
 }

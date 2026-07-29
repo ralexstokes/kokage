@@ -351,7 +351,7 @@ impl Actor for FarFutureTimers {
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.set_timeout(FAR_FUTURE_TIMEOUT, "never-timeout", Duration::MAX);
         self.timers
-            .push(ctx.interval("never-interval", Duration::MAX));
+            .push(ctx.interval_to(&ctx.myself(), "never-interval", Duration::MAX));
         Ok(())
     }
 
@@ -396,7 +396,7 @@ impl Actor for IntervalActor {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
+        self.timer = Some(ctx.interval_to(&ctx.myself(), (), Duration::from_millis(10)));
         Ok(())
     }
 
@@ -446,7 +446,7 @@ impl Actor for SlowInterval {
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.started = Some(Instant::now());
-        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
+        self.timer = Some(ctx.interval_to(&ctx.myself(), (), Duration::from_millis(10)));
         Ok(())
     }
 

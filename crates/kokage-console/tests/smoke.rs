@@ -518,6 +518,7 @@ async fn dynamic_tree_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
+        .handle()
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -526,6 +527,7 @@ async fn dynamic_tree_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
+        .handle()
         .add_actor(ActorSpec::new("tracked", || IdleActor))
         .await
         .expect("failed to add runtime actor");
@@ -559,7 +561,10 @@ async fn dynamic_tree_wires_public_observability() {
 async fn shutdown_stops_server() {
     let (handle, _snapshot_tx, _event_tx) = spawn_console().await;
     let addr = handle.local_addr();
-    handle.shutdown();
+    handle
+        .shutdown_and_wait()
+        .await
+        .expect("console server exits cleanly");
 
     timeout(Duration::from_secs(2), async {
         while let Ok(stream) = TcpStream::connect(addr).await {
@@ -569,4 +574,22 @@ async fn shutdown_stops_server() {
     })
     .await
     .expect("console still accepted TCP connections after shutdown");
+}
+
+#[tokio::test]
+async fn dropping_the_handle_detaches_without_stopping_the_server() {
+    let (handle, snapshots, lifecycle) = spawn_console().await;
+    let addr = handle.local_addr();
+    drop(handle);
+
+    let response = timeout(
+        Duration::from_secs(2),
+        http_get(addr, &addr.to_string(), "/", ""),
+    )
+    .await
+    .expect("detached console remains reachable");
+    assert!(response.starts_with("HTTP/1.1 200"));
+
+    snapshots.shutdown();
+    lifecycle.shutdown();
 }

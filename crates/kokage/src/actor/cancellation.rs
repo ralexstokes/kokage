@@ -35,10 +35,6 @@ impl CancellationHandle {
         Self { cancellation }
     }
 
-    pub(crate) fn token(&self) -> CancellationToken {
-        self.cancellation.clone()
-    }
-
     /// Cancels the operation. Cancellation is idempotent.
     pub fn cancel(&self) {
         self.cancellation.cancel();

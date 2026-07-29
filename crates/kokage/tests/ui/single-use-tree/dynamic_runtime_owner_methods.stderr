@@ -1,0 +1,29 @@
+error[E0599]: no method named `add_actor` found for struct `DynamicRuntime` in the current scope
+  --> tests/ui/single-use-tree/dynamic_runtime_owner_methods.rs:19:21
+   |
+19 |     let _ = runtime.add_actor(actor).await;
+   |                     ^^^^^^^^^ method not found in `DynamicRuntime`
+
+error[E0599]: no method named `add_child` found for struct `DynamicRuntime` in the current scope
+  --> tests/ui/single-use-tree/dynamic_runtime_owner_methods.rs:20:21
+   |
+20 |     let _ = runtime.add_child(child).await;
+   |                     ^^^^^^^^^ method not found in `DynamicRuntime`
+
+error[E0599]: no method named `add_subtree` found for struct `DynamicRuntime` in the current scope
+  --> tests/ui/single-use-tree/dynamic_runtime_owner_methods.rs:21:21
+   |
+21 |     let _ = runtime.add_subtree("ordered", OrderedTree::new()).await;
+   |                     ^^^^^^^^^^^ method not found in `DynamicRuntime`
+
+error[E0599]: no method named `add_subtree` found for struct `DynamicRuntime` in the current scope
+  --> tests/ui/single-use-tree/dynamic_runtime_owner_methods.rs:22:21
+   |
+22 |     let _ = runtime.add_subtree("dynamic", DynamicTree::new()).await;
+   |                     ^^^^^^^^^^^ method not found in `DynamicRuntime`
+
+error[E0599]: no method named `remove_child` found for struct `DynamicRuntime` in the current scope
+  --> tests/ui/single-use-tree/dynamic_runtime_owner_methods.rs:23:21
+   |
+23 |     let _ = runtime.remove_child("child").await;
+   |                     ^^^^^^^^^^^^ method not found in `DynamicRuntime`

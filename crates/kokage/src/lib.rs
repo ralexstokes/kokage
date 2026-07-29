@@ -274,7 +274,7 @@ mod supervision;
 /// `ChildSpec` is exposed here for task children. Its lower-level
 /// `ChildSpec::supervisor` constructor still requires `kokage-supervisor`'s
 /// `Supervisor`; compose actor-aware nested scopes with
-/// [`OrderedTree::subtree`] or [`DynamicRuntime::add_subtree`] instead.
+/// [`OrderedTree::subtree`] or [`DynamicRuntimeHandle::add_subtree`] instead.
 pub mod host {
     pub use crate::actor::{
         ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
@@ -303,7 +303,8 @@ pub mod observe {
 /// Common imports for `kokage` consumers.
 ///
 /// This prelude is intentionally limited to the actor traits and contexts,
-/// the primary [`OrderedTree`] composition path, and the snapshot pair used by
+/// the primary [`OrderedTree`] composition path, its [`ActorSpec`] declaration,
+/// and the snapshot pair used by
 /// application health and readiness code. Advanced configuration, error,
 /// dynamic-membership, lifecycle-history, and raw-hosting types remain at the
 /// crate root or in [`observe`] and [`host`].
@@ -314,8 +315,9 @@ pub mod observe {
 /// qualified `kokage::...` names.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, GraphBuilder, LiveContext, MessageContext, OrderedTree,
-        Reply, StartContext, StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, LiveContext, MessageContext,
+        OrderedTree, Reply, StartContext, StopContext,
+        observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
 
@@ -331,8 +333,7 @@ pub use actor::{
 };
 pub use kokage_supervisor::{
     BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorSnapshot,
-    SupervisorSnapshotReceiver, TerminalMembership,
+    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TerminalMembership,
 };
 pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
-pub use supervision::{DynamicTree, OrderedTree, TreeNode};
+pub use supervision::{DynamicTree, IntoActorNode, OrderedTree, TreeNode};

@@ -1,0 +1,5 @@
+error: Supervision can only be derived for structs with named fields
+ --> tests/ui/supervision/unit_struct.rs:4:8
+  |
+4 | struct Application;
+  |        ^^^^^^^^^^^

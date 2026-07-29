@@ -80,10 +80,15 @@ impl SupervisorSnapshotReceiver {
 
     /// Waits until `child_id` exists and its snapshot satisfies `predicate`.
     ///
-    /// This is the concise path for readiness, restart-generation, exit, and
-    /// membership waits. It delegates to [`wait_for`](Self::wait_for), so the
-    /// same conflating delivery and closed-stream behavior applies. A child
-    /// that is not a current member may appear later in a dynamic scope.
+    /// This is the concise path for predicates over the latest state, such as
+    /// readiness or "running above this baseline generation." It delegates to
+    /// [`wait_for`](Self::wait_for), so intermediate generations and exits may
+    /// be skipped. Predicates that track progress should therefore be
+    /// monotonic (for example, `generation > baseline`, not
+    /// `generation == baseline + 1`). Use a lifecycle watch when every edge is
+    /// required, and use [`wait_for`](Self::wait_for) on the whole snapshot for
+    /// absence/removal predicates. A child that is not a current member may
+    /// appear later in a dynamic scope.
     pub async fn wait_for_child(
         &mut self,
         child_id: &str,
@@ -99,7 +104,7 @@ impl SupervisorSnapshotReceiver {
     }
 }
 
-use crate::{event::ExitKind, scope::ScopeKind, strategy::Strategy};
+use crate::{event::ExitKind, restart::RestartPolicy, scope::ScopeKind, strategy::Strategy};
 
 /// Point-in-time snapshot of a supervisor's state, including the state of every
 /// child.
@@ -175,6 +180,9 @@ pub struct ChildSnapshot {
     pub membership: ChildMembershipView,
     /// Total number of times this child has been restarted.
     pub restart_count: u64,
+    /// Policy that determines whether the current exit is eligible to restart.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub restart_policy: RestartPolicy,
     /// Time remaining until the next scheduled restart, if a backoff delay is
     /// pending.
     pub next_restart_in: Option<Duration>,
@@ -244,6 +252,7 @@ impl ChildSnapshot {
             state,
             membership: ChildMembershipView::Active,
             restart_count: 0,
+            restart_policy: RestartPolicy::default(),
             next_restart_in: None,
             supervisor: None,
         }

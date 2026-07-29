@@ -35,7 +35,7 @@
 mod server;
 mod ws;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use kokage::{RuntimeHandle, observe::ActorStats};
 use kokage_supervisor::{LifecycleWatch, SupervisorSnapshotReceiver};
@@ -61,7 +61,7 @@ pub enum ConsoleError {
     /// The access token was empty or contained a byte that is not URL-safe.
     #[error("the console access token must be non-empty URL-safe ASCII")]
     InvalidAccessToken,
-    /// The console listener could not be bound or served.
+    /// The console listener could not be bound, served, or joined.
     #[error("failed to start console server: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -206,9 +206,15 @@ impl Default for ConsoleBuilder {
 }
 
 /// Handle to a running console server.
+///
+/// Dropping the handle detaches the server; it does not shut it down. Call
+/// [`shutdown`](Self::shutdown) to request graceful shutdown and
+/// [`wait`](Self::wait) to observe any serve-time error.
+#[must_use = "dropping the console handle detaches the still-running server"]
 pub struct ConsoleHandle {
     shutdown_tx: watch::Sender<bool>,
     local_addr: SocketAddr,
+    task: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 
 impl ConsoleHandle {
@@ -220,5 +226,22 @@ impl ConsoleHandle {
     /// Signals the server to shut down.
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
+    }
+
+    /// Waits for the server task to finish and reports serve-time failures.
+    ///
+    /// This does not request shutdown. Call [`shutdown`](Self::shutdown) first
+    /// when the server should stop now.
+    pub async fn wait(self) -> Result<(), ConsoleError> {
+        self.task
+            .await
+            .map_err(|error| ConsoleError::Io(io::Error::other(error)))??;
+        Ok(())
+    }
+
+    /// Requests graceful shutdown and waits for the server task to finish.
+    pub async fn shutdown_and_wait(self) -> Result<(), ConsoleError> {
+        self.shutdown();
+        self.wait().await
     }
 }

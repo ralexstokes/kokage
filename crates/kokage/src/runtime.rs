@@ -63,17 +63,26 @@ impl ActorRuntimeState {
         (config.default_restart, config.default_shutdown)
     }
 
-    fn make_actor<M: Send + 'static>(&self, spec: ActorSpec<M>) -> ActorNode {
+    fn actor_builder(&self) -> RunnableActorBuilder {
         // Construction runs the caller's factory, which may reach back into
         // this runtime. Release the config lock first so that re-entry cannot
         // deadlock on a non-reentrant mutex.
-        let actor_builder = self
-            .config
+        self.config
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .actor_builder
-            .clone();
-        spec.into_node(&actor_builder)
+            .clone()
+    }
+
+    fn make_actor<M: Send + 'static>(&self, spec: ActorSpec<M>) -> ActorNode {
+        spec.into_node(&self.actor_builder())
+    }
+
+    pub(crate) fn materialize_actor_node(
+        &self,
+        actor: ActorNode,
+    ) -> Result<ActorNode, ActorOptionsValidationError> {
+        actor.materialize(&self.actor_builder())
     }
 }
 
@@ -110,6 +119,7 @@ impl RuntimeAttachment {
 }
 
 struct DynamicChildOptions {
+    child_id: Option<String>,
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
     restart_config: Option<RestartConfig>,
@@ -292,33 +302,6 @@ impl DynamicRuntime {
     /// Waits for the runtime to stop.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.runtime.wait().await
-    }
-
-    /// Builds and adds an actor-aware runtime subtree dynamically.
-    pub async fn add_subtree(
-        &self,
-        id: impl Into<String>,
-        tree: impl Into<crate::TreeNode>,
-    ) -> Result<RuntimeHandle, ControlError> {
-        self.handle.add_subtree(id, tree).await
-    }
-
-    /// Adds an arbitrary supervised task child to this runtime.
-    pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.handle.add_child(child).await
-    }
-
-    /// Adds one actor declaration and returns its stable typed ref.
-    pub async fn add_actor<M: Send + 'static>(
-        &self,
-        spec: ActorSpec<M>,
-    ) -> Result<ActorRef<M>, ControlError> {
-        self.handle.add_actor(spec).await
-    }
-
-    /// Removes a child from the supervisor.
-    pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        self.handle.remove_child(id).await
     }
 }
 
@@ -717,14 +700,23 @@ impl DynamicRuntimeHandle {
             })?;
         let (default_restart, default_shutdown) = self.handle.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
+            child_id: spec.child_id.clone(),
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
             restart_config: spec.restart_config,
             remove_on_exit: matches!(spec.terminal_membership, TerminalMembership::Remove),
         };
         let actor = self.handle.actors.make_actor(spec);
-        self.add_constructed_actor((actor.actor, actor_ref), dynamic_options)
-            .await
+        self.add_constructed_actor(
+            (
+                actor
+                    .actor
+                    .expect("dynamic ActorSpec materialization produced a runnable actor"),
+                actor_ref,
+            ),
+            dynamic_options,
+        )
+        .await
     }
 
     async fn add_constructed_actor<M>(
@@ -736,6 +728,7 @@ impl DynamicRuntimeHandle {
             actor.clone(),
             &self.handle.actors,
             ActorChildOptions::new(options.restart, options.shutdown)
+                .child_id(options.child_id)
                 .restart_config(options.restart_config)
                 .remove_on_exit(options.remove_on_exit),
         );
@@ -995,6 +988,7 @@ mod tests {
 
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic_ref = dynamic_runtime
+            .handle()
             .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartPolicy::Never))
             .await
             .expect("dynamic actor is inserted");
@@ -1026,6 +1020,7 @@ mod tests {
     async fn dynamic_membership_removal_is_explicit() {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let actor_ref = runtime
+            .handle()
             .add_actor(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
                     .restart(RestartPolicy::Never)
@@ -1054,7 +1049,8 @@ mod tests {
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
         let root = DynamicTree::new().spawn().expect("runtime builds");
-        root.add_subtree("workers", OrderedTree::new())
+        root.handle()
+            .add_subtree("workers", OrderedTree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -1064,10 +1060,12 @@ mod tests {
             .expect("first membership is visible")
             .lineage;
 
-        root.remove_child("workers")
+        root.handle()
+            .remove_child("workers")
             .await
             .expect("first subtree removed");
-        root.add_subtree("workers", OrderedTree::new())
+        root.handle()
+            .add_subtree("workers", OrderedTree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

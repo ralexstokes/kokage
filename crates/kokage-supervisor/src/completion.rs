@@ -235,12 +235,19 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
     // The watch is created before the snapshot is read so no transition can
     // fall between them; events the snapshot already reflects are then
     // discarded by sequence.
-    let mut watch = handle.watch_lifecycle();
+    let mut watch = handle.watch_lifecycle().direct_children();
     let mut baseline = set.realign(&handle.snapshot());
 
     loop {
         if set.is_complete() {
-            return CompletionOutcome::Completed;
+            // `Exited` is emitted before its immediately following
+            // restart-scheduled transition. Recheck state before completing so
+            // `RestartPolicy::Always` cannot expose that transient stop as
+            // finished work.
+            baseline = set.realign(&handle.snapshot());
+            if set.is_complete() {
+                return CompletionOutcome::Completed;
+            }
         }
         let Some(event) = watch.next().await else {
             return CompletionOutcome::Closed;
@@ -392,7 +399,8 @@ fn is_completed(child: &ChildSnapshot) -> bool {
     if child.membership == ChildMembershipView::Removing {
         return true;
     }
-    child.next_restart_in.is_none()
+    child.restart_policy != crate::RestartPolicy::Always
+        && child.next_restart_in.is_none()
         && matches!(
             &child.state,
             ChildStateView::Stopped {

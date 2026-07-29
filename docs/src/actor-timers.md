@@ -13,8 +13,8 @@ external message.
 
 ## Self-scheduling
 
-Handler-style actors have one loop-owned timer table. One-shot self messages
-use keyed `set_timeout`; periodic messages use `interval` and return a
+Handler-style actors have one loop-owned keyed timer table for one-shot self
+messages. Periodic work uses `interval_to(&ctx.myself(), ...)` and returns a
 `CancellationHandle`:
 
 ```rust,ignore
@@ -40,7 +40,11 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
-        self.reconcile = Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
+        self.reconcile = Some(ctx.interval_to(
+            &ctx.myself(),
+            Message::Reconcile,
+            Duration::from_secs(30),
+        ));
         Ok(())
     }
 

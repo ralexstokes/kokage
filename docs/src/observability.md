@@ -42,7 +42,7 @@ subtree's local lineage sequence may therefore begin at zero even if its
 predecessor used the same local lineages; the parent path distinguishes the
 two. The `u64` counter saturates at its maximum rather than changing supervisor
 control semantics in the practically unreachable overflow case. For
-dynamically added task children, `DynamicRuntime::add_child` returns the same
+dynamically added task children, `DynamicRuntimeHandle::add_child` returns the same
 lineage that the runtime assigned while inserting the child.
 Consumers that need to associate their own state with that exact membership
 should retain the returned value rather than performing a later id-based
@@ -126,7 +126,11 @@ Subscribe before triggering a transition, capture any baseline fields you
 care about, then use `wait_for_child`:
 
 ```rust,ignore
-let baseline = handle.snapshot().child("press").unwrap().generation;
+let baseline = handle
+    .snapshot()
+    .child("press")
+    .expect("the declared press actor is present")
+    .generation;
 let mut snapshots = handle.subscribe_snapshots();
 press.send(PrintMsg::Jam).await?;
 let restarted = snapshots
@@ -138,7 +142,11 @@ let restarted = snapshots
 
 The receiver is created before the trigger, so a fast replacement cannot be
 missed. `wait_for_child` delegates to the conflating snapshot `wait_for`
-primitive and returns the matching `ChildSnapshot`.
+primitive and returns the matching `ChildSnapshot`. Because intermediate
+snapshots may be skipped, express progress monotonically (`generation >
+baseline`), not as an exact intermediate generation. Use the lifecycle stream
+when every exit or generation edge matters; wait on the full snapshot when the
+condition is that a membership is absent.
 
 ### Pumping transitions into an actor
 
@@ -242,7 +250,7 @@ graph.actor(uploads);
 
 The same declaration configures a dynamic actor before insertion:
 `ActorSpec::new("uploads", UploadActor::new).mailbox(MailboxMode::conflate()).message_size(upload_size)`.
-Pass it to `DynamicRuntime::add_actor`; use `actor_ref()` first when callers
+Pass it to `DynamicRuntimeHandle::add_actor`; use `actor_ref()` first when callers
 need its typed handle.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle

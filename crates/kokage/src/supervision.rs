@@ -98,7 +98,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// Ordered scopes contain a declared child sequence. Declaration order controls
 /// readiness-gated startup, reverse-order shutdown, and the suffix restarted
 /// by [`Strategy::RestForOne`]. Use [`DynamicTree`] for an empty leaf whose
-/// membership is written through a [`RuntimeHandle`] after spawn.
+/// membership is written through a [`DynamicRuntimeHandle`] after spawn.
 ///
 /// A tree can place one graph's actors at different scope levels while
 /// retaining the graph's typed wiring. [`Supervision`](crate::Supervision) is
@@ -150,8 +150,9 @@ pub struct OrderedTree {
 /// A single-use, identity-owning dynamic supervision tree.
 ///
 /// Dynamic trees begin empty and accept runtime membership through the
-/// [`RuntimeHandle`] returned by [`spawn`](Self::spawn) or
-/// [`handle`](Self::handle).
+/// [`DynamicRuntimeHandle`] returned by [`handle`](Self::handle) before spawn
+/// or by calling [`DynamicRuntime::handle`] on the owner returned by
+/// [`spawn`](Self::spawn).
 pub struct DynamicTree {
     inner: IdentityTree<true>,
 }
@@ -192,8 +193,13 @@ impl TreeNode {
     }
 }
 
-#[doc(hidden)]
+/// Conversion into a linear actor placement accepted by [`OrderedTree`].
+///
+/// This trait is implemented for [`ActorSpec`] and [`ActorNode`]. Applications
+/// normally rely on the implementations through [`OrderedTree::actor`] and
+/// [`OrderedTree::actor_with_scope`] rather than calling it directly.
 pub trait IntoActorNode {
+    /// Converts the value into a placement token.
     fn into_actor_node(self) -> ActorNode;
 }
 
@@ -205,7 +211,7 @@ impl IntoActorNode for ActorNode {
 
 impl<M: Send + 'static> IntoActorNode for ActorSpec<M> {
     fn into_actor_node(self) -> ActorNode {
-        self.into_node(&RunnableActorBuilder::new())
+        self.into_deferred_node()
     }
 }
 
@@ -741,27 +747,33 @@ impl SupervisionChild {
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<OrderedSupervisorBuilder, SupervisorBuildError> {
         Ok(match self {
-            Self::Actor(ActorNode {
-                actor,
-                child_id,
-                restart,
-                shutdown,
-                restart_config,
-                terminal_membership,
-            }) => builder.child(actor_child_spec(
-                actor,
-                actors,
-                ActorChildOptions::new(
-                    restart.unwrap_or(default_restart),
-                    shutdown.unwrap_or(default_shutdown),
-                )
-                .restart_config(restart_config)
-                .child_id(child_id)
-                .remove_on_exit(matches!(
+            Self::Actor(actor) => {
+                let ActorNode {
+                    actor,
+                    deferred: _,
+                    child_id,
+                    restart,
+                    shutdown,
+                    restart_config,
                     terminal_membership,
-                    crate::TerminalMembership::Remove
-                )),
-            )),
+                } = actors
+                    .materialize_actor_node(actor)
+                    .map_err(|error| SupervisorBuildError::InvalidConfig(error.message()))?;
+                builder.child(actor_child_spec(
+                    actor.expect("tree lowering materialized the actor"),
+                    actors,
+                    ActorChildOptions::new(
+                        restart.unwrap_or(default_restart),
+                        shutdown.unwrap_or(default_shutdown),
+                    )
+                    .restart_config(restart_config)
+                    .child_id(child_id)
+                    .remove_on_exit(matches!(
+                        terminal_membership,
+                        crate::TerminalMembership::Remove
+                    )),
+                ))
+            }
             Self::Task(child) => builder.child(child),
             Self::Scope { id, node } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
@@ -772,15 +784,7 @@ impl SupervisionChild {
             }
             Self::ActorWithScope {
                 id,
-                actor:
-                    ActorNode {
-                        actor,
-                        child_id,
-                        restart,
-                        shutdown,
-                        restart_config,
-                        terminal_membership,
-                    },
+                actor,
                 children,
                 strategy,
             } => {
@@ -789,13 +793,24 @@ impl SupervisionChild {
                     default_restart,
                     default_shutdown,
                 ));
+                let ActorNode {
+                    actor,
+                    deferred: _,
+                    child_id,
+                    restart,
+                    shutdown,
+                    restart_config,
+                    terminal_membership,
+                } = owned_actors
+                    .materialize_actor_node(actor)
+                    .map_err(|error| SupervisorBuildError::InvalidConfig(error.message()))?;
                 let (children_supervisor, children_actors) = children.lower(reservations)?;
                 let children_handle = crate::RuntimeHandle::new(
                     children_supervisor.handle(),
                     Arc::clone(&children_actors),
                 );
                 let leader = actor_child_spec(
-                    actor,
+                    actor.expect("tree lowering materialized the actor"),
                     &owned_actors,
                     ActorChildOptions::new(
                         restart.unwrap_or(default_restart),

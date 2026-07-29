@@ -22,11 +22,13 @@ vocabulary.
 ## Your first actor
 
 An actor owns state and handles one typed message at a time. Register its
-factory with a [`GraphBuilder`], move the completed graph into an
-[`OrderedTree`], and keep the returned [`Runtime`] alive:
+factory with a [`GraphBuilder`] and use the builder's flat one-for-one
+[`spawn`](https://stokes.io/kokage/api/kokage/struct.GraphBuilder.html#method.spawn)
+convenience when no custom tree shape is needed. Keep the returned [`Runtime`]
+alive:
 
 ```rust,no_run
-use kokage::{ActorSpec, prelude::*};
+use kokage::prelude::*;
 
 struct Greeter;
 
@@ -48,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
     let greeter = graph.actor(ActorSpec::new("greeter", || Greeter));
 
-    let runtime = OrderedTree::graph(graph.build()?).spawn()?;
+    let runtime = graph.spawn()?;
     greeter.send("print shop".to_owned()).await?;
 
     runtime.shutdown_and_wait().await?;

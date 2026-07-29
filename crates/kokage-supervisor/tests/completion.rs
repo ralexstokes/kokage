@@ -97,9 +97,7 @@ async fn a_completion_set_waits_for_its_last_child() {
             })
             .restart(RestartPolicy::Never),
         );
-    let _finished = builder
-        .handle()
-        .shutdown_on_dynamic_completion(["first", "second"]);
+    let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
     let supervisor = builder.build().expect("valid supervisor");
 
     let handle_owner = supervisor.spawn();
@@ -556,6 +554,43 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
         .shutdown_and_wait()
         .await
         .expect("single restarted generation should shut down cleanly");
+}
+
+#[tokio::test]
+async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let child_attempts = Arc::clone(&attempts);
+    let builder = Supervisor::ordered().child(
+        ChildSpec::task("service", move |ctx| {
+            let attempts = Arc::clone(&child_attempts);
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Ok(());
+                }
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::Always),
+    );
+    let handle = builder.handle();
+    let owner = builder.build().expect("valid supervisor").spawn();
+
+    timeout(common::EVENT_TIMEOUT, async {
+        while attempts.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("always child restarts");
+    assert!(
+        timeout(common::QUIET_TIMEOUT, handle.wait_completed(["service"]))
+            .await
+            .is_err(),
+        "a service that will always restart is not finite completed work"
+    );
+
+    owner.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[tokio::test]

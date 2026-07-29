@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     future::Future,
     io::Error as IoError,
     pin::Pin,
@@ -197,7 +198,7 @@ pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 /// Execution is performed by consuming its linear [`ActorNode`] values,
 /// normally into an [`crate::OrderedTree`].
 pub struct Graph {
-    inner: Arc<GraphInner>,
+    inner: GraphInner,
 }
 
 struct GraphInner {
@@ -215,12 +216,12 @@ impl Graph {
         mailbox_capacity: usize,
     ) -> Self {
         Self {
-            inner: Arc::new(GraphInner {
+            inner: GraphInner {
                 name,
                 actors,
                 observability,
                 mailbox_capacity,
-            }),
+            },
         }
     }
 
@@ -235,9 +236,20 @@ impl Graph {
     /// [`crate::OrderedTree`], or explicitly convert it to a
     /// [`RunnableActor`] for a custom host with [`ActorNode::into_runnable`].
     pub fn into_nodes(self) -> Vec<ActorNode> {
-        Arc::try_unwrap(self.inner)
-            .unwrap_or_else(|_| unreachable!("Graph has no public cloning operation"))
-            .actors
+        self.inner.actors
+    }
+
+    /// Consumes the graph and indexes its actor nodes by graph label.
+    ///
+    /// This is the robust extraction path when actors will be placed at
+    /// different supervision-tree positions: removing by label does not depend
+    /// on declaration or derived-struct field order. Labels are unique because
+    /// graph validation rejects duplicate actor ids.
+    pub fn into_nodes_by_label(self) -> HashMap<String, ActorNode> {
+        self.into_nodes()
+            .into_iter()
+            .map(|node| (node.label().to_owned(), node))
+            .collect()
     }
 
     pub(crate) fn dynamic_builder(&self) -> RunnableActorBuilder {

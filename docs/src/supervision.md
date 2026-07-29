@@ -180,7 +180,22 @@ A supervised actor also has one user-facing shutdown deadline: its child
 `ShutdownPolicy` grace bounds queued messages, outstanding offloads, and
 `on_stop`. Offload deadlines remain independent bounds on individual offloads;
 they do not extend the child grace. A host running an actor outside a tree
-passes the equivalent explicit bound to `RunnableActor::run_until`.
+passes the equivalent explicit bound to `RunnableActor::run_until`; the
+recommended standalone value is [`host::DEFAULT_SHUTDOWN_BOUND`].
+
+### One shutdown clock per child
+
+The cooperative grace bounds the complete actor drain. When it expires, the
+supervisor records `ChildExitView::Aborted { after_grace: true }`, asks the
+actor wrapper to terminate its mailbox and publish final observability, then
+hard-aborts the wrapper if that short accounting step does not finish. A root
+shutdown or dynamic removal returns `SupervisorError::ShutdownTimedOut`; a
+group restart records the same exit shape and continues only after the old
+generation has terminated.
+
+Every child owns its clock. Ordered scopes stop in reverse declaration order,
+so their worst-case grace is cumulative. Dynamic scopes start the clocks
+together, and a short-grace child cannot borrow a longer sibling's budget.
 
 ## Stopping when finite work completes
 
@@ -208,8 +223,6 @@ not yet present in a dynamic scope stays pending until added. Use
 [`wait_completed`] to await the same condition without automatically stopping
 the runtime.
 
-## Nested scopes
-
 - Failures still follow the normal restart policy. A `Never` child that fails
   can never complete, and the scope runs until explicitly stopped.
 - A later start un-completes a child, so one cancelled as part of a
@@ -219,6 +232,8 @@ the runtime.
   `Ok(())`. That is not finished work, and it does not count.
   [`LifecycleEventKind::ChildExited`] carries a `ChildExitView` whose
   `cancelled()` method reports it.
+
+## Nested scopes
 
 Nested scopes need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
@@ -256,8 +271,7 @@ handle, then add and remove `ChildSpec` tasks:
 
 ```rust,ignore
 let runtime = DynamicTree::new().spawn()?;
-let handle = runtime.handle();
-let dynamic = handle.dynamic().expect("dynamic root");
+let dynamic = runtime.handle();
 
 let lineage = dynamic
     .add_child(ChildSpec::task("night-shift-press", factory))
@@ -283,6 +297,7 @@ actors](dynamic-actors.md).
 [`BackoffPolicy`]: https://stokes.io/kokage/api/kokage/enum.BackoffPolicy.html
 [`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
 [`ShutdownPolicy`]: https://stokes.io/kokage/api/kokage/enum.ShutdownPolicy.html
+[`host::DEFAULT_SHUTDOWN_BOUND`]: https://stokes.io/kokage/api/kokage/host/constant.DEFAULT_SHUTDOWN_BOUND.html
 [`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.shutdown_on_completion
 [`wait_completed`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.wait_completed
 [`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html#variant.ChildExited
