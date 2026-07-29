@@ -1,0 +1,10 @@
+error[E0624]: associated function `supervisor` is private
+ --> tests/ui/public-api/private_child_spec_supervisor.rs:4:24
+  |
+4 |     let _ = ChildSpec::supervisor;
+  |                        ^^^^^^^^^^ private associated function
+  |
+ ::: src/supervisor/child.rs
+  |
+  |     pub(crate) fn supervisor(id: impl Into<String>, supervisor: Supervisor) -> Self {
+  |     ------------------------------------------------------------------------------- private associated function defined here

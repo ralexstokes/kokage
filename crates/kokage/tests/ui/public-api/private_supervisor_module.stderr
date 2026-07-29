@@ -1,0 +1,11 @@
+error[E0603]: module `supervisor` is private
+ --> tests/ui/public-api/private_supervisor_module.rs:3:13
+  |
+3 | use kokage::supervisor::{
+  |             ^^^^^^^^^^ private module
+  |
+note: the module `supervisor` is defined here
+ --> src/lib.rs
+  |
+  | mod supervisor;
+  | ^^^^^^^^^^^^^^
