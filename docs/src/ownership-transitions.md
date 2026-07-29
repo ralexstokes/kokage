@@ -2,10 +2,13 @@
 
 Removing an actor is not an atomic handoff of application traffic. A message
 can be accepted just before the actor observes shutdown, and mailbox acceptance
-only means at-most-once delivery to that incarnation. If the default
-`DrainPolicy::Discard` is used, the queued message can disappear during
-removal. The runtime cannot infer who should own that work, whether it is safe
-to replay, or how to deduplicate its effects.
+only means at-most-once delivery to that incarnation. The default
+`DrainPolicy::Drain` handles the queued prefix during a clean removal, within
+the actor's configured shutdown grace. A queued message can still disappear if
+the actor overrides that policy with `DrainPolicy::Discard`, crashes, is
+aborted, or exhausts its shutdown grace before draining. The runtime cannot
+infer who should own that work, whether it is safe to replay, or how to
+deduplicate its effects.
 
 For work that must survive dynamic removal, use an application-level handoff:
 
