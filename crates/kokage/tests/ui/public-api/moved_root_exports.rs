@@ -31,7 +31,6 @@ use kokage::ScopeWaitHandle;
 use kokage::SupervisionFactories;
 use kokage::SupervisionOutline;
 use kokage::SupervisorLifecycleEvent;
-use kokage::SupervisorSnapshot;
 use kokage::SupervisorStateView;
 use kokage::qualified_label;
 use kokage::timers;

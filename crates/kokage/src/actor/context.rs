@@ -1413,135 +1413,6 @@ mod sealed {
     }
 }
 
-macro_rules! live_context_inherent_methods {
-    () => {
-        /// See [`LiveContext::status`] for this capability's contract.
-        pub fn status(&self) -> ActorStatus {
-            sealed::Sealed::status(self)
-        }
-
-        /// See [`LiveContext::stop`] for this capability's contract.
-        pub fn stop(&mut self) {
-            self.cx.request_stop();
-        }
-
-        /// See [`LiveContext::continue_with`] for this capability's contract.
-        pub fn continue_with(&mut self, message: A::Msg) {
-            self.cx.push_continuation(message);
-        }
-
-        /// See [`LiveContext::watch`] for this capability's contract.
-        pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> CancellationHandle
-        where
-            T: Send + 'static,
-            F: FnMut(MonitorEvent) -> A::Msg + Send + 'static,
-        {
-            self.cx.watch(target, map)
-        }
-
-        /// See [`LiveContext::spawn_scope_wait`] for this capability's contract.
-        pub fn spawn_scope_wait<W, F, T, Map>(
-            &mut self,
-            scope: &RestrictedScope,
-            wait: W,
-            map: Map,
-        ) -> TaskHandle
-        where
-            W: FnOnce(RuntimeHandle) -> F + Send + 'static,
-            F: Future<Output = T> + Send + 'static,
-            T: Send + 'static,
-            Map: FnOnce(T) -> A::Msg + Send + 'static,
-        {
-            self.cx.spawn_scope_wait(scope, wait, map)
-        }
-
-        /// See [`LiveContext::set_timeout`] for this capability's contract.
-        pub fn set_timeout(&mut self, key: TimerKey, message: A::Msg, delay: Duration) {
-            self.cx
-                .timers
-                .insert(TimerSlot::Keyed(key), message, delay, None, None);
-        }
-
-        /// See [`LiveContext::clear_timeout`] for this capability's contract.
-        pub fn clear_timeout(&mut self, key: TimerKey) {
-            self.cx.timers.clear(TimerSlot::Keyed(key));
-        }
-
-        /// See [`LiveContext::timeout_armed`] for this capability's contract.
-        pub fn timeout_armed(&self, key: TimerKey) -> bool {
-            self.cx.timers.is_armed(TimerSlot::Keyed(key))
-        }
-
-        /// See [`LiveContext::send_after`] for this capability's contract.
-        pub fn send_after(&mut self, message: A::Msg, delay: Duration) -> CancellationHandle {
-            let timer = CancellationHandle::new();
-            self.cx.timers.insert(
-                TimerSlot::Anonymous,
-                message,
-                delay,
-                Some(timer.token()),
-                None,
-            );
-            timer
-        }
-
-        /// See [`LiveContext::interval`] for this capability's contract.
-        pub fn interval(&mut self, message: A::Msg, period: Duration) -> CancellationHandle
-        where
-            A::Msg: Clone,
-        {
-            let timer = CancellationHandle::new();
-            if period.is_zero() {
-                timer.cancel();
-                return timer;
-            }
-            self.cx.timers.insert(
-                TimerSlot::Anonymous,
-                message,
-                period,
-                Some(timer.token()),
-                Some((period, clone_message::<A::Msg>)),
-            );
-            timer
-        }
-
-        /// See [`LiveContext::send_after_to`] for this capability's contract.
-        pub fn send_after_to<T: Send + 'static>(
-            &self,
-            target: &ActorRef<T>,
-            message: T,
-            delay: Duration,
-        ) -> CancellationHandle {
-            self.cx.send_after_to(target, message, delay)
-        }
-
-        /// See [`LiveContext::interval_to`] for this capability's contract.
-        pub fn interval_to<T: Clone + Send + 'static>(
-            &self,
-            target: &ActorRef<T>,
-            message: T,
-            period: Duration,
-        ) -> CancellationHandle {
-            self.cx.interval_to(target, message, period)
-        }
-
-        /// See [`LiveContext::offload`] for this capability's contract.
-        pub fn offload<F, T, C>(
-            &mut self,
-            deadline: Duration,
-            future: F,
-            continuation: C,
-        ) -> TaskHandle
-        where
-            F: Future<Output = T> + Send + 'static,
-            T: Send + 'static,
-            C: FnOnce(Result<T, OffloadDeadline>) -> A::Msg + Send + 'static,
-        {
-            self.cx.offload(deadline, future, continuation)
-        }
-    };
-}
-
 /// The capabilities an actor has while its incarnation is still live,
 /// independent of which lifecycle stage it is in.
 ///
@@ -1741,23 +1612,6 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         self.cx().timers.is_armed(TimerSlot::Keyed(key))
     }
 
-    /// Schedules an anonymous one-shot message and returns its exact
-    /// cancellation handle.
-    ///
-    /// Self-timer delivery bypasses mailbox capacity and conflation, counts as
-    /// a received message, and is cancelled structurally on restart.
-    fn send_after(&mut self, message: M, delay: Duration) -> CancellationHandle {
-        let timer = CancellationHandle::new();
-        self.cx_mut().timers.insert(
-            TimerSlot::Anonymous,
-            message,
-            delay,
-            Some(timer.token()),
-            None,
-        );
-        timer
-    }
-
     /// Schedules a periodic actor-local message.
     ///
     /// The first message is delivered after one full period. Each delivery
@@ -1819,125 +1673,6 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 }
 
-macro_rules! live_context_trait_impl {
-    ($view:ident) => {
-        impl<A: Actor + ?Sized> LiveContext<A::Msg> for $view<'_, A> {
-            fn id(&self) -> &str {
-                $view::id(self)
-            }
-
-            fn myself(&self) -> ActorRef<A::Msg> {
-                $view::myself(self)
-            }
-
-            fn shutdown_token(&self) -> &CancellationToken {
-                $view::shutdown_token(self)
-            }
-
-            fn run_blocking<F, R>(
-                &self,
-                f: F,
-            ) -> impl Future<Output = Result<R, BlockingCancelled>> + Send + 'static
-            where
-                F: FnOnce(&CancellationToken) -> R + Send + 'static,
-                R: Send + 'static,
-            {
-                $view::run_blocking(self, f)
-            }
-
-            fn status(&self) -> ActorStatus {
-                $view::status(self)
-            }
-
-            fn stop(&mut self) {
-                $view::stop(self);
-            }
-
-            fn continue_with(&mut self, message: A::Msg) {
-                $view::continue_with(self, message);
-            }
-
-            fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> CancellationHandle
-            where
-                T: Send + 'static,
-                F: FnMut(MonitorEvent) -> A::Msg + Send + 'static,
-            {
-                $view::watch(self, target, map)
-            }
-
-            fn spawn_scope_wait<W, F, T, Map>(
-                &mut self,
-                scope: &RestrictedScope,
-                wait: W,
-                map: Map,
-            ) -> TaskHandle
-            where
-                W: FnOnce(RuntimeHandle) -> F + Send + 'static,
-                F: Future<Output = T> + Send + 'static,
-                T: Send + 'static,
-                Map: FnOnce(T) -> A::Msg + Send + 'static,
-            {
-                $view::spawn_scope_wait(self, scope, wait, map)
-            }
-
-            fn set_timeout(&mut self, key: TimerKey, message: A::Msg, delay: Duration) {
-                $view::set_timeout(self, key, message, delay);
-            }
-
-            fn clear_timeout(&mut self, key: TimerKey) {
-                $view::clear_timeout(self, key);
-            }
-
-            fn timeout_armed(&self, key: TimerKey) -> bool {
-                $view::timeout_armed(self, key)
-            }
-
-            fn send_after(&mut self, message: A::Msg, delay: Duration) -> CancellationHandle {
-                $view::send_after(self, message, delay)
-            }
-
-            fn interval(&mut self, message: A::Msg, period: Duration) -> CancellationHandle
-            where
-                A::Msg: Clone,
-            {
-                $view::interval(self, message, period)
-            }
-
-            fn send_after_to<T: Send + 'static>(
-                &self,
-                target: &ActorRef<T>,
-                message: T,
-                delay: Duration,
-            ) -> CancellationHandle {
-                $view::send_after_to(self, target, message, delay)
-            }
-
-            fn interval_to<T: Clone + Send + 'static>(
-                &self,
-                target: &ActorRef<T>,
-                message: T,
-                period: Duration,
-            ) -> CancellationHandle {
-                $view::interval_to(self, target, message, period)
-            }
-
-            fn offload<F, T, C>(
-                &mut self,
-                deadline: Duration,
-                future: F,
-                continuation: C,
-            ) -> TaskHandle
-            where
-                F: Future<Output = T> + Send + 'static,
-                T: Send + 'static,
-                C: FnOnce(Result<T, OffloadDeadline>) -> A::Msg + Send + 'static,
-            {
-                $view::offload(self, deadline, future, continuation)
-            }
-        }
-    };
-}
-
 macro_rules! live_context {
     ($view:ident) => {
         impl<A: Actor + ?Sized> sealed::Sealed<A::Msg> for $view<'_, A> {
@@ -1954,11 +1689,7 @@ macro_rules! live_context {
             }
         }
 
-        live_context_trait_impl!($view);
-
-        impl<A: Actor + ?Sized> $view<'_, A> {
-            live_context_inherent_methods!();
-        }
+        impl<A: Actor + ?Sized> LiveContext<A::Msg> for $view<'_, A> {}
     };
     ($view:ident, draining) => {
         impl<A: Actor + ?Sized> sealed::Sealed<A::Msg> for $view<'_, A> {
@@ -1979,16 +1710,17 @@ macro_rules! live_context {
             }
         }
 
-        live_context_trait_impl!($view);
-
-        impl<A: Actor + ?Sized> $view<'_, A> {
-            live_context_inherent_methods!();
-        }
+        impl<A: Actor + ?Sized> LiveContext<A::Msg> for $view<'_, A> {}
     };
 }
 
 macro_rules! stage_context_methods {
-    ($view:ident, $scope_stage:ident $(, $myself_note:literal)?) => {
+    ($view:ident, $scope_stage:ident) => {
+        impl<A: Actor + ?Sized> $view<'_, A> {
+            scope_context_methods!($scope_stage);
+        }
+    };
+    ($view:ident, $scope_stage:ident, $myself_note:literal) => {
         impl<A: Actor + ?Sized> $view<'_, A> {
             ambient_context_method! {
                 id,
@@ -1998,7 +1730,7 @@ macro_rules! stage_context_methods {
             }
 
             ambient_context_method! {
-                myself $([$myself_note])?,
+                myself [$myself_note],
                 pub fn myself(&self) -> ActorRef<A::Msg> {
                     self.cx.myself()
                 }
@@ -2231,7 +1963,8 @@ pub struct StartContext<'a, A: Actor + ?Sized> {
 /// directly would bypass drain accounting and the continuation queue.
 ///
 /// This is the only hook the provided loop calls from two different phases, so
-/// it is also the only one whose [`status`](Self::status) can be `Draining`.
+/// it is also the only one whose [`status`](LiveContext::status) can be
+/// `Draining`.
 ///
 /// The parameter is the actor, not its message: a hook signature writes
 /// `&mut MessageContext<'_, Self>` and the message type is projected from
@@ -2250,8 +1983,9 @@ pub struct MessageContext<'a, A: Actor + ?Sized> {
 /// offloads, continuations — has no one left to deliver to and
 /// is withheld. What remains is identity, the shutdown token, the scope
 /// handles, and [`run_blocking`](StopContext::run_blocking) for synchronous
-/// teardown. These common operations are inherent methods on every stage
-/// context, so calling them requires no context-trait import.
+/// teardown. These common operations are inherent here because
+/// [`StopContext`] cannot implement [`LiveContext`]; live stages get their
+/// canonical versions from that trait.
 ///
 /// The scope handles are narrowed to [`RestrictedScope`], which withholds the
 /// lifecycle waits that would block on a detach this hook is itself holding up.

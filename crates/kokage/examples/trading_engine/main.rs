@@ -129,7 +129,8 @@ use std::{
 };
 
 use kokage::{
-    ActorNode, ActorSlot, CancellationToken, DownReason, MailboxMode, Supervision,
+    ActorNode, ActorSlot, CancellationToken, DownReason, MailboxMode, RestartConfig, RuntimeHandle,
+    Supervision,
     observe::{LifecycleEventKind, LifecycleWatch, LifecycleWatchGuard},
     prelude::*,
 };

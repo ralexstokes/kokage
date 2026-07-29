@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use kokage::prelude::*;
+use kokage::{CallError, prelude::*};
 
 use crate::messages::{
     CALL_DEADLINE, CancelOutcome, GatewayMsg, LedgerMsg, OrderKey, PlaceOutcome, QueryOutcome,

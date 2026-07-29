@@ -5,7 +5,7 @@
 
 use std::{error::Error, time::Duration};
 
-use kokage::{CancellationToken, prelude::*};
+use kokage::{ActorSpec, CancellationToken, RuntimeHandle, prelude::*};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]

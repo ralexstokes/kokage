@@ -12,8 +12,8 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus, CallError,
-    DrainPolicy, Graph, GraphBuildError, GraphBuilder, MessageContext, Reply, RestartPolicy,
-    SendError, StartContext, StopContext, TrySendError,
+    DrainPolicy, Graph, GraphBuildError, GraphBuilder, LiveContext, MessageContext, Reply,
+    RestartPolicy, SendError, StartContext, StopContext, TrySendError,
     host::{
         ActorContext, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
     },

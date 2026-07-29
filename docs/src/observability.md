@@ -293,9 +293,8 @@ backed by the runtime's public snapshots, events, and actor stats:
 
 ```rust,ignore
 let runtime = tree.spawn()?;
-let console = kokage_console::Console::for_runtime(&runtime)
+let console = kokage_console::ConsoleBuilder::for_runtime(&runtime.handle())
     .bind(([127, 0, 0, 1], 8080))
-    .build()?
     .spawn()
     .await?;
 
@@ -319,11 +318,10 @@ Non-loopback binds require an access token. Add the externally visible host
 when it differs from the listener address:
 
 ```rust,ignore
-let console = kokage_console::Console::for_runtime(&runtime)
+let console = kokage_console::ConsoleBuilder::for_runtime(&runtime.handle())
     .bind(([0, 0, 0, 0], 8080))
     .access_token("replace-with-a-random-url-safe-token")
     .allowed_host("console.internal:8080")
-    .build()?
     .spawn()
     .await?;
 ```

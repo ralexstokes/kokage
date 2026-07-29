@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorResult, ActorSpec, GraphBuilder, MessageContext};
+use kokage::{Actor, ActorResult, ActorSpec, GraphBuilder, LiveContext, MessageContext};
 use tokio::sync::mpsc;
 
 mod support;

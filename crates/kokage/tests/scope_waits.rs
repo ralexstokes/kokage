@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorStatus, DrainPolicy, GraphBuilder, MessageContext,
-    OrderedTree, StartContext, StopContext, TaskHandle,
+    Actor, ActorResult, ActorSlot, ActorStatus, DrainPolicy, GraphBuilder, LiveContext,
+    MessageContext, OrderedTree, StartContext, StopContext, TaskHandle,
 };
 use tokio::sync::{Notify, mpsc};
 

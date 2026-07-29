@@ -8,13 +8,12 @@
 //!
 //! ```no_run
 //! use kokage::prelude::*;
-//! use kokage_console::Console;
+//! use kokage_console::ConsoleBuilder;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let runtime = OrderedTree::new().spawn()?;
-//! let console = Console::for_runtime(&runtime.handle())
-//!     .build()?
+//! let console = ConsoleBuilder::for_runtime(&runtime.handle())
 //!     .spawn()
 //!     .await
 //!     .expect("failed to start console");
@@ -46,10 +45,10 @@ use tokio::sync::watch;
 type StatsSource = Arc<dyn Fn() -> Vec<ActorStats> + Send + Sync>;
 type LifecycleSource = Arc<dyn Fn() -> LifecycleWatch + Send + Sync>;
 
-/// Errors returned while validating console configuration.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+/// Errors returned while validating or starting a console server.
+#[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ConsoleBuildError {
+pub enum ConsoleError {
     /// No supervisor snapshot receiver was configured.
     #[error("console snapshots are required")]
     MissingSnapshots,
@@ -62,9 +61,12 @@ pub enum ConsoleBuildError {
     /// The access token was empty or contained a byte that is not URL-safe.
     #[error("the console access token must be non-empty URL-safe ASCII")]
     InvalidAccessToken,
+    /// The console listener could not be bound or served.
+    #[error("failed to start console server: {0}")]
+    Io(#[from] std::io::Error),
 }
 
-/// Builder for configuring a [`Console`] server.
+/// Builder for configuring and spawning a console server.
 pub struct ConsoleBuilder {
     snapshots: Option<SupervisorSnapshotReceiver>,
     lifecycle: Option<LifecycleSource>,
@@ -75,7 +77,8 @@ pub struct ConsoleBuilder {
 }
 
 impl ConsoleBuilder {
-    fn new() -> Self {
+    /// Returns a console builder with a loopback bind on port 9100.
+    pub fn new() -> Self {
         Self {
             snapshots: None,
             lifecycle: None,
@@ -84,6 +87,21 @@ impl ConsoleBuilder {
             access_token: None,
             allowed_hosts: Vec::new(),
         }
+    }
+
+    /// Returns a builder pre-wired to a runtime's public observability
+    /// surfaces.
+    ///
+    /// The console remains an application-side observer: it subscribes to
+    /// snapshots and lifecycle events and samples actor stats without adding
+    /// a console dependency or feature to `kokage`.
+    pub fn for_runtime(handle: &RuntimeHandle) -> Self {
+        let lifecycle = handle.clone();
+        let stats = handle.clone();
+        Self::new()
+            .snapshots(handle.subscribe_snapshots())
+            .lifecycle(move || lifecycle.watch_lifecycle())
+            .actor_stats(move || stats.actor_stats())
     }
 
     /// Sets the supervisor snapshot receiver.
@@ -141,10 +159,9 @@ impl ConsoleBuilder {
         self
     }
 
-    /// Validates the builder and returns a [`Console`].
-    pub fn build(self) -> Result<Console, ConsoleBuildError> {
+    fn validate(&self) -> Result<(), ConsoleError> {
         if !self.bind.ip().is_loopback() && self.access_token.is_none() {
-            return Err(ConsoleBuildError::AccessTokenRequired);
+            return Err(ConsoleError::AccessTokenRequired);
         }
         if let Some(token) = &self.access_token {
             let valid = !token.is_empty()
@@ -152,78 +169,39 @@ impl ConsoleBuilder {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte));
             if !valid {
-                return Err(ConsoleBuildError::InvalidAccessToken);
+                return Err(ConsoleError::InvalidAccessToken);
             }
         }
-        Ok(Console {
-            snapshots: self.snapshots.ok_or(ConsoleBuildError::MissingSnapshots)?,
-            lifecycle: self.lifecycle.ok_or(ConsoleBuildError::MissingLifecycle)?,
-            stats: self.stats,
-            bind: self.bind,
-            access_token: self.access_token,
-            allowed_hosts: self.allowed_hosts,
-        })
-    }
-}
-
-/// A configured console server ready to start.
-pub struct Console {
-    snapshots: SupervisorSnapshotReceiver,
-    lifecycle: LifecycleSource,
-    stats: StatsSource,
-    bind: SocketAddr,
-    access_token: Option<String>,
-    allowed_hosts: Vec<String>,
-}
-
-impl Console {
-    /// Returns a new [`ConsoleBuilder`].
-    pub fn builder() -> ConsoleBuilder {
-        ConsoleBuilder::new()
+        if self.snapshots.is_none() {
+            return Err(ConsoleError::MissingSnapshots);
+        }
+        if self.lifecycle.is_none() {
+            return Err(ConsoleError::MissingLifecycle);
+        }
+        Ok(())
     }
 
-    /// Returns a builder pre-wired to a runtime's public observability
-    /// surfaces.
-    ///
-    /// The console remains an application-side observer: it subscribes to
-    /// snapshots and lifecycle events and samples actor stats without adding a console
-    /// dependency or feature to `kokage`.
-    pub fn for_runtime(handle: &RuntimeHandle) -> ConsoleBuilder {
-        let lifecycle = handle.clone();
-        let stats = handle.clone();
-        Console::builder()
-            .snapshots(handle.subscribe_snapshots())
-            .lifecycle(move || lifecycle.watch_lifecycle())
-            .actor_stats(move || stats.actor_stats())
-    }
-
-    /// Binds the listener and spawns the server in the background.
+    /// Validates the configuration, binds the listener, and spawns the server.
     ///
     /// Returns a [`ConsoleHandle`] that can be used to query the local address
     /// or shut the server down.
-    pub async fn spawn(self) -> std::io::Result<ConsoleHandle> {
-        server::spawn(
-            self.snapshots,
-            self.lifecycle,
+    pub async fn spawn(self) -> Result<ConsoleHandle, ConsoleError> {
+        self.validate()?;
+        Ok(server::spawn(
+            self.snapshots.expect("validated snapshot source"),
+            self.lifecycle.expect("validated lifecycle source"),
             self.stats,
             self.bind,
             self.access_token,
             self.allowed_hosts,
         )
-        .await
+        .await?)
     }
+}
 
-    /// Runs the server on the current task until shut down.
-    pub async fn run(self) -> std::io::Result<()> {
-        server::run(
-            self.snapshots,
-            self.lifecycle,
-            self.stats,
-            self.bind,
-            self.access_token,
-            self.allowed_hosts,
-        )
-        .await
+impl Default for ConsoleBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

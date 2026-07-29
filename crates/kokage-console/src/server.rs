@@ -273,29 +273,6 @@ pub(crate) async fn spawn(
     })
 }
 
-pub(crate) async fn run(
-    snapshots: SupervisorSnapshotReceiver,
-    lifecycle: LifecycleSource,
-    stats: StatsSource,
-    bind: SocketAddr,
-    access_token: Option<String>,
-    allowed_hosts: Vec<String>,
-) -> std::io::Result<()> {
-    let (listener, app, local_addr) = bind_app(
-        snapshots,
-        lifecycle,
-        stats,
-        bind,
-        access_token,
-        allowed_hosts,
-    )
-    .await?;
-
-    tracing::info!(%local_addr, "kokage-console listening");
-
-    axum::serve(listener, app).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

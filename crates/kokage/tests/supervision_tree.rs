@@ -4,7 +4,10 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::sleep};
 
-use kokage::{ActorSpec, Graph, ScopeKind, host::ChildSpec, observe::ChildOutline, prelude::*};
+use kokage::{
+    ActorSpec, DynamicTree, Graph, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy,
+    Strategy, host::ChildSpec, observe::ChildOutline, prelude::*,
+};
 
 struct Worker;
 

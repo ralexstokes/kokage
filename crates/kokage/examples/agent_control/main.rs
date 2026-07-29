@@ -79,7 +79,7 @@
 //!
 //! guard inputs: session run failures, budget cap, bridge restart totals
 //! guard output: shared intake gate (Arc<AtomicBool>) + PauseChanged fan-out
-//!               via router; send_after probes with backoff lift the pause
+//!               via router; keyed probe timeouts with backoff lift the pause
 //! ```
 //!
 //! # Lifecycles
@@ -133,8 +133,8 @@ use std::{
 };
 
 use kokage::{
-    ActorNode, ActorSlot, DownReason, MailboxMode, MonitorEvent, Supervision,
-    observe::LifecycleWatchGuard, prelude::*,
+    ActorNode, ActorSlot, DownReason, DynamicTree, MailboxMode, MonitorEvent, RuntimeHandle,
+    Strategy, Supervision, observe::LifecycleWatchGuard, prelude::*,
 };
 use tokio::time::Instant;
 

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
+    ActorSpec, ActorStatus, RestartPolicy, Strategy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -10,10 +11,8 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError, DynamicTree,
-            GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply, RestartConfig,
-            RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
-            StopContext, Strategy, TrySendError,
+            Actor, ActorRef, ActorResult, GraphBuilder, LiveContext, MessageContext, OrderedTree,
+            Reply, StartContext, StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
         };
     }
 
