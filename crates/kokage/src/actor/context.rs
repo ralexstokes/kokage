@@ -2078,7 +2078,7 @@ pub struct RestrictedScope {
 /// never exposes a full [`RuntimeHandle`] to an actor callback.
 #[derive(Clone, Debug)]
 pub struct DynamicRestrictedScope {
-    dynamic: crate::DynamicRuntime,
+    dynamic: crate::DynamicRuntimeHandle,
 }
 
 macro_rules! restricted_scope_forwards {

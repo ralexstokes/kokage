@@ -7,9 +7,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, ControlError, DynamicTree, GraphBuilder, MessageContext,
-    OrderedTree, RestartConfig, RestartPolicy, RestrictedScope, RuntimeHandle, ScopeKind,
-    StartContext, StopContext, Strategy, SupervisorBuildError,
+    Actor, ActorResult, ActorSpec, ControlError, DynamicRuntimeHandle, DynamicTree, GraphBuilder,
+    MessageContext, OrderedTree, RestartConfig, RestartPolicy, RestrictedScope, RuntimeHandle,
+    ScopeKind, StartContext, StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, ExitStatusView, SupervisorSnapshotReceiver},
 };
@@ -151,7 +151,7 @@ impl Actor for StopProbe {
 }
 
 struct BuilderHandleOwner {
-    mount: RuntimeHandle,
+    mount: DynamicRuntimeHandle,
     report: mpsc::UnboundedSender<&'static str>,
 }
 
@@ -159,11 +159,7 @@ impl Actor for BuilderHandleOwner {
     type Msg = ();
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        self.mount
-            .dynamic()
-            .expect("dynamic scope")
-            .add_actor("owned", || Idle)
-            .await?;
+        self.mount.add_actor("owned", || Idle).await?;
         self.report.send("mounted").expect("test receiver open");
         Ok(())
     }
@@ -245,8 +241,6 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
         .await
         .expect("pre-spawn scope starts");
     pre_spawn
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor("worker", || Idle)
         .await
         .expect("pre-spawn handle controls the spawned scope");
@@ -276,7 +270,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     runtime.shutdown_and_wait().await.expect("runtime stops");
 
     let dynamic_root = DynamicTree::new().spawn().expect("dynamic root builds");
-    assert!(dynamic_root.handle().dynamic().is_some());
+    let _: DynamicRuntimeHandle = dynamic_root.handle();
     dynamic_root
         .shutdown_and_wait()
         .await
@@ -413,7 +407,7 @@ async fn trees_terminalize_handles_when_dropped() {
     let handle = builder.handle();
     let snapshots = handle.subscribe_snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
-    assert!(handle.dynamic().is_some());
+    let _: DynamicRuntimeHandle = handle.clone();
     drop(builder);
     assert_snapshot_receiver_closes(snapshots).await;
 
@@ -497,7 +491,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = invalid.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.handle().dynamic().expect("dynamic scope").add_subtree("invalid", invalid).await,
+        parent.add_subtree("invalid", invalid).await,
         Err(ControlError::Rejected(
             SupervisorBuildError::DuplicateActorBinding(label)
         )) if label == "duplicate-binding"
@@ -505,9 +499,6 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     assert_snapshot_receiver_closes(rejected_snapshots).await;
 
     parent
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
         .add_subtree("occupied", DynamicTree::new())
         .await
         .expect("first subtree inserts");
@@ -515,7 +506,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = duplicate.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.handle().dynamic().expect("dynamic scope").add_subtree("occupied", duplicate).await,
+        parent.add_subtree("occupied", duplicate).await,
         Err(ControlError::Rejected(SupervisorBuildError::DuplicateChildId(id)))
             if id == "occupied"
     ));
@@ -537,9 +528,6 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
 
     let (awaited_tx, mut awaited_rx) = mpsc::unbounded_channel();
     let awaited = outer
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
         .add_subtree("awaited", single_use_mount(awaited_tx))
         .await
         .expect("awaited subtree inserts");
@@ -553,8 +541,6 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
     let pipelined_outer = outer.handle();
     let pipelined = tokio::spawn(async move {
         pipelined_outer
-            .dynamic()
-            .expect("dynamic scope")
             .add_subtree("pipelined", single_use_mount(pipelined_tx))
             .await
     });

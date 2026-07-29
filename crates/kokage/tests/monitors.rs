@@ -1334,11 +1334,8 @@ impl RawActor for UnitObserver {
 #[tokio::test]
 async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
-    let peer_ref = handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
+    let peer_ref = runtime
         .add_actor_with(
             "peer",
             move || StubbornPeer {
@@ -1350,10 +1347,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
         .expect("peer added");
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
-    handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    runtime
         .add_actor_with(
             "observer",
             {
@@ -1372,10 +1366,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     started(&mut observer_started).await;
     assert_eq!(next_event(&mut observed).await, up("peer", 0));
 
-    handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    runtime
         .remove_child("peer")
         .await
         .expect("peer removed by abort");
@@ -1388,7 +1379,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
         "removing the child terminates the binding"
     );
 
-    handle
+    runtime
         .shutdown_and_wait()
         .await
         .expect("runtime stopped cleanly");

@@ -87,12 +87,9 @@ async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
     let added_started = Arc::new(Notify::new());
     let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     handle_tx
-        .send(Some(handle.handle()))
+        .send(Some(handle.handle().into_runtime_handle()))
         .expect("startup actor retains handle receiver");
     handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor_with(
             "starter",
             {

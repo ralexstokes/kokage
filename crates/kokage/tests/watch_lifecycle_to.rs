@@ -100,13 +100,10 @@ async fn runtime_with_watched_subtree() -> (
     kokage::ActorRef<()>,
     mpsc::UnboundedReceiver<(u64, ChildLifecycleEvent)>,
 ) {
-    let handle = DynamicTree::new().spawn().expect("runtime builds");
+    let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
-    let sink = handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    let sink = runtime
         .add_actor_with(
             "sink",
             move || {
@@ -123,10 +120,7 @@ async fn runtime_with_watched_subtree() -> (
     let mut graph = GraphBuilder::new();
     let (crasher_slot, crasher) = graph.slot("crasher");
     graph.define(crasher_slot, || Crasher);
-    let watched = handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    let watched = runtime
         .add_subtree(
             "watched",
             OrderedTree::graph(graph.build().expect("nested graph builds"))
@@ -135,11 +129,11 @@ async fn runtime_with_watched_subtree() -> (
         )
         .await
         .expect("watched subtree added");
-    timeout(Duration::from_secs(2), handle.handle().wait_started())
+    timeout(Duration::from_secs(2), runtime.handle().wait_started())
         .await
         .expect("runtime startup timed out")
         .expect("runtime starts");
-    (handle, watched, sink, crasher, observed_rx)
+    (runtime.into_runtime(), watched, sink, crasher, observed_rx)
 }
 
 async fn recv_event(
@@ -365,22 +359,16 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
 
 #[tokio::test]
 async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
-    let handle = DynamicTree::new().spawn().expect("runtime builds");
+    let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    runtime
         .add_actor("sink", move || RestrictedSink {
             observed: observed_tx.clone(),
             watch: None,
         })
         .await
         .expect("restricted sink added");
-    let crasher = handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+    let crasher = runtime
         .add_actor_with(
             "crasher",
             || Crasher,
@@ -388,7 +376,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         )
         .await
         .expect("crasher added");
-    handle
+    runtime
         .handle()
         .wait_started()
         .await
@@ -410,5 +398,6 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     .expect("restricted-scope lifecycle event arrives");
     assert_eq!(scheduled.child_id, "crasher");
 
-    shutdown_runtime(&handle.handle(), "restricted-scope lifecycle pump shutdown").await;
+    let handle = runtime.handle();
+    shutdown_runtime(&handle, "restricted-scope lifecycle pump shutdown").await;
 }

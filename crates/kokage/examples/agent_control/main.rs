@@ -203,7 +203,7 @@ struct App {
     runtime: kokage::Runtime,
     gateway: RuntimeHandle,
     core: RuntimeHandle,
-    sessions: RuntimeHandle,
+    sessions: kokage::DynamicRuntimeHandle,
     chat: ChatSim,
     model: ScriptedModel,
     router: ActorRef<RouterMsg>,

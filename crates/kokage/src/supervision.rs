@@ -11,7 +11,7 @@ use kokage_supervisor::{
 };
 
 use crate::{
-    Graph, Runtime, RuntimeHandle,
+    DynamicRuntime, DynamicRuntimeHandle, Graph, Runtime, RuntimeHandle,
     actor::{ActorNode, ActorSpec, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -218,11 +218,6 @@ impl<M: Send + 'static> IntoActorNode for ActorSpec<M> {
 
 macro_rules! tree_common_methods {
     () => {
-        /// Returns the stable actor-aware handle reserved for this root scope.
-        pub fn handle(&self) -> RuntimeHandle {
-            self.inner.handle()
-        }
-
         /// Sets this scope's default restart intensity.
         #[must_use]
         pub fn restart_config(mut self, config: RestartConfig) -> Self {
@@ -273,6 +268,11 @@ impl Default for OrderedTree {
 
 impl OrderedTree {
     tree_common_methods!();
+
+    /// Returns the stable actor-aware handle reserved for this root scope.
+    pub fn handle(&self) -> RuntimeHandle {
+        self.inner.handle()
+    }
 
     /// Creates an empty ordered scope with standard runtime defaults.
     pub fn new() -> Self {
@@ -370,6 +370,12 @@ impl Default for DynamicTree {
 impl DynamicTree {
     tree_common_methods!();
 
+    /// Returns the stable, dynamic-membership-capable handle reserved for this
+    /// root scope.
+    pub fn handle(&self) -> DynamicRuntimeHandle {
+        DynamicRuntimeHandle::new(self.inner.handle())
+    }
+
     /// Creates an empty dynamic scope with standard runtime defaults.
     pub fn new() -> Self {
         Self {
@@ -379,17 +385,18 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`Runtime`] for as long as the runtime should remain
-    /// alive. Dropping it requests graceful shutdown; its handles are non-owning.
+    /// Retain the returned [`DynamicRuntime`] for as long as the runtime should
+    /// remain alive. Dropping it requests graceful shutdown; its handles are
+    /// non-owning.
     ///
     /// # Errors
     ///
     /// Returns the applicable [`SupervisorBuildError`] when the dynamic
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal.
-    pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
+    pub fn spawn(self) -> Result<DynamicRuntime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(Runtime::new(supervisor.spawn(), actors))
+        Ok(DynamicRuntime::new(supervisor.spawn(), actors))
     }
 }
 

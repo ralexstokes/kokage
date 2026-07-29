@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use kokage::{
     __private::{Supervision as SupervisionPlumbing, SupervisionFactories},
-    DynamicScope, GraphLookupError, ScopeKind, Supervision,
+    DynamicRuntimeHandle, DynamicScope, GraphLookupError, ScopeKind, Supervision,
     observe::ChildOutline,
     prelude::*,
 };
@@ -274,7 +274,7 @@ fn a_node_built_from_a_foreign_graph_reports_a_build_error() {
 
 /// An actor holding the mount handle of a dynamic scope declared beside it.
 struct Mounter {
-    sessions: RuntimeHandle,
+    sessions: DynamicRuntimeHandle,
 }
 
 impl Actor for Mounter {
@@ -287,8 +287,6 @@ impl Actor for Mounter {
     ) -> ActorResult {
         let worker = self
             .sessions
-            .dynamic()
-            .expect("dynamic scope")
             .add_actor("spawned", || Worker)
             .await
             .expect("dynamic scope accepts the actor");

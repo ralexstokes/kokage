@@ -338,6 +338,6 @@ pub use kokage_supervisor::{
     BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
     ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TerminalMembership,
 };
-pub use runtime::{DynamicRuntime, Runtime, RuntimeHandle};
+pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
 pub use supervision_derive::DynamicScope;
