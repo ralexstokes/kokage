@@ -11,7 +11,7 @@ use kokage::{
     ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
     host::{ActorContext, BoxError, RawActor},
 };
-use kokage_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
+use kokage_supervisor::{BackoffPolicy, RestartConfig, RestartPolicy, Strategy};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{advance, timeout},
@@ -272,7 +272,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         snapshots.wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         }),
     )
     .await
@@ -284,9 +284,8 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
             .child("worker")
             .expect("worker remains visible")
             .state
-            .last_exit()
-            .map(|exit| &exit.status),
-        Some(&ExitStatusView::Completed)
+            .last_exit(),
+        Some(exit) if exit.is_completed()
     ));
 
     handle.shutdown();

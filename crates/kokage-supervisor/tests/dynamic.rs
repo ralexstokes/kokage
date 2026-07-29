@@ -1,8 +1,8 @@
 use std::{ops::Deref, sync::Arc, time::Duration};
 
 use kokage_supervisor::{
-    ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView, RestartConfig,
-    RestartPolicy, RunningSupervisor, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError,
+    ChildSpec, ControlError, DynamicSupervisorBuilder, RestartConfig, RestartPolicy,
+    RunningSupervisor, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError,
     SupervisorError, SupervisorHandle, TerminalMembership,
 };
 use tokio::{
@@ -11,7 +11,7 @@ use tokio::{
 };
 
 mod common;
-use common::ObservedEvent;
+use common::{ExitStatusView, ObservedEvent};
 
 async fn spawn_dynamic(
     builder: DynamicSupervisorBuilder,
@@ -573,14 +573,16 @@ async fn terminal_failure_remains_visible_while_idle() {
         }
     }
 
-    assert!(matches!(
+    assert!(
         handle
             .snapshot()
             .child("fails")
             .expect("failed child remains visible")
-            .state.last_exit().map(|exit| &exit.status),
-        Some(ExitStatusView::Failed(message)) if message.contains("terminal failure")
-    ));
+            .state
+            .last_exit()
+            .and_then(|exit| exit.failure_message())
+            .is_some_and(|message| message.contains("terminal failure"))
+    );
 
     handle
         .dynamic()
@@ -1143,7 +1145,7 @@ async fn control_plane_remains_available_after_all_children_exit() {
         .wait_for(|snapshot| {
             snapshot
                 .child("done")
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         })
         .await
         .expect("completion snapshot remains available");

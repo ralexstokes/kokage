@@ -2111,15 +2111,9 @@ macro_rules! restricted_scope_forwards {
                 .map(|dynamic| DynamicRestrictedScope { dynamic })
         }
 
-        /// Observes lifecycle transitions of this scope's direct children.
-        pub fn watch_lifecycle(&self) -> crate::observe::ChildLifecycleWatch {
+        /// Observes lifecycle transitions of this scope and its descendants.
+        pub fn watch_lifecycle(&self) -> crate::observe::LifecycleWatch {
             self.handle.watch_lifecycle()
-        }
-
-        /// Observes lifecycle transitions of this scope and everything beneath
-        /// it.
-        pub fn watch_lifecycle_recursive(&self) -> crate::observe::LifecycleWatch {
-            self.handle.watch_lifecycle_recursive()
         }
 
         /// Pumps direct-child lifecycle events into `target` using its ordinary
@@ -2136,7 +2130,7 @@ macro_rules! restricted_scope_forwards {
         ) -> crate::observe::LifecycleWatchGuard
         where
             M: Send + 'static,
-            F: FnMut(crate::observe::ChildLifecycleEvent) -> M + Send + 'static,
+            F: FnMut(crate::observe::LifecycleEvent) -> M + Send + 'static,
         {
             self.handle.watch_lifecycle_to(target, map)
         }

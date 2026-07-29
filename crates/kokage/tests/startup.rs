@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Duration};
 use kokage::{
     DrainPolicy, DynamicActorOptions, SupervisorError,
     host::{ActorContext, BoxError, ChildSpec, RawActor},
-    observe::ExitStatusView,
     prelude::*,
 };
 use tokio::sync::{Mutex, Notify, mpsc, watch};
@@ -200,10 +199,12 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
         .into_iter()
         .next()
         .unwrap();
-    assert!(matches!(
-        child.state.last_exit().map(|exit| &exit.status),
-        Some(ExitStatusView::Failed(_))
-    ));
+    assert!(
+        child
+            .state
+            .last_exit()
+            .is_some_and(|exit| exit.failure_message().is_some())
+    );
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -634,13 +635,12 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(
+    assert!(
         handle.handle().snapshot().children[0]
             .state
             .last_exit()
-            .map(|exit| &exit.status),
-        Some(&ExitStatusView::Completed)
-    ));
+            .is_some_and(|exit| exit.is_completed())
+    );
     handle.shutdown_and_wait().await.unwrap();
 }
 

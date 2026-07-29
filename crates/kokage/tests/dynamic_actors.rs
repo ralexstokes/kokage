@@ -162,7 +162,7 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
             if snapshots
                 .latest()
                 .child(id)
-                .is_some_and(|child| child.state.last_exit().map(|exit| &exit.status).is_some())
+                .is_some_and(|child| child.state.last_exit().is_some())
             {
                 return;
             }
@@ -190,11 +190,10 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
     wait_for_child(handle, "settle", false).await;
 
     assert!(
-        handle.snapshot().child(id).is_some_and(|child| child
-            .state
-            .last_exit()
-            .map(|exit| &exit.status)
-            .is_some()),
+        handle
+            .snapshot()
+            .child(id)
+            .is_some_and(|child| child.state.last_exit().is_some()),
         "terminal child stays retained once the control loop has settled"
     );
 }

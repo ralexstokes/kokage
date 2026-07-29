@@ -7,8 +7,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, ControlError, ExitStatusView, RestartConfig, RestartPolicy,
-    ScopeKind, ShutdownPolicy, Supervisor, SupervisorError, SupervisorStateView,
+    BackoffPolicy, ChildSpec, ControlError, RestartConfig, RestartPolicy, ScopeKind,
+    ShutdownPolicy, Supervisor, SupervisorError, SupervisorStateView,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -16,7 +16,7 @@ use tokio::{
 };
 
 mod common;
-use common::{ObservedEvent, ObservedPathSegment};
+use common::{ExitStatusView, ObservedEvent, ObservedPathSegment};
 
 #[tokio::test]
 async fn nested_supervisor_completes_as_a_clean_child_exit() {
@@ -37,21 +37,20 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         .wait_for(|snapshot| {
             snapshot
                 .descendant(["nested", "leaf"])
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         })
         .await
         .expect("nested completion snapshot should remain available")
         .clone();
     assert_eq!(completed.state, SupervisorStateView::Running);
-    assert!(matches!(
+    assert!(
         completed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
             .state
             .last_exit()
-            .map(|exit| &exit.status),
-        Some(ExitStatusView::Completed)
-    ));
+            .is_some_and(|exit| exit.is_completed())
+    );
 
     common::shutdown(&handle).await;
 }
@@ -96,18 +95,20 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         .wait_for(|snapshot| {
             snapshot
                 .descendant(["nested", "leaf"])
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         })
         .await
         .expect("nested failure snapshot should remain available")
         .clone();
-    assert!(matches!(
+    assert!(
         failed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .state.last_exit().map(|exit| &exit.status),
-        Some(ExitStatusView::Failed(message)) if message.contains("nested failure")
-    ));
+            .state
+            .last_exit()
+            .and_then(|exit| exit.failure_message())
+            .is_some_and(|message| message.contains("nested failure"))
+    );
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -827,7 +828,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
             && snapshot.lifecycle_seq > baseline_seq
             && snapshot
                 .child("worker")
-                .is_some_and(|worker| worker.state.started())
+                .is_some_and(|worker| worker.state.is_running())
     })
     .await;
     assert!(

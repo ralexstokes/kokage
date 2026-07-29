@@ -193,7 +193,7 @@ impl Console {
         let stats = handle.clone();
         Console::builder()
             .snapshots(handle.subscribe_snapshots())
-            .lifecycle(move || lifecycle.watch_lifecycle_recursive())
+            .lifecycle(move || lifecycle.watch_lifecycle())
             .actor_stats(move || stats.actor_stats())
     }
 

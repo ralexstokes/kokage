@@ -3,9 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{
-    BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEventKind, prelude::*,
-};
+use kokage_supervisor::{BackoffPolicy, LifecycleEventKind, prelude::*};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -58,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .child(metrics)
         .spawn()?;
     let running = running_owner.handle();
-    let mut events = running.watch_lifecycle_recursive();
+    let mut events = running.watch_lifecycle();
 
     loop {
         let event = timeout(Duration::from_secs(2), events.next())
@@ -67,24 +65,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("event: {event:?}");
 
         match event.kind {
-            LifecycleEventKind::Child(ChildLifecycleEvent {
+            LifecycleEventKind::ChildRestartScheduled {
                 child_id,
-                kind:
-                    ChildLifecycleEventKind::RestartScheduled {
-                        generation, delay, ..
-                    },
+                generation,
+                delay,
                 ..
-            }) if child_id == "warm-cache" => {
+            } if child_id == "warm-cache" => {
                 println!(
                     "warm-cache generation {} is allowed one delayed restart: {delay:?}",
                     generation
                 );
             }
-            LifecycleEventKind::Child(ChildLifecycleEvent {
+            LifecycleEventKind::ChildStarted {
                 child_id,
-                kind: ChildLifecycleEventKind::Started { generation: 1 },
+                generation: 1,
                 ..
-            }) if child_id == "warm-cache" => {
+            } if child_id == "warm-cache" => {
                 break;
             }
             LifecycleEventKind::RestartIntensityExceeded { .. } => {

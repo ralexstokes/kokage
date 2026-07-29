@@ -12,8 +12,8 @@ use crate::{
 };
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
-    CancellationToken, ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard,
-    CompletionOutcome, ControlError, DynamicSupervisorHandle, LifecycleWatch, RestartConfig,
+    CancellationToken, ChildSpec, CompletionError, CompletionGuard, CompletionOutcome,
+    ControlError, DynamicSupervisorHandle, LifecycleEvent, LifecycleWatch, RestartConfig,
     RestartPolicy, RunningSupervisor, ShutdownPolicy, SupervisorBuildError, SupervisorError,
     SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
 };
@@ -151,13 +151,13 @@ impl Drop for LifecycleWatchGuard {
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
-    mut lifecycle: ChildLifecycleWatch,
+    mut lifecycle: LifecycleWatch,
     target: ActorRef<M>,
     mut map: F,
 ) -> LifecycleWatchGuard
 where
     M: Send + 'static,
-    F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
+    F: FnMut(LifecycleEvent) -> M + Send + 'static,
 {
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
@@ -173,6 +173,14 @@ where
             }) else {
                 return;
             };
+            if !event.is_child_transition()
+                && !matches!(
+                    event.kind,
+                    kokage_supervisor::LifecycleEventKind::Lagged { .. }
+                )
+            {
+                continue;
+            }
 
             tokio::select! {
                 biased;
@@ -433,16 +441,24 @@ impl RuntimeHandle {
     /// Children are addressed by their supervisor child id. That id defaults
     /// to an actor's graph label, but derived and nested scopes use the local
     /// field or child name. Use a [`subtree`](Self::subtree) handle for nested
-    /// scopes. Awaiting an id that is never a child of this scope does not
-    /// complete. See
+    /// scopes. An unknown child returns [`CompletionError::UnknownChild`]. See
     /// [`CompletionOutcome`] for the distinction between completion and the
     /// supervisor stopping first.
-    pub async fn wait_completed<I, S>(&self, ids: I) -> CompletionOutcome
+    pub async fn wait_completed<I, S>(&self, ids: I) -> Result<CompletionOutcome, CompletionError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         self.supervisor.wait_completed(ids).await
+    }
+
+    /// Waits for named children to be added dynamically and then complete.
+    pub async fn wait_completed_dynamic<I, S>(&self, ids: I) -> CompletionOutcome
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.wait_completed_dynamic(ids).await
     }
 
     /// Shuts this runtime down once every named child has completed.
@@ -464,49 +480,20 @@ impl RuntimeHandle {
         self.supervisor.shutdown_on_completion(ids)
     }
 
-    /// Returns the ordered lifecycle stream for this runtime's direct
-    /// children, including restart scheduling.
+    /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
     /// Create the watch before reading [`snapshot`](Self::snapshot), then
-    /// discard child transitions whose `seq` is at most the snapshot's
+    /// discard child transitions whose `seq()` is at most the snapshot's
     /// `lifecycle_seq` to obtain a gap-free state-plus-stream view. Pre-spawn snapshots
     /// already project configured children, so reducers should apply their
-    /// later `Added` events as idempotent membership upserts. Use a
-    /// [`subtree`](Self::subtree) handle for nested scopes.
-    pub fn watch_lifecycle(&self) -> ChildLifecycleWatch {
+    /// later `ChildAdded` events as idempotent membership upserts. Call
+    /// [`LifecycleWatch::direct_children`] for only this scope.
+    pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()
     }
 
-    /// Arms a watch for the next restart of `child_id`.
-    ///
-    /// The lifecycle subscription and current generation are captured before
-    /// this method returns. The restart may therefore be triggered before the
-    /// returned future is first polled without losing its `Started` event.
-    /// A restart already reflected in the captured generation becomes the
-    /// baseline, even if its `Started` event is buffered, so only a later
-    /// generation can complete the future.
-    ///
-    /// Returns `None` if the child is not currently supervised, is removed
-    /// before restarting, the watch lags, or this runtime identity becomes
-    /// terminal before the restart is observed.
-    pub fn restart_of(
-        &self,
-        child_id: &str,
-    ) -> impl std::future::Future<Output = Option<u64>> + Send + 'static {
-        self.supervisor.restart_of(child_id)
-    }
-
-    /// Returns the ordered lifecycle stream for this runtime's entire
-    /// supervisor tree.
-    ///
-    /// Events from nested scopes carry a stable supervisor path relative to
-    /// this runtime. The stream also includes supervisor start/stop
-    /// transitions and scheduled-restart delays.
-    pub fn watch_lifecycle_recursive(&self) -> LifecycleWatch {
-        self.supervisor.watch_lifecycle_recursive()
-    }
-
-    /// Pumps lifecycle events into `target` using its ordinary mailbox policy.
+    /// Pumps this scope's direct-child lifecycle events into `target` using
+    /// its ordinary mailbox policy.
     ///
     /// The pump follows the target through ordinary actor restarts, but never
     /// replays an event to a fresh incarnation: lifecycle events are discrete
@@ -521,9 +508,13 @@ impl RuntimeHandle {
     pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> LifecycleWatchGuard
     where
         M: Send + 'static,
-        F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
+        F: FnMut(LifecycleEvent) -> M + Send + 'static,
     {
-        spawn_lifecycle_watch_to(self.watch_lifecycle(), target.clone(), map)
+        spawn_lifecycle_watch_to(
+            self.watch_lifecycle().direct_children(),
+            target.clone(),
+            map,
+        )
     }
 
     /// Returns a clone of the latest supervisor snapshot.

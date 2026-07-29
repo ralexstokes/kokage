@@ -1,13 +1,13 @@
 use std::time::Duration;
 
-/// Snapshot of how a child task exited.
+/// Internal classification of how a child task exited.
 ///
 /// This is a cloneable, displayable view of the exit status; the original error
 /// value (if any) is converted to its `Display` string.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub enum ExitStatusView {
+pub(crate) enum ExitKind {
     /// The child returned `Ok(())`.
     Completed,
     /// The child returned an `Err`. The string is the error's `Display` output.
@@ -37,7 +37,7 @@ pub(crate) enum RuntimeEvent {
     ChildExited {
         id: String,
         generation: u64,
-        status: ExitStatusView,
+        status: ExitKind,
     },
     ChildRestartScheduled {
         id: String,

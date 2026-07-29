@@ -12,11 +12,11 @@ use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, DrainPolicy, DynamicActorOptions, DynamicTree,
     GraphBuilder, MessageContext, OrderedTree, Reply, RuntimeHandle, SendError, StartContext,
     host::{ActorContext, BoxError, RawActor},
-    observe::{ChildLifecycleEventKind, ChildLifecycleWatch},
+    observe::{LifecycleEventKind, SupervisorSnapshotReceiver},
 };
 use kokage_supervisor::{
-    ChildSpec, CompletionOutcome, ControlError, ExitStatusView, RestartConfig, RestartPolicy,
-    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorStateView,
+    ChildSpec, CompletionOutcome, ControlError, RestartConfig, RestartPolicy, ShutdownPolicy,
+    Strategy, SupervisorBuildError, SupervisorError, SupervisorStateView,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -91,21 +91,24 @@ where
     (runtime, actor_ref)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
-    let lifecycle = handle.watch_lifecycle();
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+    let snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
         .child(id)
         .unwrap_or_else(|| panic!("{id} is a direct child"))
         .generation;
-    (lifecycle, baseline)
+    (snapshots, baseline)
 }
 
-async fn await_restart(mut lifecycle: ChildLifecycleWatch, id: &str, baseline: u64) -> u64 {
-    lifecycle
-        .started_after(id, baseline)
+async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, baseline: u64) -> u64 {
+    snapshots
+        .wait_for_child(id, |child| {
+            child.generation > baseline && child.state.is_running()
+        })
         .await
         .expect("runtime remains live")
+        .generation
 }
 
 #[tokio::test]
@@ -160,7 +163,7 @@ async fn runtime_handle_waits_for_actor_completion() {
         )
         .await
         .expect("completion observed within timeout"),
-        CompletionOutcome::Completed
+        Ok(CompletionOutcome::Completed)
     );
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -930,7 +933,7 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
         .wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         })
         .await
         .expect("completion snapshot remains available")
@@ -940,9 +943,8 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
             .child("worker")
             .expect("worker remains visible")
             .state
-            .last_exit()
-            .map(|exit| &exit.status),
-        Some(&ExitStatusView::Completed)
+            .last_exit(),
+        Some(exit) if exit.is_completed()
     ));
 
     let observed = timeout(Duration::from_secs(1), observed_rx.recv())
@@ -974,7 +976,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         })
         .await
         .expect("runtime reported running");
-    let _lifecycle = control.watch_lifecycle_recursive();
+    let _lifecycle = control.watch_lifecycle();
     assert_eq!(control.snapshot().children.len(), 1);
 
     worker_ref
@@ -987,7 +989,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         .wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         })
         .await
         .expect("completion snapshot remains available")
@@ -997,9 +999,8 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
             .child("worker")
             .expect("worker remains visible")
             .state
-            .last_exit()
-            .map(|exit| &exit.status),
-        Some(&ExitStatusView::Completed)
+            .last_exit(),
+        Some(exit) if exit.is_completed()
     ));
 
     let observed = timeout(Duration::from_secs(1), observed_rx.recv())
@@ -1141,7 +1142,7 @@ impl RawActor for FailOnMessage {
 }
 
 #[tokio::test]
-async fn runtime_handle_restart_of_arms_before_the_future_is_polled() {
+async fn snapshot_child_wait_arms_before_the_future_is_polled() {
     let mut builder = GraphBuilder::new();
     let (worker_ref_slot, worker_ref) = builder.slot("worker");
     builder.define(worker_ref_slot, || FailOnMessage);
@@ -1153,27 +1154,24 @@ async fn runtime_handle_restart_of_arms_before_the_future_is_polled() {
         .spawn()
         .expect("runtime builds");
 
-    let restarted = handle.handle().restart_of("worker");
     let mut snapshots = handle.handle().subscribe_snapshots();
+    let baseline = handle
+        .handle()
+        .snapshot()
+        .child("worker")
+        .unwrap()
+        .generation;
     worker_ref.send(()).await.expect("message sent");
 
     timeout(
         Duration::from_secs(1),
-        snapshots.wait_for(|snapshot| {
-            snapshot
-                .child("worker")
-                .is_some_and(|child| child.generation == 1 && child.state.started())
+        snapshots.wait_for_child("worker", |child| {
+            child.generation > baseline && child.state.is_running()
         }),
     )
     .await
     .expect("replacement starts before the helper future is polled")
     .expect("snapshot stream stays open");
-
-    let generation = timeout(Duration::from_secs(1), restarted)
-        .await
-        .expect("restart helper should observe restart")
-        .expect("runtime remains live");
-    assert_eq!(generation, 1);
 
     handle
         .shutdown_and_wait()
@@ -1403,7 +1401,7 @@ async fn child_grace_bounds_the_whole_actor_drain() {
         shutdown.await.expect("shutdown task joined"),
         Err(SupervisorError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
     ));
-    assert_eq!(
+    assert!(
         handle
             .handle()
             .snapshot()
@@ -1411,8 +1409,7 @@ async fn child_grace_bounds_the_whole_actor_drain() {
             .expect("static membership remains")
             .state
             .last_exit()
-            .map(|exit| &exit.status),
-        Some(&ExitStatusView::Aborted { after_grace: true })
+            .is_some_and(|exit| exit.timed_out())
     );
 }
 
@@ -1451,7 +1448,7 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
         handle.shutdown_and_wait().await,
         Err(SupervisorError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
     ));
-    assert_eq!(
+    assert!(
         handle
             .handle()
             .snapshot()
@@ -1459,12 +1456,11 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
             .expect("actor remains in static membership")
             .state
             .last_exit()
-            .map(|exit| &exit.status),
-        Some(&ExitStatusView::Aborted { after_grace: true })
+            .is_some_and(|exit| exit.timed_out())
     );
     while let Some(event) = lifecycle.next().await {
-        if let ChildLifecycleEventKind::Exited { reason, .. } = event.kind {
-            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
+        if let LifecycleEventKind::ChildExited { exit, .. } = event.kind {
+            assert!(exit.timed_out());
             return;
         }
     }
