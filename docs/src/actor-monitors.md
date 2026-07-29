@@ -102,14 +102,22 @@ also applies to repeated calls within one incarnation: every returned `Guard`
 aliases the same watch, the later mapping closures are unused, and dropping or
 cancelling any non-detached alias cancels the pair.
 
-A replacement observer does not receive a fresh snapshot when it re-registers.
-Events that a previous incarnation accepted and then lost in a crash are not
-replayed, so an observer that needs its last known target state after restart
-must persist that state durably. To trade staged transition history for a
-fresh snapshot, cancel the existing handle and call `watch` again. A running
-target then emits an immediate `Up`, a terminated target emits an immediate
-`Terminated`, and a target between incarnations remains silent until its next
-`Up`.
+That no-snapshot behavior depends on detaching the guard. If an actor retains
+the guard in incarnation state, a crash drops it and cancels the watch. The
+replacement actor therefore installs a fresh watch and receives an immediate
+`Up` when the target is running. Target transitions in the gap between the old
+guard's drop and the new registration are not staged. Choose detached
+membership ownership when the watch and its transition history must survive
+observer restarts; choose a retained guard when each incarnation should own a
+fresh registration and snapshot.
+
+Events that a detached watch delivered to a previous incarnation and then lost
+in a crash are not replayed, so an observer that needs its last known target
+state after restart must persist that state durably. To deliberately trade
+staged transition history for a fresh snapshot, cancel or drop the existing
+guard and call `watch` again. A running target then emits an immediate `Up`, a
+terminated target emits an immediate `Terminated`, and a target between
+incarnations remains silent until its next `Up`.
 
 Watch notifications use the observer's ordinary mailbox. FIFO mailboxes wait
 for capacity and preserve every accepted notification. A conflating mailbox

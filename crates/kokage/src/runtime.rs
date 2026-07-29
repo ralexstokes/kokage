@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use kokage_supervisor::{
-    __private::{self, AttachedChildIdentity},
+    __private::{self, AttachedChildIdentity, guard_from_probe},
     CancellationToken, ChildSpec, CompletionError, CompletionOutcome, ControlError,
     DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
     Shutdown, ShutdownMode, SupervisorBuildError, SupervisorError, SupervisorHandle,
@@ -164,7 +164,7 @@ where
     });
 
     let task = task.abort_handle();
-    Guard::from_probe(cancellation, move || task.is_finished())
+    guard_from_probe(cancellation, move || task.is_finished())
 }
 
 /// Owns a spawned actor runtime.

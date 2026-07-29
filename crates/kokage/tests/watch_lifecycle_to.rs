@@ -212,7 +212,7 @@ async fn assert_no_buffered_lifecycle(
 }
 
 #[tokio::test]
-async fn detached_lifecycle_pump_forwards_events_without_replay_after_target_restart() {
+async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_restart() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
 

@@ -50,12 +50,10 @@ pub struct Guard {
 }
 
 impl Guard {
-    /// Creates a guard around shared operation state.
-    ///
-    /// This constructor supports framework integrations. Most applications
-    /// receive guards from kokage operations rather than constructing them.
-    #[doc(hidden)]
-    pub fn from_tokens(cancellation: CancellationToken, finished: CancellationToken) -> Self {
+    pub(crate) fn from_tokens(
+        cancellation: CancellationToken,
+        finished: CancellationToken,
+    ) -> Self {
         Self {
             cancellation,
             is_finished: Arc::new(move || finished.is_cancelled()),
@@ -64,9 +62,7 @@ impl Guard {
         }
     }
 
-    /// Creates a guard whose completion is reported by an operation probe.
-    #[doc(hidden)]
-    pub fn from_probe(
+    pub(crate) fn from_probe(
         cancellation: CancellationToken,
         is_finished: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Self {
@@ -78,9 +74,7 @@ impl Guard {
         }
     }
 
-    /// Creates a probe-backed guard with an operation-specific cancel action.
-    #[doc(hidden)]
-    pub fn from_probe_with_cancel(
+    pub(crate) fn from_probe_with_cancel(
         cancellation: CancellationToken,
         is_finished: impl Fn() -> bool + Send + Sync + 'static,
         cancel_action: impl Fn() + Send + Sync + 'static,
