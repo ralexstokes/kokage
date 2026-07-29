@@ -979,7 +979,8 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
             #[doc = "Builds this derived supervision declaration with the supplied graph builder."]
             #[doc = ""]
-            #[doc = "The builder should have graph-wide settings configured but no actors registered; this constructor registers the actors declared by the derive."]
+            #[doc = "The builder may have graph-wide settings configured, but must not contain registered actors; this constructor registers the actors declared by the derive."]
+            #[doc = "Passing a builder with registered actors returns [`GraphBuildError::NonEmptyGraphBuilder`](::kokage::GraphBuildError::NonEmptyGraphBuilder)."]
             #[doc = ""]
             #[doc = "# Panics"]
             #[doc = ""]
@@ -994,6 +995,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             where
                 #(#factory_bounds,)*
             {
+                ::kokage::__private::validate_derived_builder(&builder)?;
                 let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
                 let tree = Self::__supervision_scope(&graph, &refs, scopes)
                     .expect("derived refs belong to the graph that opened them");

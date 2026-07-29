@@ -243,6 +243,10 @@ impl GraphBuilder {
         self
     }
 
+    pub(crate) fn has_registered_actors(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
     /// Registers an actor with default [`ActorOptions`] and returns its
     /// restart-stable ref.
     ///

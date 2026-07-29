@@ -311,7 +311,9 @@ pub mod observe {
 /// Implementation bridge used by `kokage` derive expansions.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::supervision_derive::{SupervisionFactories, qualified_label};
+    pub use crate::supervision_derive::{
+        SupervisionFactories, qualified_label, validate_derived_builder,
+    };
 }
 
 /// Common imports for `kokage` consumers.

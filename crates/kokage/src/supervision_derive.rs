@@ -6,7 +6,18 @@
 //! Its members and the factories contract are implementation plumbing;
 //! application code uses the generated `tree` and `tree_with` constructors.
 
-use crate::{Graph, GraphBuilder, GraphLookupError, OrderedTree};
+use crate::{Graph, GraphBuildError, GraphBuilder, GraphLookupError, OrderedTree};
+
+/// Rejects actor registration state that generated supervision constructors
+/// cannot include in their derived tree.
+#[doc(hidden)]
+pub fn validate_derived_builder(builder: &GraphBuilder) -> Result<(), GraphBuildError> {
+    if builder.has_registered_actors() {
+        Err(GraphBuildError::NonEmptyGraphBuilder)
+    } else {
+        Ok(())
+    }
+}
 
 /// Derive support for a group of actors and its supervision scope.
 ///
