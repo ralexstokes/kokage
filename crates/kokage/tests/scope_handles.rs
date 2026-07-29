@@ -8,8 +8,8 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSpec, ControlError, DynamicRuntimeHandle, DynamicTree, GraphBuilder,
-    MessageContext, OrderedTree, RestartConfig, RestartPolicy, RestrictedScope, RuntimeHandle,
-    ScopeKind, StartContext, StopContext, Strategy, SupervisorBuildError,
+    MessageContext, OrderedTree, RestartConfig, RestrictedScope, RuntimeHandle, ScopeKind,
+    StartContext, StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, SupervisorSnapshotReceiver},
 };
@@ -86,7 +86,7 @@ impl Actor for ScopeProbe {
                 children
                     .dynamic()
                     .expect("dynamic scope")
-                    .add_actor("from-on-start", || Idle)
+                    .add_actor(ActorSpec::new("from-on-start", || Idle))
                     .await
                     .map_err(|_| ())?;
                 Ok::<_, ()>(())
@@ -107,7 +107,7 @@ impl Actor for ScopeProbe {
                 children
                     .dynamic()
                     .expect("dynamic scope")
-                    .add_actor("from-handler", || Idle)
+                    .add_actor(ActorSpec::new("from-handler", || Idle))
                     .await?;
                 self.reports
                     .send("handler-added")
@@ -159,7 +159,9 @@ impl Actor for BuilderHandleOwner {
     type Msg = ();
 
     async fn on_start(&mut self, _ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        self.mount.add_actor("owned", || Idle).await?;
+        self.mount
+            .add_actor(ActorSpec::new("owned", || Idle))
+            .await?;
         self.report.send("mounted").expect("test receiver open");
         Ok(())
     }
@@ -198,16 +200,12 @@ impl Actor for RestrictedTaskAdder {
 fn single_use_mount(report: mpsc::UnboundedSender<&'static str>) -> OrderedTree {
     let mount_builder = DynamicTree::new();
     let mount = mount_builder.handle();
-    let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("owner");
-    graph.define(actor_slot, move || BuilderHandleOwner {
-        mount: mount.clone(),
-        report: report.clone(),
-    });
-    let graph = graph.build().expect("owner graph builds");
     OrderedTree::new()
         .subtree("mount", mount_builder)
-        .actor(graph.actors()[0].clone())
+        .actor(ActorSpec::new("owner", move || BuilderHandleOwner {
+            mount: mount.clone(),
+            report: report.clone(),
+        }))
 }
 
 async fn next_report(reports: &mut mpsc::UnboundedReceiver<&'static str>) -> &'static str {
@@ -241,7 +239,7 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
         .await
         .expect("pre-spawn scope starts");
     pre_spawn
-        .add_actor("worker", || Idle)
+        .add_actor(ActorSpec::new("worker", || Idle))
         .await
         .expect("pre-spawn handle controls the spawned scope");
     assert!(spawned.handle().snapshot().child("worker").is_some());
@@ -418,13 +416,9 @@ async fn trees_terminalize_handles_when_dropped() {
 
 #[test]
 fn tree_strategy_preserves_declared_pre_spawn_snapshot() {
-    let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("actor");
-    graph.define(actor_slot, || Idle);
-    let graph = graph.build().expect("graph builds");
     let tree = OrderedTree::new()
         .task(ChildSpec::task("task", |_| async { Ok(()) }))
-        .actor(graph.actors()[0].clone());
+        .actor(ActorSpec::new("actor", || Idle));
     let handle = tree.handle();
     let declared_before = handle
         .snapshot()
@@ -479,18 +473,15 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
         .await
         .expect("dynamic parent starts");
 
-    let mut graph = GraphBuilder::new();
-    let (slot, _) = graph.slot("duplicate-binding");
-    graph.define(slot, || Idle);
-    let graph = graph.build().expect("graph builds");
-    let actor = graph.actors()[0].clone();
-    let invalid = OrderedTree::new().actor(actor.clone()).actor(actor);
+    let invalid = OrderedTree::new()
+        .actor(ActorSpec::new("duplicate-binding", || Idle))
+        .actor(ActorSpec::new("duplicate-binding", || Idle));
     let rejected = invalid.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
         parent.add_subtree("invalid", invalid).await,
         Err(ControlError::Rejected(
-            SupervisorBuildError::DuplicateActorBinding(label)
+            SupervisorBuildError::DuplicateChildId(label)
         )) if label == "duplicate-binding"
     ));
     assert_snapshot_receiver_closes(rejected_snapshots).await;
@@ -553,15 +544,13 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
 #[tokio::test]
 async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("ordinary");
-    graph.define(actor_slot, move || ScopeProbe {
-        reports: reports_tx.clone(),
-        starts: Arc::new(AtomicUsize::new(0)),
-        child_stopped: None,
-        mutate_children_on_start: false,
-    });
-    let handle = OrderedTree::graph(graph.build().expect("graph builds"))
+    let handle = OrderedTree::new()
+        .actor(ActorSpec::new("ordinary", move || ScopeProbe {
+            reports: reports_tx.clone(),
+            starts: Arc::new(AtomicUsize::new(0)),
+            child_stopped: None,
+            mutate_children_on_start: false,
+        }))
         .spawn()
         .expect("runtime builds");
     handle.handle().wait_started().await.expect("actor starts");
@@ -574,9 +563,7 @@ async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
 async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_mutation() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let starts = Arc::new(AtomicUsize::new(0));
-    let mut graph = GraphBuilder::new();
-    let (leader_slot, leader) = graph.slot("leader");
-    graph.define(leader_slot, {
+    let leader_spec = ActorSpec::new("leader", {
         let starts = Arc::clone(&starts);
         move || ScopeProbe {
             reports: reports_tx.clone(),
@@ -585,11 +572,11 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
             mutate_children_on_start: true,
         }
     });
-    let graph = graph.build().expect("leader graph builds");
+    let leader = leader_spec.actor_ref();
     let handle = OrderedTree::new()
         .actor_with_scope(
             "owned",
-            graph.actors()[0].clone(),
+            leader_spec,
             DynamicTree::new(),
             Strategy::RestForOne,
         )
@@ -641,20 +628,13 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
 async fn restricted_scope_add_child_returns_the_inserted_lineage() {
     let (lineage_tx, mut lineage_rx) = mpsc::unbounded_channel();
     let (subtree_tx, mut subtree_rx) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
-    let (adder_slot, adder) = graph.slot("adder");
-    graph.define(adder_slot, move || RestrictedTaskAdder {
+    let adder_spec = ActorSpec::new("adder", move || RestrictedTaskAdder {
         lineage: lineage_tx.clone(),
         subtree: subtree_tx.clone(),
     });
-    let graph = graph.build().expect("adder graph builds");
+    let adder = adder_spec.actor_ref();
     let handle = OrderedTree::new()
-        .actor_with_scope(
-            "owned",
-            graph.actors()[0].clone(),
-            DynamicTree::new(),
-            Strategy::OneForOne,
-        )
+        .actor_with_scope("owned", adder_spec, DynamicTree::new(), Strategy::OneForOne)
         .spawn()
         .expect("tree builds");
     handle.handle().wait_started().await.expect("tree starts");
@@ -691,9 +671,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let starts = Arc::new(AtomicUsize::new(0));
     let child_stopped = Arc::new(AtomicBool::new(false));
-    let mut leaders = GraphBuilder::new();
-    let (actor_slot, _) = leaders.slot("leader");
-    leaders.define(actor_slot, {
+    let leader = ActorSpec::new("leader", {
         let starts = Arc::clone(&starts);
         let child_stopped = Arc::clone(&child_stopped);
         move || ScopeProbe {
@@ -703,18 +681,14 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
             mutate_children_on_start: false,
         }
     });
-    let leaders = leaders.build().expect("leader graph builds");
-    let mut workers = GraphBuilder::new();
-    let (actor_slot, _) = workers.slot("worker");
-    workers.define(actor_slot, {
+    let worker = ActorSpec::new("worker", {
         let child_stopped = Arc::clone(&child_stopped);
         move || StopProbe(Arc::clone(&child_stopped))
     });
-    let workers = workers.build().expect("worker graph builds");
     let runtime = OrderedTree::new().actor_with_scope(
         "owned",
-        leaders.actors()[0].clone(),
-        OrderedTree::graph(workers),
+        leader,
+        OrderedTree::new().actor(worker),
         Strategy::RestForOne,
     );
     assert_eq!(runtime.handle().snapshot().strategy, Strategy::OneForOne);
@@ -781,28 +755,24 @@ async fn wait_count(counter: &AtomicUsize, expected: usize) {
 async fn actor_with_scope_uses_explicit_rest_for_one() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
-    let mut leaders = GraphBuilder::new();
-    let (leader_slot, leader) = leaders.slot("leader");
-    leaders.define(leader_slot, {
+    let leader_spec = ActorSpec::new("leader", {
         let starts = Arc::clone(&leader_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
         }
     });
-    let leaders = leaders.build().expect("leaders build");
-    let mut workers = GraphBuilder::new();
-    let (worker_slot, worker) = workers.slot("worker");
-    workers.define(worker_slot, {
+    let leader = leader_spec.actor_ref();
+    let worker_spec = ActorSpec::new("worker", {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
         }
     });
-    let workers = workers.build().expect("workers build");
+    let worker = worker_spec.actor_ref();
     let tree = OrderedTree::new().actor_with_scope(
         "owned",
-        leaders.actors()[0].clone(),
-        OrderedTree::graph(workers),
+        leader_spec,
+        OrderedTree::new().actor(worker_spec),
         Strategy::RestForOne,
     );
     let outline = tree.outline();
@@ -830,33 +800,24 @@ async fn actor_with_scope_uses_explicit_rest_for_one() {
 async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
-    let mut leaders = GraphBuilder::new();
-    let (actor_slot, _) = leaders.slot("leader");
-    leaders.define(actor_slot, {
+    let leader = ActorSpec::new("leader", {
         let starts = Arc::clone(&leader_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
         }
     });
-    let leaders = leaders.build().expect("leaders build");
-    let mut workers = GraphBuilder::new();
-    let (worker_slot, worker) = workers.slot("worker");
-    workers.define(worker_slot, {
+    let worker_spec = ActorSpec::new("worker", {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
         }
     });
-    let workers = workers.build().expect("workers build");
-    let inner =
-        OrderedTree::graph(workers).restart_config(RestartConfig::new(1, Duration::from_secs(30)));
+    let worker = worker_spec.actor_ref();
+    let inner = OrderedTree::new()
+        .actor(worker_spec)
+        .restart_config(RestartConfig::new(1, Duration::from_secs(30)));
     let handle = OrderedTree::new()
-        .actor_with_scope(
-            "owned",
-            leaders.actors()[0].clone(),
-            inner,
-            Strategy::OneForAll,
-        )
+        .actor_with_scope("owned", leader, inner, Strategy::OneForAll)
         .spawn()
         .expect("tree builds");
     handle.handle().wait_started().await.expect("tree starts");
@@ -872,8 +833,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 #[tokio::test]
 async fn consuming_a_graph_into_a_tree_preserves_issued_actor_refs() {
     let mut graph = GraphBuilder::new();
-    let (slot, actor_ref) = graph.slot("actor");
-    graph.define(slot, || Idle);
+    let actor_ref = graph.actor(ActorSpec::new("actor", || Idle));
     let graph = graph.build().expect("graph builds");
 
     let tree = OrderedTree::graph(graph);
@@ -889,68 +849,14 @@ async fn consuming_a_graph_into_a_tree_preserves_issued_actor_refs() {
 
 #[tokio::test]
 async fn duplicate_actor_bindings_are_rejected_during_tree_lowering() {
-    let mut graph = GraphBuilder::new();
-    let (slot, _) = graph.slot("actor");
-    graph.define(slot, || Idle);
-    let graph = graph.build().expect("graph builds");
-    let actor = graph.actors()[0].clone();
-    let tree = OrderedTree::new().actor(actor.clone()).actor(actor);
+    let tree = OrderedTree::new()
+        .actor(ActorSpec::new("actor", || Idle))
+        .actor(ActorSpec::new("actor", || Idle));
     let handle = tree.handle();
 
     assert!(matches!(
         tree.spawn(),
-        Err(SupervisorBuildError::DuplicateActorBinding(label)) if label == "actor"
+        Err(SupervisorBuildError::DuplicateChildId(label)) if label == "actor"
     ));
     assert_snapshot_stream_closes(&handle).await;
-}
-
-#[tokio::test]
-async fn actor_binding_cloned_across_trees_fails_on_the_second_concurrent_run() {
-    let mut graph = GraphBuilder::new();
-    let (slot, _) = graph.slot("actor");
-    graph.define(slot, || Idle);
-    let graph = graph.build().expect("graph builds");
-    let actor = graph.actors()[0].clone();
-
-    let first = OrderedTree::new()
-        .actor(actor.clone())
-        .spawn()
-        .expect("first tree lowers");
-    first
-        .handle()
-        .wait_started()
-        .await
-        .expect("first actor starts");
-
-    let second = OrderedTree::new()
-        .actor(ActorSpec::new(actor).restart(RestartPolicy::Never))
-        .spawn()
-        .expect("a separate tree lowers before the runtime conflict");
-    let mut snapshots = second.handle().subscribe_snapshots();
-    let stopped = timeout(
-        WAIT,
-        snapshots.wait_for(|snapshot| {
-            snapshot.child("actor").is_some_and(|actor| {
-                actor.state.is_terminal()
-                    && actor.state.last_exit().is_some_and(|exit| {
-                        exit.failure_message() == Some("actor `actor` is already running")
-                    })
-            })
-        }),
-    )
-    .await
-    .expect("second tree reports the late runtime conflict")
-    .expect("second tree snapshot stream remains available");
-    assert!(
-        stopped
-            .child("actor")
-            .expect("actor remains declared")
-            .state
-            .last_exit()
-            .is_some_and(|exit| {
-                exit.failure_message() == Some("actor `actor` is already running")
-            })
-    );
-
-    first.shutdown_and_wait().await.expect("first tree stops");
 }
