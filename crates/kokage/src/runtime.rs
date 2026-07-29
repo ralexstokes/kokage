@@ -350,6 +350,9 @@ impl RuntimeHandle {
     /// unknown child returns [`CompletionError::UnknownChild`]. See
     /// [`CompletionOutcome`] for the distinction between completion and the
     /// supervisor stopping first.
+    ///
+    /// On a dynamic scope, use [`DynamicRuntimeHandle::wait_completed`] when
+    /// ids may be added later instead of validating them immediately.
     pub async fn wait_completed<I, S>(&self, ids: I) -> Result<CompletionOutcome, CompletionError>
     where
         I: IntoIterator<Item = S>,
@@ -361,6 +364,9 @@ impl RuntimeHandle {
     /// Shuts this runtime down once every named child has completed.
     ///
     /// Child ids follow the same rules as [`wait_completed`](Self::wait_completed).
+    /// On a dynamic scope, use
+    /// [`DynamicRuntimeHandle::shutdown_on_completion`] when ids may be added
+    /// later.
     ///
     /// Arm this from a pre-spawn handle when fast children could complete
     /// immediately. The returned guard must be retained; dropping it cancels
@@ -522,6 +528,13 @@ impl DynamicRuntimeHandle {
     /// therefore remain pending indefinitely while this runtime is still
     /// running. Once present, a child follows the same completion rules as
     /// [`RuntimeHandle::wait_completed`].
+    ///
+    /// This inherent method intentionally shadows the same-named
+    /// [`RuntimeHandle`] method reached through [`Deref`](std::ops::Deref).
+    /// Call `RuntimeHandle::wait_completed(&handle, ids)` or first use
+    /// [`into_runtime_handle`](Self::into_runtime_handle) to validate ids
+    /// immediately and receive [`CompletionError::UnknownChild`] for an absent
+    /// membership.
     pub async fn wait_completed<I, S>(&self, ids: I) -> CompletionOutcome
     where
         I: IntoIterator<Item = S>,
@@ -536,6 +549,12 @@ impl DynamicRuntimeHandle {
     /// [`wait_completed`](Self::wait_completed). The returned guard must be
     /// retained; dropping it cancels the completion watch and leaves the
     /// runtime running.
+    ///
+    /// This inherent method intentionally shadows the same-named
+    /// [`RuntimeHandle`] method reached through [`Deref`](std::ops::Deref).
+    /// Call `RuntimeHandle::shutdown_on_completion(&handle, ids)` or first use
+    /// [`into_runtime_handle`](Self::into_runtime_handle) to validate ids
+    /// immediately instead of waiting for future membership.
     ///
     /// # Panics
     ///

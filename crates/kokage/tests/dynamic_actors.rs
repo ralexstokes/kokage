@@ -311,10 +311,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .spawn()
         .expect("graphless runtime builds");
     assert!(runtime.handle().snapshot().children.is_empty());
-    let sink = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let sink = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("sink", {
             let observed_tx = observed_tx.clone();
             move || Observe {
@@ -350,10 +347,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         "standalone ref stats have no supervisor context"
     );
 
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .remove_child("sink")
         .await
         .expect("sink removed");
@@ -362,10 +356,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         Err(SendError { actor_id , .. }) if actor_id == "sink"
     ));
 
-    let replacement = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let replacement = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("sink", move || Observe {
             observed: observed_tx.clone(),
         }))
@@ -412,10 +403,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let actor = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let actor = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("ordered", move || ObserveOrder {
             observed: observed_tx.clone(),
         }))
@@ -513,10 +501,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let actor = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let actor = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("removable", {
                 let release_handler = release_handler.clone();
@@ -539,10 +524,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     );
 
     let mut snapshots = runtime.handle().subscribe_snapshots();
-    let remover = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability");
+    let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("removable").await });
     timeout(Duration::from_secs(1), async {
         loop {
@@ -608,10 +590,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect("removal completed");
     assert!(runtime.handle().snapshot().child("removable").is_none());
 
-    let replacement = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let replacement = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("removable", Drain::<RemovalMsg>::new))
         .await
         .expect("id reused with a fresh membership");
@@ -635,10 +614,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let actor = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let actor = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("discarding", {
                 let release_handler = release_handler.clone();
@@ -661,10 +637,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
     );
 
     let mut snapshots = runtime.handle().subscribe_snapshots();
-    let remover = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability");
+    let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("discarding").await });
     timeout(Duration::from_secs(1), async {
         loop {
@@ -793,10 +766,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
         .spawn()
         .expect("graphless runtime builds");
     let transient_starts = Arc::new(AtomicUsize::new(0));
-    let transient = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let transient = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("transient", {
                 let starts = transient_starts.clone();
@@ -817,10 +787,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
     ));
 
     let permanent_starts = Arc::new(AtomicUsize::new(0));
-    let permanent = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let permanent = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("permanent", {
                 let starts = permanent_starts.clone();
@@ -859,10 +826,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
         .spawn()
         .expect("dynamic runtime builds");
     let inherited_starts = Arc::new(AtomicUsize::new(0));
-    let inherited = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let inherited = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("inherited", {
             let starts = Arc::clone(&inherited_starts);
             move || CleanStop {
@@ -872,10 +836,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
         .await
         .expect("inherited actor added");
     let explicit_starts = Arc::new(AtomicUsize::new(0));
-    let explicit = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let explicit = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("explicit", {
                 let starts = Arc::clone(&explicit_starts);
@@ -911,10 +872,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
         .spawn()
         .expect("dynamic tree builds");
     let starts = Arc::new(AtomicUsize::new(0));
-    let actor = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let actor = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("inherited-restart", {
             let starts = Arc::clone(&starts);
             move || CleanStop {
@@ -932,20 +890,13 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     .await
     .expect("supplied supervisor restart default is inherited");
 
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("inherited-shutdown", || PendingActor))
         .await
         .expect("pending actor added");
     timeout(
         Duration::from_millis(100),
-        runtime
-            .handle()
-            .dynamic()
-            .expect("dynamic root exposes membership capability")
-            .remove_child("inherited-shutdown"),
+        support::dynamic_root(&runtime).remove_child("inherited-shutdown"),
     )
     .await
     .expect("supplied abort default makes removal immediate")
@@ -960,10 +911,7 @@ async fn never_actor_auto_removes_after_failure() {
         .spawn()
         .expect("graphless runtime builds");
     let release = Arc::new(Notify::new());
-    let target = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let target = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("temporary", {
                 let release = release.clone();
@@ -992,10 +940,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
         .spawn()
         .expect("graphless runtime builds");
     let default_release = Arc::new(Notify::new());
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("transient-removed", {
                 let release = default_release.clone();
@@ -1012,10 +957,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
     wait_for_child(&runtime.handle(), "transient-removed", false).await;
 
     let transient_release = Arc::new(Notify::new());
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("transient-retained", {
                 let release = transient_release.clone();
@@ -1032,10 +974,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
     wait_for_retained_terminal_child(&runtime.handle(), "transient-retained").await;
 
     let reversed_release = Arc::new(Notify::new());
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("transient-retained-reversed", {
                 let release = reversed_release.clone();
@@ -1052,10 +991,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
     wait_for_retained_terminal_child(&runtime.handle(), "transient-retained-reversed").await;
 
     let never_release = Arc::new(Notify::new());
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("never-retained", {
                 let release = never_release.clone();
@@ -1080,10 +1016,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
         .spawn()
         .expect("graphless runtime builds");
     let starts = Arc::new(AtomicUsize::new(0));
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("restart-once", {
                 let starts = starts.clone();
@@ -1124,10 +1057,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let sink = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let sink = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("sink", Drain::<SizedMessage>::new)
                 .mailbox(MailboxMode::conflate())
@@ -1172,10 +1102,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
         .spawn()
         .expect("graphless runtime builds");
     let release = Arc::new(Notify::new());
-    let sink = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let sink = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("sink", {
                 let release = release.clone();
@@ -1205,10 +1132,7 @@ async fn runtime_added_actor_can_override_mailbox_capacity() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let sink = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let sink = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(9))
         .await
         .expect("actor with a capacity override is added");
@@ -1224,10 +1148,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let result = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let result = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(0))
         .await;
 
@@ -1246,10 +1167,7 @@ async fn runtime_added_actor_uses_its_actor_id_as_the_child_id() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let actor = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let actor = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("local-actor", Drain::<u64>::new))
         .await
         .expect("actor is added");
@@ -1383,10 +1301,7 @@ impl RawActor for PendingActor {
 #[tokio::test]
 async fn timed_out_removal_terminates_the_typed_ref() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
-    let actor_ref = runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    let actor_ref = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("dynamic", || PendingActor)
                 .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
@@ -1395,7 +1310,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         .expect("actor added");
 
     assert!(matches!(
-        runtime.handle().dynamic().expect("dynamic root exposes membership capability").remove_child("dynamic").await,
+        support::dynamic_root(&runtime).remove_child("dynamic").await,
         Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
             if actor_id == "dynamic"
     ));
@@ -1412,10 +1327,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         Err(SendError { actor_id , .. }) if actor_id == "dynamic"
     ));
 
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+    support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("dynamic", Drain::<()>::new))
         .await
         .expect("label reusable after timed-out removal");

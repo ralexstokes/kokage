@@ -1,7 +1,6 @@
 mod support;
 
 use support::{RunnableActors as RunnableSet, RunnableBuilder as RunnableSetBuilder};
-
 use std::{
     future::{Future, pending, poll_fn},
     io,
@@ -1582,10 +1581,7 @@ mod runnable_actor {
     #[tokio::test(start_paused = true)]
     async fn dynamic_actor_uses_its_supervisor_child_shutdown_grace() {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        runtime
-            .handle()
-            .dynamic()
-            .expect("dynamic root exposes membership capability")
+        crate::support::dynamic_root(&runtime)
             .add_actor(
                 ActorSpec::new("worker", || NeverStops)
                     .shutdown(Shutdown::drain_for(Duration::from_millis(100))),
@@ -1598,10 +1594,7 @@ mod runnable_actor {
             .await
             .expect("dynamic actor started");
         assert!(matches!(
-            runtime
-                .handle()
-                .dynamic()
-                .expect("dynamic root exposes membership capability")
+            crate::support::dynamic_root(&runtime)
                 .remove_child("worker")
                 .await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
