@@ -134,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 For lower-level hosting, construct a `GraphBuilder` manually, iterate
-`graph.actors()`, and drive each `RunnableActor::run_until` independently.
+`graph.actors()`, and drive each `host::RunnableActor::run_until` independently.
 `tokio-otp` performs that adaptation for the common supervised runtime.
 
 ## Incarnation-local state
@@ -183,7 +183,7 @@ builder.define(actor_slot, GatewayFactory { ledger, exchange });
 ```
 
 Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
-beginning of `RawActor::run`, where failure already participates in supervision
+beginning of `host::RawActor::run`, where failure already participates in supervision
 and readiness. Durable state that should survive restarts belongs in an
 unmarked factory field (usually behind a shared handle), in a database, or in
 another actor. This is the same lifetime rule as closure factories: the
@@ -194,7 +194,7 @@ custom synchronous construction rather than `Default`.
 ## Struct Declarations
 
 `#[derive(Supervision)]` supports named-field structs whose fields implement
-`RawActor`. Field names become actor labels, qualified by the path of any
+`host::RawActor`. Field names become actor labels, qualified by the path of any
 enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
 Rename a node with `#[supervision(label = "...")]`. The generated `tree`
@@ -292,7 +292,7 @@ builder.define(per_symbol_slot, KeyedMarketActor::new);
 key, preserving the first-arrival order of keys;
 its number of keys is bounded by `mailbox_capacity`, and a new key evicts the
 oldest unread key when full. Both `send` and `try_send` replace stale state
-without waiting for capacity. `ActorStats::messages_conflated` counts replaced
+without waiting for capacity. `observe::ActorStats::messages_conflated` counts replaced
 or evicted unread messages.
 
 Because a conflating `send` never waits for capacity, it consumes Tokio's
@@ -354,13 +354,13 @@ a follow-up offload. It is not `ctx.is_shutting_down()`: a drain also follows
 the actor's own `ctx.stop()` request, where the graph is not shutting down and
 `is_shutting_down()` stays `false` the whole time.
 
-Hand-written `RawActor::run` loops are
+Hand-written `host::RawActor::run` loops are
 still available as the escape hatch for custom loop control; after
 `ctx.recv().await` returns `None` because shutdown was requested, such actors
 can use `ctx.try_recv()` to drain immediately queued messages.
 
 The two actor styles intentionally receive non-nested capability sets.
-`RawActor` owns `ActorContext`, so it can call `recv`, `try_recv`, and
+`host::RawActor` owns `ActorContext`, so it can call `recv`, `try_recv`, and
 `mark_ready`, but it must express timers and other loop branches directly.
 The framework owns those operations for `Actor`; its stage contexts therefore
 withhold direct mailbox reads and readiness, while the live stages implement

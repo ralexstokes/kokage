@@ -1937,7 +1937,7 @@ impl SupervisorRuntime {
             .iter()
             .filter_map(|&key| self.children.get(key))
             .map(|entry| AttachedChildState {
-                identity: crate::AttachedChildIdentity {
+                identity: crate::attachment::AttachedChildIdentity {
                     id: entry.id.clone(),
                     lineage: entry.lineage,
                     generation: entry.runtime.generation,

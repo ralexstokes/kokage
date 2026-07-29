@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
-    GraphConfig, MailboxMode, MessageContext, RawActor, Supervision, TrySendError,
+    GraphConfig, MailboxMode, MessageContext, Supervision, TrySendError, host::RawActor,
 };
 
 enum FrontendMsg {

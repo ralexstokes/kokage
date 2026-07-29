@@ -225,11 +225,12 @@ scopes start every clock together and stop children concurrently, but each
 child escalates when its own grace expires; a short-grace child cannot borrow a
 longer-grace sibling's budget.
 
-Standalone hosts pass an explicit shutdown bound to `RunnableActor::run_until`
-(`DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
+Standalone hosts pass an explicit shutdown bound to
+`tokio_otp::host::RunnableActor::run_until`
+(`tokio_otp::host::DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
 provides the same inner-task backstop without storing execution policy on the
 graph, and an actor that overruns it resolves the run to
-`ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
+`tokio_otp::host::ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
 abort, code that never reaches a poll boundary, and blocking work already
 running on the blocking pool, can continue outside the actor task.
 
@@ -323,7 +324,7 @@ or an explicit shutdown.
 We will use a higher-level version of this API in the [Dynamic
 actors](dynamic-actors.md) chapter.
 
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
+[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
 [`RestartPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.RestartPolicy.html
 [`RestartConfig`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.RestartConfig.html
 [`BackoffPolicy`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.BackoffPolicy.html

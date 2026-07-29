@@ -1,7 +1,7 @@
 //! The supervisor waits for `on_stop` before detaching the child, so awaiting
 //! the scope's own completion from this hook waits on a detach that is waiting
 //! on this hook.
-use tokio_otp::{Actor, ActorResult, BoxError, MessageContext, StopContext};
+use tokio_otp::{Actor, ActorResult, MessageContext, StopContext, host::BoxError};
 
 struct Worker;
 

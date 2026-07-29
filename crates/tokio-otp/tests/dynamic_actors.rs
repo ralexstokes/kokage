@@ -15,11 +15,13 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, BoxError, CancellationHandle,
-    ChildMembershipView, ChildSpec, ControlError, DownReason, DrainPolicy, DynamicActorOptions,
-    DynamicTree, GraphBuilder, LiveContext, MailboxMode, MessageContext, MonitorEvent, OrderedTree,
-    RawActor, RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy, StartContext,
-    StopContext, SupervisorBuildError, SupervisorError, TrySendError,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, CancellationHandle, ControlError,
+    DownReason, DrainPolicy, DynamicActorOptions, DynamicTree, GraphBuilder, LiveContext,
+    MailboxMode, MessageContext, MonitorEvent, OrderedTree, RestartPolicy, RuntimeHandle,
+    ScopeKind, SendError, ShutdownPolicy, StartContext, StopContext, SupervisorBuildError,
+    SupervisorError, TrySendError,
+    host::{BoxError, ChildSpec, RawActor},
+    observe::ChildMembershipView,
 };
 
 struct Drain<M>(PhantomData<fn(M)>);

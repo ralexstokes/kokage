@@ -91,6 +91,6 @@ supervisor stopped
 So far the child never fails, so the supervisor has nothing interesting to do.
 Let's fix that.
 
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
+[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
 [`ChildContext`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildContext.html
 [`SupervisorHandle`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html

@@ -9,8 +9,10 @@ organize your program into small, isolated tasks and let a *supervisor*
 restart the ones that fail.
 
 The actor product needs one dependency. Its prelude covers the day-one actor
-surface; advanced APIs are available from the crate root. Applications using
-raw task supervision directly should also depend on `tokio-supervisor`:
+surface; hosting and observation APIs are grouped under `tokio_otp::host` and
+`tokio_otp::observe`, while advanced actor APIs remain at the crate root.
+Applications using raw task supervision directly should also depend on
+`tokio-supervisor`:
 
 ```toml
 [dependencies]

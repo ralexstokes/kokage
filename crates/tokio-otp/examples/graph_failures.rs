@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio::time::{sleep, timeout};
-use tokio_otp::prelude::*;
+use tokio_otp::{host::RawActor, prelude::*};
 
 #[derive(Clone)]
 struct FailsOnce {

@@ -11,12 +11,12 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorResult, ActorSpec, BoxError, ChildStateView, ControlError, DynamicTree,
-    ExitStatusView, GraphBuilder, LiveContext, MessageContext, OrderedTree, RestartConfig,
-    RestartPolicy, RuntimeHandle, ScopeKind, ShutdownPolicy, StartContext, StopContext, Strategy,
-    SupervisorBuildError, SupervisorSnapshot,
+    Actor, ActorResult, ActorSpec, ControlError, DynamicTree, GraphBuilder, LiveContext,
+    MessageContext, OrderedTree, RestartConfig, RestartPolicy, RuntimeHandle, ScopeKind,
+    ShutdownPolicy, StartContext, StopContext, Strategy, SupervisorBuildError,
+    host::{BoxError, ChildSpec},
+    observe::{ChildStateView, ExitStatusView, SupervisorSnapshot},
 };
-use tokio_supervisor::ChildSpec;
 
 const WAIT: Duration = Duration::from_secs(3);
 
@@ -705,7 +705,7 @@ async fn actor_with_scope_uses_explicit_rest_for_one() {
     let outline = tree.outline();
     assert!(matches!(
         outline.child("owned"),
-        Some(tokio_otp::ChildOutline::ActorWithScope {
+        Some(tokio_otp::observe::ChildOutline::ActorWithScope {
             strategy: Strategy::RestForOne,
             ..
         })

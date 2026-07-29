@@ -12,8 +12,8 @@ use tokio::{
     time::{advance, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, OrderedTree, RawActor,
-    Reply, SendError,
+    ActorContext, ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
+    host::{BoxError, RawActor},
 };
 use tokio_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
 

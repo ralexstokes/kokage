@@ -1,4 +1,4 @@
-use tokio_otp::{ActorSpec, ChildSpec, DynamicTree, OrderedTree, Strategy};
+use tokio_otp::{ActorSpec, DynamicTree, OrderedTree, Strategy, host::ChildSpec};
 
 fn actor() -> ActorSpec {
     loop {}

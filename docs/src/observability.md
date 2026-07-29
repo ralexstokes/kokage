@@ -1,5 +1,8 @@
 # Observability
 
+The actor product collects its public snapshot, lifecycle, outline, completion,
+and actor-stat types under `tokio_otp::observe`.
+
 The supervisor layer has two observation primitives:
 
 1. `snapshot()` / `subscribe_snapshots()` for current state
@@ -14,8 +17,8 @@ are projections for diagnostics and dashboards.
 `subscribe_snapshots()` returns a `watch::Receiver` that updates when it
 changes. The watch channel conflates intermediate snapshots but never lags.
 Snapshots carry cumulative counters — per-child
-`ChildSnapshot::restart_count` and supervisor-level
-`SupervisorSnapshot::total_restarts` — so counter deltas account for every
+`observe::ChildSnapshot::restart_count` and supervisor-level
+`observe::SupervisorSnapshot::total_restarts` — so counter deltas account for every
 restart even when updates are conflated.
 
 Every `ChildSnapshot` also carries a `lineage`. A restart increments
@@ -246,9 +249,9 @@ same mailbox vocabulary configures graph and dynamic actors:
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that
 subtree, including actors added dynamically through the scoped handle.
-These runtime-scoped samples set `ActorStats::lineage` from the
+These runtime-scoped samples set `observe::ActorStats::lineage` from the
 membership identity retained when the actor was registered. They also carry
-`ActorStats::supervisor_path`: each containing nested supervisor is identified
+`observe::ActorStats::supervisor_path`: each containing nested supervisor is identified
 by id, lineage, and generation. Use the full supervisor path together
 with `(actor_id, lineage)` to join a flattened recursive sample to the
 exact current tree node; local lineages can repeat in sibling subtrees. A direct
@@ -256,19 +259,20 @@ child has an empty path. Stats sampled directly from an `ActorRef` report
 `None` for both runtime-scoped identity fields because a ref has no supervisor
 context.
 
-`ActorStats::outstanding_offloads` is a point-in-time gauge of bounded futures
+`observe::ActorStats::outstanding_offloads` is a point-in-time gauge of bounded futures
 owned by the current actor incarnation. It rises when `ActorContext::offload`
 starts work and falls when the actor loop reaps its completion or observes its
 abort, making actors with in-flight requests visible without inspecting
 anonymous Tokio tasks.
 
-`ActorStats::outstanding_scope_waits` is the corresponding point-in-time gauge
-for lifecycle waits started with `LiveContext::spawn_scope_wait`. It returns to
-zero when the actor loop reaps a result, an explicit `ScopeWaitHandle::abort`
-is observed, or the incarnation ends. This makes message-driven code that
-accumulates never-ending lifecycle waits visible.
+`observe::ActorStats::outstanding_scope_waits` is the corresponding
+point-in-time gauge for lifecycle waits started with
+`LiveContext::spawn_scope_wait`. It returns to zero when the actor loop reaps a
+result, an explicit `ScopeWaitHandle::abort` is observed, or the incarnation
+ends. This makes message-driven code that accumulates never-ending lifecycle
+waits visible.
 
-`ActorStats::message_bytes_accepted` is then `Some(total)`; ordinary actors
+`observe::ActorStats::message_bytes_accepted` is then `Some(total)`; ordinary actors
 report `None` and do not sample message sizes. With the `metrics` feature,
 each accepted sized message also updates the `actor.message.size` histogram
 and `actor.message.bytes_accepted` counter. Metric handles and actor-id labels

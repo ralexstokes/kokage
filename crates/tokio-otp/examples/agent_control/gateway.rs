@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use tokio_otp::{
-    Actor, ActorContext, ActorRef, ActorResult, DrainPolicy, MessageContext, RawActor,
+    Actor, ActorContext, ActorRef, ActorResult, DrainPolicy, MessageContext, host::RawActor,
 };
 
 use crate::{

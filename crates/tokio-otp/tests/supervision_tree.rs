@@ -4,7 +4,12 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::sleep};
 
-use tokio_otp::{ActorSpec, ChildOutline, ChildSpec, ExitStatusView, Graph, ScopeKind, prelude::*};
+use tokio_otp::{
+    ActorSpec, Graph, ScopeKind,
+    host::ChildSpec,
+    observe::{ChildOutline, ExitStatusView},
+    prelude::*,
+};
 
 struct Worker;
 
@@ -291,7 +296,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         json.contains("\"Task\""),
         "task outline uses its public tag"
     );
-    let decoded: tokio_otp::SupervisionOutline =
+    let decoded: tokio_otp::observe::SupervisionOutline =
         serde_json::from_str(&json).expect("outline deserializes");
     assert_eq!(outline, decoded);
     let ChildOutline::Scope {

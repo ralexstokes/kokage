@@ -1,4 +1,4 @@
-use tokio_otp::{ActorContext, ActorResult, RawActor, Supervision};
+use tokio_otp::{ActorContext, ActorResult, Supervision, host::RawActor};
 
 struct Worker;
 

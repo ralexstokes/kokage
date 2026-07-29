@@ -8,7 +8,7 @@ use tokio_otp::{
 
 struct Worker;
 
-impl tokio_otp::RawActor for Worker {
+impl tokio_otp::host::RawActor for Worker {
     type Msg = ();
 
     async fn run(&mut self, _: ActorContext<()>) -> ActorResult {

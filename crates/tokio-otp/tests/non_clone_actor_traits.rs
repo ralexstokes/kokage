@@ -11,9 +11,10 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorResult, ChildLifecycleWatch, DEFAULT_SHUTDOWN_BOUND,
-    GraphBuilder, LiveContext, MessageContext, OrderedTree, RawActor, Reply, RestartPolicy,
-    RuntimeHandle,
+    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LiveContext, MessageContext,
+    OrderedTree, Reply, RestartPolicy, RuntimeHandle,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor},
+    observe::ChildLifecycleWatch,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {

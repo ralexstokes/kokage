@@ -12,9 +12,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorResult, ChildLifecycleEvent, ChildLifecycleEventKind, DynamicActorOptions,
-    DynamicTree, GraphBuilder, LifecycleWatchGuard, MessageContext, OrderedTree, RestartConfig,
-    RestartPolicy, RuntimeHandle, StartContext,
+    Actor, ActorResult, DynamicActorOptions, DynamicTree, GraphBuilder, MessageContext,
+    OrderedTree, RestartConfig, RestartPolicy, RuntimeHandle, StartContext,
+    observe::{ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleWatchGuard},
 };
 
 enum SinkMsg {

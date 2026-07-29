@@ -2,7 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{Mutex, Notify, watch};
 use tokio_otp::{
-    ChildSpec, DrainPolicy, DynamicActorOptions, ExitStatusView, LiveContext, SupervisorError,
+    DrainPolicy, DynamicActorOptions, LiveContext, SupervisorError,
+    host::{BoxError, ChildSpec, RawActor},
+    observe::ExitStatusView,
     prelude::*,
 };
 

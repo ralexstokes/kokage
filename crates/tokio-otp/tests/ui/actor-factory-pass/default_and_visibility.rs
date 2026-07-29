@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use tokio_otp::prelude::*;
+use tokio_otp::ActorFactory;
 
 mod actor {
     use super::*;

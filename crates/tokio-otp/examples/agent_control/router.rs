@@ -9,10 +9,12 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ChildLifecycleEvent, ChildLifecycleEventKind,
-    ChildMembershipView, ControlError, DynamicTree, GraphBuilder, LifecycleWatchGuard, LiveContext,
+    Actor, ActorRef, ActorResult, ControlError, DynamicTree, GraphBuilder, LiveContext,
     MessageContext, OrderedTree, RuntimeHandle, StartContext, Strategy, SupervisorError,
-    SupervisorSnapshot,
+    observe::{
+        ChildLifecycleEvent, ChildLifecycleEventKind, ChildMembershipView, LifecycleWatchGuard,
+        SupervisorSnapshot,
+    },
 };
 
 use crate::{
@@ -444,7 +446,10 @@ impl Actor for Router {
 
 #[cfg(test)]
 mod tests {
-    use tokio_otp::{ChildSnapshot, ChildStateView, Strategy, SupervisorStateView};
+    use tokio_otp::{
+        Strategy,
+        observe::{ChildSnapshot, ChildStateView, SupervisorStateView},
+    };
 
     use super::*;
 

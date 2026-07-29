@@ -1,23 +1,27 @@
 //! The plumbing a derived supervision struct lowers onto.
 //!
 //! `#[derive(Supervision)]` generates implementations of the traits declared
-//! here. They are public because a nested scope in one crate can be declared by
-//! a supervision struct in another, but application code normally touches only
-//! the generated `tree` and `tree_with` constructors.
+//! here. `Supervision` remains public so downstream generated code can name it
+//! and applications can import the derive macro through the same root name.
+//! Its members and the factories contract are implementation plumbing;
+//! application code uses the generated `tree` and `tree_with` constructors.
 
 use crate::{Graph, GraphBuilder, GraphLookupError, OrderedTree};
 
-/// A derived group of actors together with the supervision scope running them.
+/// Derive support for a group of actors and its supervision scope.
 ///
-/// A supervision struct contributes its actors to one shared [`Graph`], so
-/// typed refs cross scope boundaries freely, while the nesting of these structs
-/// determines only supervision placement.
+/// Applications should implement this trait with `#[derive(Supervision)]`
+/// rather than by hand, then use the generated `tree` or `tree_with`
+/// constructor. The associated types and methods are hidden implementation
+/// plumbing required by generated code across crate boundaries.
 pub trait Supervision: Sized {
     /// Restart-stable typed refs for every actor this struct declares,
     /// including those declared by nested scopes.
+    #[doc(hidden)]
     type Refs: Clone;
 
     /// Unfilled slot tokens, one per actor this struct declares.
+    #[doc(hidden)]
     type Slots;
 
     /// Identity-owning dynamic trees, one per `#[supervision(dynamic)]` field,
@@ -27,6 +31,7 @@ pub trait Supervision: Sized {
     /// through the factories bundle, so its mount handle can be taken with
     /// [`handle`](crate::DynamicTree::handle) before wiring — early enough
     /// for an actor factory to capture it.
+    #[doc(hidden)]
     type Scopes;
 
     /// Opens a graph slot for every declared actor beneath `prefix`.
@@ -34,6 +39,7 @@ pub trait Supervision: Sized {
     /// `prefix` is the qualified label of the enclosing scope, or empty at the
     /// root. Implementations must open slots for nested scopes under the
     /// prefix extended by the nested scope's own name.
+    #[doc(hidden)]
     fn open(builder: &mut GraphBuilder, prefix: &str) -> (Self::Slots, Self::Refs);
 
     /// Builds this struct's identity-owning supervision node for attachment to its parent scope.
@@ -42,6 +48,7 @@ pub trait Supervision: Sized {
     /// node resolves the actors it was built with. A node handed some other
     /// graph cannot find them and returns
     /// [`GraphLookupError::ForeignActorRef`].
+    #[doc(hidden)]
     fn node(
         graph: &Graph,
         refs: &Self::Refs,
@@ -49,16 +56,10 @@ pub trait Supervision: Sized {
     ) -> Result<OrderedTree, GraphLookupError>;
 }
 
-/// A bundle of factories filling every slot a supervision struct declares.
-///
-/// The generated `<Name>Factories` struct implements this trait, with one field
-/// per actor, per nested scope, and per dynamic scope. A nested scope's field
-/// holds that scope's own factories bundle, so wiring nests the same way the
-/// declaration does; a dynamic scope's field holds a
-/// [`DynamicTree`](crate::DynamicTree).
+// Internal contract by which a generated factories bundle fills the slots of
+// its matching supervision declaration.
+#[doc(hidden)]
 pub trait SupervisionFactories<T: Supervision> {
-    /// Fills every slot returned by [`Supervision::open`], yielding the dynamic
-    /// scopes this bundle carried.
     fn define(self, builder: &mut GraphBuilder, slots: T::Slots) -> T::Scopes;
 }
 
@@ -116,10 +117,7 @@ pub trait SupervisionFactories<T: Supervision> {
 /// rather than from attributes on the field.
 pub enum DynamicScope {}
 
-/// Joins a scope prefix and a node name into a qualified label.
-///
-/// Not a stable surface: generated code calls this to build actor labels and
-/// nested scope prefixes.
+// Joins a scope prefix and a node name for generated derive code.
 #[doc(hidden)]
 pub fn qualified_label(prefix: &str, name: &str) -> String {
     if prefix.is_empty() {

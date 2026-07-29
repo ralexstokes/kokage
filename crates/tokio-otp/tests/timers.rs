@@ -12,8 +12,10 @@ use tokio::{
     time::{Instant, advance, timeout},
 };
 use tokio_otp::{
-    Actor, ActorFactory, ActorRef, ActorResult, BoxError, CancellationHandle, GraphBuilder,
-    LiveContext, MessageContext, OrderedTree, RawActor, StartContext, TimerKey, timers,
+    Actor, ActorFactory, ActorRef, ActorResult, CancellationHandle, GraphBuilder, LiveContext,
+    MessageContext, OrderedTree, StartContext, TimerKey,
+    host::{BoxError, RawActor},
+    timers,
 };
 use tokio_supervisor::Strategy;
 

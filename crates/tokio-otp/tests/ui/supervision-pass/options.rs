@@ -1,4 +1,6 @@
-use tokio_otp::{ActorContext, ActorOptions, ActorResult, MailboxMode, RawActor, Supervision};
+use tokio_otp::{
+    ActorContext, ActorOptions, ActorResult, MailboxMode, Supervision, host::RawActor,
+};
 
 struct MailboxMessage;
 

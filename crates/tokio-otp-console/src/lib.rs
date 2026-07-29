@@ -40,7 +40,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use thiserror::Error;
 use tokio::sync::watch;
-use tokio_otp::{ActorStats, RuntimeHandle};
+use tokio_otp::{RuntimeHandle, observe::ActorStats};
 use tokio_supervisor::{LifecycleWatch, SupervisorSnapshot};
 
 /// Display-oriented snapshot of one actor's message and mailbox statistics.

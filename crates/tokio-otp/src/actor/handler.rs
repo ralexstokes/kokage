@@ -85,7 +85,7 @@ pub enum DrainPolicy {
     /// The drain has no clock of its own. It spends the surrounding host's
     /// shutdown budget, which is set in a different place from this policy:
     /// the explicit bound passed to
-    /// [`RunnableActor::run_until`](crate::RunnableActor::run_until) for a
+    /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until) for a
     /// standalone actor, or the child [`ShutdownPolicy`](crate::ShutdownPolicy)
     /// under a runtime. The two are not checked against each other. Setting
     /// `Drain` does not extend the budget, and nothing warns when the budget is
@@ -95,8 +95,8 @@ pub enum DrainPolicy {
     /// remaining queued messages are dropped, [`on_stop`](Actor::on_stop) can be
     /// skipped, and the actor is aborted. There is no per-message signal for the
     /// messages that were lost — what surfaces is a timed-out exit
-    /// ([`ActorRunError::ShutdownTimedOut`](crate::ActorRunError::ShutdownTimedOut)
-    /// standalone, [`ExitStatusView::Aborted { after_grace: true }`](crate::ExitStatusView::Aborted)
+    /// ([`ActorRunError::ShutdownTimedOut`](crate::host::ActorRunError::ShutdownTimedOut)
+    /// standalone, [`ExitStatusView::Aborted { after_grace: true }`](crate::observe::ExitStatusView::Aborted)
     /// under supervision). A `Drain` actor under a too-short grace period
     /// therefore behaves like a slower `Discard`, which is the failure mode to
     /// watch for. The enclosing shutdown also reports the timeout. In particular,

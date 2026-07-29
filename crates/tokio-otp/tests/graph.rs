@@ -16,10 +16,10 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError, CallError,
-    DEFAULT_SHUTDOWN_BOUND, DrainPolicy, Graph, GraphBuildError, GraphBuilder, LiveContext,
-    MessageContext, RawActor, Reply, RestartPolicy, RunnableActor, SendError, StartContext,
-    StopContext, TrySendError,
+    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, CallError, DrainPolicy, Graph,
+    GraphBuildError, GraphBuilder, LiveContext, MessageContext, Reply, RestartPolicy, SendError,
+    StartContext, StopContext, TrySendError,
+    host::{ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -1334,10 +1334,10 @@ mod runnable_actor {
         time::{sleep, timeout},
     };
     use tokio_otp::{
-        Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorRunError, BoxError,
-        ControlError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy, DynamicActorOptions, DynamicTree, Graph,
-        GraphBuilder, MessageContext, RawActor, RestartPolicy, RunnableActor, SendError,
-        StartContext, SupervisorError, TrySendError,
+        Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ControlError, DrainPolicy,
+        DynamicActorOptions, DynamicTree, Graph, GraphBuilder, MessageContext, RestartPolicy,
+        SendError, StartContext, SupervisorError, TrySendError,
+        host::{ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
     };
     use tokio_util::sync::CancellationToken;
 

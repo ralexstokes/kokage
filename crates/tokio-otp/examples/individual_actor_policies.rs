@@ -9,8 +9,8 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, OrderedTree,
-    StartContext,
+    Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
+    StartContext, host::BoxError,
 };
 use tokio_supervisor::{RestartConfig, RestartPolicy, Strategy};
 

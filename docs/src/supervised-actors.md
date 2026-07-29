@@ -15,6 +15,7 @@ durable-factory versus local-actor state boundary.
 ```rust,no_run
 use std::{io, sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
 
+use tokio_otp::host::BoxError;
 use tokio_otp::prelude::*;
 
 struct FrontDesk {
@@ -148,7 +149,7 @@ let tree = OrderedTree::new()
 let handle = tree.spawn()?;
 ```
 
-Use `OrderedTree::task` to mix an arbitrary non-actor `ChildSpec` into an
+Use `OrderedTree::task` to mix an arbitrary non-actor `host::ChildSpec` into an
 ordered scope. Its explicit restart and shutdown arguments are authoritative
 for both the tree outline and the running child, so set those policies on the
 `task` call rather than on the `ChildSpec`; readiness and restart-intensity

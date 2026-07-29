@@ -5,9 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
-    Down, DownReason, DynamicActorOptions, DynamicTree, GraphBuilder, MonitorEvent, RawActor,
-    RestartPolicy, RunnableActor,
+    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, Down, DownReason,
+    DynamicActorOptions, DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;

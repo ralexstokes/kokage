@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use tokio::sync::Notify;
-use tokio_otp::{ActorContext, ActorResult, GraphBuilder, RawActor, TrySendError};
+use tokio_otp::{ActorContext, ActorResult, GraphBuilder, TrySendError, host::RawActor};
 
 mod support;
 

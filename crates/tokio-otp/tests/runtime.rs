@@ -13,9 +13,11 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    Actor, ActorContext, ActorFactory, ActorRef, ActorResult, BoxError, ChildLifecycleEventKind,
-    ChildLifecycleWatch, DrainPolicy, DynamicActorOptions, DynamicTree, GraphBuilder,
-    MessageContext, OrderedTree, RawActor, Reply, RuntimeHandle, SendError, StartContext,
+    Actor, ActorContext, ActorFactory, ActorRef, ActorResult, DrainPolicy, DynamicActorOptions,
+    DynamicTree, GraphBuilder, MessageContext, OrderedTree, Reply, RuntimeHandle, SendError,
+    StartContext,
+    host::{BoxError, RawActor},
+    observe::{ChildLifecycleEventKind, ChildLifecycleWatch},
 };
 use tokio_supervisor::{
     ChildSpec, CompletionOutcome, ControlError, ExitStatusView, RestartConfig, RestartPolicy,

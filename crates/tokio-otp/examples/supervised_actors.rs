@@ -8,7 +8,7 @@ use std::{
 };
 
 use tokio::sync::mpsc;
-use tokio_otp::prelude::*;
+use tokio_otp::{host::BoxError, prelude::*};
 
 #[derive(Clone)]
 struct Frontend {

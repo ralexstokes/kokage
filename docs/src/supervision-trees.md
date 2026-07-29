@@ -54,7 +54,7 @@ A `Graph` establishes typed mailbox wiring. It is not cloneable: moving it into
 Typed refs minted by `GraphBuilder::slot` remain valid because they own the
 stable mailbox identities independently.
 
-For a custom shape, clone individual [`RunnableActor`] values out of the graph
+For a custom shape, clone individual [`host::RunnableActor`] values out of the graph
 and place them at different levels:
 
 ```rust,no_run
@@ -104,15 +104,15 @@ domains: `GraphBuilder::build` returns `GraphBuildError`, while
 application error enum with one transparent variant for each type.
 
 A runnable binding may occur only once in the complete recursive tree. Reusing
-the same `RunnableActor` clone in two nodes is rejected while the tree is
-lowered. `RunnableActor` remains cloneable so applications can select actors
+the same `host::RunnableActor` clone in two nodes is rejected while the tree is
+lowered. `host::RunnableActor` remains cloneable so applications can select actors
 from a graph while composing a custom shape; cloning does not create a second
 runtime identity.
 
 Advanced code can place clones of one binding into separate trees because
 each tree is lowered independently. That does not create another runnable
 identity: if both trees run concurrently, the second actor exits with
-`ActorRunError::AlreadyRunning`. Prefer one composed tree; retain a runnable
+`host::ActorRunError::AlreadyRunning`. Prefer one composed tree; retain a runnable
 clone only for custom placement or hand-driving where ownership is coordinated.
 
 The actor refs minted by `GraphBuilder::slot` continue to follow those actors
@@ -166,7 +166,7 @@ no intermediate `Runtime` object and no `into_supervisor` escape hatch.
 ## Inspect the declaration
 
 `outline()` removes executable factories and returns a
-[`SupervisionOutline`]. It is `Clone + Debug + Eq + PartialEq`; enabling the
+[`observe::SupervisionOutline`]. It is `Clone + Debug + Eq + PartialEq`; enabling the
 `serde` feature also gives it `Serialize` and `Deserialize`.
 
 An outline retains:
@@ -178,7 +178,7 @@ An outline retains:
 - nested scopes and actor-owned scopes recursively.
 
 That makes outlines useful for assertions, configuration export, and
-rendering a topology before spawn. A [`SupervisorSnapshot`] is the runtime
+rendering a topology before spawn. An [`observe::SupervisorSnapshot`] is the runtime
 companion: it reports current memberships, generations, states, and exits.
 
 ```rust,ignore
@@ -192,7 +192,7 @@ let tree = OrderedTree::new()
 let outline = tree.outline();
 
 assert_eq!(outline.child_ids(), ["ingest", "parse"]);
-let ChildOutline::Actor { restart, .. } = outline.child("ingest").unwrap()
+let observe::ChildOutline::Actor { restart, .. } = outline.child("ingest").unwrap()
 else {
     unreachable!()
 };
@@ -228,9 +228,9 @@ startup ordering and dynamic-membership reconciliation.
 [`OrderedTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.DynamicTree.html
 [`RuntimeHandle`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.RuntimeHandle.html
-[`RunnableActor`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.RunnableActor.html
+[`host::RunnableActor`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.RunnableActor.html
 [`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
-[`SupervisionOutline`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.SupervisionOutline.html
+[`observe::SupervisionOutline`]: https://stokes.io/tokio-otp/api/tokio_otp/observe/struct.SupervisionOutline.html
 [`ScopeKind`]: https://stokes.io/tokio-otp/api/tokio_supervisor/enum.ScopeKind.html
-[`SupervisorSnapshot`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorSnapshot.html
+[`observe::SupervisorSnapshot`]: https://stokes.io/tokio-otp/api/tokio_otp/observe/struct.SupervisorSnapshot.html
 [Scope handles inside actors]: dynamic-actors.md#scope-handles-inside-actors

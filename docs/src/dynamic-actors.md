@@ -361,13 +361,13 @@ concurrent teardown across sibling subtrees needed no cross-sibling drain
 sequencing.
 
 If an id is removed and later reused, compare the snapshot's
-`lineage` (also present in runtime-scoped `ActorStats`) as well as its
+`lineage` (also present in runtime-scoped `observe::ActorStats`) as well as its
 `generation`: restarts keep a lineage and increment the generation, while a new
 membership receives a later lineage and starts again at generation zero. For
-recursive stats, also compare `ActorStats::supervisor_path`; it distinguishes
+recursive stats, also compare `observe::ActorStats::supervisor_path`; it distinguishes
 otherwise identical local ids and lineages in sibling or restarted subtrees.
 
-Use `RuntimeHandle::add_child(ChildSpec)` for a non-actor task in a dynamic
+Use `RuntimeHandle::add_child(host::ChildSpec)` for a non-actor task in a dynamic
 scope and `add_subtree` for a nested actor-aware scope. Task children are not
 part of runtime actor stats, but they remain visible in snapshots and lifecycle
 watches. Applications that need raw `Supervisor` construction or

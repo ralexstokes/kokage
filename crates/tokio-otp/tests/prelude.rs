@@ -2,47 +2,75 @@ use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
 use tokio_otp::{
-    ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind, prelude::*,
+    observe::{ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind},
+    prelude::*,
 };
 
 #[allow(unused_imports)]
 mod coverage_probe {
     mod expected {
         use tokio_otp::prelude::{
-            Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-            BoxError, CallError, DynamicTree, GraphBuilder, GraphConfig, LiveContext,
-            MessageContext, OrderedTree, RawActor, Reply, RestartConfig, RestartPolicy,
-            RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext, Strategy,
-            Supervision, TrySendError,
+            Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorSpec, CallError,
+            DynamicTree, GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply,
+            RestartConfig, RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
+            StopContext, Strategy, TrySendError,
         };
     }
 
     mod advanced_root {
         use tokio_otp::{
-            BackoffPolicy, BlockingCancelled, CancellationHandle, CancellationToken, ChildExitView,
-            ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, ChildMembershipView,
-            ChildOutline, ChildSnapshot, ChildSpec, ChildStateView, CompletionOutcome,
-            ControlError, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, DynamicScope,
-            ExitStatusView, Graph, GraphBuildError, GraphLookupError, LifecycleEvent,
-            LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard,
-            Lifetime, MailboxMode, MonitorEvent, OffloadDeadline, OffloadHandle, RestrictedScope,
-            ScopeKind, SupervisionFactories, SupervisionOutline, SupervisorBuildError,
-            SupervisorError, SupervisorLifecycleEvent, SupervisorPathSegment, SupervisorSnapshot,
-            SupervisorStateView, TimerKey, TreeNode, TrySendError,
+            ActorFactory, ActorSlot, BackoffPolicy, BlockingCancelled, CancellationHandle,
+            CancellationToken, ControlError, Down, DownReason, DrainPolicy, DynamicActorOptions,
+            DynamicScope, Graph, GraphBuildError, GraphConfig, GraphLookupError, Lifetime,
+            MailboxMode, MonitorEvent, OffloadDeadline, OffloadHandle, RestrictedScope, ScopeKind,
+            ScopeWaitHandle, Supervision, SupervisorBuildError, SupervisorError, TimerKey,
+            TreeNode,
         };
         use tokio_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
+    }
+
+    mod host {
+        use tokio_otp::host::{
+            ActorRunError, BoxError, ChildContext, ChildResult, ChildSpec, DEFAULT_SHUTDOWN_BOUND,
+            RawActor, RunnableActor,
+        };
+    }
+
+    mod observe {
+        use tokio_otp::observe::{
+            ActorStats, ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind,
+            ChildLifecycleWatch, ChildMembershipView, ChildOutline, ChildSnapshot, ChildStateView,
+            CompletionGuard, CompletionOutcome, ExitStatusView, LifecycleEvent, LifecycleEventKind,
+            LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard, SupervisionOutline,
+            SupervisorLifecycleEvent, SupervisorPathSegment, SupervisorSnapshot,
+            SupervisorStateView,
+        };
+    }
+
+    mod derive_private {
+        use tokio_otp::__private::{SupervisionFactories, qualified_label};
     }
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
+async fn named_task(ctx: tokio_otp::host::ChildContext) -> tokio_otp::host::ChildResult {
+    ctx.shutdown_token().cancelled().await;
+    Ok(())
+}
+
+#[test]
+fn host_task_surface_supports_a_named_factory_without_tokio_supervisor_imports() {
+    let _child = tokio_otp::host::ChildSpec::task("worker", named_task);
+}
+
 #[test]
 fn actor_supervisor_path_segments_are_nameable() {
-    fn path_len(path: &[tokio_otp::SupervisorPathSegment]) -> usize {
+    fn path_len(path: &[tokio_otp::observe::SupervisorPathSegment]) -> usize {
         path.len()
     }
 
-    let path: Vec<tokio_otp::SupervisorPathSegment> = Vec::new();
+    let path: Vec<tokio_otp::observe::SupervisorPathSegment> = Vec::new();
     assert_eq!(path_len(&path), 0);
 }
 

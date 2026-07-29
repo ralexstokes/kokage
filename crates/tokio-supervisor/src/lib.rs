@@ -235,8 +235,35 @@ mod snapshot;
 mod strategy;
 mod supervisor;
 
+/// Implementation bridge for crates layered on top of `tokio-supervisor`.
+///
+/// This module is not a stable public API. It exists so `tokio-otp` can attach
+/// process-local actor metadata without exposing attachment machinery as part
+/// of the ordinary supervisor surface.
 #[doc(hidden)]
-pub use attachment::{AttachedChild, AttachedChildIdentity};
+pub mod __private {
+    use std::any::Any;
+
+    pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
+    use crate::{ChildSpec, SupervisorHandle};
+
+    /// Adds process-local metadata to a child specification.
+    pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
+    where
+        T: Any + Send + Sync,
+    {
+        child.attachment(attachment)
+    }
+
+    /// Returns process-local metadata from the current supervision tree.
+    pub fn attached_children<T>(handle: &SupervisorHandle) -> Vec<AttachedChild<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        handle.attached_children()
+    }
+}
+
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionGuard, CompletionOutcome};

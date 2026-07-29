@@ -10,12 +10,21 @@ a *supervisor* restart the ones that fail.
 ## The crates
 
 `tokio-otp` is the actor product: its prelude imports the day-one surface,
-while observability and advanced configuration remain explicit crate-root
-imports. Wire actors in a `Graph` and move it into an `OrderedTree`;
+while host-facing execution types live under `tokio_otp::host`, observation
+types live under `tokio_otp::observe`, and advanced configuration remains at
+the crate root. Wire actors in a `Graph` and move it into an `OrderedTree`;
 `OrderedTree::graph(graph)` is the concise path when one graph occupies one
 ordered scope. Raw task supervision requires a direct `tokio-supervisor`
-dependency. The actor crate contains both the typed actor layer and the
-runtime that supervises it, built on that deliberately independent crate:
+dependency.
+
+The tiers describe roles rather than enforcing a small root by symbol count.
+Actor and tree configuration types, plus the result and error types named by
+their primary methods, stay at the root even when they are advanced. `host`
+and `observe` collect coherent execution and observation surfaces without
+making every non-prelude type move behind a module.
+
+The actor crate contains both the typed actor layer and the runtime that
+supervises it, built on that deliberately independent crate:
 
 | Crate | Role |
 |-------|------|
@@ -75,5 +84,5 @@ next](next-steps.md)).
 [`OrderedTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.DynamicTree.html
 [`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
+[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
 [`ActorContext`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorContext.html

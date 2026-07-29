@@ -1,6 +1,6 @@
 //! Shutdown-stage code cannot start actor-owned lifecycle waits.
 
-use tokio_otp::{Actor, ActorResult, BoxError, MessageContext, StopContext};
+use tokio_otp::{Actor, ActorResult, MessageContext, StopContext, host::BoxError};
 
 struct Worker;
 

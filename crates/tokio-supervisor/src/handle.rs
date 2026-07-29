@@ -1550,8 +1550,7 @@ impl SupervisorHandle {
     /// entry as the attachment. Values with other concrete types are skipped.
     /// Attachments are not part of [`SupervisorSnapshot`] and are never
     /// serialized by the `serde` feature.
-    #[doc(hidden)]
-    pub fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
+    pub(crate) fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
     where
         T: Any + Send + Sync,
     {

@@ -8,8 +8,8 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorFactory, ActorResult, ChildLifecycleWatch, GraphBuilder, MessageContext,
-    OrderedTree, Reply, RestartPolicy, RuntimeHandle, StartContext,
+    Actor, ActorFactory, ActorResult, GraphBuilder, MessageContext, OrderedTree, Reply,
+    RestartPolicy, RuntimeHandle, StartContext, observe::ChildLifecycleWatch,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {

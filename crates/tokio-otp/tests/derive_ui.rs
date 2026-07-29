@@ -28,6 +28,15 @@ fn single_use_tree_ui() {
     t.compile_fail("tests/ui/single-use-tree/*.rs");
 }
 
+/// Public API tiers are intentionally disjoint: observation and raw-hosting
+/// types do not leak back into the crate root or day-one prelude, and the
+/// supervisor attachment bridge remains hidden behind `__private`.
+#[test]
+fn public_api_tiering_ui() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/ui/public-api/*.rs");
+}
+
 #[test]
 fn supervision_derive_ui() {
     let t = trybuild::TestCases::new();

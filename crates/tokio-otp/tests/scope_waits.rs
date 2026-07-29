@@ -11,8 +11,8 @@ use std::{
 
 use tokio::sync::{Notify, mpsc};
 use tokio_otp::{
-    Actor, ActorResult, DrainPolicy, ExitStatusView, GraphBuilder, LiveContext, MessageContext,
-    OrderedTree, ScopeWaitHandle, StartContext, StopContext,
+    Actor, ActorResult, DrainPolicy, GraphBuilder, LiveContext, MessageContext, OrderedTree,
+    ScopeWaitHandle, StartContext, StopContext, observe::ExitStatusView,
 };
 
 const WAIT: Duration = Duration::from_secs(3);

@@ -73,7 +73,7 @@ macro_rules! scope_context_methods {
         /// through the mailbox.
         ///
         /// Actors run directly through
-        /// [`RunnableActor::run_until`](crate::RunnableActor::run_until),
+        /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until),
         /// outside a supervisor, receive a terminal handle here. Its control
         /// operations return
         /// [`ControlError::Unavailable`](crate::ControlError::Unavailable)
@@ -828,7 +828,7 @@ impl Drop for ActorLifetime {
     }
 }
 
-/// Runtime context passed to a [`RawActor`](crate::RawActor) each time the
+/// Runtime context passed to a [`RawActor`](crate::host::RawActor) each time the
 /// graph is run.
 ///
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
@@ -864,7 +864,7 @@ pub struct ActorContext<M> {
 }
 
 impl<M: Send + 'static> ActorContext<M> {
-    /// Reports that a custom [`RawActor`](crate::RawActor) has completed
+    /// Reports that a custom [`RawActor`](crate::host::RawActor) has completed
     /// initialization.
     ///
     /// This is only needed when `RawActor::readiness_gated` is overridden to
@@ -1282,7 +1282,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// without waiting and without consulting the shutdown token.
     ///
     /// This is intended for drain-then-exit loops in hand-written
-    /// [`RawActor::run`](crate::RawActor::run) implementations: after
+    /// [`RawActor::run`](crate::host::RawActor::run) implementations: after
     /// [`recv`](Self::recv) returns `None` because shutdown was requested,
     /// queued messages remain readable here.
     ///
@@ -1318,7 +1318,7 @@ impl<M: Send + 'static> ActorContext<M> {
     ///
     /// The surrounding host's shutdown bound is the backstop for closures that
     /// ignore cancellation: the explicit bound passed to
-    /// [`RunnableActor::run_until`](crate::RunnableActor::run_until), or the
+    /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until), or the
     /// supervised child's [`ShutdownPolicy`](crate::ShutdownPolicy) grace.
     /// Once that bound aborts the actor task, the blocking thread continues
     /// detached because Tokio blocking tasks cannot be aborted after they start.
@@ -1491,7 +1491,7 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// path.
     ///
     /// Continuations count as received messages in
-    /// [`ActorStats`](crate::ActorStats), but not as externally accepted
+    /// [`ActorStats`](crate::observe::ActorStats), but not as externally accepted
     /// mailbox messages. They are abandoned once the actor begins stopping,
     /// which is why [`StopContext`] is outside this trait.
     ///
@@ -1727,7 +1727,7 @@ macro_rules! stage_context_methods {
 }
 
 /// A lifecycle-restricted scope handle as seen from
-/// every [`Actor`] lifecycle stage and directly from [`RawActor`](crate::RawActor)
+/// every [`Actor`] lifecycle stage and directly from [`RawActor`](crate::host::RawActor)
 /// code.
 ///
 /// This is a [`RuntimeHandle`] with the lifecycle-awaiting operations withheld.
@@ -1771,17 +1771,17 @@ pub struct RestrictedScope {
 macro_rules! restricted_scope_forwards {
     () => {
         /// Returns a point-in-time snapshot of the scope.
-        pub fn snapshot(&self) -> tokio_supervisor::SupervisorSnapshot {
+        pub fn snapshot(&self) -> crate::observe::SupervisorSnapshot {
             self.handle.snapshot()
         }
 
         /// Returns per-actor message counters for this scope.
-        pub fn actor_stats(&self) -> Vec<ActorStats> {
+        pub fn actor_stats(&self) -> Vec<crate::observe::ActorStats> {
             self.handle.actor_stats()
         }
 
         /// Subscribes to scope snapshots.
-        pub fn subscribe_snapshots(&self) -> watch::Receiver<tokio_supervisor::SupervisorSnapshot> {
+        pub fn subscribe_snapshots(&self) -> watch::Receiver<crate::observe::SupervisorSnapshot> {
             self.handle.subscribe_snapshots()
         }
 
@@ -1800,7 +1800,7 @@ macro_rules! restricted_scope_forwards {
             &self,
             label: impl Into<String>,
             factory: F,
-        ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
+        ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
         where
             F: crate::ActorFactory,
         {
@@ -1815,8 +1815,8 @@ macro_rules! restricted_scope_forwards {
             &self,
             label: impl Into<String>,
             factory: F,
-            options: crate::DynamicActorOptions<<F::Actor as crate::RawActor>::Msg>,
-        ) -> Result<ActorRef<<F::Actor as crate::RawActor>::Msg>, tokio_supervisor::ControlError>
+            options: crate::DynamicActorOptions<<F::Actor as crate::host::RawActor>::Msg>,
+        ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
         where
             F: crate::ActorFactory,
         {
@@ -1829,8 +1829,8 @@ macro_rules! restricted_scope_forwards {
         /// schedules startup. See [`RuntimeHandle::add_child`].
         pub async fn add_child(
             &self,
-            child: tokio_supervisor::ChildSpec,
-        ) -> Result<u64, tokio_supervisor::ControlError> {
+            child: crate::host::ChildSpec,
+        ) -> Result<u64, crate::ControlError> {
             self.handle.add_child(child).await
         }
 
@@ -1845,18 +1845,18 @@ macro_rules! restricted_scope_forwards {
             &self,
             id: impl Into<String>,
             tree: impl Into<crate::TreeNode>,
-        ) -> Result<(), tokio_supervisor::ControlError> {
+        ) -> Result<(), crate::ControlError> {
             self.handle.add_subtree(id, tree).await.map(drop)
         }
 
         /// Observes lifecycle transitions of this scope's direct children.
-        pub fn watch_lifecycle(&self) -> tokio_supervisor::ChildLifecycleWatch {
+        pub fn watch_lifecycle(&self) -> crate::observe::ChildLifecycleWatch {
             self.handle.watch_lifecycle()
         }
 
         /// Observes lifecycle transitions of this scope and everything beneath
         /// it.
-        pub fn watch_lifecycle_recursive(&self) -> tokio_supervisor::LifecycleWatch {
+        pub fn watch_lifecycle_recursive(&self) -> crate::observe::LifecycleWatch {
             self.handle.watch_lifecycle_recursive()
         }
 
@@ -1871,10 +1871,10 @@ macro_rules! restricted_scope_forwards {
             &self,
             target: &ActorRef<M>,
             map: F,
-        ) -> crate::LifecycleWatchGuard
+        ) -> crate::observe::LifecycleWatchGuard
         where
             M: Send + 'static,
-            F: FnMut(tokio_supervisor::ChildLifecycleEvent) -> M + Send + 'static,
+            F: FnMut(crate::observe::ChildLifecycleEvent) -> M + Send + 'static,
         {
             self.handle.watch_lifecycle_to(target, map)
         }
@@ -1885,7 +1885,7 @@ macro_rules! restricted_scope_forwards {
         /// and leaves the scope running. See
         /// [`RuntimeHandle::shutdown_on_completion`] for child-id and runtime
         /// requirements.
-        pub fn shutdown_on_completion<I, S>(&self, ids: I) -> tokio_supervisor::CompletionGuard
+        pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::observe::CompletionGuard
         where
             I: IntoIterator<Item = S>,
             S: Into<String>,

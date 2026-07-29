@@ -8,8 +8,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorResult, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, RawActor, RestartPolicy,
-    TrySendError,
+    ActorContext, ActorResult, GraphBuilder, RestartPolicy, TrySendError,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 
 #[derive(Clone)]

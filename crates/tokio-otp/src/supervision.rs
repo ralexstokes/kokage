@@ -9,13 +9,13 @@ use std::{
 };
 
 use tokio_supervisor::{
-    ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartConfig, RestartPolicy,
-    ScopeKind, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
+    __private, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartConfig,
+    RestartPolicy, ScopeKind, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
 };
 
 use crate::{
-    Graph, RunnableActor, RuntimeHandle,
-    actor::RunnableActorBuilder,
+    Graph, RuntimeHandle,
+    actor::{RunnableActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
@@ -228,14 +228,11 @@ impl ActorSpec {
         }
     }
 
-    /// Names this actor within its enclosing scope.
-    ///
-    /// Child ids are local to one supervisor, while an actor label is unique
-    /// across the whole graph. They coincide by default. A nested derived
-    /// scope uses a local id here so a graph label such as `workers.parse`
-    /// appears under the `workers` scope as child `parse`, rather than
-    /// repeating the scope name in the supervisor path.
+    // Derive expansions use a scope-local child id while retaining the
+    // path-qualified graph label. The derive's Actor labels documentation
+    // explains the resulting public naming contract.
     #[must_use]
+    #[doc(hidden)]
     pub fn child_id(mut self, id: impl Into<String>) -> Self {
         self.child_id = Some(id.into());
         self
@@ -889,10 +886,10 @@ impl SupervisionChild {
             } => builder.child(child.restart(restart).shutdown(shutdown)),
             Self::Scope { id, node } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
-                builder.child(
-                    ChildSpec::supervisor(id, nested)
-                        .attachment(RuntimeAttachment::subtree(actors, nested_actors)),
-                )
+                builder.child(__private::attach(
+                    ChildSpec::supervisor(id, nested),
+                    RuntimeAttachment::subtree(actors, nested_actors),
+                ))
             }
             Self::ActorWithScope {
                 id,
@@ -933,15 +930,15 @@ impl SupervisionChild {
                     .restart(default_restart)
                     .shutdown(default_shutdown)
                     .child(leader)
-                    .child(
-                        ChildSpec::supervisor("children", children_supervisor)
-                            .attachment(RuntimeAttachment::subtree(&owned_actors, children_actors)),
-                    )
+                    .child(__private::attach(
+                        ChildSpec::supervisor("children", children_supervisor),
+                        RuntimeAttachment::subtree(&owned_actors, children_actors),
+                    ))
                     .build()?;
-                builder.child(
-                    ChildSpec::supervisor(id, owned)
-                        .attachment(RuntimeAttachment::subtree(actors, owned_actors)),
-                )
+                builder.child(__private::attach(
+                    ChildSpec::supervisor(id, owned),
+                    RuntimeAttachment::subtree(actors, owned_actors),
+                ))
             }
         })
     }

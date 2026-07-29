@@ -9,8 +9,9 @@ use std::{
 
 use tokio::sync::{Notify, mpsc};
 use tokio_otp::{
-    Actor, ActorContext, ActorOptions, ActorResult, CallError, DEFAULT_SHUTDOWN_BOUND, DrainPolicy,
-    GraphBuilder, MailboxMode, MessageContext, RawActor, Reply, RestartPolicy, StartContext,
+    Actor, ActorContext, ActorOptions, ActorResult, CallError, DrainPolicy, GraphBuilder,
+    MailboxMode, MessageContext, Reply, RestartPolicy, StartContext,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio_util::sync::CancellationToken;
 

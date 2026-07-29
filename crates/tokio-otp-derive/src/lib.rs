@@ -13,6 +13,11 @@ use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Sp
 
 /// Derives a reusable factory from an actor's named fields.
 ///
+/// This derive is not imported by `tokio_otp::prelude::*`. Use
+/// `use tokio_otp::ActorFactory;` for the unqualified
+/// `#[derive(ActorFactory)]` form, or write
+/// `#[derive(tokio_otp::ActorFactory)]`.
+///
 /// For an actor named `Worker`, the derive generates `WorkerFactory`. Fields
 /// without an attribute become factory fields and are cloned into every new
 /// actor incarnation. Mark incarnation-local fields with `#[factory(default)]`
@@ -189,14 +194,19 @@ fn parse_factory_attributes(
 
 /// Derives a static actor graph and the supervision scope running it.
 ///
+/// This derive is not imported by `tokio_otp::prelude::*`. Use
+/// `use tokio_otp::Supervision;` for the unqualified
+/// `#[derive(Supervision)]` form, or write
+/// `#[derive(tokio_otp::Supervision)]`.
+///
 /// Each field declares one actor type in the graph. Every field type must
-/// implement `tokio_otp::RawActor`; any `Actor` qualifies through the blanket
+/// implement `tokio_otp::host::RawActor`; any `Actor` qualifies through the blanket
 /// impl. For a struct named `Pipeline`, the derive generates:
 ///
 /// * a `PipelineRefs` struct with one field per struct field, typed
 ///   `ActorRef<<FieldType as RawActor>::Msg>`;
 /// * a generic `PipelineFactories` struct with one factory field per struct
-///   field, implementing `tokio_otp::SupervisionFactories<Pipeline>`;
+///   field and an internal implementation that populates the graph slots;
 /// * a `PipelineSlots` struct holding the unfilled graph slots;
 /// * a `PipelineScopes` struct holding the dynamic trees;
 /// * an implementation of the `tokio_otp::Supervision` trait; and
@@ -360,11 +370,6 @@ fn parse_factory_attributes(
 ///
 /// For dynamic graphs — actors created in a loop, or ids chosen at runtime —
 /// use `GraphBuilder` directly instead of this derive.
-/// If a derived declaration needs the built `Graph` as well as a tree, use
-/// the public lower-level derive contract: call `Supervision::open`, fill the
-/// returned slots with `SupervisionFactories::define`, and then call
-/// `GraphBuilder::build`. `Supervision::node` can build the matching tree
-/// separately.
 ///
 /// # Per-actor options
 ///
@@ -374,7 +379,8 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use tokio_otp::{
-/// #     ActorContext, ActorOptions, ActorResult, MailboxMode, RawActor,
+/// #     ActorContext, ActorOptions, ActorResult, MailboxMode,
+/// #     host::RawActor,
 /// # };
 /// # struct Snapshot(Vec<u8>);
 /// # fn snapshot_size(message: &Snapshot) -> usize {
@@ -786,10 +792,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 // an unread ref is normal for leaf actors and not actionable,
                 // since the macro mints one per field.
                 let ref_ty = quote_spanned! {ty.span()=>
-                    ::tokio_otp::ActorRef<<#ty as ::tokio_otp::RawActor>::Msg>
+                    ::tokio_otp::ActorRef<<#ty as ::tokio_otp::host::RawActor>::Msg>
                 };
                 let slot_ty = quote_spanned! {ty.span()=>
-                    ::tokio_otp::ActorSlot<<#ty as ::tokio_otp::RawActor>::Msg>
+                    ::tokio_otp::ActorSlot<<#ty as ::tokio_otp::host::RawActor>::Msg>
                 };
                 slot_fields.push(quote! { #field_vis #ident: #slot_ty });
                 refs_fields.push(quote! {
@@ -805,16 +811,16 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 if let Some(options) = &attrs.options {
                     open_stmts.push(quote_spanned! {ty.span()=>
                         let (#slot_ident, #ident) = builder.slot_with::
-                            <<#ty as ::tokio_otp::RawActor>::Msg>(
-                                &::tokio_otp::qualified_label(prefix, #name),
+                            <<#ty as ::tokio_otp::host::RawActor>::Msg>(
+                                &::tokio_otp::__private::qualified_label(prefix, #name),
                                 #options,
                             );
                     });
                 } else {
                     open_stmts.push(quote_spanned! {ty.span()=>
                         let (#slot_ident, #ident) = builder.slot::
-                            <<#ty as ::tokio_otp::RawActor>::Msg>(
-                                &::tokio_otp::qualified_label(prefix, #name),
+                            <<#ty as ::tokio_otp::host::RawActor>::Msg>(
+                                &::tokio_otp::__private::qualified_label(prefix, #name),
                             );
                     });
                 }
@@ -841,12 +847,13 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                     #[allow(dead_code)]
                     #field_vis #ident: #param
                 });
-                factory_bounds.push(quote! { #param: ::tokio_otp::SupervisionFactories<#ty> });
+                factory_bounds
+                    .push(quote! { #param: ::tokio_otp::__private::SupervisionFactories<#ty> });
                 bound_idents.push(ident);
                 open_stmts.push(quote_spanned! {ty.span()=>
                     let (#slot_ident, #ident) = <#ty as ::tokio_otp::Supervision>::open(
                         builder,
-                        &::tokio_otp::qualified_label(prefix, #name),
+                        &::tokio_otp::__private::qualified_label(prefix, #name),
                     );
                 });
                 scope_fields.push(quote! {
@@ -854,7 +861,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 });
                 scope_ctor.push(ident);
                 define_stmts.push(quote! {
-                    let #ident = <#param as ::tokio_otp::SupervisionFactories<#ty>>::define(
+                    let #ident = <#param as ::tokio_otp::__private::SupervisionFactories<#ty>>::define(
                         self.#ident,
                         builder,
                         slots.#ident,
@@ -1018,7 +1025,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             #(#factory_fields,)*
         }
 
-        impl<#(#all_params),*> ::tokio_otp::SupervisionFactories<#declared>
+        impl<#(#all_params),*> ::tokio_otp::__private::SupervisionFactories<#declared>
             for #factories<#(#all_params),*>
         where
             #(#factory_bounds,)*
@@ -1100,7 +1107,11 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                     <Self as ::tokio_otp::Supervision>::open(&mut builder, "");
                 let factories = wire(&refs);
                 let scopes =
-                    ::tokio_otp::SupervisionFactories::<Self>::define(factories, &mut builder, slots);
+                    ::tokio_otp::__private::SupervisionFactories::<Self>::define(
+                        factories,
+                        &mut builder,
+                        slots,
+                    );
                 let graph = builder.build()?;
                 ::core::result::Result::Ok((graph, refs, scopes))
             }

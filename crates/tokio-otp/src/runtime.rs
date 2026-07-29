@@ -4,13 +4,17 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorOptions, ActorRef, ActorStats, RawActor, RunnableActor,
-    actor::{ActorOptionsValidationError, RunnableActorBuilder, SupervisorPathSegment},
+    ActorFactory, ActorOptions, ActorRef,
+    actor::{
+        ActorOptionsValidationError, ActorStats, RawActor, RunnableActor, RunnableActorBuilder,
+        SupervisorPathSegment,
+    },
 };
 use tokio::sync::watch;
 use tokio_supervisor::{
-    AttachedChildIdentity, ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard,
-    CompletionOutcome, ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
+    __private::{self, AttachedChildIdentity},
+    ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard, CompletionOutcome,
+    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
     SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
@@ -420,11 +424,10 @@ impl RuntimeHandle {
         let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
         let lineage = self
             .supervisor
-            .add_child(
-                ChildSpec::supervisor(id.clone(), nested_supervisor).attachment(
-                    RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
-                ),
-            )
+            .add_child(__private::attach(
+                ChildSpec::supervisor(id.clone(), nested_supervisor),
+                RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
+            ))
             .await?;
         self.subtree_membership(&id, Some(lineage))
             .ok_or(ControlError::Unavailable)
@@ -438,8 +441,7 @@ impl RuntimeHandle {
     }
 
     fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<RuntimeHandle> {
-        self.supervisor
-            .attached_children::<RuntimeAttachment>()
+        __private::attached_children::<RuntimeAttachment>(&self.supervisor)
             .into_iter()
             .find_map(|attached| {
                 let [identity] = attached.path() else {
@@ -677,7 +679,7 @@ impl RuntimeHandle {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
 
-        for attached in self.supervisor.attached_children::<RuntimeAttachment>() {
+        for attached in __private::attached_children::<RuntimeAttachment>(&self.supervisor) {
             let Some((child, supervisor_path)) = attached.path().split_last() else {
                 continue;
             };
@@ -809,25 +811,27 @@ pub(crate) fn actor_child_spec(
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
-    let mut child = ChildSpec::task(actor_id, move |ctx| {
-        let actor = child_guard.actor.clone();
-        let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
-        let children = children.clone();
-        async move {
-            actor
-                .run_until_ready(
-                    ctx.shutdown_token().cancelled(),
-                    ctx.abort_token().cancelled(),
-                    restart,
-                    supervisor,
-                    children,
-                    || ctx.mark_ready(),
-                )
-                .await
-                .map_err(Into::into)
-        }
-    })
-    .attachment(attachment)
+    let mut child = __private::attach(
+        ChildSpec::task(actor_id, move |ctx| {
+            let actor = child_guard.actor.clone();
+            let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
+            let children = children.clone();
+            async move {
+                actor
+                    .run_until_ready(
+                        ctx.shutdown_token().cancelled(),
+                        ctx.abort_token().cancelled(),
+                        restart,
+                        supervisor,
+                        children,
+                        || ctx.mark_ready(),
+                    )
+                    .await
+                    .map_err(Into::into)
+            }
+        }),
+        attachment,
+    )
     .wait_for_ready()
     .restart(restart)
     .remove_on_exit(remove_on_exit)

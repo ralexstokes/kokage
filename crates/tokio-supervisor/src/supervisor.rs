@@ -524,7 +524,7 @@ fn initial_attached_children(
         .iter()
         .enumerate()
         .map(|(lineage, child)| AttachedChildState {
-            identity: crate::AttachedChildIdentity {
+            identity: crate::attachment::AttachedChildIdentity {
                 id: child.id.clone(),
                 lineage: lineage as u64,
                 generation: 0,

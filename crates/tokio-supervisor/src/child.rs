@@ -10,7 +10,7 @@ use crate::{
 /// A type-erased, thread-safe error type used as the `Err` half of
 /// [`ChildResult`].
 ///
-/// This is re-exported as `tokio_otp::BoxError` by the actor layer.
+/// This is re-exported as `tokio_otp::host::BoxError` by the actor layer.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// The result type returned by every supervised child function.
@@ -213,8 +213,7 @@ impl ChildSpec {
     /// [`SupervisorHandle::attached_children`](crate::SupervisorHandle::attached_children)
     /// and is deliberately excluded from serializable snapshots.
     #[must_use]
-    #[doc(hidden)]
-    pub fn attachment<T>(self, attachment: T) -> Self
+    pub(crate) fn attachment<T>(self, attachment: T) -> Self
     where
         T: Any + Send + Sync,
     {

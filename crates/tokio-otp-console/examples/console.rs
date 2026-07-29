@@ -25,7 +25,8 @@ use std::{error::Error, io, time::Duration};
 
 use tokio::time::sleep;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, OrderedTree,
+    Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
+    host::BoxError,
 };
 use tokio_otp_console::Console;
 use tokio_supervisor::{

@@ -1,6 +1,6 @@
 //! A raw actor owns its receive loop, but lifecycle progress can still depend
 //! on that loop returning, so its `ActorContext` exposes a restricted scope.
-use tokio_otp::{ActorContext, ActorResult, RawActor};
+use tokio_otp::{ActorContext, ActorResult, host::RawActor};
 
 struct Custom;
 

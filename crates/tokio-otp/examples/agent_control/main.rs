@@ -134,7 +134,8 @@ use std::{
 
 use tokio::time::Instant;
 use tokio_otp::{
-    DownReason, DynamicScope, LifecycleWatchGuard, MailboxMode, MonitorEvent, prelude::*,
+    DownReason, DynamicScope, MailboxMode, MonitorEvent, Supervision, observe::LifecycleWatchGuard,
+    prelude::*,
 };
 
 use budget::Budget;
