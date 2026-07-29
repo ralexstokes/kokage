@@ -177,9 +177,9 @@ an order deadline can clear the timeout instead of allowing a stale
 
 ## Cross-actor timers
 
-`send_after_to` and `interval_to` live on every live stage context and on
-`host::RawContext`. Pass the target's `ActorRef`; the context binds the timer
-to the scheduling incarnation internally:
+`send_after_to` and `interval_to` live on `Context` and `host::RawContext`.
+Pass the target's `ActorRef`; the context binds the timer to the scheduling
+incarnation internally:
 
 ```rust,ignore
 ctx.send_after_to(

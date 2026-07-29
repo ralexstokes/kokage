@@ -1,5 +1,5 @@
 use kokage::{
-    Actor, ActorResult, ActorSpec, DynamicRuntime, DynamicTree, Context, OrderedTree,
+    Actor, ActorResult, ActorSpec, Context, DynamicRuntime, DynamicTree, OrderedTree,
     host::ChildSpec,
 };
 
