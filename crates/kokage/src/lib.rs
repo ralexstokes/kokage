@@ -251,7 +251,7 @@
 //! |---------|---------|-------------|
 //! | `derive` | yes | Re-exports `#[derive(ActorFactory)]` and `#[derive(Supervision)]`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
-//! | `serde` | no | Serialization support for supervision outlines and view types. |
+//! | `serde` | no | Serialization support for supervision outlines, actor stats, and view types. |
 
 mod actor;
 mod runtime;

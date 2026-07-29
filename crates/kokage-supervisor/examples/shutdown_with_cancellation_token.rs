@@ -1,6 +1,5 @@
-use kokage_supervisor::prelude::*;
+use kokage_supervisor::{CancellationToken, prelude::*};
 use tokio::time::{Duration, sleep};
-use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,19 +22,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .spawn()?;
 
     let app_shutdown = CancellationToken::new();
-    let trigger = tokio::spawn({
-        let app_shutdown = app_shutdown.clone();
-        async move {
-            sleep(Duration::from_millis(250)).await;
-            println!("application shutdown requested");
-            app_shutdown.cancel();
-        }
+    app_shutdown.cancel_when(async {
+        sleep(Duration::from_millis(250)).await;
+        println!("application shutdown requested");
     });
 
     app_shutdown.cancelled().await;
     running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
-    trigger.await?;
     Ok(())
 }

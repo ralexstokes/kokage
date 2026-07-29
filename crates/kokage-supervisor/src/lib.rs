@@ -169,6 +169,8 @@
 //! subscriptions return [`SupervisorSnapshotReceiver`]. These façade types
 //! preserve cancellation-tree and conflating-watch semantics without exposing
 //! the scheduler's channel or cancellation implementation in public APIs.
+//! [`CancellationToken::cancel_when`] links any `Send` future supplied by an
+//! application to that runtime-neutral cancellation surface.
 //!
 //! # Quick start
 //!

@@ -43,62 +43,7 @@ use kokage_supervisor::{LifecycleWatch, SupervisorSnapshotReceiver};
 use thiserror::Error;
 use tokio::sync::watch;
 
-/// Display-oriented snapshot of one actor's message and mailbox statistics.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct ActorStatsView {
-    pub actor_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supervisor_path: Option<Vec<SupervisorPathSegmentView>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lineage: Option<u64>,
-    pub messages_received: u64,
-    pub messages_accepted: u64,
-    pub messages_conflated: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_bytes_accepted: Option<u64>,
-    pub sends_rejected: u64,
-    pub outstanding_offloads: u64,
-    pub outstanding_scope_waits: u64,
-    pub mailbox_depth: usize,
-    pub mailbox_capacity: usize,
-}
-
-/// Identity of one nested supervisor containing an actor stats sample.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
-pub struct SupervisorPathSegmentView {
-    pub id: String,
-    pub lineage: u64,
-    pub generation: u64,
-}
-
-impl From<ActorStats> for ActorStatsView {
-    fn from(stats: ActorStats) -> Self {
-        Self {
-            actor_id: stats.actor_id,
-            supervisor_path: stats.supervisor_path.map(|path| {
-                path.into_iter()
-                    .map(|segment| SupervisorPathSegmentView {
-                        id: segment.id,
-                        lineage: segment.lineage,
-                        generation: segment.generation,
-                    })
-                    .collect()
-            }),
-            lineage: stats.lineage,
-            messages_received: stats.messages_received,
-            messages_accepted: stats.messages_accepted,
-            messages_conflated: stats.messages_conflated,
-            message_bytes_accepted: stats.message_bytes_accepted,
-            sends_rejected: stats.sends_rejected,
-            outstanding_offloads: stats.outstanding_offloads,
-            outstanding_scope_waits: stats.outstanding_scope_waits,
-            mailbox_depth: stats.mailbox_depth,
-            mailbox_capacity: stats.mailbox_capacity,
-        }
-    }
-}
-
-type StatsSource = Arc<dyn Fn() -> Vec<ActorStatsView> + Send + Sync>;
+type StatsSource = Arc<dyn Fn() -> Vec<ActorStats> + Send + Sync>;
 type LifecycleSource = Arc<dyn Fn() -> LifecycleWatch + Send + Sync>;
 
 /// Errors returned while validating console configuration.
@@ -160,7 +105,7 @@ impl ConsoleBuilder {
     /// Sets the pull source sampled for per-actor stats.
     pub fn actor_stats(
         mut self,
-        source: impl Fn() -> Vec<ActorStatsView> + Send + Sync + 'static,
+        source: impl Fn() -> Vec<ActorStats> + Send + Sync + 'static,
     ) -> Self {
         self.stats = Arc::new(source);
         self
@@ -249,7 +194,7 @@ impl Console {
         Console::builder()
             .snapshots(handle.subscribe_snapshots())
             .lifecycle(move || lifecycle.watch_lifecycle_recursive())
-            .actor_stats(move || stats.actor_stats().into_iter().map(Into::into).collect())
+            .actor_stats(move || stats.actor_stats())
     }
 
     /// Binds the listener and spawns the server in the background.

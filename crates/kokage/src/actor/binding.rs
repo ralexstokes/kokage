@@ -23,8 +23,10 @@ use crate::actor::{
 /// Message counters accumulate for the lifetime of the actor binding and
 /// therefore survive restarts. Outstanding-work gauges and mailbox fields
 /// describe the currently bound incarnation and are zero while no mailbox is
-/// bound.
+/// bound. Enabling the `serde` feature implements `Serialize` and
+/// `Deserialize` for this type and [`SupervisorPathSegment`].
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ActorStats {
     /// Actor id used to correlate these stats with supervisor snapshots.
@@ -38,6 +40,7 @@ pub struct ActorStats {
     /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
     /// have no supervisor context and report `None`. The element type is the
     /// public [`SupervisorPathSegment`].
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub supervisor_path: Option<Vec<SupervisorPathSegment>>,
     /// Identity of the actor's current supervisor membership, when sampled
     /// through [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
@@ -47,6 +50,7 @@ pub struct ActorStats {
     /// actor from a later actor added under the same id, including actors with
     /// identical local identities in different subtrees. Samples taken from
     /// `ActorRef::stats` have no supervisor membership and report `None`.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub lineage: Option<u64>,
     /// Messages delivered to the actor for handling.
     ///
@@ -70,6 +74,7 @@ pub struct ActorStats {
     ///
     /// `None` means the actor did not opt in. The total accumulates across
     /// actor restarts, like the message counters.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub message_bytes_accepted: Option<u64>,
     /// Mailbox sends rejected before acceptance.
     ///
@@ -97,6 +102,7 @@ pub struct ActorStats {
 
 /// Identity of one nested supervisor on an actor stats path.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct SupervisorPathSegment {
     /// Child id under which the nested supervisor is mounted.
@@ -105,6 +111,65 @@ pub struct SupervisorPathSegment {
     pub lineage: u64,
     /// Current generation of the nested supervisor child.
     pub generation: u64,
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::{ActorStats, SupervisorPathSegment};
+    use serde_json::json;
+
+    #[test]
+    fn actor_stats_round_trip_with_supervisor_identity() {
+        let stats = ActorStats {
+            actor_id: "worker".into(),
+            supervisor_path: Some(vec![SupervisorPathSegment {
+                id: "workers".into(),
+                lineage: 7,
+                generation: 2,
+            }]),
+            lineage: Some(11),
+            messages_received: 13,
+            messages_accepted: 17,
+            messages_conflated: 3,
+            message_bytes_accepted: Some(1_024),
+            sends_rejected: 1,
+            outstanding_offloads: 2,
+            outstanding_scope_waits: 4,
+            mailbox_depth: 5,
+            mailbox_capacity: 32,
+        };
+
+        let value = serde_json::to_value(&stats).expect("actor stats serialize");
+        assert_eq!(
+            value["supervisor_path"],
+            json!([{"id": "workers", "lineage": 7, "generation": 2}])
+        );
+        let decoded: ActorStats = serde_json::from_value(value).expect("actor stats deserialize");
+        assert_eq!(decoded, stats);
+    }
+
+    #[test]
+    fn actor_stats_omit_absent_optional_fields() {
+        let stats = ActorStats {
+            actor_id: "worker".into(),
+            supervisor_path: None,
+            lineage: None,
+            messages_received: 0,
+            messages_accepted: 0,
+            messages_conflated: 0,
+            message_bytes_accepted: None,
+            sends_rejected: 0,
+            outstanding_offloads: 0,
+            outstanding_scope_waits: 0,
+            mailbox_depth: 0,
+            mailbox_capacity: 0,
+        };
+
+        let value = serde_json::to_value(stats).expect("actor stats serialize");
+        assert!(value.get("supervisor_path").is_none());
+        assert!(value.get("lineage").is_none());
+        assert!(value.get("message_bytes_accepted").is_none());
+    }
 }
 
 #[derive(Debug)]

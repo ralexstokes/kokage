@@ -5,8 +5,8 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use kokage::{Actor, ActorResult, DynamicTree, MessageContext};
-use kokage_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
+use kokage::{Actor, ActorResult, DynamicTree, MessageContext, observe::ActorStats};
+use kokage_console::{Console, ConsoleBuildError, ConsoleHandle};
 use kokage_supervisor::{ChildSpec, RunningSupervisor, Supervisor};
 use serde_json::{Value, json};
 use tokio::{
@@ -36,25 +36,27 @@ impl Actor for IdleActor {
     }
 }
 
-fn actor_stats() -> Vec<ActorStatsView> {
-    vec![ActorStatsView {
-        actor_id: "worker".into(),
-        supervisor_path: Some(Vec::new()),
-        lineage: Some(0),
-        messages_received: 11,
-        messages_accepted: 10,
-        messages_conflated: 3,
-        message_bytes_accepted: None,
-        sends_rejected: 1,
-        outstanding_offloads: 0,
-        outstanding_scope_waits: 0,
-        mailbox_depth: 3,
-        mailbox_capacity: 32,
-    }]
+fn actor_stats() -> Vec<ActorStats> {
+    vec![
+        serde_json::from_value(json!({
+            "actor_id": "worker",
+            "supervisor_path": [],
+            "lineage": 0,
+            "messages_received": 11,
+            "messages_accepted": 10,
+            "messages_conflated": 3,
+            "sends_rejected": 1,
+            "outstanding_offloads": 0,
+            "outstanding_scope_waits": 0,
+            "mailbox_depth": 3,
+            "mailbox_capacity": 32,
+        }))
+        .expect("actor stats fixture is valid"),
+    ]
 }
 
 async fn spawn_console_with_stats(
-    stats: impl Fn() -> Vec<ActorStatsView> + Send + Sync + 'static,
+    stats: impl Fn() -> Vec<ActorStats> + Send + Sync + 'static,
 ) -> (ConsoleHandle, RunningSupervisor, RunningSupervisor) {
     let snapshots = Supervisor::dynamic()
         .build()

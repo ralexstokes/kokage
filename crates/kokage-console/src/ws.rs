@@ -3,10 +3,11 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use kokage::observe::ActorStats;
 use kokage_supervisor::{LifecycleEvent, SupervisorSnapshot, SupervisorSnapshotReceiver};
 use tokio::time::{self, Duration};
 
-use crate::{ActorStatsView, server::AppState};
+use crate::server::AppState;
 
 type WebSocket = axum::extract::ws::WebSocket;
 
@@ -61,7 +62,7 @@ fn event_message(event: LifecycleEvent) -> Message {
     )
 }
 
-fn stats_message(stats: &[ActorStatsView]) -> Message {
+fn stats_message(stats: &[ActorStats]) -> Message {
     Message::Text(
         serde_json::json!({ "type": "actor_stats", "data": stats })
             .to_string()
@@ -81,7 +82,7 @@ async fn send_event(socket: &mut WebSocket, event: LifecycleEvent) -> bool {
 async fn send_stats(
     socket: &mut WebSocket,
     state: &AppState,
-    last_sent: &mut Vec<ActorStatsView>,
+    last_sent: &mut Vec<ActorStats>,
 ) -> bool {
     let stats = (state.stats)();
     if stats == *last_sent {
