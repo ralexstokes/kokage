@@ -276,6 +276,14 @@ mod test_scheduler {
             }
         }
 
+        fn yield_now(&self) -> BoxFuture<()> {
+            if self.0.is_some() {
+                Box::pin(tokio::task::yield_now())
+            } else {
+                Box::pin(std::future::ready(()))
+            }
+        }
+
         fn now(&self) -> Instant {
             if self.0.is_some() {
                 tokio::time::Instant::now().into_std()

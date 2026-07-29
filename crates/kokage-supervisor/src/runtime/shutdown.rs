@@ -4,7 +4,7 @@ use slab::Slab;
 use tracing::{Instrument, info_span};
 
 use crate::{
-    __private::{TaskJoin, yield_now},
+    __private::TaskJoin,
     error::SupervisorError,
     event::RuntimeEvent,
     runtime::{
@@ -228,7 +228,7 @@ impl SupervisorRuntime {
                 // Give a normal scheduler abort one scheduling turn to complete so
                 // its exit remains ordered. A future that does not reach a
                 // poll boundary must not retain the cursor indefinitely.
-                yield_now().await;
+                self.scheduler.yield_now().await;
                 let still_active = self
                     .wait_for_ordered_child(
                         key,
@@ -387,7 +387,7 @@ impl SupervisorRuntime {
         abort_matching_children(&self.children, |key, child| {
             scope.contains(key) && child.runtime.definition.shutdown_policy.is_abort()
         });
-        yield_now().await;
+        self.scheduler.yield_now().await;
         self.drain_ready_joins_for_scope(scope, &mut deferred)
             .await?;
         if scope.is_drained(self) {
@@ -465,7 +465,7 @@ impl SupervisorRuntime {
         let remaining = active_task_names(&self.children, scope);
         if !remaining.is_empty() {
             abort_matching_children(&self.children, |key, _| scope.contains(key));
-            yield_now().await;
+            self.scheduler.yield_now().await;
             self.drain_ready_joins_for_scope(scope, &mut deferred)
                 .await?;
         }

@@ -589,16 +589,11 @@ impl SupervisorRuntime {
                     // woken by `ChildRestartScheduled` enqueue control work,
                     // then give the whole queued batch priority over an
                     // already-due restart.
-                    // A one-tick scheduler wait provides a portable fairness
-                    // boundary. A self-wake-only future can be placed in an
-                    // executor's LIFO slot and immediately repolled, starving
-                    // observers that were just woken by the restart event.
-                    let fairness_deadline = self
-                        .scheduler
-                        .now()
-                        .checked_add(Duration::from_nanos(1))
-                        .unwrap_or_else(|| self.scheduler.now());
-                    self.scheduler.sleep_until(fairness_deadline).await;
+                    // Yield through the binding rather than using a
+                    // self-wake-only future, which an executor may immediately
+                    // repoll from a LIFO slot and starve freshly woken
+                    // observers.
+                    self.scheduler.yield_now().await;
                     self.drain_deadline_command_batch()?;
                     self.handle_deadlines().await?;
                 }

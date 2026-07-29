@@ -43,6 +43,9 @@ pub trait Scheduler: Send + Sync + 'static {
     /// monotonic clock.
     fn sleep_until(&self, deadline: Instant) -> BoxFuture<()>;
 
+    /// Yields the current task so other runnable tasks can make progress.
+    fn yield_now(&self) -> BoxFuture<()>;
+
     /// Reads this scheduler's monotonic clock.
     fn now(&self) -> Instant;
 }

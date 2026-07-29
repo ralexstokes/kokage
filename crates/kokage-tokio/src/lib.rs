@@ -61,6 +61,10 @@ impl Scheduler for TokioScheduler {
         )))
     }
 
+    fn yield_now(&self) -> BoxFuture<()> {
+        Box::pin(tokio::task::yield_now())
+    }
+
     fn now(&self) -> Instant {
         tokio::time::Instant::now().into_std()
     }

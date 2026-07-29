@@ -55,6 +55,20 @@ async fn panics_and_cancellation_remain_distinguishable() {
     );
 }
 
+#[tokio::test]
+async fn yield_now_allows_another_runnable_task_to_progress() {
+    let scheduler = TokioScheduler::current();
+    let progressed = Arc::new(AtomicBool::new(false));
+    let task_progressed = Arc::clone(&progressed);
+    let task = scheduler.spawn(Box::pin(async move {
+        task_progressed.store(true, Ordering::Release);
+    }));
+
+    scheduler.yield_now().await;
+    assert!(progressed.load(Ordering::Acquire));
+    task.join().await.expect("task joins cleanly");
+}
+
 #[tokio::test(start_paused = true)]
 async fn clock_and_sleep_share_tokios_monotonic_time() {
     let scheduler = TokioScheduler::new(tokio::runtime::Handle::current());
