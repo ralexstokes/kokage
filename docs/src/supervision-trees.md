@@ -18,9 +18,8 @@ println!("{:#?}", tree.outline());
 let runtime = tree.spawn()?;
 ```
 
-The actor refs returned by `GraphBuilder::actor` (or minted from an
-`ActorSlot` for a cycle) continue to follow those actors across their
-respective restarts.
+The actor refs returned by `GraphBuilder::actor` (or minted by `slot` for a
+cycle) continue to follow those actors across their respective restarts.
 `RuntimeHandle::actor_stats()` also recurses
 through the tree, and the same local child id may be reused in a different
 scope.
@@ -50,15 +49,13 @@ leader carries an explicit override.
 
 ## Graph ownership and actor placement
 
-A `Graph` establishes typed mailbox wiring and owns one linear [`ActorNode`]
-for each declaration. It is not cloneable: moving it into
-`OrderedTree::graph` establishes one runtime owner for every actor binding.
-Typed refs returned by `GraphBuilder::actor` remain valid because they own the
-stable mailbox identities independently.
+A `Graph` establishes typed mailbox wiring. It is not cloneable: moving it into
+`OrderedTree::graph` establishes one runtime owner for every runnable binding.
+Typed refs returned by `GraphBuilder::actor` or `slot` remain valid because
+they own the stable mailbox identities independently.
 
-For a custom shape, consume the graph with `Graph::into_nodes` and move its
-nodes to the desired levels. Nodes retain the configuration supplied by their
-`ActorSpec` before graph registration:
+For a custom shape, consume the graph into non-cloneable `ActorNode` placement
+tokens and move them to different levels:
 
 ```rust,no_run
 use kokage::{ActorSpec, OrderedTree, prelude::*};
@@ -75,14 +72,11 @@ impl Actor for Worker {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let _ingest = graph.actor(
-        ActorSpec::new("ingest", || Worker)
-            .restart(RestartPolicy::Never),
-    );
-    let _parse = graph.actor(ActorSpec::new("parse", || Worker));
-    let mut nodes = graph.build()?.into_nodes().into_iter();
-    let ingest = nodes.next().expect("ingest node");
-    let parse = nodes.next().expect("parse node");
+    graph.actor(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never));
+    graph.actor(ActorSpec::new("parse", || Worker));
+    let mut actors = graph.build()?.into_nodes().into_iter();
+    let ingest = actors.next().expect("ingest node");
+    let parse = actors.next().expect("parse node");
 
     let tree = OrderedTree::new()
         .actor(ingest)
@@ -99,25 +93,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`GraphBuilder::build` validates the graph before returning it. A graph's nodes
-are yielded once, in declaration order. Because `ActorNode` is not cloneable,
-moving a node into a tree makes duplicate placement unrepresentable. Advanced
-custom hosts can explicitly leave the tree-placement API with
-`ActorNode::into_runnable`; ordinary tree composition should keep the linear
-node.
+`GraphBuilder::build` validates the wiring before yielding placement tokens.
+Each `ActorNode` can occur only once in the complete recursive tree; moving it
+makes duplicate placement unrepresentable. Custom hosts can leave the tree
+vocabulary explicitly with `ActorNode::into_runnable`.
 
 The actor refs returned during graph registration continue to follow those
 actors across their respective restarts. `RuntimeHandle::actor_stats()` also recurses
 through the tree, and the same local child id may be reused in a different
 scope.
 
-An [`ActorSpec`] is a complete actor child declaration. It owns the actor id,
-factory, mailbox settings, and optional `restart`, `shutdown`, and
-`restart_config` overrides. It is itself linear and can be consumed directly
-by `GraphBuilder::actor`, `OrderedTree::actor`, or dynamic insertion. A graph
-turns each declaration into an `ActorNode`; `ActorNode::child_id` can override
-the local supervisor id when an actor label is already qualified by its scope
-path.
+An [`ActorSpec`] is a complete typed actor declaration. Configure `restart`,
+`shutdown`, `restart_config`, and `child_id` before registering the spec with a
+graph. Graph construction materializes those settings into its `ActorNode`s;
+the enclosing scope supplies any defaults the spec leaves unset.
 
 ## Identity exists before spawn
 
@@ -130,8 +119,14 @@ returns a `DynamicRuntimeHandle` that exposes membership directly:
 let sessions_tree = DynamicTree::new();
 let sessions = sessions_tree.handle();
 
-let router = ActorSpec::new("router", move || Router::new(sessions.clone()));
-let router_ref = router.actor_ref();
+let mut graph = GraphBuilder::new();
+graph.actor(ActorSpec::new("router", move || Router::new(sessions.clone())));
+let router = graph
+    .build()?
+    .into_nodes()
+    .into_iter()
+    .next()
+    .expect("router node");
 
 let app_tree = OrderedTree::new()
     // Moving the nested tree transfers its identity into the root.
@@ -140,7 +135,7 @@ let app_tree = OrderedTree::new()
 let app_handle = app_tree.handle();
 let runtime = app_tree.spawn()?;
 let handle = runtime.handle();
-# drop((router_ref, app_handle, handle, runtime));
+# drop((app_handle, handle, runtime));
 ```
 
 Trees deliberately do not implement `Clone`: one identity can bind to one
@@ -178,10 +173,7 @@ companion: it reports current memberships, generations, states, and exits.
 ```rust,ignore
 let tree = OrderedTree::new()
     .default_restart(RestartPolicy::Always)
-    .actor(
-        ActorSpec::new("ingest", || Worker)
-            .restart(RestartPolicy::Never),
-    )
+    .actor(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never))
     .actor(ActorSpec::new("parse", || Worker));
 let outline = tree.outline();
 
@@ -223,7 +215,6 @@ startup ordering and dynamic-membership reconciliation.
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
 [`DynamicRuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.DynamicRuntimeHandle.html
-[`ActorNode`]: https://stokes.io/kokage/api/kokage/struct.ActorNode.html
 [`host::RunnableActor`]: https://stokes.io/kokage/api/kokage/host/struct.RunnableActor.html
 [`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
 [`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html

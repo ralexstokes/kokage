@@ -227,23 +227,23 @@ The `kokage` `actor_metrics` example prints the result in
 Prometheus-shaped text without an actor-layer metrics backend.
 
 Message sizes are application-defined and fully opt-in. Pass a sizing function
-to the actor's `ActorOptions`:
+to the actor's `ActorSpec`:
 
 ```rust,ignore
 fn upload_size(message: &Upload) -> usize {
     message.payload.len()
 }
 
-let uploads = graph.actor_with(
-    "uploads",
-    ActorOptions::new().message_size(upload_size),
-    UploadActor::new,
-);
+let uploads = ActorSpec::new("uploads", UploadActor::new)
+    .message_size(upload_size);
+let uploads_ref = uploads.actor_ref();
+graph.actor(uploads);
 ```
 
-The same mailbox vocabulary configures dynamic actors through direct forwarding
-setters:
-`DynamicActorOptions::new().mailbox(MailboxMode::conflate()).message_size(upload_size)`.
+The same declaration configures a dynamic actor before insertion:
+`ActorSpec::new("uploads", UploadActor::new).mailbox(MailboxMode::conflate()).message_size(upload_size)`.
+Pass it to `DynamicRuntime::add_actor`; use `actor_ref()` first when callers
+need its typed handle.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that

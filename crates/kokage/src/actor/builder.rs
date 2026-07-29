@@ -550,7 +550,7 @@ impl GraphBuilder {
     /// Registers one complete actor declaration and returns its stable ref.
     ///
     /// Register actors in dependency order so each factory can capture refs
-    /// returned by earlier calls. Use [`slot`](Self::slot) and
+    /// returned by earlier calls. Use [`ActorSlot::new`] and
     /// [`define`](Self::define) instead when cyclic wiring requires a ref before
     /// its factory can be constructed.
     pub fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {

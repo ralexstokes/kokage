@@ -9,7 +9,7 @@
 //! spawn the tree:
 //!
 //! ```no_run
-//! use kokage::prelude::*;
+//! use kokage::{ActorSpec, prelude::*};
 //!
 //! struct Echo;
 //!
@@ -25,7 +25,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut graph = GraphBuilder::new();
-//! let echo = graph.actor("Echo", || Echo);
+//! let echo = graph.actor(ActorSpec::new("Echo", || Echo));
 //!
 //! let graph = graph.build()?;
 //! let runtime = OrderedTree::graph(graph).spawn()?;
@@ -136,8 +136,8 @@
 //!
 //! ```
 //! use kokage::{
-//!     Actor, ActorResult, CancellationToken, GraphBuilder, MessageContext, Reply, RestartPolicy,
-//!     host::DEFAULT_SHUTDOWN_BOUND,
+//!     Actor, ActorResult, ActorSpec, CancellationToken, GraphBuilder, MessageContext, Reply,
+//!     RestartPolicy, host::DEFAULT_SHUTDOWN_BOUND,
 //! };
 //!
 //! enum CounterMsg {
@@ -169,10 +169,15 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut builder = GraphBuilder::new();
 //! builder.name("example");
-//! let counter = builder.actor("Counter", || Counter { total: 0 });
+//! let counter = builder.actor(ActorSpec::new("Counter", || Counter { total: 0 }));
 //! let graph = builder.build().expect("valid graph");
 //!
-//! let actor = graph.actors()[0].clone();
+//! let actor = graph
+//!     .into_nodes()
+//!     .into_iter()
+//!     .next()
+//!     .expect("counter node")
+//!     .into_runnable();
 //! let stop = CancellationToken::new();
 //! let run = tokio::spawn({
 //!     let stop = stop.clone();
