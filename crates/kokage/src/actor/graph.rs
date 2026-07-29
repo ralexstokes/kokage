@@ -9,10 +9,10 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::RestartPolicy;
+use kokage_supervisor::{CancellationToken, RestartPolicy};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
-use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
+use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
 use crate::{
@@ -23,6 +23,7 @@ use crate::{
             mailbox,
         },
         builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
+        cancellation::CancelOnDrop,
         context::{ActorContext, ActorLifetime, ActorRef},
         error::GraphLookupError,
         factory::ActorFactory,
@@ -408,7 +409,7 @@ impl RunnableActor {
                 })
                 .instrument(actor_span),
         ));
-        let _cancel_actor_on_drop = actor_shutdown.clone().drop_guard();
+        let _cancel_actor_on_drop = CancelOnDrop::new(actor_shutdown.clone());
 
         self.inner.observability.emit_actor_started(&actor_id);
 

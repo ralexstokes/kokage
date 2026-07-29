@@ -12,10 +12,8 @@ use std::{
     fmt,
 };
 
-use tokio_util::sync::CancellationToken;
-
 use crate::{
-    ChildLifecycleEvent, ChildLifecycleEventKind, ExitStatusView,
+    CancellationToken, ChildLifecycleEvent, ChildLifecycleEventKind, ExitStatusView,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };

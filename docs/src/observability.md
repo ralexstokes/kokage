@@ -14,8 +14,11 @@ are projections for diagnostics and dashboards.
 ## Snapshots: Current State
 
 `RuntimeHandle::snapshot()` returns the current tree state, and
-`subscribe_snapshots()` returns a `watch::Receiver` that updates when it
-changes. The watch channel conflates intermediate snapshots but never lags.
+`subscribe_snapshots()` returns a crate-owned `SupervisorSnapshotReceiver`
+that updates when it changes. Use `latest()` for an unobserved read,
+`take_latest()` to mark the current version observed, and `changed()` or
+`wait_for(...)` for asynchronous observation. The receiver conflates
+intermediate snapshots but never lags.
 Snapshots carry cumulative counters — per-child
 `observe::ChildSnapshot::restart_count` and supervisor-level
 `observe::SupervisorSnapshot::total_restarts` — so counter deltas account for every

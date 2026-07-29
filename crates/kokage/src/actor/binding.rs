@@ -7,9 +7,8 @@ use std::{
     },
 };
 
-use kokage_supervisor::RestartPolicy;
+use kokage_supervisor::{CancellationToken, RestartPolicy};
 use tokio::sync::{Notify, mpsc, watch};
-use tokio_util::sync::CancellationToken;
 
 use crate::actor::{
     error::TrySendError,

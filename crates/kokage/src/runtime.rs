@@ -6,20 +6,17 @@ use std::{
 use crate::{
     ActorFactory, ActorOptions, ActorRef, MailboxMode,
     actor::{
-        ActorOptionsValidationError, ActorStats, RawActor, RunnableActor, RunnableActorBuilder,
-        SupervisorPathSegment,
+        ActorOptionsValidationError, ActorStats, CancelOnDrop, RawActor, RunnableActor,
+        RunnableActorBuilder, SupervisorPathSegment,
     },
 };
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
-    ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard, CompletionOutcome,
-    ControlError, DynamicSupervisorHandle, LifecycleWatch, RestartConfig, RestartPolicy,
-    RunningSupervisor, ShutdownPolicy, SupervisorBuildError, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot,
+    CancellationToken, ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard,
+    CompletionOutcome, ControlError, DynamicSupervisorHandle, LifecycleWatch, RestartConfig,
+    RestartPolicy, RunningSupervisor, ShutdownPolicy, SupervisorBuildError, SupervisorError,
+    SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
 };
-use tokio::sync::watch;
-
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug)]
 pub(crate) struct ActorRuntimeState {
@@ -321,7 +318,7 @@ where
     let task_cancellation = cancellation.clone();
 
     tokio::spawn(async move {
-        let _cancel_on_exit = task_cancellation.clone().drop_guard();
+        let _cancel_on_exit = CancelOnDrop::new(task_cancellation.clone());
         loop {
             let Some(event) = (tokio::select! {
                 biased;
@@ -649,7 +646,7 @@ impl RuntimeHandle {
     }
 
     /// Returns a watch receiver that updates when the snapshot changes.
-    pub fn subscribe_snapshots(&self) -> watch::Receiver<SupervisorSnapshot> {
+    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
         self.supervisor.subscribe_snapshots()
     }
 }

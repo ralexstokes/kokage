@@ -9,12 +9,12 @@ use std::{
     time::Duration,
 };
 
+use kokage_supervisor::CancellationToken;
 use tokio::{
     sync::{oneshot, watch},
     task::{AbortHandle, Id as TaskId, JoinError, JoinSet},
     time::{Instant, MissedTickBehavior, timeout},
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::RuntimeHandle;
 
@@ -23,7 +23,7 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, GatedSendOutcome,
         MailboxReceiver, MailboxRef, MessageSizeObserver, SendGate, SendOutcome,
     },
-    cancellation::CancellationHandle,
+    cancellation::{CancelOnDrop, CancellationHandle},
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
@@ -1397,7 +1397,7 @@ impl<M: Send + 'static> ActorContext<M> {
     {
         let cancellation = self.shutdown.child_token();
         async move {
-            let _cancel_on_drop = cancellation.clone().drop_guard();
+            let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
             let joined = tokio::task::spawn_blocking(move || f(&cancellation)).await;
 
             match joined {
@@ -2108,7 +2108,7 @@ macro_rules! restricted_scope_forwards {
         }
 
         /// Subscribes to scope snapshots.
-        pub fn subscribe_snapshots(&self) -> watch::Receiver<crate::observe::SupervisorSnapshot> {
+        pub fn subscribe_snapshots(&self) -> crate::observe::SupervisorSnapshotReceiver {
             self.handle.subscribe_snapshots()
         }
 
