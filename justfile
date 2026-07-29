@@ -25,6 +25,12 @@ test:
 doc-check:
     RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
+public-api:
+    bash scripts/check-public-api.sh
+
+core-features:
+    bash scripts/check-core-features.sh
+
 smoke:
     cargo run --locked -p kokage --example trading_engine --features metrics
     cargo run --locked -p kokage --example agent_control --features metrics
@@ -37,7 +43,7 @@ nixfmt-check:
 
 # Fast local CI mirror — reuses the local cargo cache and incremental builds.
 # The clean Nix lane retains the explicit all-target build for non-test codegen coverage.
-ci: fmt lint test smoke doc-check nixfmt-check build-book
+ci: fmt lint test smoke doc-check public-api core-features nixfmt-check build-book
 
 # Full clean Nix CI lane; use before pushing or when touching Nix files.
 ci-nix:

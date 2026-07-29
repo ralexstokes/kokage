@@ -26,6 +26,11 @@ pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 /// [`TaskError::Cancelled`]. Kokage enforces abort-on-drop through
 /// [`TaskHandle`].
 ///
+/// The join future supplied to [`TaskHandle::new`] must be cancellation-safe:
+/// dropping that future must detach observation without cancelling the task.
+/// `TaskHandle` owns abort-on-drop behavior and invokes the binding's `abort`
+/// callback when cancellation is required.
+///
 /// [`sleep_until`](Self::sleep_until) must use the same monotonic clock as
 /// [`now`](Self::now), must not complete before its deadline, and must wake
 /// after clock advancement. `spawn_blocking` must keep blocking closures off
@@ -129,11 +134,13 @@ pub struct TaskHandle {
 impl TaskHandle {
     /// Constructs a handle for a third-party scheduler binding.
     ///
-    /// `join` must resolve exactly once with the task's final status. `abort`
-    /// must request cancellation without blocking, and `is_finished` must
-    /// become true once joining can no longer wait on task execution. The
-    /// closures may be invoked from any thread and may be invoked after task
-    /// completion.
+    /// `join` must resolve exactly once with the task's final status. Dropping
+    /// `join` must detach observation without cancelling the task; this type
+    /// invokes `abort` itself when its abort-on-drop contract requires
+    /// cancellation. `abort` must request cancellation without blocking, and
+    /// `is_finished` must become true once joining can no longer wait on task
+    /// execution. The closures may be invoked from any thread and may be
+    /// invoked after task completion.
     pub fn new(
         join: BoxFuture<Result<(), TaskError>>,
         abort: impl Fn() + Send + Sync + 'static,

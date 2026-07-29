@@ -23,7 +23,6 @@ metrics = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "sync"] }
-tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

@@ -19,7 +19,6 @@ serde = { workspace = true, optional = true }
 slab.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "sync"] }
-tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -30,6 +29,7 @@ serde_json.workspace = true
 tracing-subscriber.workspace = true
 trybuild.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util", "time"] }
+tokio-util.workspace = true
 
 [[bench]]
 name = "common_flows"

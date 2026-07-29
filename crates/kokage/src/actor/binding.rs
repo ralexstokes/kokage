@@ -491,7 +491,7 @@ impl<M> MailboxRef<M> {
                 // Cooperate before acceptance so cancellation while yielding
                 // still drops the message, matching `ActorRef::send`'s
                 // cancellation contract.
-                tokio::task::coop::consume_budget().await;
+                kokage_supervisor::__private::yield_now().await;
                 sender.send(message)
             }
         }
@@ -533,7 +533,7 @@ impl<M> MailboxRef<M> {
                 }
             }
             MailboxSender::Conflating(sender) => {
-                tokio::task::coop::consume_budget().await;
+                kokage_supervisor::__private::yield_now().await;
                 sender.send_gated(message, gate)
             }
         }

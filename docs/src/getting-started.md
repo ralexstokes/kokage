@@ -17,7 +17,9 @@ kokage-tokio = { git = "https://github.com/ralexstokes/kokage" }
 
 `kokage::prelude` covers the day-one actor product surface and core policies.
 Raw supervisor construction and control types stay in `kokage-supervisor`; if
-tasks are all you need, depend on that crate alone.
+tasks are all you need, depend on that crate alone. The
+[scheduler bindings](schedulers.md) chapter covers explicit runtime handles and
+the contract for third-party executor adapters.
 
 ## Your first supervised task
 

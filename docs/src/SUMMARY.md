@@ -5,6 +5,7 @@
 # Tutorial
 
 - [Getting started](getting-started.md)
+- [Scheduler bindings](schedulers.md)
 - [Supervision fundamentals](supervision.md)
 - [Actor graphs](actor-graphs.md)
 - [Bounded request/reply](request-reply.md)
