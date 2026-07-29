@@ -543,7 +543,7 @@ impl RuntimeHandle {
     /// Unlike [`ActorRef::stats`], each returned sample populates
     /// [`ActorStats::supervisor_path`] and [`ActorStats::lineage`] from the
     /// current runtime membership. Message-size totals remain `None` unless
-    /// observation was enabled in that actor's [`ActorOptions`].
+    /// observation was enabled with [`ActorSpec::message_size`].
     pub fn actor_stats(&self) -> Vec<ActorStats> {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
@@ -702,8 +702,8 @@ impl DynamicRuntimeHandle {
     /// the incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`RuntimeHandle::wait_started`] retains
-    /// the stronger readiness contract. A zero
-    /// [`ActorOptions::mailbox_capacity`] is rejected with
+    /// the stronger readiness contract. An
+    /// [`ActorSpec::mailbox_capacity`] of zero is rejected with
     /// [`ControlError::Rejected`].
     pub async fn add_actor<M: Send + 'static>(
         &self,
