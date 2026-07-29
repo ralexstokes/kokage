@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err("paper jam".into())
     })
     .restart(press_restart)
-    .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)));
+    .shutdown(Shutdown::drain_for(Duration::from_secs(1)));
 
     // A front desk that runs until its tree asks it to stop.
     let front_desk = ChildSpec::task("front-desk", |ctx| async move {

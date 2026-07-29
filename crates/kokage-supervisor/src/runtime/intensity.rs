@@ -253,9 +253,11 @@ mod tests {
 
     #[test]
     fn jittered_backoff_stays_within_equal_jitter_bounds() {
-        let mut tracker = tracker(
-            Backoff::exponential(Duration::from_millis(80), 2, Duration::from_millis(500)).jitter(),
-        );
+        let mut tracker = tracker(Backoff::exponential_with_jitter(
+            Duration::from_millis(80),
+            2,
+            Duration::from_millis(500),
+        ));
         let started_at = Instant::now();
         record_short_restart(&mut tracker, started_at);
         record_short_restart(&mut tracker, started_at + Duration::from_millis(2));

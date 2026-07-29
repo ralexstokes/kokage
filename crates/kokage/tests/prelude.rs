@@ -23,10 +23,11 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, Backoff, BlockingCancelled, CancellationHandle, CancellationToken,
-            ControlError, DownReason, DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle,
-            DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline, Restart, RestrictedScope,
-            Runtime, RuntimeHandle, ScopeKind, Shutdown, Strategy, SupervisorBuildError,
+            ActorFactory, Backoff, BackoffParts, BlockingCancelled, CancellationHandle,
+            CancellationToken, ControlError, DownReason, DynamicRestrictedScope, DynamicRuntime,
+            DynamicRuntimeHandle, DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline, Restart,
+            RestartMode, RestrictedScope, Runtime, RuntimeHandle, ScopeKind, SealedActorSlot,
+            SealedActorSpec, Shutdown, ShutdownMode, Strategy, SupervisorBuildError,
             SupervisorError, TaskHandle, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
@@ -96,20 +97,27 @@ fn policy_values_expose_their_declared_behavior() {
     }
 
     fn restart_name(policy: Restart) -> &'static str {
-        if policy == Restart::always() {
-            "always"
-        } else if policy == Restart::never() {
-            "never"
-        } else {
-            "on-failure"
+        match policy.mode() {
+            kokage::RestartMode::Always => "always",
+            kokage::RestartMode::OnFailure => "on-failure",
+            kokage::RestartMode::Never => "never",
         }
     }
 
     fn drain_name(policy: kokage::Shutdown) -> &'static str {
-        if policy.drains_messages() {
-            "drain"
-        } else {
-            "discard"
+        match policy.mode() {
+            kokage::ShutdownMode::Drain => "drain",
+            kokage::ShutdownMode::Discard => "discard",
+            kokage::ShutdownMode::Abort => "abort",
+        }
+    }
+
+    fn backoff_name(backoff: kokage::Backoff) -> &'static str {
+        match backoff.parts() {
+            kokage::BackoffParts::None => "none",
+            kokage::BackoffParts::Fixed(_) => "fixed",
+            kokage::BackoffParts::Exponential { jitter: false, .. } => "exponential",
+            kokage::BackoffParts::Exponential { jitter: true, .. } => "jittered-exponential",
         }
     }
 
@@ -130,7 +138,21 @@ fn policy_values_expose_their_declared_behavior() {
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
     assert_eq!(restart_name(Restart::default()), "on-failure");
+    assert_eq!(
+        restart_name(Restart::always().limit(3, Duration::from_secs(1))),
+        "always"
+    );
     assert_eq!(drain_name(kokage::Shutdown::default()), "drain");
+    assert_eq!(drain_name(kokage::Shutdown::abort()), "abort");
+    assert_eq!(backoff_name(kokage::Backoff::none()), "none");
+    assert_eq!(
+        backoff_name(kokage::Backoff::exponential_with_jitter(
+            Duration::from_millis(10),
+            2,
+            Duration::from_secs(1),
+        )),
+        "jittered-exponential"
+    );
     assert_eq!(actor_status_name(ActorStatus::Running), "running");
     assert_eq!(scope_name(kokage::ScopeKind::default()), "ordered");
 }

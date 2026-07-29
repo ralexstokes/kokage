@@ -704,7 +704,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
     });
 
     let handle_owner = Supervisor::dynamic()
-        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

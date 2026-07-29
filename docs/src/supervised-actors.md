@@ -5,7 +5,7 @@ That gives each logical actor independent restart policy, mailbox binding,
 lifecycle events, and statistics.
 
 ```rust
-use std::time::Duration;
+# use std::time::Duration;
 
 # use kokage::{ActorSpec, OrderedTree, Restart, Shutdown};
 # struct Worker;

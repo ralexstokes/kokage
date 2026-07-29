@@ -583,7 +583,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(trigger)
         .child(peer)
         .build()
@@ -623,7 +623,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart(common::restart_with_backoff(
+        .default_restart(common::restart_with_backoff(
             2,
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(40)),
@@ -774,7 +774,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart(common::restart_with_backoff(
+        .default_restart(common::restart_with_backoff(
             2,
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(40)),

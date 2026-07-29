@@ -299,9 +299,9 @@ pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch};
-pub use restart::{Backoff, Restart};
+pub use restart::{Backoff, BackoffParts, Restart, RestartMode};
 pub use scope::ScopeKind;
-pub use shutdown::Shutdown;
+pub use shutdown::{Shutdown, ShutdownMode};
 pub use snapshot::{
     ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError,
     SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,

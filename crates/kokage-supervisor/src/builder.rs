@@ -121,12 +121,6 @@ impl OrderedSupervisorBuilder {
         self
     }
 
-    /// Sets the restart declaration inherited by children without an override.
-    #[must_use]
-    pub fn restart(self, restart: Restart) -> Self {
-        self.default_restart(restart)
-    }
-
     /// Sets the shutdown policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
@@ -229,12 +223,6 @@ impl DynamicSupervisorBuilder {
     pub fn default_restart(mut self, restart: Restart) -> Self {
         self.default_restart = restart;
         self
-    }
-
-    /// Sets the restart declaration inherited by dynamically added children.
-    #[must_use]
-    pub fn restart(self, restart: Restart) -> Self {
-        self.default_restart(restart)
     }
 
     /// Sets the shutdown policy inherited by dynamically added task and
