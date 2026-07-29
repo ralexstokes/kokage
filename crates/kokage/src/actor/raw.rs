@@ -56,6 +56,6 @@ pub trait RawActor: Send + 'static {
         false
     }
 
-    /// Runs the actor until it finishes or graph shutdown is requested.
+    /// Runs the actor until it finishes or shutdown is requested.
     fn run(&mut self, ctx: ActorContext<Self::Msg>) -> impl Future<Output = ActorResult> + Send;
 }

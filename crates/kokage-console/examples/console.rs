@@ -5,8 +5,8 @@
 //!
 //! ```text
 //! root (OneForOne)
-//! ├── frontend            graph actor, forwards jobs to the worker
-//! ├── worker              graph actor, fails every 6th job (backoff 1.5s)
+//! ├── frontend            actor, forwards jobs to the worker
+//! ├── worker              actor, fails every 6th job (backoff 1.5s)
 //! ├── burst               dynamic actor, added and removed on a cycle
 //! ├── pipeline (OneForAll)
 //! │   ├── source          runs until shutdown
@@ -24,8 +24,8 @@
 use std::{error::Error, io, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
-    OrderedTree, host::BoxError,
+    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, MessageContext, OrderedTree,
+    host::BoxError,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
 use kokage_supervisor::{BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, Strategy};
@@ -148,7 +148,6 @@ fn telemetry_runtime() -> OrderedTree {
 async fn main() -> Result<(), Box<dyn Error>> {
     let worker_restart = RestartConfig::new(60, Duration::from_secs(60))
         .backoff(BackoffPolicy::Fixed(Duration::from_millis(1500)));
-    let mut builder = GraphBuilder::new();
     let worker_spec = ActorSpec::new("worker", || Worker).restart_config(worker_restart);
     let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
@@ -158,12 +157,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     let frontend = frontend_spec.actor_ref();
-    builder.actor(frontend_spec);
-    builder.actor(worker_spec);
-    let graph = builder.build()?;
 
-    let runtime = OrderedTree::graph(graph)
+    let runtime = OrderedTree::new()
         .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
+        .actor(frontend_spec)
+        .actor(worker_spec)
         .subtree("pipeline", pipeline_runtime())
         .subtree("telemetry", telemetry_runtime())
         .subtree("dynamic", DynamicTree::new())

@@ -44,11 +44,11 @@ async fn sample(worker: ActorRef<&'static str>, runtime: RuntimeHandle, stop: Ca
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
-    let worker = graph.actor(ActorSpec::new("Worker", move || Worker {
+    let worker_spec = ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
-    }));
-    let runtime = OrderedTree::graph(graph.build()?).spawn()?;
+    });
+    let worker = worker_spec.actor_ref();
+    let runtime = OrderedTree::new().actor(worker_spec).spawn()?;
 
     let sampler_stop = CancellationToken::new();
     let sampler = tokio::spawn(sample(

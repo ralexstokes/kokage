@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     cell::Cell,
     future::pending,
@@ -10,8 +14,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, GraphBuilder, LiveContext, MessageContext,
-    OrderedTree, Reply, RestartPolicy, RuntimeHandle,
+    Actor, ActorFactory, ActorResult, ActorSpec, LiveContext, MessageContext, Reply, RestartPolicy,
+    RuntimeHandle,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
     observe::SupervisorSnapshotReceiver,
 };
@@ -144,14 +148,15 @@ impl ActorFactory for NonCloneHandlerFactory {
 #[tokio::test]
 async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     let constructions = Arc::new(AtomicUsize::new(0));
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_ref = builder.actor(ActorSpec::new(
         "handler",
         NonCloneHandlerFactory {
             constructions: constructions.clone(),
         },
     ));
-    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
+    let handle = builder
+        .build()
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
         .expect("runtime builds");
@@ -214,7 +219,7 @@ impl RawActor for NonCloneRaw {
 async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     let constructions = Arc::new(AtomicUsize::new(0));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_ref = builder.actor(ActorSpec::new("raw", {
         let constructions = constructions.clone();
         move || NonCloneRaw {
@@ -223,7 +228,8 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
             observed: observed_tx.clone(),
         }
     }));
-    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
+    let handle = builder
+        .build()
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
         .expect("runtime builds");
@@ -260,15 +266,7 @@ async fn constructor_panic_uses_the_actor_panic_path() {
         }
     }
 
-    let mut builder = GraphBuilder::new();
-    builder.actor(ActorSpec::new("panics", PanickingFactory));
-    let graph = builder.build().expect("registration does not construct");
-    let actor = graph
-        .into_nodes()
-        .into_iter()
-        .next()
-        .expect("actor exists")
-        .into_runnable();
+    let actor = ActorSpec::new("panics", PanickingFactory).into_runnable();
 
     let joined = tokio::spawn(async move {
         actor
@@ -296,11 +294,9 @@ impl Actor for DefaultActor {
 
 #[tokio::test]
 async fn default_constructor_path_is_an_actor_factory() {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_ref = builder.actor(ActorSpec::new("DefaultActor", DefaultActor::default));
-    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
-        .spawn()
-        .expect("runtime builds");
+    let handle = builder.build().spawn().expect("runtime builds");
 
     handle.handle().wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");

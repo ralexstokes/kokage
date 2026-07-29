@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     io,
     sync::{
@@ -8,7 +12,7 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
+    ActorRef, ActorResult, ActorSpec, OrderedTree, Reply, SendError,
     host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::{BackoffPolicy, RestartConfig, RestartPolicy, Strategy};
@@ -76,7 +80,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let (failed_tx, failed_rx) = oneshot::channel();
 
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let failed = oneshot_slot(failed_tx);
     let worker_ref = builder.actor(ActorSpec::new("worker", {
         let worker_starts = worker_starts.clone();
@@ -94,9 +98,9 @@ async fn supervised_actors_restart_only_the_failed_actor() {
             starts: frontend_starts.clone(),
         }
     }));
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
@@ -235,13 +239,13 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     let (exited_tx, exited_rx) = oneshot::channel();
     let exited = oneshot_slot(exited_tx);
 
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let worker_ref = builder.actor(ActorSpec::new("worker", move || NotifyCleanExit {
         exited: exited.clone(),
     }));
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .spawn()

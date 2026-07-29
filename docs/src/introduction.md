@@ -1,95 +1,57 @@
 # Introduction
 
-Kokage is a small family of crates for OTP-style supervision trees and typed
-actors — a thin layer over an async scheduler, with Tokio as the supported
-scheduler today. The core idea is the same one that has kept telecom switches
-running for decades: **let it crash**. Instead of writing defensive code that
-tries to recover from every possible failure in place, you organize your
-program into small, isolated tasks and let a *supervisor* restart the ones that
-fail.
+Kokage brings OTP-style supervision and typed actors to an async Rust
+scheduler. Actors exchange typed messages through restart-stable
+`ActorRef<M>` values, while supervision trees decide which children restart
+together and how shutdown proceeds.
 
 ## The crates
 
-`kokage` is the actor product: its prelude imports the day-one surface,
-while host-facing execution types live under `kokage::host`, observation
-types live under `kokage::observe`, and advanced configuration remains at
-the crate root. Wire actors in a `Graph` and move it into an `OrderedTree`;
-`OrderedTree::graph(graph)` is the concise path when one graph occupies one
-ordered scope. Add plain async tasks to the same tree with
-`kokage::host::ChildSpec`.
-
-Spawning a tree returns an owning [`Runtime`]. Keep it alive for as long as
-the application should run; `RuntimeHandle` values cloned from it are
-non-owning control and observation capabilities. Dropping the owner requests
-graceful shutdown, while dropping any number of handles does nothing to the
-runtime lifetime.
-
-The tiers describe roles rather than enforcing a small root by symbol count.
-Actor and tree configuration types, plus the result and error types named by
-their primary methods, stay at the root even when they are advanced. `host`
-and `observe` collect coherent execution and observation surfaces without
-making every non-prelude type move behind a module.
-
-The actor crate contains both the typed actor layer and the runtime that
-supervises it, built on that deliberately independent crate:
+Most applications depend only on `kokage`. Its prelude contains the common
+actor and tree surface; advanced configuration remains at the crate root,
+low-level hosting lives under `kokage::host`, and observation types live
+under `kokage::observe`.
 
 | Crate | Role |
-|-------|------|
-| [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under an ordered or dynamic tree. |
-| [`kokage-supervisor`](https://stokes.io/kokage/api/kokage_supervisor/index.html) | Structured supervision of async tasks: restart policies, restart intensity limits, graceful shutdown, and supervision trees. |
-| [`kokage-console`](https://stokes.io/kokage/api/kokage_console/index.html) | An experimental, git-only web console for watching a running supervision tree. It is separate from the published product crate. |
-
-`kokage-supervisor` knows nothing about actors — it supervises any async task,
-and is useful on its own if that is all you need. `kokage` builds on it:
-actors are the unit of execution, and what an actor's exit *means* — restart,
-final completion, escalation — is always supervisor policy, never the actor's
-own concern.
+|---|---|
+| [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Typed actors placed directly in ordered or dynamic supervision trees. |
+| [`kokage-supervisor`](https://stokes.io/kokage/api/kokage_supervisor/index.html) | Actor-independent structured supervision for async tasks. |
+| `kokage-derive` | The optional `ActorFactory` derive, re-exported by `kokage`. |
+| `kokage-console` | An experimental live view over snapshots. |
 
 ## The mental model
 
-If you have used Erlang/OTP or Elixir, the mapping is direct:
+An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox
+policy, restart policy, shutdown policy, and incarnation factory. Calling
+`actor_ref()` before placement yields its typed, restart-stable sender.
 
-| OTP concept | kokage equivalent |
-|-------------|----------------------|
-| Supervisor + child specs | [`OrderedTree`] / [`DynamicTree`] + [`ActorSpec`] / [`ChildSpec`] |
-| `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
-| `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
-| Restart intensity (`MaxR`/`MaxT`) | `RestartConfig::new(max_restarts, within)` |
-| GenServer-ish process with a mailbox | An actor with stage-specific `StartContext` / `MessageContext` callbacks |
-| Registered process name | A typed `ActorRef<M>`, minted at wiring time and passed around (labels are display names, not addresses) |
+An `OrderedTree` owns static declarations. A `DynamicTree` owns a scope whose
+membership can change at runtime. Moving a declaration into a tree establishes
+exactly one owner, and `spawn()` validates the complete tree before starting
+it.
 
-If you have not: don't worry. This tutorial builds everything up from scratch.
+A `Runtime` owns the spawned root. Keep it alive for the application's
+lifetime; clone `RuntimeHandle` values for non-owning control and
+observation.
 
 ## The running example
 
-Throughout the tutorial we build a tiny **print shop** service:
+The tutorial grows a small print shop:
 
-```text
-                 ┌────────────┐      ┌───────┐      ┌──────────┐
-  orders ref ──▶ │ front-desk │ ───▶ │ press │ ───▶ │ shipping │
-                 └────────────┘      └───────┘      └──────────┘
-```
+- a front desk accepts orders;
+- a press performs work and may fail;
+- a ledger records durable outcomes;
+- typed refs connect them;
+- the tree determines their restart relationships.
 
-- Customers submit print orders through a typed `ActorRef<Order>` (the stable
-  entry point into the graph).
-- The **front-desk** actor validates orders and forwards them.
-- The **press** actor does the actual printing — and occasionally jams.
-- The **shipping** actor records finished jobs.
-
-The press jamming is the interesting part: we want the rest of the shop to
-keep running while a supervisor replaces the press, and we want in-flight
-senders to transparently reconnect to the new press. That is exactly what
-these crates are for.
+Actors keep transient state inside each incarnation. Data that must survive a
+restart belongs in a durable factory capture, another actor, or external
+storage.
 
 ## How to read this tutorial
 
-Each chapter is a complete, runnable program. You can paste any of them into a
-binary crate and run it, or explore the closely related examples that ship in
-each crate's `examples/` directory (listed in [Where to go
-next](next-steps.md)).
-
-[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
-[`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
-[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
-[`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
-[`Runtime`]: https://stokes.io/kokage/api/kokage/struct.Runtime.html
+Start with [Getting started](getting-started.md), then use
+[Actor wiring](actor-graphs.md) for slots and cyclic references. Continue with
+[Supervised actors](supervised-actors.md) and
+[Inspectable supervision trees](supervision-trees.md) before adding runtime
+membership from [Dynamic actors](dynamic-actors.md).

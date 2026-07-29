@@ -119,7 +119,6 @@ impl RuntimeAttachment {
 }
 
 struct DynamicChildOptions {
-    child_id: Option<String>,
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
     restart_config: Option<RestartConfig>,
@@ -422,7 +421,7 @@ impl RuntimeHandle {
     /// Waits until every named child is simultaneously completed.
     ///
     /// Children are addressed by their supervisor child id. That id defaults
-    /// to an actor's graph label, but derived and nested scopes use the local
+    /// to an actor's id, and nested scopes use the local
     /// field or child name. Use a [`subtree`](Self::subtree) handle for nested
     /// scopes. An unknown child returns [`CompletionError::UnknownChild`]. See
     /// [`CompletionOutcome`] for the distinction between completion and the
@@ -624,7 +623,7 @@ impl DynamicRuntimeHandle {
     /// retained subtree handles then fail control operations with
     /// [`ControlError::Unavailable`].
     ///
-    /// If the subtree itself restarts, its statically declared graph actors
+    /// If the subtree itself restarts, its statically declared actors
     /// are recreated, while children added later through the returned handle
     /// are lost and must be replayed by the application. If this scope's
     /// supervisor restarts, the dynamically added subtree is not recreated.
@@ -700,7 +699,6 @@ impl DynamicRuntimeHandle {
             })?;
         let (default_restart, default_shutdown) = self.handle.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
-            child_id: spec.child_id.clone(),
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
             restart_config: spec.restart_config,
@@ -728,7 +726,6 @@ impl DynamicRuntimeHandle {
             actor.clone(),
             &self.handle.actors,
             ActorChildOptions::new(options.restart, options.shutdown)
-                .child_id(options.child_id)
                 .restart_config(options.restart_config)
                 .remove_on_exit(options.remove_on_exit),
         );
@@ -811,34 +808,22 @@ impl Drop for TerminateBindingOnDrop {
 
 /// How one actor is supervised as a child of its enclosing scope.
 pub(crate) struct ActorChildOptions {
-    /// Id within the enclosing scope. Defaults to the actor label.
-    pub(crate) child_id: Option<String>,
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: ShutdownPolicy,
     pub(crate) restart_config: Option<RestartConfig>,
     /// Whether the membership disappears when the actor exits, rather than
     /// resting as an inactive entry.
     pub(crate) remove_on_exit: bool,
-    /// The scope this actor leads, for an `ActorWithScope` leader. `None` for
-    /// every other actor shape.
-    pub(crate) children: Option<RuntimeHandle>,
 }
 
 impl ActorChildOptions {
     pub(crate) fn new(restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
         Self {
-            child_id: None,
             restart,
             shutdown,
             restart_config: None,
             remove_on_exit: false,
-            children: None,
         }
-    }
-
-    pub(crate) fn child_id(mut self, child_id: Option<String>) -> Self {
-        self.child_id = child_id;
-        self
     }
 
     pub(crate) fn restart_config(mut self, config: Option<RestartConfig>) -> Self {
@@ -850,11 +835,6 @@ impl ActorChildOptions {
         self.remove_on_exit = remove_on_exit;
         self
     }
-
-    pub(crate) fn children(mut self, children: RuntimeHandle) -> Self {
-        self.children = Some(children);
-        self
-    }
 }
 
 pub(crate) fn actor_child_spec(
@@ -863,14 +843,12 @@ pub(crate) fn actor_child_spec(
     options: ActorChildOptions,
 ) -> ChildSpec {
     let ActorChildOptions {
-        child_id,
         restart,
         shutdown,
         restart_config,
         remove_on_exit,
-        children,
     } = options;
-    let actor_id = child_id.unwrap_or_else(|| actor.label().to_owned());
+    let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
@@ -879,7 +857,6 @@ pub(crate) fn actor_child_spec(
         ChildSpec::task(actor_id, move |ctx| {
             let actor = child_guard.actor.clone();
             let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
-            let children = children.clone();
             async move {
                 actor
                     .run_until_ready(
@@ -887,7 +864,6 @@ pub(crate) fn actor_child_spec(
                         ctx.abort_token().cancelled(),
                         restart,
                         supervisor,
-                        children,
                         || ctx.mark_ready(),
                     )
                     .await

@@ -1,3 +1,7 @@
+mod support;
+
+use support::RunnableBuilder;
+
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
@@ -8,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, CallError, DrainPolicy, GraphBuilder, MailboxMode,
-    MessageContext, Reply, RestartPolicy, StartContext,
+    Actor, ActorResult, ActorSlot, CallError, DrainPolicy, MailboxMode, MessageContext, Reply,
+    RestartPolicy, StartContext,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::sync::{Notify, mpsc};
@@ -51,7 +55,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("ticks").mailbox(MailboxMode::conflate());
     let actor_ref = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
@@ -62,7 +66,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()
@@ -115,7 +119,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, _received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("ticks").mailbox(MailboxMode::conflate());
     let actor_ref = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
@@ -126,7 +130,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()
@@ -183,7 +187,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("snapshots")
         .mailbox(MailboxMode::conflate())
         .message_size(sized_snapshot_size);
@@ -196,7 +200,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()
@@ -249,9 +253,9 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
-    builder.mailbox_capacity(2);
+    let mut builder = RunnableBuilder::new();
     let slot = ActorSlot::new("market-data")
+        .mailbox_capacity(2)
         .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol));
     let actor_ref = slot.actor_ref();
     builder.define(slot, {
@@ -262,7 +266,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()
@@ -345,7 +349,7 @@ async fn replaced_call_reports_reply_dropped() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("requests").mailbox(MailboxMode::conflate());
     let actor_ref = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
@@ -356,7 +360,7 @@ async fn replaced_call_reports_reply_dropped() {
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()
@@ -445,7 +449,7 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("drain").mailbox(MailboxMode::conflate());
     let actor_ref = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, {
@@ -456,7 +460,7 @@ async fn drain_policy_handles_latest_message_after_shutdown() {
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()
@@ -494,7 +498,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let panic_once = Arc::new(AtomicBool::new(true));
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let actor_ref_slot = ActorSlot::new("poison-recovery").mailbox(MailboxMode::conflate_by_key({
         let panic_once = Arc::clone(&panic_once);
         move |value: &u64| {
@@ -514,7 +518,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
             received: received_tx.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()

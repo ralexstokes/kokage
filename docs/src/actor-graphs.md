@@ -1,387 +1,124 @@
-# Actor Graphs
+# Actor wiring
 
-The actor layer of `kokage` models a group of async actors with typed
-mailboxes. Each actor declares one message type, and the derive mints
-restart-stable `ActorRef<M>` handles that can be stored in other actors'
-state.
+An `ActorSpec<M>` is the complete declaration for one actor. It combines a
+scope-local id, an incarnation factory, mailbox configuration, and per-actor
+restart and shutdown policy. The same declaration can be placed in a static
+tree, inserted into a dynamic scope, or converted for a direct host.
 
-There are no string-addressed sends and no byte envelope type. If the front
-desk sends orders to the press, the front desk owns an `ActorRef<Order>`.
-Actor names exist too, but only as *labels* for tracing, stats, and
-supervisor child ids — addressing is always a typed ref.
+## Straight-line wiring
 
-Handler methods return `Ok(())` to receive another message. Calling
-`ctx.stop()` before returning successfully requests a clean self-stop. A clean
-stop follows the same drain policy and `on_stop` hook as an external stop:
-`Discard` drops the queued mailbox, `Drain` handles it, and queued
-`continue_with` continuations are dropped in either case — the loop logs a
-`WARN` naming the actor and the count when that happens. It is a normal exit to
-watches and supervision. `RestartPolicy::Always` restarts it; `OnFailure` and
-`Never` do not.
+For acyclic dependencies, obtain a ref from a spec before moving it:
 
-For a cyclic static graph, derive `Supervision` on a struct whose fields are
-actor types. The derive generates refs and factory bundles. Its `wire` closure
-receives one typed `ActorRef` per field before it constructs the factories, so
-cycles and forward references do not require string lookup. Graph validation
-and the supervision tree remain explicit:
+```rust
+# use kokage::{ActorSpec, OrderedTree};
+# struct Press;
+# struct FrontDesk(kokage::ActorRef<()>);
+# impl kokage::Actor for Press { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for FrontDesk { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+let press_actor = ActorSpec::new("press", || Press);
+let press = press_actor.actor_ref();
+let front_desk_actor = ActorSpec::new("front-desk", {
+    let press = press.clone();
+    move || FrontDesk(press.clone())
+});
+let front_desk = front_desk_actor.actor_ref();
 
-```rust,no_run
-use std::time::Duration;
-use kokage::{ActorFactory, ActorRef, ActorResult, Actor, GraphBuilder, MessageContext, OrderedTree, Reply, Supervision};
-
-struct Order(String);
-struct Parcel(String);
-
-enum ShippingMsg {
-    Ship(Parcel),
-    Total(Reply<usize>),
-}
-
-#[derive(ActorFactory)]
-struct FrontDesk {
-    press: ActorRef<Order>,
-}
-
-impl Actor for FrontDesk {
-    type Msg = Order;
-
-    async fn handle(&mut self, order: Order, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        self.press.send(order).await?;
-        Ok(())
-    }
-}
-
-#[derive(ActorFactory)]
-struct Press {
-    shipping: ActorRef<ShippingMsg>,
-}
-
-impl Actor for Press {
-    type Msg = Order;
-
-    async fn handle(&mut self, Order(order): Order, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        self.shipping
-            .send(ShippingMsg::Ship(Parcel(format!("printed[{order}]"))))
-            .await?;
-        Ok(())
-    }
-}
-
-#[derive(ActorFactory)]
-struct Shipping {
-    #[factory(default)]
-    shipped: usize,
-}
-
-impl Actor for Shipping {
-    type Msg = ShippingMsg;
-
-    async fn handle(
-        &mut self,
-        message: ShippingMsg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
-        match message {
-            ShippingMsg::Ship(Parcel(parcel)) => {
-                self.shipped += 1;
-                println!("shipping: {parcel}");
-            }
-            ShippingMsg::Total(reply) => reply.send(self.shipped),
-        }
-        Ok(())
-    }
-}
-
-#[derive(Supervision)]
-struct PrintShop {
-    front_desk: FrontDesk,
-    press: Press,
-    shipping: Shipping,
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut graph = GraphBuilder::new();
-    let refs = PrintShop::wire(&mut graph, |refs| PrintShopFactories {
-        front_desk: FrontDeskFactory {
-            press: refs.press.clone(),
-        },
-        press: PressFactory {
-            shipping: refs.shipping.clone(),
-        },
-        shipping: ShippingFactory {},
-    });
-    let tree = OrderedTree::graph(graph.build()?);
-
-    let runtime = tree.spawn()?;
-
-    refs.front_desk
-        .send(Order("business cards x100".into()))
-        .await?;
-    refs.front_desk.send(Order("flyers x500".into())).await?;
-
-    let shipped = refs.shipping
-        .call(Duration::from_secs(1), ShippingMsg::Total)
-        .await?;
-    println!("shipped {shipped} jobs");
-
-    runtime.shutdown_and_wait().await?;
-    Ok(())
-}
+let tree = OrderedTree::new()
+    .actor(press_actor)
+    .actor(front_desk_actor);
+# let _ = (press, front_desk, tree);
 ```
 
-For lower-level hosting, construct a `GraphBuilder` manually, consume
-`graph.into_nodes()`, convert each node with `into_runnable()`, and drive each
-`host::RunnableActor::run_until` independently.
-`kokage` performs that adaptation for the common supervised runtime.
+## Cyclic wiring with slots
+
+When factories refer to each other, create all `ActorSlot` values and refs
+first. `define` consumes a slot and returns its `ActorSpec`, making a
+partially defined declaration structurally impossible:
+
+```rust
+# use kokage::{ActorSlot, OrderedTree};
+# struct Left(kokage::ActorRef<()>);
+# struct Right(kokage::ActorRef<()>);
+# impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+let left_slot = ActorSlot::<()>::new("left");
+let left = left_slot.actor_ref();
+let right_slot = ActorSlot::<()>::new("right");
+let right = right_slot.actor_ref();
+
+let left_actor = left_slot.define({
+    let right = right.clone();
+    move || Left(right.clone())
+});
+let right_actor = right_slot.define({
+    let left = left.clone();
+    move || Right(left.clone())
+});
+
+let tree = OrderedTree::new()
+    .actor(left_actor)
+    .actor(right_actor);
+# let _ = (left, right, tree);
+```
+
+Rust checks the slot message type and prevents defining the same slot twice.
+The tree checks placement rules when it is spawned or inserted.
 
 ## Incarnation-local state
 
-Every `GraphBuilder::actor` registration takes an `ActorFactory`. Its `build`
-method runs exactly once for the initial start and once for every supervised
-restart, so ordinary actor fields are fresh incarnation-local state. The actor
-type does not need `Clone`, and a synchronously constructible non-`Clone` guard
-or resource can live directly in the actor. Construction happens inside the
-supervised actor future, so a `build` panic follows the same supervision path
-as a startup or run panic.
+Every spec holds an `ActorFactory`. Its `build` method runs once for the
+initial incarnation and once for every restart. Factory captures survive actor
+failure; values created by `build` reset.
 
-Constructor functions are the common case:
+With the default `derive` feature, `#[derive(kokage::ActorFactory)]`
+generates a reusable factory from a named-field actor. Ordinary fields are
+cloned into each incarnation; `#[factory(default)]` fields are rebuilt with
+`Default`.
 
-```rust,ignore
-let worker = builder.actor(ActorSpec::new("worker", Worker::new));
-```
-
-Closures automatically implement `ActorFactory`. For a small wired actor,
-capture only durable configuration or handles and clone those while
-constructing each incarnation:
-
-```rust,ignore
-let ledger = ledger_ref.clone();
-let gateway = builder.actor(ActorSpec::new(
-    "gateway",
-    move || Gateway::new(ledger.clone()),
-));
-```
-
-Larger wiring can derive a named factory directly from the actor. Unmarked
-fields become durable factory configuration and are cloned into every
-incarnation. Fields marked `#[factory(default)]` are omitted from the factory
-and reset to their `Default` value on every build:
-
-```rust,ignore
+```rust
+# use std::sync::Arc;
+# struct Client;
+# impl Clone for Client { fn clone(&self) -> Self { Self } }
 #[derive(kokage::ActorFactory)]
-struct Gateway {
-    ledger: ActorRef<LedgerMsg>,
-    exchange: Exchange,
+struct Worker {
+    client: Client,
     #[factory(default)]
-    pending: Vec<Order>,
+    pending: Vec<String>,
 }
-
-let gateway = builder.actor(ActorSpec::new(
-    "gateway",
-    GatewayFactory { ledger, exchange },
-));
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 ```
 
-Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
-beginning of `host::RawActor::run`, where failure already participates in supervision
-and readiness. Durable state that should survive restarts belongs in an
-unmarked factory field (usually behind a shared handle), in a database, or in
-another actor. This is the same lifetime rule as closure factories: the
-factory value or closure captures outlive incarnations, while the actor
-returned by `build` does not. Hand-write `ActorFactory` when local state needs
-custom synchronous construction rather than `Default`.
+Fallible or asynchronous initialization belongs in `Actor::on_start`, where
+failure participates in supervision and readiness.
 
-## Struct Declarations
+## Mailbox and policy configuration
 
-`#[derive(Supervision)]` supports named-field structs whose fields implement
-`host::RawActor`. Field names become actor labels; rename one with
-`#[supervision(label = "...")]`. A custom label must be non-empty and cannot
-contain `.`, which separates supervisor path components. The generated `wire`
-method mutates a caller-owned `GraphBuilder` and returns cloneable typed refs.
-Build the graph, then select its supervision topology explicitly with
-`OrderedTree` or `DynamicTree`.
+Configure an individual declaration before placement:
 
-The derive keeps that shape in the type system:
-
-- a field whose type is not an actor is a compile error
-- wiring a ref with the wrong message type is a compile error
-- every factory field must be present exactly once in the generated
-  `<Name>Factories` struct literal
-- each factory must build its corresponding declared actor type
-- a declaration with no actors is a compile error
-- two nodes sharing a name, from field names or `label` overrides, is a
-  compile error
-
-The derive intentionally has no mailbox, restart, shutdown, nested-scope, or
-dynamic-scope attributes. Derived fields use the graph-wide builder defaults.
-Wire an individually configured actor through an explicit `ActorSlot` alongside
-the derived declaration, and apply topology through the explicit tree APIs.
-
-## Dynamic and Advanced Builder Wiring
-
-Use `GraphBuilder` directly when actors are generated in a loop or require
-hand-written wiring. Register the ordinary acyclic case in dependency order
-with `builder.actor(ActorSpec::new(id, factory))`.
-
-`ActorSlot::new(id)` is the cyclic-wiring escape hatch. Configure it with the
-same fluent methods as `ActorSpec`, call `actor_ref()` before its factory
-exists, then fill the linear token with `builder.define(slot, factory)`.
-
-The direct builder still validates runtime configuration facts:
-
-- duplicate actor labels
-- slots that were opened but never filled
-- empty graph names, empty actor labels, and zero mailbox capacity
-
-One hazard comes with cyclic wiring: mailboxes are bounded, so two actors
-that `send` to each other while both mailboxes are full deadlock permanently,
-and a `call` cycle deadlocks at depth one. Use `try_send` on feedback edges,
-and `call` only "downhill" along a DAG ordering of the graph.
-
-## Conflating Mailboxes
-
-FIFO mailboxes are right for commands: `send` waits for capacity and
-`try_send` reports `TrySendError::Full`. High-rate state snapshots often need the
-opposite policy—a slow consumer should skip stale updates instead of making
-the producer fall behind. Configure those actors explicitly:
-
-```rust,ignore
-use kokage::{ActorSpec, MailboxMode};
-
-let latest = builder.actor(
-    ActorSpec::new("latest-market", MarketActor::new)
-        .mailbox(MailboxMode::conflate()),
-);
-
-let per_symbol = builder.actor(
-    ActorSpec::new("market-by-symbol", KeyedMarketActor::new)
-        .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol_id)),
-);
+```rust
+# use kokage::{ActorSpec, MailboxMode, RestartPolicy};
+# struct Worker;
+# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+let worker = ActorSpec::new("worker", || Worker)
+    .mailbox_capacity(128)
+    .mailbox(MailboxMode::fifo())
+    .restart(RestartPolicy::Permanent)
+    .message_size(|message: &String| message.len());
+# let _ = worker;
 ```
 
-`MailboxMode::conflate()` stores at most one unread message.
-`MailboxMode::conflate_by_key(...)` stores one unread message per distinct
-key, preserving the first-arrival order of keys;
-its number of keys is bounded by `mailbox_capacity`, and a new key evicts the
-oldest unread key when full. Both `send` and `try_send` replace stale state
-without waiting for capacity. `observe::ActorStats::messages_conflated` counts replaced
-or evicted unread messages.
+An ordered scope also has a mailbox-capacity default. Explicit settings on a
+spec win. A zero capacity, an empty actor id, or duplicate ids in one scope are
+reported during tree lowering. The same local id in different sibling scopes
+is legal.
 
-Because a conflating `send` never waits for capacity, it consumes Tokio's
-cooperative task budget internally. Tight loops of awaited sends therefore
-yield periodically to other tasks without an explicit `yield_now`; producers
-should still rate-limit when the application requires an actual throughput
-bound.
+Bounded cyclic calls can still deadlock through backpressure. Prefer
+asynchronous `send`, offload bounded calls from the actor loop, or design a
+directional request flow.
 
-Keyed sends scan at most `mailbox_capacity` unread keys and may evaluate the
-extractor for every comparison. Keep the extractor cheap and prefer numeric
-or interned ids over allocating keys.
+## Direct hosting
 
-Use these modes only for idempotent state snapshots. They are deliberately
-lossy and are unsuitable for commands. In particular, do not use `call`: if a
-newer message replaces a request before it is handled, the caller receives
-`CallError::ReplyDropped`.
-
-## Runtime Handles
-
-`ActorRef<M>` is the external entry point. It supports:
-
-| Method | Behavior |
-|--------|----------|
-| `send` | Waits for a bound mailbox and retries across expected restart windows; FIFO queues wait for capacity, while conflating mailboxes replace stale state. It returns `SendError` only when the membership is terminal or unavailable. |
-| `try_send` | Returns immediately with `TrySendError::{NotRunning, Full, Closed, Terminated}` when delivery cannot proceed; conflating mailboxes replace stale state instead of reporting `Full`. |
-| `call` | Sends a message carrying `Reply<T>` and awaits the reply until its required caller-owned timeout expires. |
-
-Refs are bound to long-lived mailbox bindings, not one actor incarnation. A
-ref minted at wiring time keeps working across per-actor supervised
-restarts. Delivery is at-most-once: `Ok` from `send` means the message was
-accepted by the current incarnation's mailbox, not that it will be
-processed.
-
-See [Bounded request/reply](request-reply.md) for cancellation before and
-after mailbox acceptance, FIFO backpressure, restart windows, and the
-unknown-outcome rule for external side effects.
-
-## Message Loss at Shutdown and Restart
-
-`Actor` is the usual actor interface: you implement `handle`, and the
-framework owns the receive loop. Its default shutdown behavior is to drain:
-when shutdown is requested, the actor closes external intake and handles the
-messages its mailbox already accepted before running `on_stop`. The drain
-spends the surrounding shutdown budget — the `run_until` bound standalone, or
-the child `ShutdownPolicy` grace under a runtime — so that budget has to fit
-the queued prefix, not just one message.
-
-If an actor should instead stop at once and drop what is queued, return
-`DrainPolicy::Discard` from `drain_policy`; queued `call` requests then see
-`CallError::ReplyDropped`, and outstanding offloads are aborted rather than
-awaited. That is the right choice when queued work is replaceable — recomputed
-next run, conflated into a later snapshot, or retried by the sender.
-
-A drained message reaches the same `handle` as any other, so a handler that
-behaves differently on the way out checks whether `ctx.status()` is
-`ActorStatus::Draining`. Reach for it when the handler would
-otherwise queue work that nothing will run — a `continue_with`, a fresh timer,
-a follow-up offload. Graph shutdown remains a separate signal available as
-`ctx.shutdown_token().is_cancelled()`: a drain can also follow the actor's own
-`ctx.stop()` request while that token remains live.
-
-Hand-written `host::RawActor::run` loops are
-still available as the escape hatch for custom loop control; after
-`ctx.recv().await` returns `None` because shutdown was requested, such actors
-can use `ctx.try_recv()` to drain immediately queued messages.
-
-The two actor styles intentionally receive non-nested capability sets.
-`host::RawActor` owns `host::ActorContext`, so it can call `recv`, `try_recv`, and
-`mark_ready`, but it must express timers and other loop branches directly.
-The framework owns those operations for `Actor`; its stage contexts therefore
-withhold direct mailbox reads and readiness, while the live stages implement
-`LiveContext` for loop-owned timers and continuations. Watches and offloads are
-available directly from each style's context.
-Identity, shutdown-observation, blocking-work, and scope-access methods are
-inherent on every stage context, including `StopContext`; no context trait
-import is needed to call any concrete stage operation. `LiveContext` remains the generic bound for
-helpers shared by the startup and message stages.
-
-`ctx.try_recv()` returns `Option<M>`: `Some(message)` for an immediately
-available delivery and `None` when there is no queued message. The actor run
-owns a mailbox sender for its entire lifetime, so a separate disconnected
-state is not observable through this API.
-
-Restarts have the same loss boundary. Each actor run binds a fresh mailbox, so
-messages queued behind the message that makes an actor crash are lost with the
-old mailbox. `send` retries while an actor is between bindings, but
-it cannot recover messages that were already accepted by the old run.
-
-## Blocking Work
-
-Actors can offload blocking work through `ctx.run_blocking`. Its closure
-receives a cancellation token that follows actor shutdown and is also
-cancelled if the `run_blocking` future is dropped. Long-running closures
-should check it periodically.
-
-```rust,ignore
-let engraved = ctx.run_blocking(move |token| {
-    if token.is_cancelled() {
-        return None;
-    }
-    Some(engrave(input))
-}).await?;
-```
-
-The closure can return any type, including an application-defined `Result`;
-that produces a nested result distinguishing application failure from
-`BlockingCancelled`. A panic resumes on the actor task. If a closure ignores
-cancellation, the standalone host bound or supervised child grace remains the
-backstop; the blocking thread then runs detached because Tokio cannot abort
-blocking work after it starts.
-
-For intentionally detached or concurrent work, clone `ctx.myself()`, call
-`tokio::task::spawn_blocking` directly, and send the result back as a message.
-The `blocking_lifecycle` example demonstrates this mailbox-as-completion
-pattern. Bounded async work started with `ctx.offload` is different: its
-completion is owned and reaped by the actor loop without consuming mailbox
-capacity.
-
-[`ActorRef`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html
+`ActorSpec::into_runnable` validates and materializes one
+`host::RunnableActor` for tests or hosts with their own supervision story.
+Normal applications should place the spec in `OrderedTree` or
+`DynamicTree`.

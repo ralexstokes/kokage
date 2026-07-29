@@ -1,5 +1,0 @@
-error: label must not be empty
-  --> tests/ui/supervision/label_empty.rs:15:27
-   |
-15 |     #[supervision(label = "")]
-   |                           ^^

@@ -291,7 +291,7 @@ impl<M> MailboxMode<M> {
 
     /// One latest-wins slot for the whole mailbox.
     ///
-    /// This mode always has capacity 1; the graph's mailbox capacity setting
+    /// This mode always has capacity 1; the declaration's mailbox capacity
     /// does not apply.
     ///
     /// Sending never waits for capacity. Awaited

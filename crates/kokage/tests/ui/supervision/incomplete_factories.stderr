@@ -1,5 +1,0 @@
-error[E0063]: missing field `second` in initializer of `ApplicationFactories<_, _>`
-  --> tests/ui/supervision/incomplete_factories.rs:21:41
-   |
-21 |     Application::wire(&mut builder, |_| ApplicationFactories { first: || Worker });
-   |                                         ^^^^^^^^^^^^^^^^^^^^ missing `second`

@@ -1,7 +1,5 @@
-//! Compile-fail and compile-pass coverage for the derive guarantees: actor
-//! factory and supervision shapes and attributes, plus the token-API errors
-//! the type system promises (wrong message type for a slot and reusing a
-//! consumed slot token).
+//! Compile-fail and compile-pass coverage for actor-factory derive guarantees,
+//! lifecycle-stage restrictions, and single-use construction tokens.
 
 #[test]
 fn derive_ui() {
@@ -24,7 +22,4 @@ fn derive_ui() {
     // types live outside the crate root and day-one prelude, and the supervisor
     // attachment bridge remains hidden behind `__private`.
     t.compile_fail("tests/ui/public-api/*.rs");
-
-    t.compile_fail("tests/ui/supervision/*.rs");
-    t.pass("tests/ui/supervision-pass/*.rs");
 }

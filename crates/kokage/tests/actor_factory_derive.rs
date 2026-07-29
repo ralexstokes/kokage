@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     io,
     sync::{
@@ -8,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree, Reply,
-    RestartPolicy, RuntimeHandle, StartContext, observe::SupervisorSnapshotReceiver,
+    Actor, ActorFactory, ActorResult, ActorSpec, MessageContext, Reply, RestartPolicy,
+    RuntimeHandle, StartContext, observe::SupervisorSnapshotReceiver,
 };
 
 fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
@@ -78,14 +82,15 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     assert_factory::<DerivedActorFactory>();
 
     let starts = Arc::new(AtomicUsize::new(0));
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_ref = builder.actor(ActorSpec::new(
         "derived",
         DerivedActorFactory {
             starts: starts.clone(),
         },
     ));
-    let handle = OrderedTree::graph(builder.build().expect("graph builds"))
+    let handle = builder
+        .build()
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
         .expect("runtime builds");

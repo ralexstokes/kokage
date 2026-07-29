@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::time::Duration;
 
 use kokage::{
@@ -11,19 +15,18 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorResult, GraphBuilder, LiveContext, MessageContext, OrderedTree,
-            Reply, StartContext, StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
+            Actor, ActorRef, ActorResult, LiveContext, MessageContext, OrderedTree, Reply,
+            StartContext, StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
         };
     }
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorNode, ActorSlot, ActorSpec, BackoffPolicy, BlockingCancelled,
+            ActorFactory, ActorSlot, ActorSpec, BackoffPolicy, BlockingCancelled,
             CancellationHandle, CancellationToken, ControlError, DownReason, DrainPolicy,
-            DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, DynamicTree, Graph,
-            GraphBuildError, GraphSpawnError, IntoActorNode, MailboxMode, MonitorEvent,
-            OffloadDeadline, RestartConfig, RestartPolicy, RestrictedScope, Runtime, RuntimeHandle,
-            ScopeKind, ShutdownPolicy, Strategy, Supervision, SupervisorBuildError,
+            DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, DynamicTree, MailboxMode,
+            MonitorEvent, OffloadDeadline, RestartConfig, RestartPolicy, RestrictedScope, Runtime,
+            RuntimeHandle, ScopeKind, ShutdownPolicy, Strategy, SupervisorBuildError,
             SupervisorError, TaskHandle, TerminalMembership, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
@@ -138,12 +141,13 @@ impl Actor for BlockingWorker {
 #[tokio::test]
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let worker = graph.actor(ActorSpec::new("worker", move || BlockingWorker {
         observed: observed_tx.clone(),
     }));
 
-    let handle = OrderedTree::graph(graph.build().expect("valid graph"))
+    let handle = graph
+        .build()
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");

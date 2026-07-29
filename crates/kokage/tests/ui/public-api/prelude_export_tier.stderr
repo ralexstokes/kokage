@@ -27,9 +27,3 @@ error[E0432]: unresolved import `kokage::prelude::RawActor`
   |
 9 | use kokage::prelude::RawActor;
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawActor` in `prelude`
-
-error[E0432]: unresolved import `kokage::prelude::Supervision`
-  --> tests/ui/public-api/prelude_export_tier.rs:10:5
-   |
-10 | use kokage::prelude::Supervision;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `Supervision` in `prelude`

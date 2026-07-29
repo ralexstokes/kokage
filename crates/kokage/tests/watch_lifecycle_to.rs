@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     io,
     sync::{
@@ -8,9 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, GraphBuilder, LiveContext,
-    MessageContext, OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle,
-    StartContext,
+    Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, LiveContext, MessageContext,
+    OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, StartContext,
     observe::{LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard},
 };
 use tokio::{
@@ -118,7 +121,7 @@ async fn runtime_with_watched_subtree() -> (
         )
         .await
         .expect("sink added");
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let crasher_slot = ActorSlot::new("crasher");
     let crasher = crasher_slot.actor_ref();
     graph.define(crasher_slot, || Crasher);
@@ -126,7 +129,8 @@ async fn runtime_with_watched_subtree() -> (
         .handle()
         .add_subtree(
             "watched",
-            OrderedTree::graph(graph.build().expect("nested graph builds"))
+            graph
+                .build()
                 .default_restart(RestartPolicy::OnFailure)
                 .restart_config(RestartConfig::new(8, Duration::from_secs(1))),
         )

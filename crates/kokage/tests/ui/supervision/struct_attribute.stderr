@@ -1,5 +1,0 @@
-error: `supervision` attributes are not supported on structs; configure topology and policy explicitly on the supervision tree
- --> tests/ui/supervision/struct_attribute.rs:4:1
-  |
-4 | #[supervision(strategy = kokage::Strategy::OneForAll)]
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

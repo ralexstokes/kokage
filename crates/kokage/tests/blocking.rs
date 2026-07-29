@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    ActorResult, ActorSpec, Graph, GraphBuilder, RestartPolicy,
+    ActorResult, ActorSpec, RestartPolicy,
     host::{ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
@@ -31,18 +31,8 @@ fn send_once<T>(slot: &SenderSlot<T>, value: T) {
     }
 }
 
-fn only_actor(graph: Graph) -> RunnableActor {
-    graph
-        .into_nodes()
-        .into_iter()
-        .next()
-        .expect("actor exists")
-        .into_runnable()
-}
-
-fn start_graph(graph: Graph) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
+fn start_actor(actor: RunnableActor) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
     let stop = CancellationToken::new();
-    let actor = only_actor(graph);
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
@@ -58,7 +48,7 @@ fn start_graph(graph: Graph) -> (CancellationToken, JoinHandle<Result<(), ActorR
     (stop, task)
 }
 
-async fn stop_graph(stop: CancellationToken, task: JoinHandle<Result<(), ActorRunError>>) {
+async fn stop_actor(stop: CancellationToken, task: JoinHandle<Result<(), ActorRunError>>) {
     stop.cancel();
     timeout(Duration::from_secs(1), task)
         .await
@@ -87,15 +77,14 @@ impl RawActor for ReturnsResult {
 async fn run_blocking_returns_the_closure_result() {
     let (observed_tx, observed_rx) = oneshot::channel();
     let observed = sender_slot(observed_tx);
-    let mut builder = GraphBuilder::new();
-    builder.actor(ActorSpec::new("worker", move || ReturnsResult {
+    let actor = ActorSpec::new("worker", move || ReturnsResult {
         observed: observed.clone(),
-    }));
-    let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(graph);
+    })
+    .into_runnable();
+    let (stop, task) = start_actor(actor);
 
     assert_eq!(observed_rx.await.expect("result observed"), Ok(Ok(42)));
-    stop_graph(stop, task).await;
+    stop_actor(stop, task).await;
 }
 
 #[derive(Clone)]
@@ -128,16 +117,15 @@ async fn run_blocking_token_is_cancelled_on_actor_shutdown() {
     let started = Arc::new(Notify::new());
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let cancelled = sender_slot(cancelled_tx);
-    let mut builder = GraphBuilder::new();
-    builder.actor(ActorSpec::new("worker", {
+    let actor = ActorSpec::new("worker", {
         let started = started.clone();
         move || WaitsForShutdown {
             started: started.clone(),
             cancelled: cancelled.clone(),
         }
-    }));
-    let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(graph);
+    })
+    .into_runnable();
+    let (stop, task) = start_actor(actor);
 
     started.notified().await;
     stop.cancel();
@@ -191,8 +179,7 @@ async fn dropping_run_blocking_future_cancels_its_token() {
     let drop_future = Arc::new(Notify::new());
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let cancelled = sender_slot(cancelled_tx);
-    let mut builder = GraphBuilder::new();
-    builder.actor(ActorSpec::new("worker", {
+    let actor = ActorSpec::new("worker", {
         let started = started.clone();
         let drop_future = drop_future.clone();
         move || DropsFuture {
@@ -200,9 +187,9 @@ async fn dropping_run_blocking_future_cancels_its_token() {
             drop_future: drop_future.clone(),
             cancelled: cancelled.clone(),
         }
-    }));
-    let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(graph);
+    })
+    .into_runnable();
+    let (stop, task) = start_actor(actor);
 
     started.notified().await;
     drop_future.notify_one();
@@ -210,7 +197,7 @@ async fn dropping_run_blocking_future_cancels_its_token() {
         .await
         .expect("blocking closure observed future drop")
         .expect("cancellation sender remained alive");
-    stop_graph(stop, task).await;
+    stop_actor(stop, task).await;
 }
 
 #[derive(Clone)]
@@ -246,8 +233,7 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
     let release = Arc::new(AtomicBool::new(false));
     let (finished_tx, finished_rx) = oneshot::channel();
     let finished = sender_slot(finished_tx);
-    let mut builder = GraphBuilder::new();
-    builder.actor(ActorSpec::new("worker", {
+    let actor = ActorSpec::new("worker", {
         let started = started.clone();
         let release = release.clone();
         move || IgnoresCancellation {
@@ -255,9 +241,8 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
             release: release.clone(),
             finished: finished.clone(),
         }
-    }));
-    let graph = builder.build().expect("valid graph");
-    let actor = only_actor(graph);
+    })
+    .into_runnable();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
@@ -306,11 +291,7 @@ impl RawActor for Panics {
 
 #[tokio::test]
 async fn blocking_panic_propagates_as_actor_panic() {
-    let mut builder = GraphBuilder::new();
-    builder.actor(ActorSpec::new("worker", || Panics));
-    let graph = builder.build().expect("valid graph");
-
-    let actor = only_actor(graph);
+    let actor = ActorSpec::new("worker", || Panics).into_runnable();
     let result = timeout(
         Duration::from_secs(1),
         tokio::spawn(async move {

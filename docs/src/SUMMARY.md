@@ -5,7 +5,7 @@
 # Tutorial
 
 - [Getting started](getting-started.md)
-- [Actor graphs](actor-graphs.md)
+- [Actor wiring](actor-graphs.md)
 - [Bounded request/reply](request-reply.md)
 - [Bounded actor offloads](actor-offloads.md)
 - [Supervised actors](supervised-actors.md)

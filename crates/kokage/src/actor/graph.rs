@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     future::Future,
     io::Error as IoError,
     pin::Pin,
@@ -23,7 +22,6 @@ use crate::{
             ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
             mailbox,
         },
-        builder::{ActorNode, DEFAULT_MAILBOX_CAPACITY},
         cancellation::CancelOnDrop,
         context::{ActorContext, ActorLifetime, ActorRef},
         factory::ActorFactory,
@@ -32,6 +30,8 @@ use crate::{
         raw::{BoxError, RawActor},
     },
 };
+
+pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
 
 pub(crate) type BoxedActorFuture =
     Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send + 'static>>;
@@ -43,7 +43,6 @@ pub(crate) struct RunnerStart {
     pub(crate) restart_policy: RestartPolicy,
     pub(crate) ready: oneshot::Sender<()>,
     pub(crate) supervisor: RuntimeHandle,
-    pub(crate) children: Option<RuntimeHandle>,
 }
 
 /// Type-erased actor runner.
@@ -129,7 +128,6 @@ where
                 scope_waits: Default::default(),
                 scope_wait_gates: Default::default(),
                 supervisor: start.supervisor,
-                children: start.children,
             };
             let mut monitor_exit = MonitorExitGuard::new(monitor_hub);
             // Binding is deliberately deferred until this actor future's first
@@ -192,85 +190,9 @@ pub enum ActorRunError {
 /// whether it is hosted by hand or by an [`OrderedTree`](crate::OrderedTree).
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
-/// An actor graph containing wiring and independently runnable actors.
+/// A single actor declaration, ready to be run independently.
 ///
-/// Stable typed refs remain functional across independent actor restarts.
-/// Execution is performed by consuming its linear [`ActorNode`] values,
-/// normally into an [`crate::OrderedTree`].
-pub struct Graph {
-    inner: GraphInner,
-}
-
-struct GraphInner {
-    name: Arc<str>,
-    actors: Vec<ActorNode>,
-    observability: GraphObservability,
-    mailbox_capacity: usize,
-}
-
-impl Graph {
-    pub(crate) fn new(
-        name: Arc<str>,
-        actors: Vec<ActorNode>,
-        observability: GraphObservability,
-        mailbox_capacity: usize,
-    ) -> Self {
-        Self {
-            inner: GraphInner {
-                name,
-                actors,
-                observability,
-                mailbox_capacity,
-            },
-        }
-    }
-
-    /// Returns the graph name used in tracing fields.
-    pub fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    /// Consumes the graph and returns its actor nodes in declaration order.
-    ///
-    /// Each [`ActorNode`] is a non-cloneable placement token. Move it into an
-    /// [`crate::OrderedTree`], or explicitly convert it to a
-    /// [`RunnableActor`] for a custom host with [`ActorNode::into_runnable`].
-    pub fn into_nodes(self) -> Vec<ActorNode> {
-        self.inner.actors
-    }
-
-    /// Consumes the graph and indexes its actor nodes by graph label.
-    ///
-    /// This is the robust extraction path when actors will be placed at
-    /// different supervision-tree positions: removing by label does not depend
-    /// on declaration or derived-struct field order. Labels are unique because
-    /// graph validation rejects duplicate actor ids.
-    pub fn into_nodes_by_label(self) -> HashMap<String, ActorNode> {
-        self.into_nodes()
-            .into_iter()
-            .map(|node| (node.label().to_owned(), node))
-            .collect()
-    }
-
-    pub(crate) fn dynamic_builder(&self) -> RunnableActorBuilder {
-        RunnableActorBuilder {
-            observability: self.inner.observability.clone(),
-            mailbox_capacity: self.inner.mailbox_capacity,
-        }
-    }
-}
-
-impl std::fmt::Debug for Graph {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Graph")
-            .field("name", &self.name())
-            .finish_non_exhaustive()
-    }
-}
-
-/// A single actor in a graph, ready to be run independently.
-///
-/// Retains stable mailbox bindings from the graph, so [`ActorRef`] handles
+/// Retains a stable mailbox binding, so [`ActorRef`] handles
 /// keep working across restarts. Use [`run_until`](Self::run_until) to drive
 /// one actor incarnation.
 #[derive(Clone)]
@@ -363,8 +285,7 @@ impl RunnableActor {
     /// Actors run through this unsupervised entry point receive a terminal
     /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::host::ActorContext::supervisor):
     /// control operations return `ControlError::Unavailable` and observation
-    /// streams are closed. Their [`ActorContext::children`](crate::host::ActorContext::children)
-    /// value is `None`.
+    /// streams are closed.
     pub async fn run_until<F>(
         &self,
         shutdown: F,
@@ -389,7 +310,6 @@ impl RunnableActor {
             abort,
             restart,
             RuntimeHandle::unavailable(),
-            None,
             || {},
         )
         .await
@@ -401,7 +321,6 @@ impl RunnableActor {
         abort: A,
         restart: RestartPolicy,
         supervisor: RuntimeHandle,
-        children: Option<RuntimeHandle>,
         ready: R,
     ) -> Result<(), ActorRunError>
     where
@@ -426,7 +345,6 @@ impl RunnableActor {
                     restart_policy: restart,
                     ready: ready_tx,
                     supervisor,
-                    children,
                 })
                 .instrument(actor_span),
         ));
@@ -650,6 +568,13 @@ impl RunnableActorBuilder {
         Self {
             observability: GraphObservability::new(anonymous_graph_name()),
             mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
+        }
+    }
+
+    pub(crate) fn with_mailbox_capacity(mailbox_capacity: usize) -> Self {
+        Self {
+            observability: GraphObservability::new(anonymous_graph_name()),
+            mailbox_capacity,
         }
     }
 

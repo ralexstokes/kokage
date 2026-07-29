@@ -5,7 +5,7 @@
 //! per-conversation subtrees added and removed at runtime via
 //! `DynamicRuntimeHandle::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
-//! a readiness-gated `RawActor` bridge, and a `#[derive(Supervision)]` supervision
+//! a readiness-gated `RawActor` bridge, and an explicitly wired supervision
 //! tree with a real budget ↔ guard cycle.
 //!
 //! # Modules
@@ -31,10 +31,9 @@
 //!
 //! # Supervision shape
 //!
-//! `#[derive(Supervision)]` wires the cyclic core and its typed refs. Configured
-//! gateway/journal slots join the same graph, then linear actor nodes build the
-//! explicit tree below. Graph labels remain qualified (`gateway.inbound`,
-//! `core.journal`) while supervisor child ids stay local.
+//! `ActorSlot`s mint the cyclic core's typed refs before factories are defined,
+//! then the resulting actor specs build the explicit tree below. Actor ids are
+//! local to their containing supervision scope.
 //!
 //! ```text
 //! root (OneForOne)
@@ -133,7 +132,7 @@ use std::{
 
 use kokage::{
     ActorSlot, DownReason, DynamicTree, MailboxMode, MonitorEvent, RuntimeHandle, Strategy,
-    Supervision, observe::LifecycleWatchGuard, prelude::*,
+    observe::LifecycleWatchGuard, prelude::*,
 };
 use tokio::time::Instant;
 
@@ -144,32 +143,17 @@ use guard::Guard;
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
-use router::{Router, RouterFactory};
+use router::RouterFactory;
 use telemetry::LatencyRecorder;
 use tool_host::ToolHost;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
-/// Gateway actors keep the 32-deep mailbox the separate `agent-gateway` graph
-/// gave them before the scopes merged into one graph; core actors keep the
-/// graph-wide default.
+/// Gateway actors use a shallower mailbox than the core scope's default.
 const GATEWAY_MAILBOX: usize = 32;
 
 fn gateway_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
     ActorSlot::new(label).mailbox_capacity(GATEWAY_MAILBOX)
-}
-
-/// The budget↔guard cycle is what the derive wires. Topology stays explicit.
-#[derive(Supervision)]
-struct AgentControl {
-    #[supervision(label = "core-budget")]
-    budget: Budget,
-    #[supervision(label = "core-guard")]
-    guard: Guard,
-    #[supervision(label = "core-tool-host")]
-    tool_host: ToolHost,
-    #[supervision(label = "core-router")]
-    router: Router,
 }
 
 struct App {
@@ -223,131 +207,82 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions_mount = sessions_runtime.handle();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
-    // Open the configured gateway and journal slots before deriving the core.
-    // The core factories can capture those refs, and the bridge factory is
-    // filled afterward with the derived router ref.
-    let mut builder = kokage::GraphBuilder::new();
-    builder.name("agent-control");
-    let outbound_slot = gateway_slot::<OutboundMsg>("gateway.outbound");
+    // Open every slot first so cyclic factories can capture the stable refs.
+    let outbound_slot = gateway_slot::<OutboundMsg>("outbound");
     let outbound = outbound_slot.actor_ref();
-    let progress_slot = gateway_slot::<ProgressMsg>("gateway.progress").mailbox(
+    let progress_slot = gateway_slot::<ProgressMsg>("progress").mailbox(
         MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat()),
     );
     let progress = progress_slot.actor_ref();
-    let inbound_slot = gateway_slot::<InboundMsg>("gateway.inbound");
+    let inbound_slot = gateway_slot::<InboundMsg>("inbound");
     let journal_slot =
-        ActorSlot::<JournalMsg>::new("core.journal").message_size(messages::journal_message_size);
+        ActorSlot::<JournalMsg>::new("journal").message_size(messages::journal_message_size);
     let journal = journal_slot.actor_ref();
+    let budget_slot = ActorSlot::<BudgetMsg>::new("budget");
+    let budget = budget_slot.actor_ref();
+    let guard_slot = ActorSlot::<GuardMsg>::new("guard");
+    let guard = guard_slot.actor_ref();
+    let tool_host_slot = ActorSlot::<ToolHostMsg>::new("tool_host");
+    let tool_host = tool_host_slot.actor_ref();
+    let router_slot = ActorSlot::<RouterMsg>::new("router");
+    let router = router_slot.actor_ref();
 
-    let refs = AgentControl::wire(&mut builder, |refs| AgentControlFactories {
-        budget: {
-            let guard = refs.guard.clone();
-            move || Budget::new(guard.clone())
-        },
-        guard: {
-            let budget = refs.budget.clone();
-            let router = refs.router.clone();
-            let model = model.clone();
-            let gate = gate.clone();
-            move || Guard::new(budget.clone(), router.clone(), model.clone(), gate.clone())
-        },
-        tool_host: ToolHost::default,
-        router: RouterFactory {
-            mount: sessions_mount.clone().into(),
-            journal: journal.clone(),
-            budget: refs.budget.clone(),
-            tool_host: refs.tool_host.clone(),
-            guard: refs.guard.clone(),
-            outbound: outbound.clone(),
-            progress: progress.clone(),
-            gate: gate.clone(),
-            model: model_client.clone(),
-            session_epoch: session_epoch.clone(),
-            proof: proof.clone(),
-        },
+    let budget_actor = budget_slot.define({
+        let guard = guard.clone();
+        move || Budget::new(guard.clone())
     });
-    let AgentControlRefs {
-        budget,
-        guard,
-        tool_host,
-        router,
-    } = refs;
-
-    builder.define(outbound_slot, {
+    let guard_actor = guard_slot.define({
+        let budget = budget.clone();
+        let router = router.clone();
+        let model = model.clone();
+        let gate = gate.clone();
+        move || Guard::new(budget.clone(), router.clone(), model.clone(), gate.clone())
+    });
+    let tool_host_actor = tool_host_slot.define(ToolHost::default);
+    let router_actor = router_slot.define(RouterFactory {
+        mount: sessions_mount.clone().into(),
+        journal: journal.clone(),
+        budget: budget.clone(),
+        tool_host: tool_host.clone(),
+        guard: guard.clone(),
+        outbound: outbound.clone(),
+        progress: progress.clone(),
+        gate: gate.clone(),
+        model: model_client.clone(),
+        session_epoch: session_epoch.clone(),
+        proof: proof.clone(),
+    });
+    let outbound_actor = outbound_slot.define({
         let chat = chat.clone();
         move || Outbound::new(chat.clone())
     });
-    builder.define(progress_slot, {
+    let progress_actor = progress_slot.define({
         let chat = chat.clone();
         move || Progress::new(chat.clone())
     });
-    builder.define(inbound_slot, {
+    let inbound_actor = inbound_slot.define({
         let chat = chat.clone();
         let journal = journal.clone();
         let router = router.clone();
         move || Inbound::new(chat.clone(), journal.clone(), router.clone())
     });
-    builder.define(journal_slot, Journal::default);
+    let journal_actor = journal_slot.define(Journal::default);
 
-    let graph = builder.build()?;
-    let mut nodes = graph.into_nodes_by_label();
     let gateway_tree = OrderedTree::new()
         .strategy(Strategy::RestForOne)
-        .actor(
-            nodes
-                .remove("gateway.outbound")
-                .expect("gateway.outbound node")
-                .child_id("outbound"),
-        )
-        .actor(
-            nodes
-                .remove("gateway.progress")
-                .expect("gateway.progress node")
-                .child_id("progress"),
-        )
-        .actor(
-            nodes
-                .remove("gateway.inbound")
-                .expect("gateway.inbound node")
-                .child_id("inbound"),
-        );
+        .actor(outbound_actor)
+        .actor(progress_actor)
+        .actor(inbound_actor);
     let core_tree = OrderedTree::new()
-        .actor(
-            nodes
-                .remove("core.journal")
-                .expect("core.journal node")
-                .child_id("journal"),
-        )
-        .actor(
-            nodes
-                .remove("core-budget")
-                .expect("core-budget node")
-                .child_id("budget"),
-        )
-        .actor(
-            nodes
-                .remove("core-guard")
-                .expect("core-guard node")
-                .child_id("guard"),
-        )
-        .actor(
-            nodes
-                .remove("core-tool-host")
-                .expect("core-tool-host node")
-                .child_id("tool_host"),
-        )
-        .actor(
-            nodes
-                .remove("core-router")
-                .expect("core-router node")
-                .child_id("router"),
-        );
+        .actor(journal_actor)
+        .actor(budget_actor)
+        .actor(guard_actor)
+        .actor(tool_host_actor)
+        .actor(router_actor);
     let tree = OrderedTree::new()
         .subtree("gateway", gateway_tree)
         .subtree("core", core_tree)
         .subtree("sessions", sessions_runtime);
-    assert!(nodes.is_empty(), "every graph actor is placed exactly once");
-
     let runtime = tree.spawn()?;
     let gateway = runtime
         .handle()
@@ -692,7 +627,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
         .send(BudgetMsg::SetGlobalCap { tokens: u64::MAX })
         .await?;
     await_until(|| async { !paused(&app.guard).await.unwrap_or(true) }).await?;
-    println!("PHASE 6 OK — #[derive(Supervision)] budget↔guard cycle + recoverable probe backoff");
+    println!("PHASE 6 OK — budget↔guard cycle + recoverable probe backoff");
     Ok(())
 }
 

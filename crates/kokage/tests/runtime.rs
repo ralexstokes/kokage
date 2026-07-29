@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     io,
     marker::PhantomData,
@@ -10,7 +14,7 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, DrainPolicy, DynamicTree,
-    GraphBuilder, MessageContext, OrderedTree, Reply, RuntimeHandle, SendError, StartContext,
+    MessageContext, OrderedTree, Reply, RuntimeHandle, SendError, StartContext,
     host::{ActorContext, BoxError, RawActor},
     observe::{LifecycleEventKind, SupervisorSnapshotReceiver},
 };
@@ -81,13 +85,13 @@ fn build_runtime<F>(factory: F) -> (OrderedTree, ActorRef<<F::Actor as RawActor>
 where
     F: ActorFactory,
 {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_ref_slot = ActorSlot::new("worker");
     let actor_ref = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, factory);
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
+    let runtime = graph.strategy(Strategy::OneForOne);
 
     (runtime, actor_ref)
 }
@@ -231,28 +235,28 @@ async fn runtime_handle_enumerates_actor_stats() {
 
 #[tokio::test]
 async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
-    let mut root_graph = GraphBuilder::new();
+    let mut root_graph = TreeBuilder::new();
     let root_ref_slot = ActorSlot::new("root-worker");
     let root_ref = root_ref_slot.actor_ref();
     root_graph.define(root_ref_slot, Drain::<()>::new);
-    let mut nested_graph = GraphBuilder::new();
+    let mut nested_graph = TreeBuilder::new();
     let nested_ref_slot = ActorSlot::new("nested-worker");
     let nested_ref = nested_ref_slot.actor_ref();
     nested_graph.define(nested_ref_slot, Drain::<()>::new);
-    let mut leaf_graph = GraphBuilder::new();
+    let mut leaf_graph = TreeBuilder::new();
     let leaf_ref_slot = ActorSlot::new("leaf-worker");
     let leaf_ref = leaf_ref_slot.actor_ref();
     leaf_graph.define(leaf_ref_slot, Drain::<()>::new);
 
-    let root_graph = root_graph.build().expect("valid root graph");
-    let nested_graph = nested_graph.build().expect("valid nested graph");
-    let leaf_graph = leaf_graph.build().expect("valid leaf graph");
-    let handle = OrderedTree::graph(root_graph)
+    let root_graph = root_graph.build();
+    let nested_graph = nested_graph.build();
+    let leaf_graph = leaf_graph.build();
+    let handle = root_graph
         .subtree(
             "workers",
-            OrderedTree::graph(nested_graph)
+            nested_graph
                 .subtree("dynamic", DynamicTree::new())
-                .subtree("leaf", OrderedTree::graph(leaf_graph)),
+                .subtree("leaf", leaf_graph),
         )
         .subtree("raw-members", DynamicTree::new())
         .spawn()
@@ -379,19 +383,16 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
 
 #[tokio::test]
 async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let static_ref_slot = ActorSlot::new("static-worker");
     let static_ref = static_ref_slot.actor_ref();
     graph.define(static_ref_slot, Drain::<()>::new);
     let root = DynamicTree::new().spawn().expect("runtime builds");
 
-    let graph = graph.build().expect("graph builds");
+    let graph = graph.build();
     let subtree = root
         .handle()
-        .add_subtree(
-            "workers",
-            OrderedTree::graph(graph).subtree("dynamic", DynamicTree::new()),
-        )
+        .add_subtree("workers", graph.subtree("dynamic", DynamicTree::new()))
         .await
         .expect("subtree added");
     subtree.wait_started().await.expect("subtree started");
@@ -517,18 +518,18 @@ async fn subtree_validation_phases_report_rejected() {
 
 #[tokio::test]
 async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
-    let mut left_graph = GraphBuilder::new();
+    let mut left_graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("worker");
     left_graph.define(actor_slot, Drain::<()>::new);
-    let mut right_graph = GraphBuilder::new();
+    let mut right_graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("worker");
     right_graph.define(actor_slot, Drain::<()>::new);
 
-    let left_graph = left_graph.build().expect("left graph builds");
-    let right_graph = right_graph.build().expect("right graph builds");
+    let left_graph = left_graph.build();
+    let right_graph = right_graph.build();
     let handle = OrderedTree::new()
-        .subtree("left", OrderedTree::graph(left_graph))
-        .subtree("right", OrderedTree::graph(right_graph))
+        .subtree("left", left_graph)
+        .subtree("right", right_graph)
         .spawn()
         .expect("runtime builds");
     handle
@@ -620,15 +621,15 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
-    let mut nested_graph = GraphBuilder::new();
+    let mut nested_graph = TreeBuilder::new();
     let static_ref_slot = ActorSlot::new("static-worker");
     let static_ref = static_ref_slot.actor_ref();
     nested_graph.define(static_ref_slot, || FailOnMessage);
-    let nested_graph = nested_graph.build().expect("valid nested graph");
+    let nested_graph = nested_graph.build();
     let handle = OrderedTree::new()
         .subtree(
             "workers",
-            OrderedTree::graph(nested_graph)
+            nested_graph
                 .subtree("dynamic", DynamicTree::new())
                 .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
@@ -733,17 +734,17 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
 
 #[tokio::test]
 async fn dynamic_subtree_restart_recreates_only_builder_membership() {
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let static_ref_slot = ActorSlot::new("static-worker");
     let static_ref = static_ref_slot.actor_ref();
     graph.define(static_ref_slot, || FailOnMessage);
     let root = DynamicTree::new().spawn().expect("runtime builds");
-    let graph = graph.build().expect("graph builds");
+    let graph = graph.build();
     let subtree = root
         .handle()
         .add_subtree(
             "workers",
-            OrderedTree::graph(graph)
+            graph
                 .subtree("dynamic", DynamicTree::new())
                 .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
@@ -781,15 +782,15 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
 
 #[tokio::test]
 async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
-    let mut parent_graph = GraphBuilder::new();
+    let mut parent_graph = TreeBuilder::new();
     let fuse_slot = ActorSlot::new("fuse");
     let fuse = fuse_slot.actor_ref();
     parent_graph.define(fuse_slot, || FailOnMessage);
-    let parent_graph = parent_graph.build().expect("graph builds");
+    let parent_graph = parent_graph.build();
     let root = OrderedTree::new()
         .subtree(
             "parent",
-            OrderedTree::graph(parent_graph)
+            parent_graph
                 .subtree("dynamic", DynamicTree::new())
                 .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
@@ -1017,15 +1018,15 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
 #[tokio::test]
 async fn supervision_tree_wires_graph_into_supervised_runtime() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
     let worker_ref = worker_ref_slot.actor_ref();
     builder.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
@@ -1049,10 +1050,10 @@ async fn supervision_tree_wires_graph_into_supervised_runtime() {
 
 #[tokio::test]
 async fn supervision_tree_mixes_actor_and_non_actor_children() {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_slot = ActorSlot::new("actor");
     builder.define(actor_slot, Drain::<()>::new);
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
     let sidecar_started = Arc::new(Notify::new());
 
     let sidecar = ChildSpec::task("sidecar", {
@@ -1066,10 +1067,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
             }
         }
     });
-    let handle = OrderedTree::graph(graph)
-        .task(sidecar)
-        .spawn()
-        .expect("runtime builds");
+    let handle = graph.task(sidecar).spawn().expect("runtime builds");
 
     timeout(Duration::from_secs(1), sidecar_started.notified())
         .await
@@ -1097,14 +1095,14 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
 
 #[tokio::test]
 async fn snapshot_wait_reports_all_children_running_after_spawn() {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_slot = ActorSlot::new("one");
     builder.define(actor_slot, Drain::<()>::new);
     let actor_slot = ActorSlot::new("two");
     builder.define(actor_slot, Drain::<()>::new);
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
@@ -1146,13 +1144,13 @@ impl RawActor for FailOnMessage {
 
 #[tokio::test]
 async fn snapshot_child_wait_arms_before_the_future_is_polled() {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
     let worker_ref = worker_ref_slot.actor_ref();
     builder.define(worker_ref_slot, || FailOnMessage);
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
@@ -1196,13 +1194,13 @@ impl RawActor for AlwaysFails {
 
 #[tokio::test]
 async fn send_fails_after_restart_intensity_is_exhausted() {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
     let worker_ref = worker_ref_slot.actor_ref();
     builder.define(worker_ref_slot, || AlwaysFails);
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::Always)
         .restart_config(RestartConfig::new(1, Duration::from_secs(60)))
@@ -1265,7 +1263,7 @@ impl Actor for ResettingCounter {
 #[tokio::test]
 async fn supervised_restart_constructs_fresh_actor_state() {
     let on_starts = Arc::new(AtomicUsize::new(0));
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let counter_slot = ActorSlot::new("counter");
     let counter = counter_slot.actor_ref();
     builder.define(counter_slot, {
@@ -1275,9 +1273,9 @@ async fn supervised_restart_constructs_fresh_actor_state() {
             on_starts: on_starts.clone(),
         }
     });
-    let graph = builder.build().expect("valid graph");
+    let graph = builder.build();
 
-    let handle = OrderedTree::graph(graph)
+    let handle = graph
         .default_restart(RestartPolicy::Always)
         .spawn()
         .expect("runtime builds");
@@ -1369,7 +1367,7 @@ impl Actor for StuckDrainActor {
 async fn child_grace_bounds_the_whole_actor_drain() {
     let handling_gate = Arc::new(Notify::new());
     let release_gate = Arc::new(Notify::new());
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let worker_slot = ActorSlot::new("worker");
     let worker = worker_slot.actor_ref();
     graph.define(worker_slot, {
@@ -1380,7 +1378,8 @@ async fn child_grace_bounds_the_whole_actor_drain() {
             release_gate: release_gate.clone(),
         }
     });
-    let handle = OrderedTree::graph(graph.build().expect("graph builds"))
+    let handle = graph
+        .build()
         .default_shutdown(ShutdownPolicy::Cooperative {
             grace: Duration::from_millis(20),
         })
@@ -1432,7 +1431,7 @@ impl RawActor for PendingActor {
 #[tokio::test]
 async fn actor_shutdown_timeout_is_truthful_across_layers() {
     let started = Arc::new(Notify::new());
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_slot = ActorSlot::new("worker");
     builder.define(actor_slot, {
         let started = started.clone();
@@ -1440,7 +1439,8 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
             started: started.clone(),
         }
     });
-    let handle = OrderedTree::graph(builder.build().expect("valid graph"))
+    let handle = builder
+        .build()
         .default_shutdown(ShutdownPolicy::Cooperative {
             grace: Duration::from_millis(20),
         })
@@ -1477,14 +1477,14 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
 #[tokio::test]
 async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
     let worker_ref = worker_ref_slot.actor_ref();
     graph.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });
-    let graph = graph.build().expect("valid graph");
-    let handle = OrderedTree::graph(graph)
+    let graph = graph.build();
+    let handle = graph
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed runtime builds");
@@ -1495,7 +1495,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
         .expect("message sent");
     observed_rx.recv().await.expect("message observed");
 
-    // Graph actors are visible in the runtime's stats without any dynamic
+    // Declared actors are visible in the runtime's stats without any dynamic
     // actor having been added.
     let stats = handle.handle().actor_stats();
     let worker = stats

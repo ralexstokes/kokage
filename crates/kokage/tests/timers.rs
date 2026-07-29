@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     io,
     sync::{
@@ -8,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, CancellationHandle, GraphBuilder,
-    LiveContext, MessageContext, OrderedTree, StartContext, TimerKey,
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, CancellationHandle, LiveContext,
+    MessageContext, OrderedTree, StartContext, TimerKey,
     host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::Strategy;
@@ -22,10 +26,10 @@ fn build_runtime<F>(factory: F) -> (OrderedTree, ActorRef<<F::Actor as RawActor>
 where
     F: ActorFactory,
 {
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let actor_ref = builder.actor(ActorSpec::new("timer", factory));
-    let graph = builder.build().expect("valid graph");
-    let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
+    let graph = builder.build();
+    let runtime = graph.strategy(Strategy::OneForOne);
     (runtime, actor_ref)
 }
 
@@ -572,13 +576,13 @@ where
     F: ActorFactory,
 {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let sink_ref = builder.actor(ActorSpec::new("sink", move || Sink {
         observed: observed_tx.clone(),
     }));
     let scheduler_ref = builder.actor(ActorSpec::new("scheduler", scheduler(sink_ref)));
-    let graph = builder.build().expect("valid graph");
-    let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
+    let graph = builder.build();
+    let runtime = graph.strategy(Strategy::OneForOne);
     (runtime, scheduler_ref, observed_rx)
 }
 

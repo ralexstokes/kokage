@@ -1,5 +1,0 @@
-error: Supervision cannot be derived for generic structs
-  --> tests/ui/supervision/generic_struct.rs:17:20
-   |
-17 | struct GenericScope<T> {
-   |                    ^^^

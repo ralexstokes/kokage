@@ -1,16 +1,11 @@
 # Compile-fail UI tests
 
-`actor-factory/`, `supervision/`, `single-use-tree/`, `public-api/`, and
-`lifecycle-stages/` hold
+`actor-factory/`, `single-use-tree/`, `public-api/`, and `lifecycle-stages/` hold
 [trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
 `tests/derive_ui.rs`. `actor-factory/` covers the `#[derive(ActorFactory)]`
-shape and attribute contract. `supervision/` covers the narrow
-`#[derive(Supervision)]` cyclic-wiring contract: supported declaration shapes,
-factory bounds, label syntax (empty, duplicate, dotted, and unsupported
-options), typed refs, visibility, and rejection of struct-level topology
-attributes. The `single-use-tree/` fixtures pin linear placement and
-owner/handle boundaries;
-`public-api/` pins the documented export tiers. Each
+shape and attribute contract. The `single-use-tree/` fixtures pin linear
+placement and owner/handle boundaries; `public-api/` pins the documented
+export tiers. Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
 spans included. The corresponding `*-pass/` directories cover supported
 derive attributes and visibility.
@@ -35,7 +30,7 @@ toolchain in `rust-toolchain.toml` may break them even though nothing is
 wrong. Regenerate locally and review the diff:
 
 ```sh
-TRYBUILD=overwrite cargo test -p kokage --test derive_ui
+./scripts/dev env TRYBUILD=overwrite cargo test -p kokage --test derive_ui
 git diff crates/kokage/tests/ui
 ```
 
