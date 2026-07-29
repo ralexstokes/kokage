@@ -1327,7 +1327,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
             move || StubbornPeer {
                 started: peer_started_tx.clone(),
             },
-            DynamicActorOptions::new().shutdown(ShutdownPolicy::abort()),
+            DynamicActorOptions::new().shutdown(ShutdownPolicy::Abort),
         )
         .await
         .expect("peer added");

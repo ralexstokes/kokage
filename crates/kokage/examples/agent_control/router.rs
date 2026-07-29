@@ -52,15 +52,29 @@ enum SessionSlot {
 
 fn mount_reconciliation(
     snapshot: SupervisorSnapshot,
-    mut routes_subtree: impl FnMut(&str) -> bool,
+    routes_subtree: impl FnMut(&str) -> bool,
 ) -> (u64, Vec<String>) {
     let alignment_seq = snapshot.lifecycle_seq;
-    let orphaned = snapshot
-        .children
+    mount_reconciliation_parts(
+        alignment_seq,
+        snapshot
+            .children
+            .into_iter()
+            .map(|child| (child.id, child.membership)),
+        routes_subtree,
+    )
+}
+
+fn mount_reconciliation_parts(
+    alignment_seq: u64,
+    children: impl IntoIterator<Item = (String, ChildMembershipView)>,
+    mut routes_subtree: impl FnMut(&str) -> bool,
+) -> (u64, Vec<String>) {
+    let orphaned = children
         .into_iter()
-        .filter(|child| child.membership == ChildMembershipView::Active)
-        .filter(|child| !routes_subtree(&child.id))
-        .map(|child| child.id)
+        .filter(|(_, membership)| *membership == ChildMembershipView::Active)
+        .filter(|(id, _)| !routes_subtree(id))
+        .map(|(id, _)| id)
         .collect();
     (alignment_seq, orphaned)
 }
@@ -76,9 +90,17 @@ fn mount_event_disposition(
     alignment_seq: u64,
     event: &ChildLifecycleEvent,
 ) -> MountEventDisposition {
-    if matches!(&event.kind, ChildLifecycleEventKind::Lagged { .. }) {
+    event_disposition(
+        alignment_seq,
+        event.seq,
+        matches!(&event.kind, ChildLifecycleEventKind::Lagged { .. }),
+    )
+}
+
+fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountEventDisposition {
+    if lagged {
         MountEventDisposition::ReconcileSnapshot
-    } else if event.seq > alignment_seq {
+    } else if event_seq > alignment_seq {
         MountEventDisposition::Apply
     } else {
         MountEventDisposition::Ignore
@@ -446,73 +468,32 @@ impl Actor for Router {
 
 #[cfg(test)]
 mod tests {
-    use kokage::{
-        Strategy,
-        observe::{ChildSnapshot, ChildStateView, SupervisorStateView},
-    };
-
     use super::*;
 
     #[test]
     fn lagged_event_bypasses_seq_filter_and_reconciles_active_orphans() {
-        let added =
-            |seq| ChildLifecycleEvent::new(seq, "orphan", 0, 0, 0, ChildLifecycleEventKind::Added);
         assert_eq!(
-            mount_event_disposition(
-                72,
-                &ChildLifecycleEvent::new(
-                    72,
-                    "orphan",
-                    0,
-                    0,
-                    0,
-                    ChildLifecycleEventKind::Lagged { dropped: 71 },
-                ),
-            ),
+            event_disposition(72, 72, true),
             MountEventDisposition::ReconcileSnapshot
         );
         assert_eq!(
-            mount_event_disposition(72, &added(71)),
+            event_disposition(72, 71, false),
             MountEventDisposition::Ignore
         );
         assert_eq!(
-            mount_event_disposition(72, &added(73)),
+            event_disposition(72, 73, false),
             MountEventDisposition::Apply
         );
 
-        let mut already_removing = ChildSnapshot::new(
-            "already-removing",
-            0,
-            ChildStateView::Stopping {
-                started: true,
-                previous_exit: None,
-            },
-        );
-        already_removing.membership = ChildMembershipView::Removing;
-        let mut snapshot = SupervisorSnapshot::new(
-            SupervisorStateView::Running,
-            Strategy::OneForOne,
+        let (alignment_seq, orphaned) = mount_reconciliation_parts(
+            73,
             vec![
-                ChildSnapshot::new(
-                    "routed",
-                    0,
-                    ChildStateView::Running {
-                        previous_exit: None,
-                    },
-                ),
-                ChildSnapshot::new(
-                    "orphan",
-                    0,
-                    ChildStateView::Running {
-                        previous_exit: None,
-                    },
-                ),
-                already_removing,
+                ("routed".to_owned(), ChildMembershipView::Active),
+                ("orphan".to_owned(), ChildMembershipView::Active),
+                ("already-removing".to_owned(), ChildMembershipView::Removing),
             ],
+            |id| id == "routed",
         );
-        snapshot.lifecycle_seq = 73;
-
-        let (alignment_seq, orphaned) = mount_reconciliation(snapshot, |id| id == "routed");
 
         assert_eq!(alignment_seq, 73);
         assert_eq!(orphaned, ["orphan"]);

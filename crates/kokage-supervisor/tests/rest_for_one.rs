@@ -153,7 +153,9 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: common::SHORT_GRACE,
+    });
 
     let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -249,7 +251,9 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: Duration::from_secs(1),
+    });
 
     let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -414,7 +418,9 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: Duration::from_secs(1),
+    });
 
     let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
@@ -487,5 +493,7 @@ fn failing_once_child(
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(200)))
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: Duration::from_millis(200),
+    })
 }

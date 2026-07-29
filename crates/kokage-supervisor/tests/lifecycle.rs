@@ -8,8 +8,8 @@ use std::{
 
 use kokage_supervisor::{
     BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSpec, CompletionGuard,
-    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, RestartConfig,
-    RestartPolicy, ShutdownPolicy, Strategy, Supervisor, SupervisorLifecycleEvent,
+    LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig, RestartPolicy,
+    ShutdownPolicy, Strategy, Supervisor, SupervisorLifecycleEvent,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -73,10 +73,11 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
     let crash = Arc::new(Notify::new());
     let child_crash = Arc::clone(&crash);
     let builder = Supervisor::ordered()
-        .restart_intensity(
-            RestartConfig::new(5, Duration::from_secs(60))
-                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
-        )
+        .restart_config(common::restart_config(
+            5,
+            Duration::from_secs(60),
+            BackoffPolicy::Fixed(Duration::from_millis(40)),
+        ))
         .child(
             ChildSpec::task("worker", move |ctx| {
                 let crash = Arc::clone(&child_crash);
@@ -159,21 +160,6 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
     assert_eq!(tree.next().await, None);
 }
 
-#[test]
-fn recursive_lifecycle_values_have_public_test_constructors() {
-    let segment = LifecyclePathSegment::new("nested", 3, 5);
-    let event = LifecycleEvent::new(
-        vec![segment.clone()],
-        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started),
-    );
-
-    assert_eq!(event.supervisor_path, vec![segment]);
-    assert!(matches!(
-        event.kind,
-        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started)
-    ));
-}
-
 #[tokio::test]
 async fn recursive_started_after_matches_a_non_empty_supervisor_path() {
     let crash = Arc::new(Notify::new());
@@ -192,26 +178,37 @@ async fn recursive_started_after_matches_a_non_empty_supervisor_path() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
+            .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid nested supervisor");
-    let handle = Supervisor::ordered()
-        .child(ChildSpec::supervisor("nested", nested))
-        .build()
-        .expect("valid root supervisor")
-        .spawn();
+    let builder = Supervisor::ordered().child(ChildSpec::supervisor("nested", nested));
+    let pre_spawn = builder.handle();
+    let mut lifecycle = pre_spawn.watch_lifecycle_recursive();
+    let handle = builder.build().expect("valid root supervisor").spawn();
     handle.wait_started().await.expect("startup succeeds");
-    let mut lifecycle = handle.watch_lifecycle_recursive();
+
+    let nested_path = loop {
+        let event = lifecycle.next().await.expect("lifecycle remains open");
+        if !event.supervisor_path.is_empty()
+            && matches!(
+                event.kind,
+                LifecycleEventKind::Child(ref child)
+                    if child.child_id == "worker"
+                        && matches!(child.kind, ChildLifecycleEventKind::Started { generation: 0 })
+            )
+        {
+            break event.supervisor_path;
+        }
+    };
 
     crash.notify_one();
-    let nested_path = [LifecyclePathSegment::new("nested", 0, 0)];
     assert_eq!(
         lifecycle.started_after(&nested_path, "worker", 0).await,
         Some(1)
     );
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -230,10 +227,11 @@ async fn scheduled_restart_event_observes_its_aligned_snapshot() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(
-        RestartConfig::new(5, Duration::from_secs(60))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(30))),
-    );
+    .restart_config(common::restart_config(
+        5,
+        Duration::from_secs(60),
+        BackoffPolicy::Fixed(Duration::from_secs(30)),
+    ));
     let handle = Supervisor::ordered()
         .child(child)
         .build()
@@ -253,13 +251,13 @@ async fn scheduled_restart_event_observes_its_aligned_snapshot() {
     assert_eq!(worker.restart_count, scheduled.child_restart_count);
     assert!(worker.next_restart_in.is_some());
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
 async fn restart_intensity_is_recursive_only_and_closes_the_direct_watch() {
     let builder = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
         .child(ChildSpec::task("worker", |_| async {
             Err(common::test_error("boom"))
         }));
@@ -302,7 +300,7 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
     let builder = Supervisor::ordered().child(
         ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
+            .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
     );
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
@@ -349,7 +347,7 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
     assert_eq!(recreated.supervisor_path[1].id, "leaf");
     assert!(recreated.supervisor_path[1].lineage > initial.supervisor_path[1].lineage);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -401,7 +399,7 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
     assert_eq!(second.supervisor_path.len(), 1);
     assert_eq!(second.supervisor_path[0].generation, 0);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -420,7 +418,7 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartConfig::new(100, Duration::from_secs(60)));
+    .restart_config(RestartConfig::new(100, Duration::from_secs(60)));
     let builder = Supervisor::dynamic();
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
@@ -431,7 +429,7 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
     wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
             .child("storm")
-            .is_some_and(|child| child.generation == RESTARTS as u64 && child.started())
+            .is_some_and(|child| child.generation == RESTARTS as u64 && child.state.started())
     })
     .await;
 
@@ -454,7 +452,7 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
     .await;
     assert!(last_start.supervisor_path.is_empty());
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -508,7 +506,7 @@ async fn restart_is_an_ordered_exit_schedule_started_sequence() {
     assert_eq!(started.total_restarts, 1);
     assert_eq!(started.child_restart_count, 1);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -538,7 +536,7 @@ async fn started_after_reports_membership_removal() {
         .expect("worker removal succeeds");
     assert_eq!(lifecycle.started_after("worker", baseline).await, None);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -580,7 +578,7 @@ async fn readiness_gated_started_is_emitted_only_after_ready() {
         ChildLifecycleEventKind::Started { generation: 0 }
     ));
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -616,7 +614,7 @@ async fn remove_on_exit_emits_exited_before_removed() {
     assert_eq!(removed.seq, exited.seq + 1);
     assert!(handle.snapshot().child("ephemeral").is_none());
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -625,7 +623,9 @@ async fn cooperative_remove_publishes_removed_before_reply() {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
-    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: Duration::from_secs(1),
+    });
     let handle = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
@@ -648,7 +648,7 @@ async fn cooperative_remove_publishes_removed_before_reply() {
     assert!(handle.snapshot().lifecycle_seq >= removed.seq);
     assert!(handle.snapshot().child("worker").is_none());
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -693,7 +693,7 @@ async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
     assert_eq!(removed.seq, exited.seq + 1);
     assert_eq!(removed.lineage, added.lineage);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -712,7 +712,7 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartConfig::new(100, Duration::from_secs(60)));
+    .restart_config(RestartConfig::new(100, Duration::from_secs(60)));
     let handle = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
@@ -723,7 +723,7 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
             .child("storm")
-            .is_some_and(|child| child.generation == RESTARTS as u64 && child.started())
+            .is_some_and(|child| child.generation == RESTARTS as u64 && child.state.started())
     })
     .await;
 
@@ -748,7 +748,7 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     assert_eq!(last.total_restarts, RESTARTS as u64);
     assert_eq!(last.child_restart_count, RESTARTS as u64);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -788,7 +788,7 @@ async fn watch_snapshot_filter_is_gap_free_under_concurrent_churn() {
     assert_eq!(observed.first().copied(), Some(baseline.lifecycle_seq + 1));
     assert!(observed.windows(2).all(|pair| pair[1] == pair[0] + 1));
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -811,7 +811,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .shutdown(ShutdownPolicy::abort()),
+            .shutdown(ShutdownPolicy::Abort),
         )
         .child(
             ChildSpec::task("fatal", move |_ctx| {
@@ -822,8 +822,8 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
-            .shutdown(ShutdownPolicy::abort()),
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::Abort),
         )
         .build()
         .expect("valid middle supervisor");
@@ -831,7 +831,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .child(
             ChildSpec::supervisor("middle", middle)
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
+                .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor")
@@ -871,7 +871,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
     assert_eq!(added.total_restarts, 2);
     assert_eq!(started.total_restarts, 2);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -911,7 +911,7 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
         .child("worker")
         .expect("declared child is projected");
     assert!(declared.state.is_starting());
-    assert!(!declared.started());
+    assert!(!declared.state.started());
 
     release.notify_one();
     let added = next_for(&mut lifecycle, "worker", |kind| {
@@ -927,7 +927,7 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
     assert_eq!(started.seq, added.seq + 1);
     assert_eq!(started.lineage, declared.lineage);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -986,7 +986,7 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
         "nested lifecycle to close eagerly on removal",
     )
     .await;
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -1003,7 +1003,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
             }
         })
         .restart(RestartPolicy::OnFailure)
-        .shutdown(ShutdownPolicy::abort()),
+        .shutdown(ShutdownPolicy::Abort),
     );
     let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
     let leaf = leaf_builder.build().expect("valid leaf supervisor");
@@ -1020,7 +1020,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .shutdown(ShutdownPolicy::abort()),
+            .shutdown(ShutdownPolicy::Abort),
         )
         .build()
         .expect("valid supervisor")
@@ -1049,7 +1049,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     .await;
     assert_eq!(started.seq, added.seq + 1);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
     wait_closed(
         &mut lifecycle,
         "root shutdown to close revived nested watch",
@@ -1071,7 +1071,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("valid nested supervisor");
@@ -1091,7 +1091,7 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
     .await;
     wait_closed(&mut lifecycle, "non-restarted nested identity to close").await;
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -1105,7 +1105,7 @@ async fn parent_stop_closes_watch_while_stable_handle_is_retained() {
     let nested = handle.supervisor("nested").expect("nested handle");
     let mut lifecycle = nested.watch_lifecycle();
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
     wait_closed(&mut lifecycle, "root terminality to close descendant watch").await;
     assert_eq!(nested.snapshot().total_restarts, 0);
 }
@@ -1118,7 +1118,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
         .child(
             ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
+                .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid supervisor")
@@ -1157,7 +1157,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
     assert!(second_exit.seq > started.seq);
     assert_eq!(second_exit.total_restarts, 1);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
     wait_closed(
         &mut lifecycle,
         "root terminality to close revived descendant watch",
@@ -1175,7 +1175,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .child(
             ChildSpec::supervisor("middle", middle)
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
+                .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor")
@@ -1194,7 +1194,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .await
         .expect("bomb added");
@@ -1217,7 +1217,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
     })
     .await;
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -1263,7 +1263,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
         .await
         .expect_err("later RestForOne position remains provisionally revivable");
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
     wait_closed(
         &mut tail_lifecycle,
         "root terminality to close deferred tail identity",
@@ -1296,8 +1296,8 @@ fn middle_supervisor(
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
-            .shutdown(ShutdownPolicy::abort()),
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::Abort),
         )
         .build()
         .expect("valid leaf supervisor");
@@ -1313,8 +1313,8 @@ fn middle_supervisor(
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
-            .shutdown(ShutdownPolicy::abort()),
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::Abort),
         )
         .build()
         .expect("valid middle supervisor")
@@ -1380,7 +1380,7 @@ async fn started_after_reports_a_start_lost_to_overflow() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(RestartConfig::new(100, Duration::from_secs(60))),
+            .restart_config(RestartConfig::new(100, Duration::from_secs(60))),
         )
         .await
         .expect("dynamic add succeeds");
@@ -1389,7 +1389,7 @@ async fn started_after_reports_a_start_lost_to_overflow() {
     wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
             .child("storm")
-            .is_some_and(|child| child.generation == RESTARTS as u64 && child.started())
+            .is_some_and(|child| child.generation == RESTARTS as u64 && child.state.started())
     })
     .await;
 
@@ -1400,5 +1400,5 @@ async fn started_after_reports_a_start_lost_to_overflow() {
         .expect("started_after must not outlive the transitions it awaits");
     assert_eq!(waited, None);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }

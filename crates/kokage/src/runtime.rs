@@ -13,7 +13,7 @@ use crate::{
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
     ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard, CompletionOutcome,
-    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
+    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, RunningSupervisor, ShutdownPolicy,
     SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 use tokio::sync::watch;
@@ -347,11 +347,27 @@ where
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
+    // Transitional ownership bridge while the higher-level runtime still
+    // returns a handle as its root owner. Nested handles never carry this.
+    _root_owner: Option<Arc<RunningSupervisor>>,
 }
 
 impl RuntimeHandle {
     pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
-        Self { supervisor, actors }
+        Self {
+            supervisor,
+            actors,
+            _root_owner: None,
+        }
+    }
+
+    pub(crate) fn root(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
+        let owner = Arc::new(supervisor);
+        Self {
+            supervisor: owner.handle(),
+            actors,
+            _root_owner: Some(owner),
+        }
     }
 
     pub(crate) fn unavailable() -> Self {
@@ -838,7 +854,7 @@ pub(crate) fn actor_child_spec(
     .shutdown(shutdown);
 
     if let Some(intensity) = restart_intensity {
-        child = child.restart_intensity(intensity);
+        child = child.restart_config(intensity);
     }
 
     child

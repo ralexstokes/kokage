@@ -46,11 +46,13 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         completed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(ExitStatusView::Completed)
     ));
 
-    common::shutdown(handle).await;
+    common::shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -101,7 +103,7 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         failed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .last_exit(),
+            .state.last_exit().map(|exit| &exit.status),
         Some(ExitStatusView::Failed(message)) if message.contains("nested failure")
     ));
 
@@ -514,7 +516,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(ChildSpec::task("leaf", {
             let attempts = attempts.clone();
             let fail_first = fail_first.clone();
@@ -615,7 +617,7 @@ async fn abort_mode_hard_cascades_through_a_nested_supervisor() {
         .expect("valid outer supervisor")
         .spawn();
     handle
-        .add_child(ChildSpec::supervisor("nested", nested).shutdown(ShutdownPolicy::abort()))
+        .add_child(ChildSpec::supervisor("nested", nested).shutdown(ShutdownPolicy::Abort))
         .await
         .expect("nested child should be accepted");
     common::recv_event(&mut started_rx).await;
@@ -643,7 +645,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(ChildSpec::task("leaf", {
             let fail = fail.clone();
             let attempts = attempts.clone();
@@ -669,10 +671,11 @@ async fn control_is_unavailable_between_nested_incarnations() {
 
     let handle = Supervisor::ordered()
         .child(
-            ChildSpec::supervisor("nested", nested).restart_intensity(
-                RestartConfig::new(5, Duration::from_secs(30))
-                    .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(500))),
-            ),
+            ChildSpec::supervisor("nested", nested).restart_config(common::restart_config(
+                5,
+                Duration::from_secs(30),
+                BackoffPolicy::Fixed(Duration::from_millis(500)),
+            )),
         )
         .build()
         .expect("valid outer supervisor")
@@ -742,7 +745,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .expect("valid grandchild supervisor");
 
     let mid = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(
             ChildSpec::task("fuse", {
                 let fail = fail.clone();
@@ -754,7 +757,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::abort()),
+            .shutdown(ShutdownPolicy::Abort),
         )
         .child(ChildSpec::supervisor("leafsup", leafsup))
         .build()
@@ -803,7 +806,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
             && snapshot.lifecycle_seq > baseline_seq
             && snapshot
                 .child("worker")
-                .is_some_and(|worker| worker.started())
+                .is_some_and(|worker| worker.state.started())
     })
     .await;
     assert_eq!(
@@ -817,7 +820,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         "the grandchild control channel should bind to the replacement incarnation"
     );
 
-    common::shutdown(handle).await;
+    common::shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -841,7 +844,7 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .child(ChildSpec::supervisor("nested", nested))
         .child(
             ChildSpec::task("fatal", |_| async { Err(common::test_error("fatal")) })
-                .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
+                .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor");

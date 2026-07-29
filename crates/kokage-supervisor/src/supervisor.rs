@@ -47,7 +47,7 @@ use crate::{
 /// let supervisor = Supervisor::ordered().build()?;
 /// let handle = supervisor.handle();
 ///
-/// supervisor.clone().spawn(); // spawns the clone's identity, not `handle`'s
+/// let _running = supervisor.clone().spawn(); // owns the clone's identity
 /// drop(supervisor);           // abandons `handle`'s identity: it goes terminal
 /// # Ok(())
 /// # }
@@ -62,6 +62,59 @@ pub struct Supervisor {
     // handed to a parent edge. Spawned roots terminalize through this guard
     // when their owned runtime finishes.
     terminalize_on_drop: AtomicBool,
+}
+
+/// Owning guard for a spawned root supervisor.
+///
+/// A running supervisor has exactly one owner. Dropping this value requests a
+/// graceful shutdown, while any [`SupervisorHandle`] values obtained through
+/// [`handle`](Self::handle) remain non-owning and may be dropped freely.
+/// Retain the owner for as long as the root supervisor should keep running.
+#[must_use = "dropping the running supervisor requests graceful shutdown"]
+pub struct RunningSupervisor {
+    handle: SupervisorHandle,
+}
+
+impl RunningSupervisor {
+    /// Returns a non-owning handle for control and observation.
+    pub fn handle(&self) -> SupervisorHandle {
+        self.handle.clone()
+    }
+
+    /// Requests a graceful shutdown of the supervisor.
+    pub fn shutdown(&self) {
+        self.handle.shutdown();
+    }
+
+    /// Requests a graceful shutdown and waits for the supervisor to stop.
+    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+        self.handle.shutdown_and_wait().await
+    }
+
+    /// Waits for the supervisor to stop.
+    pub async fn wait(&self) -> Result<(), SupervisorError> {
+        self.handle.wait().await
+    }
+}
+
+impl std::ops::Deref for RunningSupervisor {
+    type Target = SupervisorHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
+
+impl Drop for RunningSupervisor {
+    fn drop(&mut self) {
+        self.handle.shutdown();
+    }
+}
+
+impl std::fmt::Debug for RunningSupervisor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunningSupervisor").finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -156,9 +209,11 @@ impl Supervisor {
         self.channels.handle()
     }
 
-    /// Spawns the supervisor as a background Tokio task and returns a handle
-    /// for control and observation.
-    pub fn spawn(self) -> SupervisorHandle {
+    /// Spawns the supervisor as a background Tokio task and returns its owner.
+    ///
+    /// Dropping the returned [`RunningSupervisor`] requests graceful shutdown.
+    /// Handles obtained from it are non-owning.
+    pub fn spawn(self) -> RunningSupervisor {
         let channels = Arc::clone(&self.channels);
         channels.claim_edge(false);
         channels.mark_root();
@@ -206,7 +261,7 @@ impl Supervisor {
                     None,
                     None,
                     false,
-                    task_channels.internal_handle(),
+                    task_channels.handle(),
                 )
                 .await;
             let _ = task_done_tx.send(Some(result.clone()));
@@ -215,7 +270,9 @@ impl Supervisor {
         });
 
         channels.install_root_extra(RootExtra::new(done_rx, join_handle, done_tx));
-        channels.handle()
+        RunningSupervisor {
+            handle: channels.handle(),
+        }
     }
 
     pub(crate) async fn run_as_child(
@@ -303,7 +360,7 @@ impl Supervisor {
                     Some(parent_link),
                     Some(startup_ctx),
                     revivable,
-                    channels.internal_handle(),
+                    channels.handle(),
                 )
                 .await;
             let _ = task_done_tx.send(Some(result.clone()));
@@ -532,7 +589,7 @@ fn initial_attached_children(
             attachment: child.attachment.clone(),
             supervisor: nested_channels
                 .get(&child.id)
-                .map(StableSupervisorChannels::internal_handle),
+                .map(StableSupervisorChannels::handle),
         })
         .collect()
 }

@@ -45,7 +45,9 @@ async fn transient_child_panic_causes_restart() {
             .snapshot()
             .child("panic-worker")
             .expect("panic worker remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(ExitStatusView::Panicked)
     ));
 
@@ -70,7 +72,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::abort());
+    .shutdown(ShutdownPolicy::Abort);
 
     let trigger_failure_for_child = Arc::clone(&trigger_failure);
     let trigger = ChildSpec::task("trigger", move |ctx| {
@@ -102,7 +104,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     assert_eq!(common::recv_event(&mut peer_starts_rx).await, 1);
     let peer = common::wait_for_child_running(&mut snapshots, "abort-peer", 1).await;
     assert!(matches!(
-        peer.last_exit(),
+        peer.state.last_exit().map(|exit| &exit.status),
         Some(ExitStatusView::Aborted { after_grace: false })
     ));
 

@@ -133,7 +133,7 @@ impl SupervisorHandle {
     ///
     /// The returned guard must be retained: dropping it cancels the watch and
     /// leaves the supervisor running. The spawned task holds no lifecycle
-    /// lease, so it never keeps a root supervisor alive on its own.
+    /// ownership, so it never keeps a root supervisor alive on its own.
     ///
     /// # Panics
     ///
@@ -144,7 +144,7 @@ impl SupervisorHandle {
         S: Into<String>,
     {
         let set = CompletionSet::new(ids);
-        let handle = self.observer();
+        let handle = self.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
 

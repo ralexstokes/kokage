@@ -77,7 +77,7 @@ fn print_child_snapshot(child: &ChildSnapshot, depth: usize) {
         child_membership(child.membership),
         child.restart_count,
         child.next_restart_in,
-        child.last_exit()
+        child.state.last_exit().map(|exit| &exit.status)
     );
 
     if let Some(snapshot) = child.supervisor.as_ref() {

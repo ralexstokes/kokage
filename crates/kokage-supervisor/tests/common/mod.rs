@@ -24,6 +24,16 @@ pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 pub const QUIET_TIMEOUT: Duration = Duration::from_millis(150);
 pub const SHORT_GRACE: Duration = Duration::from_millis(50);
 
+pub fn restart_config(
+    max_restarts: usize,
+    within: Duration,
+    backoff: kokage_supervisor::BackoffPolicy,
+) -> RestartConfig {
+    let mut config = RestartConfig::new(max_restarts, within);
+    config.backoff = backoff;
+    config
+}
+
 pub fn test_error(message: &'static str) -> BoxError {
     Box::new(std::io::Error::other(message))
 }
@@ -371,7 +381,7 @@ pub fn failing_child(
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
+    .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(
@@ -415,9 +425,9 @@ pub async fn wait_for_snapshot(
     .expect("timed out waiting for matching supervisor snapshot")
 }
 
-pub async fn shutdown(handle: SupervisorHandle) {
+pub async fn shutdown(handle: &SupervisorHandle) {
     handle.shutdown();
-    wait(&handle, "supervisor shutdown")
+    wait(handle, "supervisor shutdown")
         .await
         .expect("shutdown should succeed");
 }
