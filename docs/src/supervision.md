@@ -18,8 +18,8 @@ use kokage::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut press_restart = RestartConfig::new(3, Duration::from_secs(10));
-    press_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
+    let press_restart = RestartConfig::new(3, Duration::from_secs(10))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
 
     // A press that jams shortly after starting.
     let press = ChildSpec::task("press", |ctx| async move {
