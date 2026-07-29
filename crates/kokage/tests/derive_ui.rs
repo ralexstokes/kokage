@@ -23,7 +23,8 @@ fn derive_ui() {
     t.compile_fail("tests/ui/declaration-sealing/*.rs");
 
     // Public API tiers are intentionally disjoint: observation and raw-hosting
-    // types live outside the crate root and day-one prelude, and the supervisor
-    // attachment bridge remains hidden behind `__private`.
+    // types live outside the crate root and day-one prelude, while the
+    // low-level supervisor module and its nested-child constructor remain
+    // private implementation details.
     t.compile_fail("tests/ui/public-api/*.rs");
 }
