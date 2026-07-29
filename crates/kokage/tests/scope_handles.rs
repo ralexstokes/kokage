@@ -15,7 +15,9 @@ use kokage::{
     OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext, Strategy,
     SupervisorBuildError,
     host::{BoxError, ChildSpec},
-    observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
+    observe::{
+        ChildStateView, CompletionGuard, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver,
+    },
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -182,6 +184,42 @@ impl Actor for BuilderHandleOwner {
 struct RestrictedTaskAdder {
     lineage: mpsc::UnboundedSender<u64>,
     subtree: mpsc::UnboundedSender<RestrictedScope>,
+}
+
+struct DynamicCompletionLeader {
+    completion: Option<CompletionGuard>,
+    reports: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for DynamicCompletionLeader {
+    type Msg = ();
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+        let dynamic = ctx
+            .supervisor()
+            .dynamic()
+            .expect("leader runs in a dynamic scope");
+        self.completion = Some(dynamic.shutdown_on_completion(["first", "second"]));
+        self.reports.send("armed").expect("test receiver open");
+
+        dynamic
+            .add_child(ChildSpec::task("first", |_| async { Ok(()) }))
+            .await?;
+        dynamic
+            .add_child(ChildSpec::task("second", |_| async { Ok(()) }))
+            .await?;
+        self.reports.send("inserted").expect("test receiver open");
+        Ok(())
+    }
+
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+        Ok(())
+    }
+
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
+        assert!(self.completion.is_some(), "completion guard was retained");
+        Ok(())
+    }
 }
 
 impl Actor for RestrictedTaskAdder {
@@ -759,6 +797,26 @@ async fn restricted_scope_add_child_returns_the_inserted_lineage() {
     );
 
     handle.shutdown_and_wait().await.expect("tree stops");
+}
+
+#[tokio::test]
+async fn dynamic_restricted_scope_arms_completion_before_inserting_children() {
+    let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
+    let runtime = DynamicTree::new().spawn().expect("dynamic root builds");
+    support::dynamic_root(&runtime)
+        .add_actor(ActorSpec::new("leader", move || DynamicCompletionLeader {
+            completion: None,
+            reports: reports_tx.clone(),
+        }))
+        .await
+        .expect("leader inserted");
+
+    assert_eq!(next_report(&mut reports_rx).await, "armed");
+    assert_eq!(next_report(&mut reports_rx).await, "inserted");
+    timeout(WAIT, runtime.wait())
+        .await
+        .expect("future-member completion requests shutdown")
+        .expect("dynamic root stops");
 }
 
 #[tokio::test]
