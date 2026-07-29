@@ -13,7 +13,7 @@ error[E0599]: no associated function or constant named `graph_with` found for st
 14 | struct Application {
    | ------------------ associated function or constant `graph_with` not found for this struct
 ...
-20 |     Application::graph_with(GraphConfig::new(), |_| ApplicationFactories {
+20 |     Application::graph_with(GraphBuilder::new(), |_| ApplicationFactories {
    |                  ^^^^^^^^^^ associated function or constant not found in `Application`
 
 error[E0599]: no associated function or constant named `runtime` found for struct `Application` in the current scope
@@ -31,11 +31,11 @@ error[E0599]: no associated function or constant named `runtime_with` found for 
 14 | struct Application {
    | ------------------ associated function or constant `runtime_with` not found for this struct
 ...
-24 |     Application::runtime_with(GraphConfig::new(), |_| ApplicationFactories {
+24 |     Application::runtime_with(GraphBuilder::new(), |_| ApplicationFactories {
    |                  ^^^^^^^^^^^^ associated function or constant not found in `Application`
    |
 help: there is an associated function `tree_with` with a similar name
    |
-24 -     Application::runtime_with(GraphConfig::new(), |_| ApplicationFactories {
-24 +     Application::tree_with(GraphConfig::new(), |_| ApplicationFactories {
+24 -     Application::runtime_with(GraphBuilder::new(), |_| ApplicationFactories {
+24 +     Application::tree_with(GraphBuilder::new(), |_| ApplicationFactories {
    |

@@ -20,7 +20,7 @@ pub(crate) use context::deadline_after;
 
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::ActorOptionsValidationError;
-pub use builder::{ActorOptions, ActorSlot, GraphBuilder, GraphConfig};
+pub use builder::{ActorOptions, ActorSlot, GraphBuilder};
 pub use cancellation::{CancellationHandle, Lifetime};
 pub use context::{
     ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, RestrictedScope,

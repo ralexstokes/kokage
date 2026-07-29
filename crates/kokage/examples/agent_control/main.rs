@@ -257,8 +257,9 @@ async fn build_app() -> Result<App, AnyError> {
     // refs together: the bridge captures `core.router` and the router captures
     // `gateway.outbound` in the same literal, with no slot/define split and no
     // ordering between the two scopes.
-    let config = kokage::GraphConfig::new().name("agent-control");
-    let (tree, refs) = AgentControl::tree_with(config, |refs| AgentControlFactories {
+    let mut builder = kokage::GraphBuilder::new();
+    builder.name("agent-control");
+    let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
         gateway: GatewayFactories {
             outbound: {
                 let chat = chat.clone();

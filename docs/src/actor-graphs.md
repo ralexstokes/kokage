@@ -139,7 +139,7 @@ For lower-level hosting, construct a `GraphBuilder` manually, iterate
 
 ## Incarnation-local state
 
-Every call to `GraphBuilder::define` takes an `ActorFactory`. Its `build`
+Every `GraphBuilder::actor` registration takes an `ActorFactory`. Its `build`
 method runs exactly once for the initial start and once for every supervised
 restart, so ordinary actor fields are fresh incarnation-local state. The actor
 type does not need `Clone`, and a synchronously constructible non-`Clone` guard
@@ -150,8 +150,7 @@ as a startup or run panic.
 Constructor functions are the common case:
 
 ```rust,ignore
-let (actor_slot, _) = builder.slot("worker");
-builder.define(actor_slot, Worker::new);
+let worker = builder.actor("worker", Worker::new);
 ```
 
 Closures automatically implement `ActorFactory`. For a small wired actor,
@@ -160,8 +159,7 @@ constructing each incarnation:
 
 ```rust,ignore
 let ledger = ledger_ref.clone();
-let (actor_slot, _) = builder.slot("gateway");
-builder.define(actor_slot, move || Gateway::new(ledger.clone()));
+let gateway = builder.actor("gateway", move || Gateway::new(ledger.clone()));
 ```
 
 Larger wiring can derive a named factory directly from the actor. Unmarked
@@ -178,8 +176,7 @@ struct Gateway {
     pending: Vec<Order>,
 }
 
-let (actor_slot, _) = builder.slot("gateway");
-builder.define(actor_slot, GatewayFactory { ledger, exchange });
+let gateway = builder.actor("gateway", GatewayFactory { ledger, exchange });
 ```
 
 Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
@@ -199,8 +196,8 @@ enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
 Rename a node with `#[supervision(label = "...")]`. The generated `tree`
 returns a single-use `OrderedTree` and its cloneable typed refs. `tree_with`
-does the same from an immutable `GraphConfig` carrying the graph name and
-mailbox capacity.
+does the same from an otherwise empty `GraphBuilder` carrying graph-wide name
+and mailbox-capacity settings.
 
 The same derive can declare the supervision tree that runs those actors — see
 [Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
@@ -244,12 +241,15 @@ message types as well as application-owned ones.
 
 ## Dynamic and Advanced Builder Wiring
 
-Use `GraphBuilder` directly when actors are dynamic, generated in a loop, or
-require hand-written wiring. `builder.slot::<M>(id)` reserves a typed ref with
-default actor options; use `builder.slot_with::<M>(id, options)` when the actor
-needs a different mailbox or message-size observation. In both cases,
-`builder.define(slot, factory)` fills the token-protected slot. Reserve all
-slots before defining actors when wiring cycles.
+Use `GraphBuilder` directly when actors are generated in a loop or require
+hand-written wiring. Register the ordinary acyclic case in dependency order
+with `builder.actor(id, factory)`; use `builder.actor_with(id, options,
+factory)` when an actor needs a different mailbox or message-size observation.
+
+Slots are the cyclic-wiring escape hatch. `builder.slot::<M>(id)` or
+`slot_with::<M>(id, options)` creates a typed ref before its factory exists;
+reserve every ref in the cycle, then fill each token with
+`builder.define(slot, factory)`.
 
 The direct builder still validates runtime configuration facts:
 
@@ -272,19 +272,19 @@ the producer fall behind. Configure those actors explicitly:
 ```rust,ignore
 use kokage::{ActorOptions, MailboxMode};
 
-let (latest_slot, latest) = builder.slot_with(
+let latest = builder.actor_with(
     "latest-market",
     ActorOptions::new().mailbox(MailboxMode::conflate()),
+    MarketActor::new,
 );
-builder.define(latest_slot, MarketActor::new);
 
-let (per_symbol_slot, per_symbol) = builder.slot_with(
+let per_symbol = builder.actor_with(
     "market-by-symbol",
     ActorOptions::new().mailbox(MailboxMode::conflate_by_key(
         |tick: &Tick| tick.symbol_id,
     )),
+    KeyedMarketActor::new,
 );
-builder.define(per_symbol_slot, KeyedMarketActor::new);
 ```
 
 `MailboxMode::conflate()` stores at most one unread message.

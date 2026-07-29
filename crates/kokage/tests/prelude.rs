@@ -21,8 +21,8 @@ mod coverage_probe {
         use kokage::{
             ActorFactory, ActorSlot, BackoffPolicy, BlockingCancelled, CancellationHandle,
             CancellationToken, ControlError, Down, DownReason, DrainPolicy, DynamicActorOptions,
-            DynamicScope, Graph, GraphBuildError, GraphConfig, GraphLookupError, Lifetime,
-            MailboxMode, MonitorEvent, OffloadDeadline, OffloadHandle, RestrictedScope, ScopeKind,
+            DynamicScope, Graph, GraphBuildError, GraphLookupError, Lifetime, MailboxMode,
+            MonitorEvent, OffloadDeadline, OffloadHandle, RestrictedScope, ScopeKind,
             ScopeWaitHandle, Supervision, SupervisorBuildError, SupervisorError, TimerKey,
             TreeNode,
         };

@@ -24,8 +24,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut graph = GraphBuilder::new();
-//! let (echo_slot, echo) = graph.slot("Echo");
-//! graph.define(echo_slot, || Echo);
+//! let echo = graph.actor("Echo", || Echo);
 //!
 //! let graph = graph.build()?;
 //! let handle = OrderedTree::graph(graph)
@@ -170,8 +169,7 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut builder = GraphBuilder::new();
 //! builder.name("example");
-//! let (counter_slot, counter) = builder.slot("Counter");
-//! builder.define(counter_slot, || Counter { total: 0 });
+//! let counter = builder.actor("Counter", || Counter { total: 0 });
 //! let graph = builder.build().expect("valid graph");
 //!
 //! let actor = graph.actors()[0].clone();
@@ -340,9 +338,9 @@ pub use kokage_derive::{ActorFactory, Supervision};
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSlot,
     BlockingCancelled, CallError, CancellationHandle, Down, DownReason, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, GraphConfig, GraphLookupError, Lifetime, LiveContext,
-    MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, OffloadHandle, Reply,
-    RestrictedScope, ScopeWaitHandle, SendError, StartContext, StopContext, TimerKey, TrySendError,
+    GraphBuildError, GraphBuilder, GraphLookupError, Lifetime, LiveContext, MailboxMode,
+    MessageContext, MonitorEvent, OffloadDeadline, OffloadHandle, Reply, RestrictedScope,
+    ScopeWaitHandle, SendError, StartContext, StopContext, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
     BackoffPolicy, ControlError, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,

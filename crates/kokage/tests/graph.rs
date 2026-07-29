@@ -1028,8 +1028,7 @@ async fn cyclic_wiring_via_slot() {
 fn graph_preserves_explicit_name() {
     let mut builder = GraphBuilder::new();
     builder.name("orders");
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, Drain::<()>::new);
+    builder.actor("worker", Drain::<()>::new);
     let graph = builder.build().expect("valid graph");
 
     assert_eq!(graph.name(), "orders");
@@ -1038,13 +1037,11 @@ fn graph_preserves_explicit_name() {
 #[test]
 fn graph_generates_unique_anonymous_names() {
     let mut first = GraphBuilder::new();
-    let (actor_slot, _) = first.slot("worker");
-    first.define(actor_slot, Drain::<()>::new);
+    first.actor("worker", Drain::<()>::new);
     let first = first.build().expect("valid graph");
 
     let mut second = GraphBuilder::new();
-    let (actor_slot, _) = second.slot("worker");
-    second.define(actor_slot, Drain::<()>::new);
+    second.actor("worker", Drain::<()>::new);
     let second = second.build().expect("valid graph");
 
     assert_ne!(first.name(), second.name());
@@ -1062,10 +1059,8 @@ fn build_rejects_invalid_graph_definitions() {
     ));
 
     let mut duplicate = GraphBuilder::new();
-    let (actor_slot, _) = duplicate.slot("worker");
-    duplicate.define(actor_slot, Drain::<u32>::new);
-    let (actor_slot, _) = duplicate.slot("worker");
-    duplicate.define(actor_slot, Drain::<u32>::new);
+    duplicate.actor("worker", Drain::<u32>::new);
+    duplicate.actor("worker", Drain::<u32>::new);
     assert!(matches!(
         duplicate.build(),
         Err(GraphBuildError::DuplicateActorId { actor_id , .. }) if actor_id == "worker"
@@ -1076,16 +1071,14 @@ fn build_rejects_invalid_graph_definitions() {
 
     let mut empty_name = GraphBuilder::new();
     empty_name.name("");
-    let (actor_slot, _) = empty_name.slot("worker");
-    empty_name.define(actor_slot, Drain::<()>::new);
+    empty_name.actor("worker", Drain::<()>::new);
     assert!(matches!(
         empty_name.build(),
         Err(GraphBuildError::EmptyGraphName)
     ));
 
     let mut empty_actor_id = GraphBuilder::new();
-    let (actor_slot, _) = empty_actor_id.slot("");
-    empty_actor_id.define(actor_slot, Drain::<()>::new);
+    empty_actor_id.actor("", Drain::<()>::new);
     assert!(matches!(
         empty_actor_id.build(),
         Err(GraphBuildError::EmptyActorId)
@@ -1093,17 +1086,18 @@ fn build_rejects_invalid_graph_definitions() {
 
     let mut zero_capacity = GraphBuilder::new();
     zero_capacity.mailbox_capacity(0);
-    let (actor_slot, _) = zero_capacity.slot("worker");
-    zero_capacity.define(actor_slot, Drain::<()>::new);
+    zero_capacity.actor("worker", Drain::<()>::new);
     assert!(matches!(
         zero_capacity.build(),
         Err(GraphBuildError::ZeroMailboxCapacity)
     ));
 
     let mut zero_actor_capacity = GraphBuilder::new();
-    let (actor_slot, _) =
-        zero_actor_capacity.slot_with("worker", ActorOptions::new().mailbox_capacity(0));
-    zero_actor_capacity.define(actor_slot, Drain::<()>::new);
+    zero_actor_capacity.actor_with(
+        "worker",
+        ActorOptions::new().mailbox_capacity(0),
+        Drain::<()>::new,
+    );
     assert!(matches!(
         zero_actor_capacity.build(),
         Err(GraphBuildError::ZeroMailboxCapacity)
@@ -1114,10 +1108,12 @@ fn build_rejects_invalid_graph_definitions() {
 async fn an_actor_can_depart_from_the_graph_wide_mailbox_capacity() {
     let mut builder = GraphBuilder::new();
     builder.mailbox_capacity(2);
-    let (shallow_slot, shallow) = builder.slot("shallow");
-    builder.define(shallow_slot, Drain::<()>::new);
-    let (deep_slot, deep) = builder.slot_with("deep", ActorOptions::new().mailbox_capacity(9));
-    builder.define(deep_slot, Drain::<()>::new);
+    let shallow = builder.actor("shallow", Drain::<()>::new);
+    let deep = builder.actor_with(
+        "deep",
+        ActorOptions::new().mailbox_capacity(9),
+        Drain::<()>::new,
+    );
     let graph = builder.build().expect("graph builds");
 
     // Capacity is a property of the bound mailbox, so it is observable only
