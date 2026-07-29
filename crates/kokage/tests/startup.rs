@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    DrainPolicy, DynamicActorOptions, SupervisorError,
+    DrainPolicy, SupervisorError,
     host::{ActorContext, BoxError, ChildSpec, RawActor},
     prelude::*,
 };
@@ -89,17 +89,13 @@ async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
         .send(Some(handle.handle().into_runtime_handle()))
         .expect("startup actor retains handle receiver");
     handle
-        .add_actor_with(
-            "starter",
-            {
-                let added_started = Arc::clone(&added_started);
-                move || AddsChildOnStart {
-                    handle_rx: handle_rx.clone(),
-                    added_started: Arc::clone(&added_started),
-                }
-            },
-            DynamicActorOptions::default(),
-        )
+        .add_actor(ActorSpec::new("starter", {
+            let added_started = Arc::clone(&added_started);
+            move || AddsChildOnStart {
+                handle_rx: handle_rx.clone(),
+                added_started: Arc::clone(&added_started),
+            }
+        }))
         .await
         .expect("startup actor added");
 
@@ -116,19 +112,17 @@ async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() 
     let mut graph = GraphBuilder::new();
     let first_order = order.clone();
     let first_release = release.clone();
-    let (first_slot, first) = graph.slot("Probe");
-    graph.define(first_slot, move || Probe {
+    let first = graph.actor(ActorSpec::new("Probe", move || Probe {
         name: "first",
         order: first_order.clone(),
         release: Some(first_release.clone()),
-    });
+    }));
     let second_order = order.clone();
-    let (actor_slot, _) = graph.slot("Probe-2");
-    graph.define(actor_slot, move || Probe {
+    graph.actor(ActorSpec::new("Probe-2", move || Probe {
         name: "second",
         order: second_order.clone(),
         release: None,
-    });
+    }));
 
     let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
 
@@ -180,8 +174,7 @@ impl Actor for FailsOnStart {
 #[tokio::test]
 async fn failed_actor_start_disarms_readiness_without_panicking() {
     let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("FailsOnStart");
-    graph.define(actor_slot, || FailsOnStart);
+    graph.actor(ActorSpec::new("FailsOnStart", || FailsOnStart));
     let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
         .spawn()
@@ -254,12 +247,13 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let (actor_slot, actor) = graph.slot("DrainContinuation");
-    graph.define(actor_slot, move || DrainContinuation {
-        handled: actor_handled.clone(),
-        started: actor_started.clone(),
-        release: actor_release.clone(),
-    });
+    let actor = graph.actor(ActorSpec::new("DrainContinuation", move || {
+        DrainContinuation {
+            handled: actor_handled.clone(),
+            started: actor_started.clone(),
+            release: actor_release.clone(),
+        }
+    }));
     let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     handle.handle().wait_started().await.unwrap();
     actor.send("hold").await.unwrap();
@@ -280,12 +274,13 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let (actor_slot, actor) = graph.slot("DrainContinuation");
-    graph.define(actor_slot, move || DrainContinuation {
-        handled: actor_handled.clone(),
-        started: actor_started.clone(),
-        release: actor_release.clone(),
-    });
+    let actor = graph.actor(ActorSpec::new("DrainContinuation", move || {
+        DrainContinuation {
+            handled: actor_handled.clone(),
+            started: actor_started.clone(),
+            release: actor_release.clone(),
+        }
+    }));
     let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
 
     actor.send("hold-and-continue").await.unwrap();
@@ -360,12 +355,11 @@ fn drain_phase_probe_graph(
     let observed = observed.clone();
     let started = started.clone();
     let release = release.clone();
-    let (actor_slot, actor) = graph.slot("DrainPhaseProbe");
-    graph.define(actor_slot, move || DrainPhaseProbe {
+    let actor = graph.actor(ActorSpec::new("DrainPhaseProbe", move || DrainPhaseProbe {
         observed: observed.clone(),
         started: started.clone(),
         release: release.clone(),
-    });
+    }));
     (graph, actor)
 }
 
@@ -470,10 +464,11 @@ impl Actor for OverlappingStopProbe {
 async fn status_carves_local_stop_during_graph_shutdown() {
     let (observed, mut statuses) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (slot, actor) = graph.slot("OverlappingStopProbe");
-    graph.define(slot, move || OverlappingStopProbe {
-        observed: observed.clone(),
-    });
+    let actor = graph.actor(ActorSpec::new("OverlappingStopProbe", move || {
+        OverlappingStopProbe {
+            observed: observed.clone(),
+        }
+    }));
     let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     handle.handle().wait_started().await.unwrap();
 
@@ -533,8 +528,7 @@ async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() 
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut graph = GraphBuilder::new();
-    let (actor_slot, actor) = graph.slot("StopsOnStart");
-    graph.define(actor_slot, {
+    let actor = graph.actor(ActorSpec::new("StopsOnStart", {
         let started = started.clone();
         let release = release.clone();
         let events = events.clone();
@@ -544,7 +538,7 @@ async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() 
             events: events.clone(),
             policy: DrainPolicy::Discard,
         }
-    });
+    }));
     let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
         .spawn()
@@ -575,8 +569,7 @@ async fn start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let mut graph = GraphBuilder::new();
-    let (actor_slot, actor) = graph.slot("StopsOnStart");
-    graph.define(actor_slot, {
+    let actor = graph.actor(ActorSpec::new("StopsOnStart", {
         let started = started.clone();
         let release = release.clone();
         let events = events.clone();
@@ -586,7 +579,7 @@ async fn start_context_stop_with_drain_handles_the_queued_mailbox_only() {
             events: events.clone(),
             policy: DrainPolicy::Drain,
         }
-    });
+    }));
     let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
         .spawn()
@@ -625,8 +618,7 @@ impl RawActor for PromptRaw {
 #[tokio::test]
 async fn prompt_raw_actor_delivers_readiness_before_completion() {
     let mut graph = GraphBuilder::new();
-    let (actor_slot, _) = graph.slot("PromptRaw");
-    graph.define(actor_slot, || PromptRaw);
+    graph.actor(ActorSpec::new("PromptRaw", || PromptRaw));
     let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
         .spawn()
@@ -690,12 +682,11 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let (actor_slot, actor) = graph.slot("DefaultPolicy");
-    graph.define(actor_slot, move || DefaultPolicy {
+    let actor = graph.actor(ActorSpec::new("DefaultPolicy", move || DefaultPolicy {
         handled: actor_handled.clone(),
         started: actor_started.clone(),
         release: actor_release.clone(),
-    });
+    }));
     let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     handle.handle().wait_started().await.unwrap();
 

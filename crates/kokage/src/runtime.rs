@@ -974,16 +974,17 @@ mod tests {
             .spawn()
             .expect("static runtime builds");
         static_runtime
+            .handle()
             .wait_started()
             .await
             .expect("static actor starts");
-        let mut static_snapshots = static_runtime.subscribe_snapshots();
+        let mut static_snapshots = static_runtime.handle().subscribe_snapshots();
         static_ref.send(()).await.expect("static message accepted");
         static_snapshots
             .wait_for(|snapshot| {
                 snapshot
                     .child("static")
-                    .is_some_and(|child| child.state.is_stopped())
+                    .is_some_and(|child| child.state.is_terminal())
             })
             .await
             .expect("static terminal membership remains visible");
@@ -993,16 +994,16 @@ mod tests {
             .expect("static runtime shuts down");
 
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        let dynamic = dynamic_runtime.dynamic().expect("root is dynamic");
-        let dynamic_ref = dynamic
+        let dynamic_ref = dynamic_runtime
             .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartPolicy::Never))
             .await
             .expect("dynamic actor is inserted");
         dynamic_runtime
+            .handle()
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut dynamic_snapshots = dynamic_runtime.subscribe_snapshots();
+        let mut dynamic_snapshots = dynamic_runtime.handle().subscribe_snapshots();
         dynamic_ref
             .send(())
             .await
@@ -1011,7 +1012,7 @@ mod tests {
             .wait_for(|snapshot| {
                 snapshot
                     .child("dynamic")
-                    .is_some_and(|child| child.state.is_stopped())
+                    .is_some_and(|child| child.state.is_terminal())
             })
             .await
             .expect("dynamic terminal membership remains visible");
@@ -1024,8 +1025,7 @@ mod tests {
     #[tokio::test]
     async fn dynamic_membership_removal_is_explicit() {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        let dynamic = runtime.dynamic().expect("root is dynamic");
-        let actor_ref = dynamic
+        let actor_ref = runtime
             .add_actor(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
                     .restart(RestartPolicy::Never)
@@ -1033,8 +1033,12 @@ mod tests {
             )
             .await
             .expect("dynamic actor is inserted");
-        runtime.wait_started().await.expect("dynamic actor starts");
-        let mut snapshots = runtime.subscribe_snapshots();
+        runtime
+            .handle()
+            .wait_started()
+            .await
+            .expect("dynamic actor starts");
+        let mut snapshots = runtime.handle().subscribe_snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots
