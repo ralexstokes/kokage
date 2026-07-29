@@ -1,6 +1,6 @@
 # Actor Graphs
 
-The actor layer of `tokio-otp` models a group of async actors with typed
+The actor layer of `kokage` models a group of async actors with typed
 mailboxes. Each actor declares one message type, and the derive mints
 restart-stable `ActorRef<M>` handles that can be stored in other actors'
 state.
@@ -27,7 +27,7 @@ refs bundle alongside the graph, for use as application entry points:
 
 ```rust,no_run
 use std::time::Duration;
-use tokio_otp::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
+use kokage::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -135,7 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 For lower-level hosting, construct a `GraphBuilder` manually, iterate
 `graph.actors()`, and drive each `host::RunnableActor::run_until` independently.
-`tokio-otp` performs that adaptation for the common supervised runtime.
+`kokage` performs that adaptation for the common supervised runtime.
 
 ## Incarnation-local state
 
@@ -170,7 +170,7 @@ incarnation. Fields marked `#[factory(default)]` are omitted from the factory
 and reset to their `Default` value on every build:
 
 ```rust,ignore
-#[derive(tokio_otp::ActorFactory)]
+#[derive(kokage::ActorFactory)]
 struct Gateway {
     ledger: ActorRef<LedgerMsg>,
     exchange: Exchange,
@@ -222,7 +222,7 @@ generated `GraphBuilder::slot_with`; plain fields use `GraphBuilder::slot` and
 retain the default FIFO mailbox without message-size observation:
 
 ```rust,ignore
-use tokio_otp::{ActorOptions, MailboxMode, Supervision};
+use kokage::{ActorOptions, MailboxMode, Supervision};
 
 fn snapshot_size(message: &Snapshot) -> usize {
     message.payload.len()
@@ -270,7 +270,7 @@ opposite policy—a slow consumer should skip stale updates instead of making
 the producer fall behind. Configure those actors explicitly:
 
 ```rust,ignore
-use tokio_otp::{ActorOptions, MailboxMode};
+use kokage::{ActorOptions, MailboxMode};
 
 let (latest_slot, latest) = builder.slot_with(
     "latest-market",
@@ -411,4 +411,4 @@ pattern. Bounded async work started with `ctx.offload` is different: its
 completion is owned and reaped by the actor loop without consuming mailbox
 capacity.
 
-[`ActorRef`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorRef.html
+[`ActorRef`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html

@@ -18,7 +18,7 @@ example. Run any of them with:
 cargo run -p <crate> --example <name>
 ```
 
-### `tokio-supervisor`
+### `kokage-supervisor`
 
 | Example | Shows |
 |---------|-------|
@@ -33,7 +33,7 @@ cargo run -p <crate> --example <name>
 | `tracing` | Structured logging output. |
 | `metrics` | Prometheus metrics (needs `--features metrics`). |
 
-### `tokio-otp`
+### `kokage`
 
 | Example | Shows |
 |---------|-------|
@@ -53,7 +53,7 @@ cargo run -p <crate> --example <name>
 | `actor_tracing` | Structured actor and message tracing. |
 | `supervisor_snapshot_trace` | Observing runtime state in detail. |
 | `actor_metrics` | Pull-based actor stats and user-owned export sampling. |
-| `console` | The experimental live web console (`cargo run -p tokio-otp-console --example console`). |
+| `console` | The experimental live web console (`cargo run -p kokage-console --example console`). |
 
 ## Design notes
 

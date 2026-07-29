@@ -1,6 +1,6 @@
 # Supervised Actors
 
-`tokio-otp` decomposes a typed actor graph so each actor becomes its own
+`kokage` decomposes a typed actor graph so each actor becomes its own
 supervised child. Existing `ActorRef<M>` handles keep following the same
 long-lived mailbox bindings, so a sender can wait while a failed actor is
 restarted and then deliver to the new generation.
@@ -15,8 +15,8 @@ durable-factory versus local-actor state boundary.
 ```rust,no_run
 use std::{io, sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
 
-use tokio_otp::host::BoxError;
-use tokio_otp::prelude::*;
+use kokage::host::BoxError;
+use kokage::prelude::*;
 
 struct FrontDesk {
     press: ActorRef<String>,
@@ -171,7 +171,7 @@ When the shape is static, `#[derive(Supervision)]` can declare the graph and
 its `OrderedTree` at once: struct nesting is scope nesting.
 
 ```rust,ignore
-use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Supervision};
+use kokage::{DynamicScope, RestartPolicy, Strategy, Supervision};
 
 #[derive(Supervision)]
 #[supervision(strategy = Strategy::OneForAll)]

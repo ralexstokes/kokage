@@ -7,7 +7,7 @@ timeout so the whole operation is bounded:
 
 ```rust,no_run
 use std::time::Duration;
-use tokio_otp::{ActorRef, Reply};
+use kokage::{ActorRef, Reply};
 
 enum AccountMsg {
     Balance(Reply<u64>),

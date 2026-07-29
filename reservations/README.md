@@ -1,7 +1,7 @@
 # Kokage crate markers
 
 These standalone packages hold the crates.io names selected in
-[issue #245](https://github.com/ralexstokes/tokio-otp/issues/245) while the
+[issue #245](https://github.com/ralexstokes/kokage/issues/245) while the
 project rename is completed. Each `0.0.0` release is dependency-free and
 intentionally exposes no API.
 

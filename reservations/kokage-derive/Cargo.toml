@@ -4,8 +4,8 @@ version = "0.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "Pre-release marker for the Kokage derive macros"
-homepage = "https://github.com/ralexstokes/tokio-otp"
-repository = "https://github.com/ralexstokes/tokio-otp"
+homepage = "https://github.com/ralexstokes/kokage"
+repository = "https://github.com/ralexstokes/kokage"
 readme = "README.md"
 
 [workspace]

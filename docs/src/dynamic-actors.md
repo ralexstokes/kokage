@@ -10,7 +10,7 @@ zero-argument constructor paths implement `ActorFactory` automatically; named
 spec structs are useful when durable configuration deserves its own type.
 
 ```rust,no_run
-use tokio_otp::{
+use kokage::{
     Actor, ActorOptions, ActorRef, ActorResult, DynamicActorOptions, MessageContext,
     DynamicTree,
 };
@@ -371,8 +371,8 @@ Use `RuntimeHandle::add_child(host::ChildSpec)` for a non-actor task in a dynami
 scope and `add_subtree` for a nested actor-aware scope. Task children are not
 part of runtime actor stats, but they remain visible in snapshots and lifecycle
 watches. Applications that need raw `Supervisor` construction or
-`SupervisorHandle` APIs should depend on `tokio-supervisor` directly; those
-low-level construction and control types are not re-exported by `tokio-otp`.
+`SupervisorHandle` APIs should depend on `kokage-supervisor` directly; those
+low-level construction and control types are not re-exported by `kokage`.
 
 ## Name-based discovery, when you want it
 
@@ -395,7 +395,7 @@ Insert refs as actors are created, and `call` the directory to resolve a name
 to a typed ref. Because the directory is self-hosted, *you* choose its
 semantics — namespacing, removal, versioning — instead of inheriting a
 framework registry's. The runnable version is
-`crates/tokio-otp/examples/directory.rs`.
+`crates/kokage/examples/directory.rs`.
 
 Note that a directory instance is homogeneous: `Directory<M>` holds refs to
 actors whose message type is that one `M`, and that is what makes lookups

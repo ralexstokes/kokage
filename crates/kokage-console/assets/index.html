@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kokage console</title>
+<style>
+  :root {
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #232322;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --hairline: rgba(255, 255, 255, 0.10);
+    --hairline-soft: rgba(255, 255, 255, 0.06);
+    --accent: #3987e5;
+    --good: #0ca30c;
+    --warn: #fab219;
+    --serious: #ec835a;
+    --critical: #d03b3b;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--page);
+    color: var(--ink-2);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    display: grid;
+    grid-template-rows: 52px 1fr;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--surface-2);
+    border-radius: 5px;
+    border: 2px solid var(--page);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #2e2e2c; }
+
+  /* Top bar */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--hairline);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: 0.2px;
+  }
+  .brand-chip {
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 1px 8px;
+    align-self: center;
+  }
+  .conn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--ink-2);
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 3px 12px 3px 10px;
+  }
+  .conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .conn.is-connected .conn-dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+  .conn.is-disconnected .conn-dot { background: var(--critical); box-shadow: 0 0 0 3px color-mix(in srgb, var(--critical) 25%, transparent); }
+
+  /* Layout */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    grid-template-rows: minmax(0, 1fr) 260px;
+    grid-template-areas:
+      "tree side"
+      "log  log";
+    min-height: 0;
+  }
+
+  @media (max-width: 860px) {
+    body { overflow: auto; grid-template-rows: 52px auto; }
+    .layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: none;
+      grid-template-areas: "tree" "side" "log";
+    }
+    .panel-body { overflow: visible; }
+    .panel-tree { border-right: none; }
+    .panel-side { border-top: 1px solid var(--hairline); }
+    .panel-log .panel-body { overflow-y: auto; max-height: 45vh; }
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+  }
+  .panel-tree { grid-area: tree; border-right: 1px solid var(--hairline); }
+  .panel-side { grid-area: side; }
+  .panel-log  { grid-area: log; border-top: 1px solid var(--hairline); }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px 10px;
+    flex-shrink: 0;
+  }
+  .panel-head h2 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--muted);
+  }
+  .panel-meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .panel-body {
+    overflow-y: auto;
+    padding: 0 20px 20px;
+    min-height: 0;
+  }
+
+  .empty-state {
+    color: var(--muted);
+    border: 1px dashed var(--hairline);
+    border-radius: 8px;
+    padding: 24px;
+    text-align: center;
+    font-size: 12px;
+  }
+
+  /* Badges & chips */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+    padding: 1px 8px 1px 6px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .badge::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .badge-good     { color: var(--good);     background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .badge-accent   { color: var(--accent);   background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .badge-warn     { color: var(--warn);     background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .badge-muted    { color: var(--muted);    background: color-mix(in srgb, var(--muted) 14%, transparent); }
+  .badge-critical { color: var(--critical); background: color-mix(in srgb, var(--critical) 16%, transparent); }
+  .badge-serious  { color: var(--serious);  background: color-mix(in srgb, var(--serious) 14%, transparent); }
+
+  .chip {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-2);
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 0 6px;
+    white-space: nowrap;
+  }
+  .chip-quiet { color: var(--muted); background: transparent; padding: 0; }
+  .chip-warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .chip-accent { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .chip-critical {
+    color: var(--critical);
+    background: color-mix(in srgb, var(--critical) 12%, transparent);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+  }
+
+  /* Supervision tree */
+  .sup-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin: 2px 0 8px;
+  }
+  .sup-header .sup-title {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .sup-children { padding-left: 4px; }
+
+  details.node > .sup-children,
+  details.node > .node-nested {
+    margin-left: 9px;
+    padding-left: 14px;
+    border-left: 1px solid var(--hairline-soft);
+  }
+
+  .node-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    transition: background 0.12s;
+  }
+  .node-row:hover { background: var(--surface-2); }
+  .node-main { display: contents; }
+
+  summary.node-row { cursor: pointer; list-style: none; }
+  summary.node-row::-webkit-details-marker { display: none; }
+  summary.node-row::before {
+    content: "\25B8";
+    font-size: 11px;
+    line-height: 1;
+    color: var(--muted);
+    transition: transform 0.15s;
+    flex-shrink: 0;
+  }
+  details[open] > summary.node-row::before { transform: rotate(90deg); }
+  .node-leaf { padding-left: 25px; }
+
+  .node-id {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  /* Overview */
+  .sup-card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+  }
+  .sup-card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 0;
+  }
+  .sup-card-row .lbl { color: var(--muted); font-size: 12px; }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .tile {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 12px 8px;
+  }
+  .tile-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 2px;
+  }
+  .tile-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .tile-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.2;
+  }
+
+  .side-section {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--muted);
+    margin: 16px 0 8px;
+  }
+
+  .actor-card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 14px 12px;
+    margin-bottom: 8px;
+  }
+  .actor-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .actor-id {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .actor-mail {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .meter {
+    height: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--meter-hue, var(--accent)) 18%, transparent);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .meter-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--meter-hue, var(--accent));
+    transition: width 0.3s;
+  }
+  .actor-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .actor-stat .lbl { font-size: 11px; color: var(--muted); display: block; }
+  .actor-stat .val {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .actor-stat .val.is-serious { color: var(--serious); }
+
+  /* Event log */
+  .log-entries { font-family: var(--mono); }
+  .log-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .log-entry:hover { background: var(--surface-2); }
+  .log-ts {
+    color: var(--muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .log-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: 84px;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .log-kind::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .kind-good     { color: var(--good); }
+  .kind-accent   { color: var(--accent); }
+  .kind-warn     { color: var(--warn); }
+  .kind-muted    { color: var(--muted); }
+  .kind-critical { color: var(--critical); }
+  .log-msg { color: var(--ink-2); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">kokage <span class="brand-chip">console</span></div>
+  <div id="conn" class="conn is-disconnected">
+    <span class="conn-dot"></span>
+    <span id="conn-text">Connecting&hellip;</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel panel-tree">
+    <header class="panel-head"><h2>Supervision tree</h2></header>
+    <div class="panel-body" id="tree-root"></div>
+  </section>
+
+  <aside class="panel panel-side">
+    <header class="panel-head"><h2>Overview</h2></header>
+    <div class="panel-body" id="stats-root"></div>
+  </aside>
+
+  <section class="panel panel-log">
+    <header class="panel-head">
+      <h2>Event log</h2>
+      <span class="panel-meta" id="log-count"></span>
+    </header>
+    <div class="panel-body log-entries" id="log-entries"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  const MAX_LOG = 500;
+  let snapshot = null;
+  let actorStats = [];
+  let logTotal = 0;
+  const collapsedNodes = new Set();
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function emptyState(text) {
+    return el("div", "empty-state", text);
+  }
+
+  // --- WebSocket with auto-reconnect ---
+  let ws = null;
+  let backoff = 1000;
+  const MAX_BACKOFF = 10000;
+
+  function wsUrl() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return proto + "//" + location.host + "/ws";
+  }
+
+  function setConnected(ok) {
+    const conn = document.getElementById("conn");
+    conn.className = "conn " + (ok ? "is-connected" : "is-disconnected");
+    document.getElementById("conn-text").textContent = ok ? "Connected" : "Reconnecting…";
+  }
+
+  function connect() {
+    try { ws = new WebSocket(wsUrl()); } catch (_) { scheduleReconnect(); return; }
+
+    ws.onopen = function () {
+      backoff = 1000;
+      setConnected(true);
+    };
+
+    ws.onclose = function () {
+      setConnected(false);
+      scheduleReconnect();
+    };
+
+    ws.onerror = function () {
+      ws.close();
+    };
+
+    ws.onmessage = function (ev) {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.type === "snapshot") {
+        snapshot = msg.data;
+        renderTree();
+        renderStats();
+      } else if (msg.type === "event") {
+        addLogEntry(msg.data);
+      } else if (msg.type === "actor_stats") {
+        actorStats = msg.data || [];
+        renderTree();
+        renderStats();
+      }
+    };
+  }
+
+  function scheduleReconnect() {
+    setTimeout(function () {
+      backoff = Math.min(backoff * 2, MAX_BACKOFF);
+      connect();
+    }, backoff);
+  }
+
+  // --- Formatting ---
+  function variantName(value) {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object") return Object.keys(value)[0] || null;
+    return null;
+  }
+
+  function variantPayload(value) {
+    const name = variantName(value);
+    return name && typeof value === "object" ? value[name] : null;
+  }
+
+  function stateBadgeClass(state) {
+    switch (variantName(state)) {
+      case "Running":  return "badge-good";
+      case "Starting": return "badge-accent";
+      case "Stopping": return "badge-warn";
+      case "StartupAborted": return "badge-critical";
+      default:         return "badge-muted";
+    }
+  }
+
+  function formatExit(exit) {
+    if (exit === null || exit === undefined) return null;
+    if (typeof exit === "string") return exit;
+    if (exit.Failed !== undefined) return "Failed: " + exit.Failed;
+    if (exit.Aborted !== undefined) {
+      return exit.Aborted.after_grace ? "Aborted after grace" : "Aborted";
+    }
+    return JSON.stringify(exit);
+  }
+
+  function isFailureExit(exitStr) {
+    return exitStr.startsWith("Failed") || exitStr === "Panicked" || exitStr.startsWith("Aborted");
+  }
+
+  function formatDuration(d) {
+    var nanos = d.nanos == null ? 0 : d.nanos;
+    var total = d.secs + nanos / 1e9;
+    if (total < 1) return Math.round(total * 1000) + "ms";
+    if (nanos >= 50000000) return total.toFixed(1) + "s";
+    return Math.round(total) + "s";
+  }
+
+  // --- Rendering: Tree ---
+  function stateBadge(state) {
+    const name = variantName(state) || "Unknown";
+    return el("span", "badge " + stateBadgeClass(state), name);
+  }
+
+  function childExit(child) {
+    const details = variantPayload(child.state);
+    if (!details) return null;
+    return details.exit || details.previous_exit || null;
+  }
+
+  function sameSupervisorPath(actual, expected) {
+    if (!actual || actual.length !== expected.length) return false;
+    return actual.every(function (segment, index) {
+      const wanted = expected[index];
+      return segment.id === wanted.id &&
+        segment.lineage === wanted.lineage &&
+        segment.generation === wanted.generation;
+    });
+  }
+
+  function nodeRow(child, supervisorPath) {
+    const row = el("span", "node-main");
+    row.appendChild(el("span", "node-id", child.id));
+    row.appendChild(stateBadge(child.state));
+    row.appendChild(el("span", "chip chip-quiet", "lineage " + child.lineage));
+    row.appendChild(el("span", "chip chip-quiet", "gen " + child.generation));
+    if (child.restart_count > 0) {
+      row.appendChild(el("span", "chip chip-warn", "restarts " + child.restart_count));
+    }
+    if (child.membership === "Removing") {
+      row.appendChild(el("span", "chip chip-warn", "removing"));
+    }
+
+    const actor = actorStats.find(function (stats) {
+      return stats.actor_id === child.id &&
+        (stats.supervisor_path == null || sameSupervisorPath(stats.supervisor_path, supervisorPath)) &&
+        (stats.lineage == null || stats.lineage === child.lineage);
+    });
+    if (actor) {
+      row.appendChild(el("span", "chip", "mailbox " + actor.mailbox_depth + "/" + actor.mailbox_capacity));
+    }
+
+    const exit = childExit(child);
+    const exitStr = formatExit(exit && exit.status);
+    if (exitStr) {
+      const chip = el("span", "chip " + (isFailureExit(exitStr) ? "chip-critical" : "chip-quiet"), exitStr);
+      chip.title = exitStr;
+      row.appendChild(chip);
+    }
+
+    if (child.next_restart_in) {
+      row.appendChild(el("span", "chip chip-accent", "restart in " + formatDuration(child.next_restart_in)));
+    }
+    return row;
+  }
+
+  function renderChild(child, parentPath, supervisorPath) {
+    const path = parentPath + "/" + child.id;
+
+    if (!child.supervisor) {
+      const leaf = el("div", "node-row node-leaf");
+      leaf.appendChild(nodeRow(child, supervisorPath));
+      return leaf;
+    }
+
+    const det = el("details", "node");
+    det.open = !collapsedNodes.has(path);
+    det.addEventListener("toggle", function () {
+      if (det.open) {
+        collapsedNodes.delete(path);
+      } else {
+        collapsedNodes.add(path);
+      }
+    });
+
+    const sum = el("summary", "node-row");
+    sum.appendChild(nodeRow(child, supervisorPath));
+    det.appendChild(sum);
+
+    const nested = el("div", "node-nested");
+    const nestedSupervisorPath = supervisorPath.concat([{
+      id: child.id,
+      lineage: child.lineage,
+      generation: child.generation
+    }]);
+    nested.appendChild(renderSupervisor(child.supervisor, path, nestedSupervisorPath));
+    det.appendChild(nested);
+    return det;
+  }
+
+  function renderSupervisor(sup, parentPath, supervisorPath) {
+    const frag = document.createDocumentFragment();
+
+    const header = el("div", "sup-header");
+    header.appendChild(el("span", "sup-title", "supervisor"));
+    header.appendChild(stateBadge(sup.state));
+    header.appendChild(el("span", "chip", sup.strategy || "?"));
+    frag.appendChild(header);
+
+    const children = el("div", "sup-children");
+    if (sup.children && sup.children.length > 0) {
+      sup.children.forEach(function (c) {
+        children.appendChild(renderChild(c, parentPath, supervisorPath));
+      });
+    } else {
+      children.appendChild(el("div", "node-row node-leaf", "no children"));
+    }
+    frag.appendChild(children);
+    return frag;
+  }
+
+  function renderTree() {
+    const root = document.getElementById("tree-root");
+    root.innerHTML = "";
+    if (!snapshot) {
+      root.appendChild(emptyState("Waiting for snapshot…"));
+      return;
+    }
+    root.appendChild(renderSupervisor(snapshot, "", []));
+  }
+
+  // --- Rendering: Overview ---
+  function countChildren(sup) {
+    const counts = { total: 0, restarts: 0, Running: 0, Starting: 0, Stopping: 0, Stopped: 0 };
+    if (!sup) return counts;
+    // Sum supervisor-level total_restarts, not per-child restart_count: a
+    // removed child's restart_count vanishes from the snapshot, while
+    // total_restarts keeps counting for the supervisor's stable identity.
+    counts.restarts = sup.total_restarts || 0;
+    if (!sup.children) return counts;
+    sup.children.forEach(function (c) {
+      counts.total++;
+      const state = variantName(c.state);
+      if (state === "StartupAborted") counts.Stopped++;
+      else if (counts[state] !== undefined) counts[state]++;
+      if (c.supervisor) {
+        const nested = countChildren(c.supervisor);
+        counts.total += nested.total;
+        counts.restarts += nested.restarts;
+        counts.Running += nested.Running;
+        counts.Starting += nested.Starting;
+        counts.Stopping += nested.Stopping;
+        counts.Stopped += nested.Stopped;
+      }
+    });
+    return counts;
+  }
+
+  function tile(label, value, dotColor) {
+    const t = el("div", "tile");
+    const lbl = el("div", "tile-label");
+    if (dotColor) {
+      const dot = el("span", "tile-dot");
+      dot.style.background = dotColor;
+      lbl.appendChild(dot);
+    }
+    lbl.appendChild(document.createTextNode(label));
+    t.appendChild(lbl);
+    t.appendChild(el("div", "tile-value", String(value)));
+    return t;
+  }
+
+  function actorCard(actor) {
+    const card = el("div", "actor-card");
+
+    const head = el("div", "actor-head");
+    head.appendChild(el("span", "actor-id", actor.actor_id));
+    if (actor.lineage != null) {
+      head.appendChild(el("span", "chip chip-quiet", "lineage " + actor.lineage));
+    }
+    head.appendChild(el("span", "actor-mail",
+      "mailbox " + actor.mailbox_depth + " / " + actor.mailbox_capacity));
+    card.appendChild(head);
+
+    const ratio = actor.mailbox_capacity > 0 ? actor.mailbox_depth / actor.mailbox_capacity : 0;
+    const meter = el("div", "meter");
+    const hue = ratio >= 0.95 ? "var(--critical)" : ratio >= 0.75 ? "var(--warn)" : "var(--accent)";
+    meter.style.setProperty("--meter-hue", hue);
+    const fill = el("div", "meter-fill");
+    fill.style.width = Math.min(100, Math.round(ratio * 100)) + "%";
+    meter.appendChild(fill);
+    card.appendChild(meter);
+
+    const stats = el("div", "actor-stats");
+    [
+      ["received", actor.messages_received, false],
+      ["accepted", actor.messages_accepted, false],
+      ["conflated", actor.messages_conflated, actor.messages_conflated > 0],
+      ["rejected", actor.sends_rejected, actor.sends_rejected > 0],
+    ].concat(actor.message_bytes_accepted == null
+      ? []
+      : [["accepted bytes", actor.message_bytes_accepted, false]])
+    .forEach(function (entry) {
+      const stat = el("div", "actor-stat");
+      stat.appendChild(el("span", "lbl", entry[0]));
+      stat.appendChild(el("span", "val" + (entry[2] ? " is-serious" : ""), String(entry[1])));
+      stats.appendChild(stat);
+    });
+    card.appendChild(stats);
+    return card;
+  }
+
+  function renderStats() {
+    const root = document.getElementById("stats-root");
+    root.innerHTML = "";
+    if (!snapshot) {
+      root.appendChild(emptyState("No data yet"));
+      return;
+    }
+
+    const supCard = el("div", "sup-card");
+    const stateRow = el("div", "sup-card-row");
+    stateRow.appendChild(el("span", "lbl", "Supervisor state"));
+    stateRow.appendChild(stateBadge(snapshot.state));
+    supCard.appendChild(stateRow);
+    const stratRow = el("div", "sup-card-row");
+    stratRow.appendChild(el("span", "lbl", "Strategy"));
+    stratRow.appendChild(el("span", "chip", snapshot.strategy || "?"));
+    supCard.appendChild(stratRow);
+    root.appendChild(supCard);
+
+    const c = countChildren(snapshot);
+    const tiles = el("div", "tiles");
+    tiles.appendChild(tile("Children", c.total));
+    tiles.appendChild(tile("Restarts", c.restarts));
+    tiles.appendChild(tile("Running", c.Running, "var(--good)"));
+    tiles.appendChild(tile("Starting", c.Starting, "var(--accent)"));
+    tiles.appendChild(tile("Stopping", c.Stopping, "var(--warn)"));
+    tiles.appendChild(tile("Stopped", c.Stopped, "var(--muted)"));
+    root.appendChild(tiles);
+
+    if (actorStats.length > 0) {
+      root.appendChild(el("div", "side-section", "Actors"));
+      actorStats.forEach(function (actor) {
+        root.appendChild(actorCard(actor));
+      });
+    }
+  }
+
+  // --- Rendering: Event Log ---
+  function classifyEvent(ev) {
+    const envelope = ev && typeof ev === "object" ? ev : {};
+    const supervisorPath = Array.isArray(envelope.supervisor_path) ? envelope.supervisor_path : [];
+    const envelopeName = variantName(envelope.kind);
+    const envelopePayload = variantPayload(envelope.kind);
+    let eventName = envelopeName;
+    let lifecycle = envelopePayload;
+    if (envelopeName === "Supervisor") {
+      eventName = "Supervisor" + envelopePayload;
+      lifecycle = {};
+    } else if (envelopeName === "Child") {
+      const child = envelopePayload || {};
+      eventName = variantName(child.kind);
+      lifecycle = Object.assign({}, child, variantPayload(child.kind) || {});
+    }
+    let info;
+    if (eventName === "SupervisorStarted") {
+      info = { kind: "started", cls: "kind-good", msg: "Supervisor started" };
+    } else if (eventName === "SupervisorStopping") {
+      info = { kind: "stopping", cls: "kind-warn", msg: "Supervisor stopping" };
+    } else if (eventName === "SupervisorStopped") {
+      info = { kind: "stopped", cls: "kind-muted", msg: "Supervisor stopped" };
+    } else if (eventName === "Added") {
+      info = { kind: "added", cls: "kind-accent", msg: "Child '" + lifecycle.child_id + "' added" };
+    } else if (eventName === "Started") {
+      info = {
+        kind: lifecycle.generation > 0 ? "restarted" : "started",
+        cls: lifecycle.generation > 0 ? "kind-warn" : "kind-good",
+        msg: "Child '" + lifecycle.child_id + "' started (gen " + lifecycle.generation + ")",
+      };
+    } else if (eventName === "Exited") {
+      const st = formatExit(lifecycle.reason) || "unknown";
+      const failed = isFailureExit(st);
+      info = {
+        kind: failed ? "failed" : "exited",
+        cls: failed ? "kind-critical" : "kind-muted",
+        msg: "Child '" + lifecycle.child_id + "' exited: " + st + " (gen " + lifecycle.generation + ")",
+      };
+    } else if (eventName === "Removed") {
+      info = { kind: "removed", cls: "kind-muted", msg: "Child '" + lifecycle.child_id + "' removed" };
+    } else if (eventName === "RestartScheduled") {
+      info = {
+        kind: "scheduled", cls: "kind-accent",
+        msg: "Restart scheduled for '" + lifecycle.child_id + "' in " +
+          formatDuration(lifecycle.delay),
+      };
+    } else if (eventName === "RestartIntensityExceeded") {
+      info = { kind: "intensity", cls: "kind-critical", msg: "Restart intensity exceeded" };
+    } else if (eventName === "Lagged") {
+      info = { kind: "lagged", cls: "kind-critical", msg: "Lifecycle stream dropped " + lifecycle.dropped + " tree events; resynchronize from the latest snapshot" };
+    }
+    info = info || { kind: "event", cls: "kind-muted", msg: JSON.stringify(ev) || "Unknown lifecycle event" };
+    if (supervisorPath.length > 0) {
+      const prefix = supervisorPath.map(function (segment) {
+        return "[" + segment.id + " lineage:" + segment.lineage + " gen:" + segment.generation + "]";
+      }).join(" ");
+      info.msg = prefix + " " + info.msg;
+    }
+    return info;
+  }
+
+  function formatTime(d) {
+    return d.toLocaleTimeString("en-GB", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+  }
+
+  function addLogEntry(ev) {
+    const root = document.getElementById("log-entries");
+    if (logTotal === 0) root.innerHTML = "";
+    const info = classifyEvent(ev);
+    const row = el("div", "log-entry");
+    row.appendChild(el("span", "log-ts", formatTime(new Date())));
+    row.appendChild(el("span", "log-kind " + info.cls, info.kind));
+    row.appendChild(el("span", "log-msg", info.msg));
+    root.insertBefore(row, root.firstChild);
+    while (root.children.length > MAX_LOG) {
+      root.removeChild(root.lastChild);
+    }
+    logTotal++;
+    document.getElementById("log-count").textContent =
+      logTotal + (logTotal === 1 ? " event" : " events");
+  }
+
+  // --- Init ---
+  renderTree();
+  renderStats();
+  document.getElementById("log-entries").appendChild(emptyState("No events yet"));
+  connect();
+})();
+</script>
+</body>
+</html>

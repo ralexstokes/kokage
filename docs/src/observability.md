@@ -1,14 +1,14 @@
 # Observability
 
 The actor product collects its public snapshot, lifecycle, outline, completion,
-and actor-stat types under `tokio_otp::observe`.
+and actor-stat types under `kokage::observe`.
 
 The supervisor layer has two observation primitives:
 
 1. `snapshot()` / `subscribe_snapshots()` for current state
 2. `watch_lifecycle()` / `watch_lifecycle_recursive()` for ordered transitions
 
-`tracing`, pull-based actor stats, optional metrics, and `tokio-otp-console`
+`tracing`, pull-based actor stats, optional metrics, and `kokage-console`
 are projections for diagnostics and dashboards.
 
 ## Snapshots: Current State
@@ -41,7 +41,7 @@ two. The `u64` counter saturates at its maximum rather than changing supervisor
 control semantics in the practically unreachable overflow case. For
 dynamically added task children, `RuntimeHandle::add_child` returns the same
 lineage that the supervisor assigned while inserting the child (as does
-`SupervisorHandle::add_child` in the lower-level `tokio-supervisor` crate).
+`SupervisorHandle::add_child` in the lower-level `kokage-supervisor` crate).
 Consumers that need to associate their own state with that exact membership
 should retain the returned value rather than performing a later id-based
 snapshot lookup.
@@ -225,7 +225,7 @@ println!("received={} queued={}/{}",
 
 Applications that need time-series export periodically sample these values and
 the supervisor snapshot — a ~10-line task you own, not a framework pipeline.
-The `tokio-otp` `actor_metrics` example prints the result in
+The `kokage` `actor_metrics` example prints the result in
 Prometheus-shaped text without an actor-layer metrics backend.
 
 Message sizes are application-defined and fully opt-in. Pass a sizing function
@@ -288,12 +288,12 @@ as well.
 
 ## Web Console
 
-The separate `tokio-otp-console` workspace crate can launch a web console
+The separate `kokage-console` workspace crate can launch a web console
 backed by the runtime's public snapshots, events, and actor stats:
 
 ```rust,ignore
 let handle = tree.spawn()?;
-let console = tokio_otp_console::Console::for_runtime(&handle)
+let console = kokage_console::Console::for_runtime(&handle)
     .bind(([127, 0, 0, 1], 8080))
     .build()?
     .spawn()
@@ -302,9 +302,9 @@ let console = tokio_otp_console::Console::for_runtime(&handle)
 println!("console at http://{}", console.local_addr());
 ```
 
-Run `cargo run -p tokio-otp-console --example console` to try it from the
+Run `cargo run -p kokage-console --example console` to try it from the
 workspace checkout. The console is experimental, git-only tooling and is not
-a `tokio-otp` feature or dependency.
+a `kokage` feature or dependency.
 The default loopback bind remains token-free for convenient local development,
 but every request is restricted to the listener address (or `localhost`) and
 WebSocket browser origins must match the request host.
@@ -313,7 +313,7 @@ Non-loopback binds require an access token. Add the externally visible host
 when it differs from the listener address:
 
 ```rust,ignore
-let console = tokio_otp_console::Console::for_runtime(&handle)
+let console = kokage_console::Console::for_runtime(&handle)
     .bind(([0, 0, 0, 0], 8080))
     .access_token("replace-with-a-random-url-safe-token")
     .allowed_host("console.internal:8080")

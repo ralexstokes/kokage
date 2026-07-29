@@ -7,7 +7,7 @@ the value back into an ordinary typed message:
 
 ```rust,no_run
 use std::time::Duration;
-use tokio_otp::ActorContext;
+use kokage::ActorContext;
 
 enum Msg {
     Loaded(String),
@@ -47,7 +47,7 @@ concurrent offloads in one incarnation remains part of the message protocol:
 
 ```rust,no_run
 # use std::time::Duration;
-# use tokio_otp::{ActorContext, OffloadDeadline};
+# use kokage::{ActorContext, OffloadDeadline};
 enum Msg {
     Fetched { request: u64, value: Result<String, OffloadDeadline> },
 }
@@ -76,7 +76,7 @@ caller's reply still happen on the serial loop:
 
 ```rust,no_run
 use std::{collections::HashMap, time::Duration};
-use tokio_otp::prelude::*;
+use kokage::prelude::*;
 
 enum VenueMsg {
     Place { order: u64, reply: Reply<bool> },

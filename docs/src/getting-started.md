@@ -3,19 +3,19 @@
 ## Dependencies
 
 The crates are not yet published to crates.io, so use git dependencies (or
-path dependencies if you are working inside this repository). `tokio-otp` is
+path dependencies if you are working inside this repository). `kokage` is
 the one dependency needed for the actor product. The opening chapters also
-construct raw task supervisors, so they name `tokio-supervisor` directly:
+construct raw task supervisors, so they name `kokage-supervisor` directly:
 
 ```toml
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
-tokio-otp = { git = "https://github.com/ralexstokes/tokio-otp" }
-tokio-supervisor = { git = "https://github.com/ralexstokes/tokio-otp" }
+kokage = { git = "https://github.com/ralexstokes/kokage" }
+kokage-supervisor = { git = "https://github.com/ralexstokes/kokage" }
 ```
 
-`tokio_otp::prelude` covers the day-one actor product surface and core policies.
-Raw supervisor construction and control types stay in `tokio-supervisor`; if
+`kokage::prelude` covers the day-one actor product surface and core policies.
+Raw supervisor construction and control types stay in `kokage-supervisor`; if
 tasks are all you need, depend on that crate alone.
 
 ## Your first supervised task
@@ -29,7 +29,7 @@ shutdown policies.
 ```rust,no_run
 use std::time::Duration;
 
-use tokio_supervisor::{ChildSpec, Supervisor};
+use kokage_supervisor::{ChildSpec, Supervisor};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -91,6 +91,6 @@ supervisor stopped
 So far the child never fails, so the supervisor has nothing interesting to do.
 Let's fix that.
 
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
-[`ChildContext`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildContext.html
-[`SupervisorHandle`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html
+[`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
+[`ChildContext`]: https://stokes.io/kokage/api/kokage_supervisor/struct.ChildContext.html
+[`SupervisorHandle`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html

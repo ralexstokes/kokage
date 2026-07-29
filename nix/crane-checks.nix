@@ -23,7 +23,7 @@ let
   };
   commonArgs = {
     CARGO_PROFILE = "";
-    pname = "tokio-otp";
+    pname = "kokage";
     src = cargoSrc;
     strictDeps = true;
     version = "0.1.0";
@@ -64,8 +64,8 @@ in
         # Custom benchmark harnesses are not compatible with nextest's test listing.
         cargo test --locked --workspace --all-features --bench '*'
         cargo test --locked --workspace --doc --all-features
-        cargo run --locked -p tokio-otp --example trading_engine --features metrics
-        cargo run --locked -p tokio-otp --example agent_control --features metrics
+        cargo run --locked -p kokage --example trading_engine --features metrics
+        cargo run --locked -p kokage --example agent_control --features metrics
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
       '';
       doInstallCargoArtifacts = false;

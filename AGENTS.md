@@ -1,4 +1,4 @@
-# tokio-otp
+# Kokage
 
 ## Running anything
 
@@ -30,4 +30,4 @@ Create them under `.worktrees`.
   the base PATH at all.
 - A shell spawned from another checkout inherits *that* checkout's devshell, so
   a worktree can appear to work while silently using the wrong toolchain.
-  `./scripts/dev` detects this via `TOKIO_OTP_DEVSHELL` and re-enters the right one.
+  `./scripts/dev` detects this via `KOKAGE_DEVSHELL` and re-enters the right one.

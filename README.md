@@ -1,7 +1,7 @@
-# tokio-otp
+# Kokage
 
-Erlang/OTP-style fault tolerance for the [`tokio`](https://tokio.rs) ecosystem:
-supervision trees, typed actor graphs, and a runtime that composes the two.
+OTP-style supervision trees and typed actors — a thin layer over an async
+scheduler (Tokio today).
 
 The core idea is the one that has kept telecom switches running for decades:
 **let it crash**. Instead of defensively handling every failure in place, you
@@ -9,14 +9,14 @@ organize your program into small, isolated tasks and let a *supervisor*
 restart the ones that fail.
 
 The actor product needs one dependency. Its prelude covers the day-one actor
-surface; hosting and observation APIs are grouped under `tokio_otp::host` and
-`tokio_otp::observe`, while advanced actor APIs remain at the crate root.
+surface; hosting and observation APIs are grouped under `kokage::host` and
+`kokage::observe`, while advanced actor APIs remain at the crate root.
 Applications using raw task supervision directly should also depend on
-`tokio-supervisor`:
+`kokage-supervisor`:
 
 ```toml
 [dependencies]
-tokio-otp = { git = "https://github.com/ralexstokes/tokio-otp" }
+kokage = { git = "https://github.com/ralexstokes/kokage" }
 ```
 
 ## A taste
@@ -26,7 +26,7 @@ supervisor restarts it — and the `orders` ref keeps working across the
 restart, transparently reconnecting to the replacement:
 
 ```rust
-use tokio_otp::prelude::*;
+use kokage::prelude::*;
 
 struct FrontDesk {
     press: ActorRef<String>,
@@ -66,21 +66,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 The full runnable version is
-[`crates/tokio-otp/examples/supervised_actors.rs`](crates/tokio-otp/examples/supervised_actors.rs).
+[`crates/kokage/examples/supervised_actors.rs`](crates/kokage/examples/supervised_actors.rs).
 
 ## The crates
 
-`tokio-otp` is the product: typed actor graphs plus the runtime that
-supervises them, in one crate. `tokio-supervisor` underneath is deliberately
+`kokage` is the product: typed actor graphs plus the runtime that
+supervises them, in one crate. `kokage-supervisor` underneath is deliberately
 independent — it knows nothing about actors and is useful on its own for
 supervising plain async tasks.
 
 | Crate | Role |
 |-------|------|
-| [`tokio-otp`](crates/tokio-otp) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under single-use ordered or dynamic trees with actor-aware runtime handles. |
-| [`tokio-supervisor`](crates/tokio-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
-| [`tokio-otp-derive`](crates/tokio-otp-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic actor graphs and their supervision scopes; re-exported by `tokio-otp` under the default `derive` feature. |
-| [`tokio-otp-console`](crates/tokio-otp-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `tokio-otp` feature and dependency surface. |
+| [`kokage`](crates/kokage) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under single-use ordered or dynamic trees with actor-aware runtime handles. |
+| [`kokage-supervisor`](crates/kokage-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
+| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic actor graphs and their supervision scopes; re-exported by `kokage` under the default `derive` feature. |
+| [`kokage-console`](crates/kokage-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `kokage` feature and dependency surface. |
 
 ## Getting started
 
@@ -90,8 +90,8 @@ supervising plain async tasks.
   `just serve-book` for a local copy.
 - **API docs** — `just doc` builds and opens the rustdoc for the workspace.
 - **Examples** — each crate ships runnable examples under its `examples/`
-  directory, e.g. `cargo run -p tokio-otp --example supervised_actors`. Try
-  the console locally with `cargo run -p tokio-otp-console --example console`.
+  directory, e.g. `cargo run -p kokage --example supervised_actors`. Try
+  the console locally with `cargo run -p kokage-console --example console`.
 
 ## Status
 

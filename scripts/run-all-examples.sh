@@ -17,7 +17,7 @@ mapfile -t examples < <(
 console_found=false
 for target in "${examples[@]}"; do
   IFS=$'\t' read -r package example <<<"$target"
-  if [[ "$package" == "tokio-otp-console" && "$example" == "console" ]]; then
+  if [[ "$package" == "kokage-console" && "$example" == "console" ]]; then
     console_found=true
     continue
   fi
@@ -32,8 +32,8 @@ if [[ "$console_found" != true ]]; then
   exit 1
 fi
 
-echo "Running tokio-otp-console/console"
-cargo build --locked -p tokio-otp-console --example console --all-features
+echo "Running kokage-console/console"
+cargo build --locked -p kokage-console --example console --all-features
 console_log=$(mktemp)
 console_pid=
 cleanup() {

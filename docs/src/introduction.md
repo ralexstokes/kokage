@@ -1,20 +1,21 @@
 # Introduction
 
-`tokio-otp` is a small family of crates that bring Erlang/OTP-style fault
-tolerance to the [`tokio`](https://tokio.rs) ecosystem. The core idea is the
-same one that has kept telecom switches running for decades: **let it crash**.
-Instead of writing defensive code that tries to recover from every possible
-failure in place, you organize your program into small, isolated tasks and let
-a *supervisor* restart the ones that fail.
+Kokage is a small family of crates for OTP-style supervision trees and typed
+actors — a thin layer over an async scheduler, with Tokio as the supported
+scheduler today. The core idea is the same one that has kept telecom switches
+running for decades: **let it crash**. Instead of writing defensive code that
+tries to recover from every possible failure in place, you organize your
+program into small, isolated tasks and let a *supervisor* restart the ones that
+fail.
 
 ## The crates
 
-`tokio-otp` is the actor product: its prelude imports the day-one surface,
-while host-facing execution types live under `tokio_otp::host`, observation
-types live under `tokio_otp::observe`, and advanced configuration remains at
+`kokage` is the actor product: its prelude imports the day-one surface,
+while host-facing execution types live under `kokage::host`, observation
+types live under `kokage::observe`, and advanced configuration remains at
 the crate root. Wire actors in a `Graph` and move it into an `OrderedTree`;
 `OrderedTree::graph(graph)` is the concise path when one graph occupies one
-ordered scope. Raw task supervision requires a direct `tokio-supervisor`
+ordered scope. Raw task supervision requires a direct `kokage-supervisor`
 dependency.
 
 The tiers describe roles rather than enforcing a small root by symbol count.
@@ -28,12 +29,12 @@ supervises it, built on that deliberately independent crate:
 
 | Crate | Role |
 |-------|------|
-| [`tokio-otp`](https://stokes.io/tokio-otp/api/tokio_otp/index.html) | Static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under an ordered or dynamic tree. |
-| [`tokio-supervisor`](https://stokes.io/tokio-otp/api/tokio_supervisor/index.html) | Structured supervision of async tasks: restart policies, restart intensity limits, graceful shutdown, and supervision trees. |
-| [`tokio-otp-console`](https://stokes.io/tokio-otp/api/tokio_otp_console/index.html) | An experimental, git-only web console for watching a running supervision tree. It is separate from the published product crate. |
+| [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under an ordered or dynamic tree. |
+| [`kokage-supervisor`](https://stokes.io/kokage/api/kokage_supervisor/index.html) | Structured supervision of async tasks: restart policies, restart intensity limits, graceful shutdown, and supervision trees. |
+| [`kokage-console`](https://stokes.io/kokage/api/kokage_console/index.html) | An experimental, git-only web console for watching a running supervision tree. It is separate from the published product crate. |
 
-`tokio-supervisor` knows nothing about actors — it supervises any async task,
-and is useful on its own if that is all you need. `tokio-otp` builds on it:
+`kokage-supervisor` knows nothing about actors — it supervises any async task,
+and is useful on its own if that is all you need. `kokage` builds on it:
 actors are the unit of execution, and what an actor's exit *means* — restart,
 final completion, escalation — is always supervisor policy, never the actor's
 own concern.
@@ -42,7 +43,7 @@ own concern.
 
 If you have used Erlang/OTP or Elixir, the mapping is direct:
 
-| OTP concept | tokio-otp equivalent |
+| OTP concept | kokage equivalent |
 |-------------|----------------------|
 | Supervisor + child specs | [`OrderedTree`] / [`DynamicTree`] + [`ActorSpec`] / [`ChildSpec`] |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
@@ -81,8 +82,8 @@ binary crate and run it, or explore the closely related examples that ship in
 each crate's `examples/` directory (listed in [Where to go
 next](next-steps.md)).
 
-[`OrderedTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.OrderedTree.html
-[`DynamicTree`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.DynamicTree.html
-[`ActorSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorSpec.html
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
-[`ActorContext`]: https://stokes.io/tokio-otp/api/tokio_otp/struct.ActorContext.html
+[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
+[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
+[`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
+[`ActorContext`]: https://stokes.io/kokage/api/kokage/struct.ActorContext.html

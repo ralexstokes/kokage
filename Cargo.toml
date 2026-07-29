@@ -1,25 +1,28 @@
 [workspace]
 default-members = [
-    "crates/tokio-supervisor",
-    "crates/tokio-otp-derive",
-    "crates/tokio-otp",
-    "crates/tokio-otp-console",
+    "crates/kokage-supervisor",
+    "crates/kokage-derive",
+    "crates/kokage",
+    "crates/kokage-console",
 ]
 members = [
-    "crates/tokio-supervisor",
-    "crates/tokio-otp-derive",
-    "crates/tokio-otp",
-    "crates/tokio-otp-console",
+    "crates/kokage-supervisor",
+    "crates/kokage-derive",
+    "crates/kokage",
+    "crates/kokage-console",
 ]
 resolver = "3"
 
 [workspace.metadata]
-name = "tokio-otp"
+name = "kokage"
 
 [workspace.dependencies]
 axum = "0.8"
 futures-util = "0.3"
 getrandom = "0.3"
+kokage = { path = "crates/kokage" }
+kokage-derive = { path = "crates/kokage-derive" }
+kokage-supervisor = { path = "crates/kokage-supervisor" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 metrics-util = { version = "0.20", features = ["debugging"] }
@@ -31,9 +34,6 @@ slab = "0.4"
 syn = "2.0"
 thiserror = "2.0.18"
 tokio = { version = "1.50.0", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
-tokio-otp = { path = "crates/tokio-otp" }
-tokio-otp-derive = { path = "crates/tokio-otp-derive" }
-tokio-supervisor = { path = "crates/tokio-supervisor" }
 tokio-tungstenite = "0.29"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.44"

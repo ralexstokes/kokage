@@ -2,8 +2,8 @@
 
 ## Goal
 
-Ship a credible, publishable v0.1 of `tokio-supervisor`,
-`tokio-otp-derive`, and `tokio-otp` whose existing semantics are explicit,
+Ship a credible, publishable v0.1 of `kokage-supervisor`,
+`kokage-derive`, and `kokage` whose existing semantics are explicit,
 tested, and usable for a demanding single-process application.
 
 The proving application is a multi-venue trading engine that:
@@ -129,7 +129,7 @@ been narrowed to the primary composition path.
 - Give non-exhaustive option structs constructors and builder-style setters so
   downstream code does not depend on struct literals. In particular, settle
   the construction story for `DynamicActorOptions`.
-- Audit the roughly sixty names re-exported by `tokio_otp::prelude`; retain only
+- Audit the roughly sixty names re-exported by `kokage::prelude`; retain only
   intentional, stable conveniences.
 - Add `#![warn(missing_docs)]` to the release crates and document all public
   items until the existing `-D warnings` checks pass.
@@ -184,15 +184,15 @@ Acceptance criteria:
 
 ### 1.3 Remove product-to-console coupling
 
-**Status: complete.** `tokio-otp-console` is an unpublished workspace crate
+**Status: complete.** `kokage-console` is an unpublished workspace crate
 built exclusively on the product crates' public observation surfaces. The
-`tokio-otp` crate has no console feature, dependency, runtime method, or
+`kokage` crate has no console feature, dependency, runtime method, or
 re-export.
 
-- Remove the `console` feature and optional `tokio-otp-console` dependency from
-  the published `tokio-otp` crate.
+- Remove the `console` feature and optional `kokage-console` dependency from
+  the published `kokage` crate.
 - Remove `RuntimeHandle::console` and console re-exports from the product crate.
-- Keep `tokio-otp-console` in the repository as experimental, git-only tooling
+- Keep `kokage-console` in the repository as experimental, git-only tooling
   with `publish = false`.
 - Wire the console through public snapshot, event, and actor-stat surfaces so
   the core release does not depend on its web stack or security surface.
@@ -403,11 +403,11 @@ For each published crate:
 
 The expected publication set is:
 
-1. `tokio-supervisor`;
-2. `tokio-otp-derive`;
-3. `tokio-otp`.
+1. `kokage-supervisor`;
+2. `kokage-derive`;
+3. `kokage`.
 
-`tokio-otp-console` is not in the v0.1 publication set.
+`kokage-console` is not in the v0.1 publication set.
 
 ### 4.2 Verify the MSRV
 
@@ -420,7 +420,7 @@ The expected publication set is:
 - Make `cargo package` succeed for every published crate.
 - Add package-content checks to CI.
 - Use `cargo publish --dry-run` in dependency order when registry availability
-  permits it. For the first release, `tokio-otp` cannot complete a normal
+  permits it. For the first release, `kokage` cannot complete a normal
   registry-backed dry run until its unpublished internal dependencies exist in
   the registry; do not paper over that constraint with path-only manifests.
 - After publishing the baseline, add `cargo-semver-checks` against the latest
@@ -477,7 +477,7 @@ Big shapes that neither application covers, roughly in priority order:
    ordered-startup failure and rollback (both applications cover successful
    sequential startup only), and finishing via `handle.wait()` rather than
    `shutdown_and_wait()`.
-2. **Supervision without actors.** `tokio-supervisor` is independently
+2. **Supervision without actors.** `kokage-supervisor` is independently
    usable, but both applications go through `Runtime` + actors everywhere.
    Raw `Supervisor`/`ChildSpec`/`ChildContext` over plain tokio
    tasks, mixed trees of raw children and actor subtrees, and meaningful use

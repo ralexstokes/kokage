@@ -6,7 +6,7 @@ identity an `ActorRef` points at — and turns each lifecycle transition into an
 ordinary typed message in the observer's mailbox:
 
 ```rust
-use tokio_otp::{Actor, ActorContext, ActorRef, ActorResult, MessageContext, MonitorEvent};
+use kokage::{Actor, ActorContext, ActorRef, ActorResult, MessageContext, MonitorEvent};
 
 enum CoordinatorMsg {
     Worker(MonitorEvent),
