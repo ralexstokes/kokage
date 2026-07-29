@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .actor(
             ActorSpec::new(worker_actor)
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartConfig::new(5, std::time::Duration::from_secs(5))),
+                .restart_config(RestartConfig::new(5, std::time::Duration::from_secs(5))),
         )
         .spawn()?;
 

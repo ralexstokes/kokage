@@ -12,6 +12,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut events = handle.watch_lifecycle_recursive();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -23,6 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_child_started(&mut events, "api").await?;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
@@ -46,13 +50,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    handle.remove_child("cache-warmer").await?;
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .remove_child("cache-warmer")
+        .await?;
     wait_for_child_removed(&mut events, "cache-warmer").await?;
     println!("cache-warmer removed at runtime");
 
     let nested = Supervisor::dynamic().build()?;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await?;
     wait_for_nested_supervisor_started(&mut events, "nested").await?;
@@ -60,6 +70,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
     nested
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -71,6 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("nested supervisor added at runtime");
 
     nested
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("nested-cache", |ctx| async move {
             println!("nested-cache started in generation {}", ctx.generation());
 
@@ -94,7 +108,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    nested.remove_child("nested-cache").await?;
+    nested
+        .dynamic()
+        .expect("dynamic supervisor")
+        .remove_child("nested-cache")
+        .await?;
     wait_for_nested_child_removed(&mut events, "nested", "nested-cache").await?;
     println!("nested-cache removed from nested supervisor");
 

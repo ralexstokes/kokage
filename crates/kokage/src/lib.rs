@@ -1,7 +1,8 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style supervision trees and typed actors over an
-//! async scheduler (Tokio today), with one integrated [`RuntimeHandle`].
+//! async scheduler (Tokio today), with an owning [`Runtime`] and integrated
+//! non-owning [`RuntimeHandle`] values.
 //!
 //! For the common setup — every actor of a graph running as its own
 //! supervised child — build a graph, move it into an [`OrderedTree`], and
@@ -55,7 +56,8 @@
 //! | Type | Role |
 //! |------|------|
 //! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their handles are available before spawn. |
-//! | [`RuntimeHandle`] | Control surface for shutdown, completion, and observability; dynamic-scope handles also add actors, task children, and subtrees. |
+//! | [`Runtime`] | Owns a spawned root and requests graceful shutdown when dropped. |
+//! | [`RuntimeHandle`] | Non-owning control and observation surface; [`RuntimeHandle::dynamic`] exposes dynamic membership when supported. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
@@ -284,7 +286,7 @@ pub mod timers;
 /// `ChildSpec` is exposed here for task children. Its lower-level
 /// `ChildSpec::supervisor` constructor still requires `kokage-supervisor`'s
 /// `Supervisor`; compose actor-aware nested scopes with
-/// [`OrderedTree::subtree`] or [`RuntimeHandle::add_subtree`] instead.
+/// [`OrderedTree::subtree`] or [`DynamicRuntime::add_subtree`] instead.
 pub mod host {
     pub use crate::actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor};
     pub use kokage_supervisor::{BoxError, ChildContext, ChildResult, ChildSpec};
@@ -329,8 +331,8 @@ pub mod prelude {
     pub use crate::{
         Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorSpec, CallError,
         DynamicTree, GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply, RestartConfig,
-        RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext,
-        Strategy, TrySendError,
+        RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
+        StopContext, Strategy, TrySendError,
     };
 }
 
@@ -339,16 +341,17 @@ pub use kokage_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSlot,
-    BlockingCancelled, CallError, CancellationHandle, Down, DownReason, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, GraphConfig, GraphLookupError, Lifetime, LiveContext,
-    MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, OffloadHandle, Reply,
-    RestrictedScope, ScopeWaitHandle, SendError, StartContext, StopContext, TimerKey, TrySendError,
+    BlockingCancelled, CallError, CancellationHandle, Down, DownReason, DrainPolicy,
+    DynamicRestrictedScope, Graph, GraphBuildError, GraphBuilder, GraphConfig, GraphLookupError,
+    Lifetime, LiveContext, MailboxMode, MessageContext, MonitorEvent, OffloadDeadline,
+    OffloadHandle, Reply, RestrictedScope, ScopeWaitHandle, SendError, StartContext, StopContext,
+    TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
     BackoffPolicy, ControlError, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,
     SupervisorBuildError, SupervisorError,
 };
-pub use runtime::{DynamicActorOptions, RuntimeHandle};
+pub use runtime::{DynamicActorOptions, DynamicRuntime, Runtime, RuntimeHandle};
 pub use supervision::{ActorSpec, DynamicTree, OrderedTree, TreeNode};
 pub use supervision_derive::{DynamicScope, Supervision};
 pub use tokio_util::sync::CancellationToken;

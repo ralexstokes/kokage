@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor)
-                .restart_intensity(RestartConfig::new(2, Duration::from_secs(1))),
+                .restart_config(RestartConfig::new(2, Duration::from_secs(1))),
         )
         .spawn()?;
     let mut events = handle.watch_lifecycle_recursive();

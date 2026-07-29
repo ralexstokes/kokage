@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorOptions, ActorRef,
+    ActorFactory, ActorOptions, ActorRef, MailboxMode,
     actor::{
         ActorOptionsValidationError, ActorStats, RawActor, RunnableActor, RunnableActorBuilder,
         SupervisorPathSegment,
@@ -13,8 +13,9 @@ use crate::{
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
     ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard, CompletionOutcome,
-    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, RunningSupervisor, ShutdownPolicy,
-    SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    ControlError, DynamicSupervisorHandle, LifecycleWatch, RestartConfig, RestartPolicy,
+    RunningSupervisor, ShutdownPolicy, SupervisorBuildError, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot,
 };
 use tokio::sync::watch;
 
@@ -123,7 +124,7 @@ impl RuntimeAttachment {
 ///
 /// These options configure both the actor's mailbox and its supervised-child
 /// lifecycle. The message type is inferred from the factory passed to
-/// [`RuntimeHandle::add_actor_with`]. Configure restart and shutdown behavior with
+/// [`DynamicRuntime::add_actor_with`]. Configure restart and shutdown behavior with
 /// [`restart`](Self::restart) and [`shutdown`](Self::shutdown); options left
 /// unset inherit the dynamic runtime's defaults.
 #[derive(Debug)]
@@ -134,7 +135,7 @@ pub struct DynamicActorOptions<M = ()> {
     // Shutdown-policy override for the supervised actor child.
     shutdown: Option<ShutdownPolicy>,
     // Optional restart intensity override for this actor child.
-    restart_intensity: Option<RestartConfig>,
+    restart_config: Option<RestartConfig>,
     actor_options: ActorOptions<M>,
     // `None` selects the dynamic-actor default. Keeping the override unresolved
     // makes `restart(...).remove_on_exit(...)` order-independent.
@@ -146,7 +147,7 @@ impl<M> Clone for DynamicActorOptions<M> {
         Self {
             restart: self.restart,
             shutdown: self.shutdown,
-            restart_intensity: self.restart_intensity,
+            restart_config: self.restart_config,
             actor_options: self.actor_options.clone(),
             remove_on_exit: self.remove_on_exit,
         }
@@ -158,7 +159,7 @@ impl<M> Default for DynamicActorOptions<M> {
         Self {
             restart: None,
             shutdown: None,
-            restart_intensity: None,
+            restart_config: None,
             actor_options: ActorOptions::new(),
             remove_on_exit: None,
         }
@@ -194,20 +195,34 @@ impl<M> DynamicActorOptions<M> {
 
     /// Overrides the supervisor's restart intensity for this actor.
     #[must_use]
-    pub fn restart_intensity(mut self, restart_intensity: RestartConfig) -> Self {
-        self.restart_intensity = Some(restart_intensity);
+    pub fn restart_config(mut self, restart_config: RestartConfig) -> Self {
+        self.restart_config = Some(restart_config);
         self
     }
 
-    /// Sets the actor's mailbox and message-observation options.
+    /// Overrides the hosting scope's mailbox capacity for this actor alone.
     ///
     /// [`ActorOptions::mailbox_capacity`] overrides the hosting scope's
     /// default for this actor. Unkeyed
     /// [`MailboxMode::conflate()`](crate::MailboxMode::conflate()) always has
     /// capacity one and ignores both the scope default and the override.
     #[must_use]
-    pub fn options(mut self, options: ActorOptions<M>) -> Self {
-        self.actor_options = options;
+    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.actor_options = self.actor_options.mailbox_capacity(capacity);
+        self
+    }
+
+    /// Selects the actor's mailbox storage policy.
+    #[must_use]
+    pub fn mailbox(mut self, mailbox: MailboxMode<M>) -> Self {
+        self.actor_options = self.actor_options.mailbox(mailbox);
+        self
+    }
+
+    /// Enables accepted-message byte observation using `size_hint`.
+    #[must_use]
+    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
+        self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
 
@@ -237,7 +252,7 @@ impl<M> DynamicActorOptions<M> {
         DynamicChildOptions {
             restart,
             shutdown,
-            restart_intensity: self.restart_intensity,
+            restart_config: self.restart_config,
             remove_on_exit,
         }
     }
@@ -255,7 +270,7 @@ impl<M> DynamicActorOptions<M> {
 struct DynamicChildOptions {
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartConfig>,
+    restart_config: Option<RestartConfig>,
     remove_on_exit: bool,
 }
 
@@ -338,36 +353,81 @@ where
     LifecycleWatchGuard { cancellation }
 }
 
-/// Cheaply cloneable runtime control surface.
+/// Owns a spawned actor runtime.
 ///
-/// For a spawned root runtime, dropping the last public handle clone requests
-/// graceful shutdown. A handle scoped to a nested runtime does not own that
-/// runtime's lifecycle; dropping it leaves the parent-owned subtree running.
+/// Dropping this value requests graceful shutdown. Handles cloned from it are
+/// non-owning and may be dropped without affecting runtime lifetime.
+#[must_use = "dropping the runtime requests graceful shutdown"]
+pub struct Runtime {
+    supervisor: RunningSupervisor,
+    handle: RuntimeHandle,
+}
+
+impl Runtime {
+    pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
+        let handle = RuntimeHandle::new(supervisor.handle(), actors);
+        Self { supervisor, handle }
+    }
+
+    /// Returns a non-owning runtime control and observation handle.
+    pub fn handle(&self) -> RuntimeHandle {
+        self.handle.clone()
+    }
+
+    /// Requests graceful shutdown without waiting for completion.
+    pub fn shutdown(&self) {
+        self.supervisor.shutdown();
+    }
+
+    /// Requests graceful shutdown and waits for completion.
+    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+        self.supervisor.shutdown_and_wait().await
+    }
+
+    /// Waits for the runtime to stop.
+    pub async fn wait(&self) -> Result<(), SupervisorError> {
+        self.supervisor.wait().await
+    }
+}
+
+impl std::ops::Deref for Runtime {
+    type Target = RuntimeHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
+
+impl std::fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runtime").finish_non_exhaustive()
+    }
+}
+
+/// Cheaply cloneable, non-owning runtime control and observation surface.
+///
+/// Dropping any root or nested handle leaves the runtime running. A spawned
+/// root remains alive until its owning [`Runtime`] is shut down or dropped.
 #[derive(Clone)]
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
-    // Transitional ownership bridge while the higher-level runtime still
-    // returns a handle as its root owner. Nested handles never carry this.
-    _root_owner: Option<Arc<RunningSupervisor>>,
+}
+
+/// Runtime-membership capability for a dynamic actor scope.
+///
+/// Obtain this value with [`RuntimeHandle::dynamic`]. The wrapper keeps the
+/// scope's ordinary control and observation identity while exposing the five
+/// operations that can change membership.
+#[derive(Clone, Debug)]
+pub struct DynamicRuntime {
+    handle: RuntimeHandle,
+    supervisor: DynamicSupervisorHandle,
 }
 
 impl RuntimeHandle {
     pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
-        Self {
-            supervisor,
-            actors,
-            _root_owner: None,
-        }
-    }
-
-    pub(crate) fn root(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
-        let owner = Arc::new(supervisor);
-        Self {
-            supervisor: owner.handle(),
-            actors,
-            _root_owner: Some(owner),
-        }
+        Self { supervisor, actors }
     }
 
     pub(crate) fn unavailable() -> Self {
@@ -400,6 +460,17 @@ impl RuntimeHandle {
         self.supervisor.shutdown_and_wait().await
     }
 
+    /// Returns this scope's dynamic-membership capability.
+    ///
+    /// Ordered root and subtree handles return `None`; dynamic scopes return
+    /// `Some` before and after spawn.
+    pub fn dynamic(&self) -> Option<DynamicRuntime> {
+        self.supervisor.dynamic().map(|supervisor| DynamicRuntime {
+            handle: self.clone(),
+            supervisor,
+        })
+    }
+
     /// Builds and adds an actor-aware runtime subtree dynamically.
     ///
     /// The returned handle can add actors or further subtrees, and recursive
@@ -414,12 +485,9 @@ impl RuntimeHandle {
     /// supervisor restarts, the dynamically added subtree is not recreated.
     ///
     /// Restart intensity remains tracked per child across this boundary.
-    /// This operation is supported only when this handle targets a dynamic
-    /// scope; ordered scopes return
-    /// [`ControlError::UnsupportedByScopeKind`]. Dynamic additions start
-    /// immediately and dynamic siblings stop concurrently under one shared
-    /// maximum-grace deadline. Use [`wait_started`](Self::wait_started) when
-    /// readiness is needed.
+    /// Dynamic additions start immediately and dynamic siblings stop
+    /// concurrently under one shared maximum-grace deadline. Use
+    /// [`wait_started`](Self::wait_started) when readiness is needed.
     ///
     /// Both failure phases use [`ControlError::Rejected`]: first the supplied
     /// tree is lowered and validated, then the parent validates insertion of
@@ -430,16 +498,16 @@ impl RuntimeHandle {
     /// some rules, such as duplicate child ids, can arise in either phase.
     /// Any error consumes the supplied tree and makes handles previously issued
     /// from it terminal.
-    pub async fn add_subtree(
+    async fn add_subtree_dynamic(
         &self,
+        supervisor: &DynamicSupervisorHandle,
         id: impl Into<String>,
         tree: impl Into<crate::TreeNode>,
     ) -> Result<RuntimeHandle, ControlError> {
         let id = id.into();
         let parts = tree.into().into_parts();
         let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
-        let lineage = self
-            .supervisor
+        let lineage = supervisor
             .add_child(__private::attach(
                 ChildSpec::supervisor(id.clone(), nested_supervisor),
                 RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
@@ -481,31 +549,34 @@ impl RuntimeHandle {
 
     /// Adds an arbitrary supervised task child to this runtime.
     ///
-    /// This is the task-level counterpart to [`add_actor`](Self::add_actor).
-    /// It is supported only for dynamic scopes; ordered scopes return
-    /// [`ControlError::UnsupportedByScopeKind`]. Success means the membership
-    /// was inserted and startup was scheduled, and returns the lineage
-    /// assigned to that membership. Task children do not appear in
+    /// This is the task-level counterpart to adding an actor. Success means
+    /// the membership was inserted and startup was scheduled, and returns the
+    /// lineage assigned to that membership. Task children do not appear in
     /// [`actor_stats`](Self::actor_stats), but remain visible through snapshots
     /// and lifecycle watches.
-    pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.supervisor.add_child(child).await
+    async fn add_child_dynamic(
+        &self,
+        supervisor: &DynamicSupervisorHandle,
+        child: ChildSpec,
+    ) -> Result<u64, ControlError> {
+        supervisor.add_child(child).await
     }
 
     /// Adds a supervised runtime actor with default options and returns its
     /// stable typed ref.
     ///
-    /// See [`add_actor_with`](Self::add_actor_with) for child-id, readiness,
-    /// scope-kind, and explicit mailbox-option details.
-    pub async fn add_actor<F>(
+    /// See [`DynamicRuntime::add_actor_with`] for child-id, readiness, and
+    /// explicit mailbox-option details.
+    async fn add_actor_dynamic<F>(
         &self,
+        supervisor: &DynamicSupervisorHandle,
         label: impl Into<String>,
         factory: F,
     ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
     where
         F: ActorFactory,
     {
-        self.add_actor_with(label, factory, DynamicActorOptions::new())
+        self.add_actor_with_dynamic(supervisor, label, factory, DynamicActorOptions::new())
             .await
     }
 
@@ -513,17 +584,16 @@ impl RuntimeHandle {
     /// explicit options and returns its stable typed ref.
     ///
     /// The actor's label is also its direct supervisor child id, so it can be
-    /// removed later with [`remove_child`](Self::remove_child). See
-    /// [`ActorFactory`] for the incarnation lifecycle contract. This operation
-    /// is supported only for dynamic scopes; ordered scopes return
-    /// [`ControlError::UnsupportedByScopeKind`]. Success means membership was
-    /// inserted and immediate startup was scheduled. The returned stable ref
+    /// removed later through the dynamic capability. See
+    /// [`ActorFactory`] for the incarnation lifecycle contract. Success means
+    /// membership was inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`wait_started`](Self::wait_started)
     /// retains the stronger readiness contract. A zero
     /// [`ActorOptions::mailbox_capacity`] is rejected with
     /// [`ControlError::Rejected`].
-    pub async fn add_actor_with<F>(
+    async fn add_actor_with_dynamic<F>(
         &self,
+        supervisor: &DynamicSupervisorHandle,
         label: impl Into<String>,
         factory: F,
         options: DynamicActorOptions<<F::Actor as RawActor>::Msg>,
@@ -540,11 +610,13 @@ impl RuntimeHandle {
                 ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
             })?;
         let actor = self.actors.make_actor(label, factory, actor_options);
-        self.add_constructed_actor(actor, dynamic_options).await
+        self.add_constructed_actor(supervisor, actor, dynamic_options)
+            .await
     }
 
     async fn add_constructed_actor<M>(
         &self,
+        supervisor: &DynamicSupervisorHandle,
         (actor, actor_ref): (RunnableActor, ActorRef<M>),
         options: DynamicChildOptions,
     ) -> Result<ActorRef<M>, ControlError> {
@@ -552,10 +624,10 @@ impl RuntimeHandle {
             actor.clone(),
             &self.actors,
             ActorChildOptions::new(options.restart, options.shutdown)
-                .restart_intensity(options.restart_intensity)
+                .restart_config(options.restart_config)
                 .remove_on_exit(options.remove_on_exit),
         );
-        self.supervisor.add_child(child).await?;
+        supervisor.add_child(child).await?;
 
         Ok(actor_ref)
     }
@@ -580,8 +652,12 @@ impl RuntimeHandle {
     /// `send` waits and then returns [`SendError`](crate::SendError).
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
-    pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        self.supervisor.remove_child(id).await
+    async fn remove_child_dynamic(
+        &self,
+        supervisor: &DynamicSupervisorHandle,
+        id: impl Into<String>,
+    ) -> Result<(), ControlError> {
+        supervisor.remove_child(id).await
     }
 
     /// Waits for the supervisor to stop.
@@ -750,6 +826,61 @@ impl RuntimeHandle {
     }
 }
 
+impl DynamicRuntime {
+    /// Builds and adds an actor-aware runtime subtree dynamically.
+    ///
+    /// Success means insertion completed and startup was scheduled. The
+    /// returned handle is non-owning and scoped to the inserted subtree.
+    pub async fn add_subtree(
+        &self,
+        id: impl Into<String>,
+        tree: impl Into<crate::TreeNode>,
+    ) -> Result<RuntimeHandle, ControlError> {
+        self.handle
+            .add_subtree_dynamic(&self.supervisor, id, tree)
+            .await
+    }
+
+    /// Adds an arbitrary supervised task child and returns its lineage.
+    pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
+        self.handle.add_child_dynamic(&self.supervisor, child).await
+    }
+
+    /// Adds a supervised actor using the dynamic scope's defaults.
+    pub async fn add_actor<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
+    where
+        F: ActorFactory,
+    {
+        self.handle
+            .add_actor_dynamic(&self.supervisor, label, factory)
+            .await
+    }
+
+    /// Adds a supervised actor with explicit child and mailbox options.
+    pub async fn add_actor_with<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+        options: DynamicActorOptions<<F::Actor as RawActor>::Msg>,
+    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
+    where
+        F: ActorFactory,
+    {
+        self.handle
+            .add_actor_with_dynamic(&self.supervisor, label, factory, options)
+            .await
+    }
+
+    /// Removes a child after applying its shutdown policy.
+    pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
+        self.handle.remove_child_dynamic(&self.supervisor, id).await
+    }
+}
+
 impl std::fmt::Debug for RuntimeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeHandle").finish_non_exhaustive()
@@ -783,7 +914,7 @@ pub(crate) struct ActorChildOptions {
     pub(crate) child_id: Option<String>,
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: ShutdownPolicy,
-    pub(crate) restart_intensity: Option<RestartConfig>,
+    pub(crate) restart_config: Option<RestartConfig>,
     /// Whether the membership disappears when the actor exits, rather than
     /// resting as an inactive entry.
     pub(crate) remove_on_exit: bool,
@@ -798,7 +929,7 @@ impl ActorChildOptions {
             child_id: None,
             restart,
             shutdown,
-            restart_intensity: None,
+            restart_config: None,
             remove_on_exit: false,
             children: None,
         }
@@ -809,8 +940,8 @@ impl ActorChildOptions {
         self
     }
 
-    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartConfig>) -> Self {
-        self.restart_intensity = intensity;
+    pub(crate) fn restart_config(mut self, config: Option<RestartConfig>) -> Self {
+        self.restart_config = config;
         self
     }
 
@@ -834,7 +965,7 @@ pub(crate) fn actor_child_spec(
         child_id,
         restart,
         shutdown,
-        restart_intensity,
+        restart_config,
         remove_on_exit,
         children,
     } = options;
@@ -869,8 +1000,8 @@ pub(crate) fn actor_child_spec(
     .remove_on_exit(remove_on_exit)
     .shutdown(shutdown);
 
-    if let Some(intensity) = restart_intensity {
-        child = child.restart_config(intensity);
+    if let Some(config) = restart_config {
+        child = child.restart_config(config);
     }
 
     child
@@ -899,7 +1030,9 @@ mod tests {
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
         let root = DynamicTree::new().spawn().expect("runtime builds");
-        root.add_subtree("workers", OrderedTree::new())
+        root.dynamic()
+            .expect("dynamic scope")
+            .add_subtree("workers", OrderedTree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -908,10 +1041,14 @@ mod tests {
             .expect("first membership is visible")
             .lineage;
 
-        root.remove_child("workers")
+        root.dynamic()
+            .expect("dynamic scope")
+            .remove_child("workers")
             .await
             .expect("first subtree removed");
-        root.add_subtree("workers", OrderedTree::new())
+        root.dynamic()
+            .expect("dynamic scope")
+            .add_subtree("workers", OrderedTree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

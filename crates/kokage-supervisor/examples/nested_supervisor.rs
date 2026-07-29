@@ -48,8 +48,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let supervisor = Supervisor::dynamic().build()?;
 
     let handle = supervisor.spawn();
-    handle.add_child(metrics).await?;
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(metrics)
+        .await?;
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested-pipeline", nested_supervisor))
         .await?;
     let nested_handle = handle
