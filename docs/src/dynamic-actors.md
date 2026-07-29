@@ -239,11 +239,6 @@ incarnation, including an empty dynamic scope. Dropping an unspawned tree,
 failing `spawn()`, or having an insertion rejected makes the identity terminal
 and closes retained streams.
 
-The same rule applies to the builders returned by `Supervisor::ordered()` and
-`Supervisor::dynamic()`, whose `handle()` returns a raw
-`SupervisorHandle`. Supervisor declarations are single-use; handle clones
-continue to address one identity.
-
 ## Scope handles inside actors
 
 Every actor stage has the same safe scope surface: `host::ActorContext`,
@@ -379,9 +374,7 @@ otherwise identical local ids and lineages in sibling or restarted subtrees.
 Use `RuntimeHandle::dynamic().expect("dynamic scope").add_child(host::ChildSpec)` for a non-actor task in a dynamic
 scope and `add_subtree` for a nested actor-aware scope. Task children are not
 part of runtime actor stats, but they remain visible in snapshots and lifecycle
-watches. Applications that need raw `Supervisor` construction or
-`SupervisorHandle` APIs should depend on `kokage-supervisor` directly; those
-low-level construction and control types are not re-exported by `kokage`.
+watches.
 
 ## Name-based discovery, when you want it
 

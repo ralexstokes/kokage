@@ -1,22 +1,19 @@
-# Task-supervision backend
+# Task children and supervision
 
-Actor applications do not normally construct this layer directly: `kokage`'s
-trees and runtimes adapt every actor to it. This chapter deliberately steps
-down into the independent `kokage-supervisor` backend so its restart,
-shutdown, and strategy semantics are concrete. Programs made entirely from
-plain async tasks can use this crate as their front door.
+Actors are the usual unit of a kokage application, but a supervision tree can
+also host plain async tasks. Define those tasks with [`host::ChildSpec`], place
+them in an [`OrderedTree`] or [`DynamicTree`], and control the result through
+the same [`Runtime`] and [`RuntimeHandle`] used for actor trees.
 
-We supervise two such tasks: a `front-desk` that should run forever and a
-`press` that keeps jamming. The next chapter returns to the actor-facing
-`GraphBuilder` / `OrderedTree` / `Runtime` vocabulary used by the rest of the
-book.
+This example supervises a `front-desk` task that should run forever and a
+`press` task that keeps jamming:
 
 ```rust,no_run
 use std::time::Duration;
 
-use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, RestartPolicy, RestartConfig, ShutdownPolicy, Strategy,
-    Supervisor,
+use kokage::{
+    BackoffPolicy, OrderedTree, RestartConfig, RestartPolicy, ShutdownPolicy,
+    host::ChildSpec,
 };
 
 #[tokio::main]
@@ -31,83 +28,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err("paper jam".into())
     })
     .restart_config(press_restart)
-    .shutdown(ShutdownPolicy::Cooperative { grace: Duration::from_secs(1) });
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: Duration::from_secs(1),
+    });
 
-    // A front desk that runs until asked to stop.
+    // A front desk that runs until its tree asks it to stop.
     let front_desk = ChildSpec::task("front-desk", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
     .restart(RestartPolicy::Always);
 
-    let running = Supervisor::ordered()
-        .child(press)
-        .child(front_desk)
+    let runtime = OrderedTree::new()
+        .task(press)
+        .task(front_desk)
         .spawn()?;
 
-    match running.wait().await {
-        Ok(()) => println!("supervisor stopped cleanly"),
-        Err(error) => println!("supervisor gave up: {error}"),
+    match runtime.wait().await {
+        Ok(()) => println!("runtime stopped cleanly"),
+        Err(error) => println!("runtime gave up: {error}"),
     }
     Ok(())
 }
 ```
 
-Running this prints the press restarting three times, each generation 100 ms
-apart, and then the supervisor giving up because the restart intensity limit
-was exceeded:
+The press starts four generations, each separated by 100 ms, before its
+restart budget is exhausted. That failure stops the root runtime and is
+returned from `Runtime::wait`:
 
 ```text
 press starting (generation 0)
 press starting (generation 1)
 press starting (generation 2)
 press starting (generation 3)
-supervisor gave up: restart intensity exceeded
+runtime gave up: restart intensity exceeded
 ```
 
-Let's unpack the policies that produced that behaviour.
+The important boundary is ownership: the tree is single-use configuration,
+`Runtime` owns the live root, and a cloned `RuntimeHandle` is non-owning
+control and observation access. Plain tasks do not introduce a second
+application lifecycle model.
 
 ## Restart policies
 
 Each child has a [`RestartPolicy`] that decides whether an exit triggers a
 restart:
 
-- **`RestartPolicy::Always`** — always restart, even after a clean `Ok(())`
-  exit. Right for services that should simply never stop, like the front
-  desk.
-- **`RestartPolicy::OnFailure`** (the default) — restart only on failure (`Err`,
-  panic, or abort). A clean exit is final. Right for the press: a jam should
-  be retried, but if the press decides it is done, it is done.
-- **`RestartPolicy::Never`** — never restart. Runs at most once; useful for
-  one-shot startup jobs.
-
-## Restart intensity and backoff
+- **`RestartPolicy::Always`** always restarts, even after a clean `Ok(())`
+  exit. It suits a service that should never stop, such as the front desk.
+- **`RestartPolicy::OnFailure`** (the default) restarts after an error, panic,
+  or abort, but treats a clean exit as final. It suits the press: a jam should
+  be retried, but deliberately finishing should be final.
+- **`RestartPolicy::Never`** runs at most once. It suits one-shot startup or
+  batch work.
 
 Unbounded restarting would turn a persistent fault into a busy loop, so
-restarts are budgeted by a [`RestartConfig`]: at most `max_restarts`
-restarts within a sliding `within` window (the default is 5 restarts within
-30 seconds). Exceeding the budget makes the whole supervisor exit with
-`SupervisorError::RestartIntensityExceeded` — in a supervision tree, that
-escalates the failure to the parent.
+restarts are budgeted by a [`RestartConfig`]: at most `max_restarts` within a
+sliding `within` window. Exceeding the budget fails the scope and escalates to
+its parent.
 
-A [`BackoffPolicy`] optionally delays each restart attempt with `Fixed` or
-`Exponential`; the exponential variant's `jitter` flag enables equal jitter.
-The exponential attempt count is a per-child consecutive-restart counter that
-resets once a run survives longer than the intensity window. A shutdown
-request always wins over a pending restart delay.
+A [`BackoffPolicy`] can delay attempts with a fixed or exponential schedule.
+The exponential attempt count is tracked per child and resets after a run
+survives longer than the intensity window. Shutdown always wins over a pending
+restart delay.
 
-The setters are named `restart_config` after the value they accept. The
-configuration carries both the restart budget and its backoff policy; set the
-public `backoff` field after calling `RestartConfig::new`.
-
-Intensity can be set on the supervisor as a whole
-(`Supervisor::ordered().restart_config(...)`) or overridden per child, as we did
-for the press.
+Call `OrderedTree::restart_config` or `DynamicTree::restart_config` to set the
+scope-wide budget, and `ChildSpec::restart_config` when one task needs its own
+budget.
 
 ## Ordered startup and readiness
 
-`Supervisor::ordered()` creates an ordered scope builder. It starts the declared child
-sequence one at a time, waiting at each opted-in readiness signal:
+`OrderedTree` starts declared children one at a time. A task that opts into a
+readiness gate holds later siblings until it calls `mark_ready`:
 
 ```rust,ignore
 let database = ChildSpec::task("database", |ctx| async move {
@@ -118,148 +110,105 @@ let database = ChildSpec::task("database", |ctx| async move {
 })
 .wait_for_ready();
 
-let supervisor = Supervisor::ordered()
-    .child(database)
-    .child(api)
-    .build()?;
+let runtime = OrderedTree::new()
+    .task(database)
+    .task(api)
+    .spawn()?;
+
+runtime.handle().wait_started().await?;
 ```
 
-The API child is not spawned until the database reports readiness. The same
-ordering is used when `OneForAll` or `RestForOne` restarts multiple children.
-Plain children without `wait_for_ready()` count as ready immediately. Actor
-children are gated automatically: their `on_start` hook is the readiness
-boundary. Use `LiveContext::continue_with(message)` inside `on_start` to queue
-expensive follow-up work as the actor's next message without delaying later
-siblings. Call `handle.wait_started().await` when code outside the tree needs
-to wait until all current children are running. Ordered membership is immutable
-at runtime, so `SupervisorHandle::dynamic()` returns `None`. Use
-`Supervisor::dynamic()` for an
-empty runtime-written scope; its children start immediately. There is no
-implicit readiness timeout.
+The API task is not spawned until the database reports readiness. Plain tasks
+without `wait_for_ready` count as ready immediately. Actor children are gated
+automatically: their `on_start` hook is the readiness boundary. Use
+`LiveContext::continue_with(message)` in `on_start` to queue expensive
+follow-up work as the actor's next message without delaying later siblings.
 
-Ordered startup latency is cumulative: the scope becomes ready after the sum
-of its declared readiness gates' `on_start` times. This is now the default for
-`Supervisor::ordered()` and `OrderedTree::new()`; use a dynamic scope when members
-should start independently and immediate runtime insertion is the right
-ownership model.
+Ordered membership is immutable after spawn, so `RuntimeHandle::dynamic`
+returns `None`. Use `DynamicTree` when members should start independently and
+be added at runtime. There is no implicit readiness timeout.
 
 ## Strategies
 
-The [`Strategy`] decides who is affected when a child fails:
+An ordered tree's [`Strategy`] selects which siblings are affected by a child
+failure:
 
-- **`Strategy::OneForOne`** (default) — only the failed child restarts. The
-  front desk never notices the press jamming.
-- **`Strategy::OneForAll`** — every child is stopped and restarted together.
-  Use this when children hold interdependent state, e.g. a producer/consumer
-  pair that must resynchronize from scratch. (`Never` children are drained
-  with the group but not respawned.) Draining the old generation is an atomic
-  critical section, so control commands wait behind it until every old task
-  exits or reaches its shutdown backstop. Post-drain readiness gates are
-  non-blocking loop state.
-- **`Strategy::RestForOne`** — the failed child and every child declared after
-  it are stopped, then eligible children in that suffix restart in declaration
-  order. Earlier children remain running. Use this for ordered pipelines. Its
-  old-suffix drain has the same bounded control-command blocking window as
-  `OneForAll`.
+- **`Strategy::OneForOne`** (the default) restarts only the failed child.
+- **`Strategy::OneForAll`** stops and restarts every eligible child together.
+  It suits children with interdependent state.
+- **`Strategy::RestForOne`** restarts the failed child and every later child
+  in declaration order. Earlier children keep running, which suits ordered
+  pipelines.
 
-For `RestForOne`, declaration order is therefore part of the fault model. If
-children are declared as `outbound`, `progress`, `inbound`, an `inbound`
-failure restarts only `inbound`: the last child has no later siblings. If a
-failing bridge must take its delivery pair down with it, declare the bridge
-first so the pair follows it, or use `OneForAll` when a failure in any member
-must restart the whole group. Phase 3 of the runnable [`agent_control`
-example] pins the last-child behavior with per-child restart-count assertions.
+Select it directly on the tree:
+
+```rust,ignore
+let runtime = OrderedTree::new()
+    .strategy(Strategy::RestForOne)
+    .task(outbound)
+    .task(progress)
+    .task(inbound)
+    .spawn()?;
+```
+
+For `RestForOne`, declaration order is part of the fault model. An `inbound`
+failure in this example restarts only `inbound`; the last child has no later
+siblings. Put a bridge before the delivery pair if the pair must restart with
+it, or use `OneForAll` if every member must share fate. The runnable
+[`agent_control` example] pins this behavior with per-child restart counts.
 
 ## Shutdown policies
 
-When a child must stop — on supervisor shutdown, removal, or a group restart —
-its [`ShutdownPolicy`] governs how:
+When a task must stop because its runtime is shutting down, its membership is
+removed, or its group is restarting, [`ShutdownPolicy`] governs how:
 
-- **`ShutdownPolicy::Cooperative { grace }`** (default, 5 s grace) — cancel
-  the child's token and wait up to `grace` for a voluntary exit. On shutdown
-  or removal, abort *and report a timeout error* otherwise; callers that only
-  need best-effort cleanup may explicitly ignore that error. The child's
-  lifecycle exit is `Aborted { after_grace: true }`. During a group restart,
-  grace expiry escalates the old generation to abort and the restart continues
-  once the old task exits.
-- **`ShutdownPolicy::Abort`** — abort immediately.
+- **`ShutdownPolicy::Cooperative { grace }`** cancels the task's shutdown
+  token and waits for a voluntary exit. After `grace`, the task is aborted and
+  the shutdown or removal reports a timeout.
+- **`ShutdownPolicy::Abort`** aborts immediately.
 
-One caveat inherited from Tokio itself: aborts take effect at `.await` points.
-A child stuck in a non-yielding loop cannot be preempted — isolate truly
-blocking work behind a blocking pool (as the actor layer's `run_blocking`
-does, see the next chapter) or an external process. Ordered teardown advances
-after issuing such an abort rather than waiting without a bound. A group
-restart is stricter than a shutdown, because it has to respawn what it drained:
-a child that is still running when the drain ends fails the restart, but only
-after the whole drain group's longest grace has been spent waiting for it. An
-abort of a nested supervisor wrapper hard-cascades through that subtree;
-cooperative shutdown lets the subtree apply its own ordered or dynamic drain
-first.
+Tokio aborts take effect at `.await` points. A non-yielding loop cannot be
+preempted, so put truly blocking work on a blocking pool or in an external
+process. Actor code can use `LiveContext::run_blocking` for this boundary.
 
-Ordered shutdown latency is also cumulative: each cooperative child receives
-its own grace before the cursor moves to the previous declaration, so the
-worst-case grace budget is their sum (with the default, up to 5 seconds × the
-number of children). Dynamic scopes cancel siblings together and run every
-child's grace concurrently, so their budget is the longest single grace rather
-than the sum.
+Ordered trees stop children in reverse declaration order and give each child
+its complete grace, so the worst-case grace budget is their sum. Dynamic
+scopes cancel siblings together and use the longest single grace as their
+overall budget.
 
-### One shutdown clock per child
+A supervised actor also has one user-facing shutdown deadline: its child
+`ShutdownPolicy` grace bounds queued messages, outstanding offloads, and
+`on_stop`. Offload deadlines remain independent bounds on individual offloads;
+they do not extend the child grace. A host running an actor outside a tree
+passes the equivalent explicit bound to `RunnableActor::run_until`.
 
-A supervised actor has one user-facing shutdown deadline: its child
-`ShutdownPolicy` grace. The grace bounds the whole actor drain, including
-queued messages, outstanding offloads, and `on_stop`. Offload deadlines remain
-independent bounds on individual offloads; they do not extend the child grace.
+## Stopping when finite work completes
 
-When a cooperative grace expires, the supervisor records an
-`Aborted { after_grace: true }` exit and signals the actor wrapper's tidy-abort path. The
-wrapper aborts and joins the inner actor task, terminates its mailbox binding,
-and publishes actor observability before returning. If the wrapper does not
-finish within a short accounting beat — a tenth of the child's own grace,
-clamped to between 1 ms and 10 ms — the supervisor hard-aborts it.
-The enclosing shutdown or removal reports the timeout, and snapshots and
-lifecycle streams expose the same truthful `Aborted { after_grace: true }`
-reason. A group restart records that exit reason too, but treats the expiry as
-successful escalation once the old task has actually terminated.
-
-Ordered scopes stop children in reverse declaration order and give each child
-its complete grace, plus that child's accounting beat if it times out. Dynamic
-scopes start every clock together and stop children concurrently, but each
-child escalates when its own grace expires; a short-grace child cannot borrow a
-longer-grace sibling's budget.
-
-Standalone hosts pass an explicit shutdown bound to
-`kokage::host::RunnableActor::run_until`
-(`kokage::host::DEFAULT_SHUTDOWN_BOUND` matches the default supervisor grace). That bound
-provides the same inner-task backstop without storing execution policy on the
-graph, and an actor that overruns it resolves the run to
-`kokage::host::ActorRunError::ShutdownTimedOut` rather than a clean exit. As with every Tokio
-abort, code that never reaches a poll boundary, and blocking work already
-running on the blocking pool, can continue outside the actor task.
-
-## Stopping a scope when its finite work is done
-
-Pipeline and batch subtrees often have a natural completion point. Name those
-children in [`shutdown_on_completion`], taken from a pre-spawn handle so a child
-that finishes immediately is still observed:
+Pipeline and batch trees often have a natural completion point. Arm
+[`shutdown_on_completion`] on a pre-spawn handle so even a task that finishes
+immediately is observed:
 
 ```rust,ignore
-let builder = Supervisor::ordered()
-    .child(source)
-    .child(indexer.restart(RestartPolicy::Never))
-    .child(metrics_reporter);
+let tree = OrderedTree::new()
+    .task(source)
+    .task(indexer.restart(RestartPolicy::Never))
+    .task(metrics_reporter);
 
+let handle = tree.handle();
 // Retain the guard: dropping it cancels the watch.
-let _finished = builder.handle().shutdown_on_completion(["source", "indexer"]);
-let batch = builder.build()?;
+let _finished = handle.shutdown_on_completion(["source", "indexer"]);
+let runtime = tree.spawn()?;
+runtime.wait().await?;
 ```
 
-The scope stops once every named child is *simultaneously* in a completed
-state, so `["source"]` alone gives you "stop as soon as the source is done".
-[`wait_completed`] is the same rule as a plain `await` when you would rather
-decide for yourself what to do next.
+The scope stops when every named child is simultaneously completed. A child
+counts as completed when its current generation returns `Ok(())` on its own
+and no restart is pending. Failure still follows its restart policy, and an id
+not yet present in a dynamic scope stays pending until added. Use
+[`wait_completed`] to await the same condition without automatically stopping
+the runtime.
 
-A child counts as completed once its current generation has returned `Ok(())`
-of its own accord and no restart is pending for it. Three consequences follow:
+## Nested scopes
 
 - Failures still follow the normal restart policy. A `Never` child that fails
   can never complete, and the scope runs until explicitly stopped.
@@ -271,7 +220,7 @@ of its own accord and no restart is pending for it. Three consequences follow:
   [`LifecycleEventKind::ChildExited`] carries a `ChildExitView` whose
   `cancelled()` method reports it.
 
-Nested supervisors need nothing special: a scope that stops itself this way is
+Nested scopes need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
 in its own completion set. For dynamic scopes whose ids are not members yet,
 use `wait_completed_dynamic` or `shutdown_on_dynamic_completion`; those names
@@ -279,71 +228,62 @@ make the future-membership behavior explicit.
 
 ## Supervision trees
 
-A supervisor is a first-class child kind, giving each subsystem its own
-restart budget while failures that exhaust it escalate to the parent:
+Subtrees give each subsystem its own restart budget while preserving one
+runtime hierarchy:
 
 ```rust,ignore
-let pressroom = Supervisor::ordered()
-    .child(press) // ... the flaky press from above
-    .build()?;
+let pressroom = OrderedTree::new()
+    .restart_config(pressroom_restart)
+    .task(press);
 
-let shop = Supervisor::ordered()
-    .child(ChildSpec::supervisor("pressroom", pressroom))
-    .child(front_desk)
-    .build()?;
+let shop = OrderedTree::new()
+    .subtree("pressroom", pressroom)
+    .task(front_desk);
+
+let runtime = shop.spawn()?;
 ```
 
-The nested supervisor forwards its lifecycle events to the parent and shows up
-inside the parent's snapshots, so [Observability](observability.md) sees the
-whole tree. The actor layer exposes its executable declaration as data; see
-[Inspectable supervision trees](supervision-trees.md) when you need to inspect,
-compare, or assemble that shape directly.
+The subtree forwards lifecycle events and appears in the root snapshot, so
+[Observability](observability.md) sees the whole tree. Executable declarations
+can also be projected to data; see [Inspectable supervision
+trees](supervision-trees.md) when you need to inspect, compare, or assemble
+that shape.
 
-## Dynamic children
+## Dynamic task children
 
-`Supervisor::dynamic()` creates an empty scope whose children are added and
-removed while it is running:
+`DynamicTree` starts empty. Obtain its membership capability from the runtime
+handle, then add and remove `ChildSpec` tasks:
 
 ```rust,ignore
-let lineage = handle
-    .dynamic()
-    .expect("dynamic supervisor")
+let runtime = DynamicTree::new().spawn()?;
+let handle = runtime.handle();
+let dynamic = handle.dynamic().expect("dynamic root");
+
+let lineage = dynamic
     .add_child(ChildSpec::task("night-shift-press", factory))
     .await?;
-handle
-    .dynamic()
-    .expect("dynamic supervisor")
-    .remove_child("night-shift-press")
-    .await?;
-
-// A dynamic nested scope has its own restart-stable handle:
-let pressroom = handle.supervisor("pressroom").expect("added dynamically");
-pressroom
-    .dynamic()
-    .expect("dynamic pressroom")
-    .add_child(child)
-    .await?;
+dynamic.remove_child("night-shift-press").await?;
 ```
 
-`add_child` returns the lineage allocated atomically for that
-insertion. It is the same value published in the child's snapshot and remains
-the identity of that membership if the id is removed and reused before the
-caller next samples the tree. The reply schedules immediate startup;
-`wait_started()` observes the stronger readiness boundary.
+`add_child` returns the lineage allocated to that membership. The value is
+also published in snapshots and distinguishes a removed child from a later
+same-id replacement. Task children remain visible through runtime snapshots
+and lifecycle watches, but do not appear in actor message statistics.
 
-Dynamic supervisors start empty and can have their last child removed. At zero
-children they keep serving control commands and wait for the next `add_child`
-or an explicit shutdown.
-We will use a higher-level version of this API in the [Dynamic
-actors](dynamic-actors.md) chapter.
+For dynamic actor construction and actor-owned scopes, continue to [Dynamic
+actors](dynamic-actors.md).
 
-[`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
-[`RestartPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.RestartPolicy.html
-[`RestartConfig`]: https://stokes.io/kokage/api/kokage_supervisor/struct.RestartConfig.html
-[`BackoffPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.BackoffPolicy.html
-[`Strategy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.Strategy.html
-[`ShutdownPolicy`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ShutdownPolicy.html
-[`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html#method.shutdown_on_completion
-[`wait_completed`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html#method.wait_completed
-[`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage_supervisor/enum.LifecycleEventKind.html#variant.ChildExited
+[`host::ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
+[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
+[`Runtime`]: https://stokes.io/kokage/api/kokage/struct.Runtime.html
+[`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
+[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/enum.RestartPolicy.html
+[`RestartConfig`]: https://stokes.io/kokage/api/kokage/struct.RestartConfig.html
+[`BackoffPolicy`]: https://stokes.io/kokage/api/kokage/enum.BackoffPolicy.html
+[`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
+[`ShutdownPolicy`]: https://stokes.io/kokage/api/kokage/enum.ShutdownPolicy.html
+[`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.shutdown_on_completion
+[`wait_completed`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.wait_completed
+[`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html#variant.ChildExited
 [`agent_control` example]: https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples/agent_control
