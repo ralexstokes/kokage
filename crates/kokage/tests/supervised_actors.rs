@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    ActorContext, ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
-    host::{BoxError, RawActor},
+    ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
+    host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
 use tokio::{

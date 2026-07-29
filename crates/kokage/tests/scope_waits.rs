@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, DrainPolicy, GraphBuilder, LiveContext, MessageContext, OrderedTree,
-    ScopeWaitHandle, StartContext, StopContext, observe::ExitStatusView,
+    Actor, ActorResult, ActorStatus, DrainPolicy, GraphBuilder, MessageContext, OrderedTree,
+    StartContext, StopContext, TaskHandle, observe::ExitStatusView,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -165,7 +165,7 @@ enum CancelMsg {
 struct CancellableWait {
     started: mpsc::UnboundedSender<()>,
     dropped: mpsc::UnboundedSender<()>,
-    handles: mpsc::UnboundedSender<ScopeWaitHandle>,
+    handles: mpsc::UnboundedSender<TaskHandle>,
     completions: mpsc::UnboundedSender<()>,
 }
 
@@ -252,7 +252,7 @@ struct BackpressureWait {
     handler_started: mpsc::UnboundedSender<()>,
     handler_release: Arc<Notify>,
     observed: mpsc::UnboundedSender<&'static str>,
-    handles: mpsc::UnboundedSender<ScopeWaitHandle>,
+    handles: mpsc::UnboundedSender<TaskHandle>,
 }
 
 impl Actor for BackpressureWait {
@@ -871,11 +871,11 @@ impl Actor for MixedDrain {
                 ctx.stop();
             }
             MixedDrainMsg::Filler => {
-                assert!(ctx.is_draining());
+                assert_eq!(ctx.status(), ActorStatus::Draining);
                 self.observed.send("filler").expect("receiver open");
             }
             MixedDrainMsg::OffloadDone => {
-                assert!(ctx.is_draining());
+                assert_eq!(ctx.status(), ActorStatus::Draining);
                 self.observed.send("offload").expect("receiver open");
             }
             MixedDrainMsg::ScopeDone => {

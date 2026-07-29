@@ -1,4 +1,4 @@
-use kokage::{ActorContext, ActorResult, Supervision, host::RawActor};
+use kokage::{host::ActorContext, ActorResult, Supervision, host::RawActor};
 
 #[derive(Clone)]
 struct Park;

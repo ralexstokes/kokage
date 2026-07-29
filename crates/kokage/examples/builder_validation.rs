@@ -1,6 +1,9 @@
 use std::marker::PhantomData;
 
-use kokage::{ActorContext, ActorResult, GraphBuildError, GraphBuilder, host::RawActor};
+use kokage::{
+    ActorResult, GraphBuildError, GraphBuilder,
+    host::{ActorContext, RawActor},
+};
 
 struct Idle<M>(PhantomData<fn(M)>);
 

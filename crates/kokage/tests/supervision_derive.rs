@@ -1,6 +1,7 @@
 use kokage::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
-    GraphConfig, MailboxMode, MessageContext, Supervision, TrySendError, host::RawActor,
+    Actor, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder, GraphConfig,
+    MailboxMode, MessageContext, Supervision, TrySendError,
+    host::{ActorContext, RawActor},
 };
 use tokio::sync::mpsc;
 

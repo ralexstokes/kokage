@@ -131,11 +131,8 @@ impl Actor for Reconciler {
                         tracing::debug!(venue, generation, "venue feed up");
                         self.transition(venue, VenueHealth::Stale);
                     }
-                    MonitorEvent::Down(down) => {
-                        self.down_reasons
-                            .entry(venue)
-                            .or_default()
-                            .push(down.reason);
+                    MonitorEvent::Down { reason, .. } => {
+                        self.down_reasons.entry(venue).or_default().push(reason);
                         self.transition(venue, VenueHealth::Down);
                     }
                     MonitorEvent::Terminated { .. } => {

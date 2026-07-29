@@ -1,6 +1,9 @@
 use std::{error::Error, sync::Arc};
 
-use kokage::{ActorContext, ActorResult, GraphBuilder, TrySendError, host::RawActor};
+use kokage::{
+    ActorResult, GraphBuilder, TrySendError,
+    host::{ActorContext, RawActor},
+};
 use tokio::sync::Notify;
 
 mod support;

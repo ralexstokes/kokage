@@ -426,13 +426,19 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         .values()
         .find(|events| {
             events.iter().any(|event| {
-                matches!(event, MonitorEvent::Down(down) if down.reason == DownReason::Failure)
+                matches!(
+                    event,
+                    MonitorEvent::Down {
+                        reason: DownReason::Failure,
+                        ..
+                    }
+                )
             })
         })
         .expect("panic run monitor events");
     let down = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Down(_)))
+        .position(|event| matches!(event, MonitorEvent::Down { .. }))
         .expect("Down event");
     let terminated = panic_events
         .iter()

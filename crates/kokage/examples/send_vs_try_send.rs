@@ -1,8 +1,8 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorContext, ActorResult, GraphBuilder, RestartPolicy, TrySendError,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor},
+    ActorResult, GraphBuilder, RestartPolicy, TrySendError,
+    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::{
     sync::{

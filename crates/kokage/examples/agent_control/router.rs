@@ -158,7 +158,7 @@ impl Router {
         let session_actor = graph.actors()[0].clone();
         let mount = self.mount();
         let offload_id = subtree_id.clone();
-        ctx.offload_or(
+        ctx.offload(
             PHASE_TIMEOUT,
             async move {
                 // OneForAll: a session panic tears its transient runs down
@@ -179,8 +179,10 @@ impl Router {
                     .await;
                 subtree.is_ok()
             },
-            false,
-            move |ok| RouterMsg::Mounted { chat, ok },
+            move |result| RouterMsg::Mounted {
+                chat,
+                ok: result.unwrap_or(false),
+            },
         );
         self.sessions.insert(
             chat,
@@ -201,7 +203,7 @@ impl Router {
     ) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
-        ctx.offload_or(
+        ctx.offload(
             PHASE_TIMEOUT,
             async move {
                 matches!(
@@ -211,11 +213,10 @@ impl Router {
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
                 )
             },
-            false,
-            move |done| RouterMsg::Reaped {
+            move |result| RouterMsg::Reaped {
                 chat,
                 subtree_id,
-                done,
+                done: result.unwrap_or(false),
             },
         );
     }
@@ -225,7 +226,7 @@ impl Router {
     fn pipeline_sweep(&self, subtree_id: String, ctx: &mut impl LiveContext<RouterMsg>) {
         let mount = self.mount();
         let remove_id = subtree_id.clone();
-        ctx.offload_or(
+        ctx.offload(
             PHASE_TIMEOUT,
             async move {
                 matches!(
@@ -236,8 +237,10 @@ impl Router {
                         | Err(ControlError::ChildRemovalInProgress(_))
                 )
             },
-            false,
-            move |done| RouterMsg::Swept { subtree_id, done },
+            move |result| RouterMsg::Swept {
+                subtree_id,
+                done: result.unwrap_or(false),
+            },
         );
     }
 

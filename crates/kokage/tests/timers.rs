@@ -8,10 +8,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, CancellationHandle, GraphBuilder, LiveContext,
-    MessageContext, OrderedTree, StartContext, TimerKey,
-    host::{BoxError, RawActor},
-    timers,
+    Actor, ActorFactory, ActorRef, ActorResult, CancellationHandle, GraphBuilder, MessageContext,
+    OrderedTree, StartContext, TimerKey,
+    host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::Strategy;
 use tokio::{
@@ -650,15 +649,40 @@ impl Actor for CrossScheduler {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        let lifetime = ctx.lifetime();
-        let _timer =
-            timers::send_after_to(&lifetime, &self.target, "cross", Duration::from_millis(20));
+        let _timer = ctx.send_after_to(&self.target, "cross", Duration::from_millis(20));
         Ok(())
     }
 
     async fn handle(&mut self, (): Self::Msg, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
         Ok(())
     }
+}
+
+struct RawCrossScheduler {
+    target: ActorRef<&'static str>,
+}
+
+impl RawActor for RawCrossScheduler {
+    type Msg = ();
+
+    async fn run(&mut self, mut ctx: ActorContext<Self::Msg>) -> ActorResult {
+        let _timer = ctx.send_after_to(&self.target, "raw-cross", Duration::from_millis(20));
+        while ctx.recv().await.is_some() {}
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn raw_actor_context_can_schedule_cross_actor_timer() {
+    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+        move || RawCrossScheduler {
+            target: target.clone(),
+        }
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert_eq!(observed_rx.recv().await, Some("raw-cross"));
+    handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -690,14 +714,11 @@ impl Actor for RestartingCrossScheduler {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        let lifetime = ctx.lifetime();
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            let _old =
-                timers::send_after_to(&lifetime, &self.target, "old", Duration::from_millis(150));
+            let _old = ctx.send_after_to(&self.target, "old", Duration::from_millis(150));
             ctx.continue_with(());
         } else {
-            let _new =
-                timers::send_after_to(&lifetime, &self.target, "new", Duration::from_millis(10));
+            let _new = ctx.send_after_to(&self.target, "new", Duration::from_millis(10));
         }
         Ok(())
     }
@@ -738,12 +759,7 @@ impl Actor for CrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        self.timer = Some(timers::interval_to(
-            &ctx.lifetime(),
-            &self.target,
-            "tick",
-            Duration::from_millis(10),
-        ));
+        self.timer = Some(ctx.interval_to(&self.target, "tick", Duration::from_millis(10)));
         Ok(())
     }
 

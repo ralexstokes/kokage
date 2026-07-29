@@ -277,17 +277,12 @@ impl LifecycleWatchGuard {
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }
-
-    /// Returns whether the lifecycle pump has been cancelled or stopped.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
-    }
 }
 
 impl std::fmt::Debug for LifecycleWatchGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LifecycleWatchGuard")
-            .field("is_cancelled", &self.is_cancelled())
+            .field("cancelled", &self.cancellation.is_cancelled())
             .finish()
     }
 }

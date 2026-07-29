@@ -1,5 +1,5 @@
 use kokage::{
-    ActorContext, ActorOptions, ActorResult, MailboxMode, Supervision, host::RawActor,
+    host::ActorContext, ActorOptions, ActorResult, MailboxMode, Supervision, host::RawActor,
 };
 
 struct MailboxMessage;

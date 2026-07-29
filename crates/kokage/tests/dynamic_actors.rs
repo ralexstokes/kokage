@@ -11,12 +11,11 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, CancellationHandle, ControlError,
-    DownReason, DrainPolicy, DynamicActorOptions, DynamicTree, GraphBuilder, LiveContext,
-    MailboxMode, MessageContext, MonitorEvent, OrderedTree, RestartPolicy, RuntimeHandle,
-    ScopeKind, SendError, ShutdownPolicy, StartContext, StopContext, SupervisorBuildError,
-    SupervisorError, TrySendError,
-    host::{BoxError, ChildSpec, RawActor},
+    Actor, ActorOptions, ActorRef, ActorResult, CancellationHandle, ControlError, DownReason,
+    DrainPolicy, DynamicActorOptions, DynamicTree, GraphBuilder, MailboxMode, MessageContext,
+    MonitorEvent, OrderedTree, RestartPolicy, RuntimeHandle, ScopeKind, SendError, ShutdownPolicy,
+    StartContext, StopContext, SupervisorBuildError, SupervisorError, TrySendError,
+    host::{ActorContext, BoxError, ChildSpec, RawActor},
     observe::ChildMembershipView,
 };
 use tokio::{
@@ -743,8 +742,8 @@ async fn default_terminal_removal_preserves_monitor_order_and_reuses_id() {
     target.send(()).await.expect("clean stop requested");
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent::Down(ref down)
-            if down.actor_id == "temporary" && down.reason == DownReason::Normal
+        MonitorEvent::Down { ref actor_id, reason: DownReason::Normal, .. }
+            if actor_id == "temporary"
     ));
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,

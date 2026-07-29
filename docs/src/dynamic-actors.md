@@ -246,7 +246,7 @@ one identity.
 
 ## Scope handles inside actors
 
-Every actor stage has the same safe scope surface: `ActorContext`,
+Every actor stage has the same safe scope surface: `host::ActorContext`,
 `StartContext`, `MessageContext`, and `StopContext` return `RestrictedScope`
 from `supervisor()` and `children()`. Observation always works. Insertion
 (`add_actor`, `add_subtree`) schedules startup rather than waiting for it, so
@@ -280,7 +280,7 @@ The task belongs to the current actor incarnation: stop or restart cancels it,
 and `DrainPolicy::Drain` does not wait for it. Its mapped result goes through
 the starting incarnation's ordinary mailbox, so mailbox capacity, FIFO order,
 and conflation still apply; it cannot leak into a later restart. Retain the
-returned `ScopeWaitHandle` when a message-driven wait needs explicit
+returned `TaskHandle` when a message-driven wait needs explicit
 cancellation, and monitor `ActorStats::outstanding_scope_waits` for waits that
 do not finish. A panic in the wait or mapper that the receive loop observes
 while the incarnation is live fails the actor normally under supervision. As

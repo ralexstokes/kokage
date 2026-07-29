@@ -379,7 +379,7 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use kokage::{
-/// #     ActorContext, ActorOptions, ActorResult, MailboxMode,
+/// #     host::ActorContext, ActorOptions, ActorResult, MailboxMode,
 /// #     host::RawActor,
 /// # };
 /// # struct Snapshot(Vec<u8>);

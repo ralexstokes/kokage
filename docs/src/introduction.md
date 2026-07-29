@@ -86,4 +86,4 @@ next](next-steps.md)).
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
 [`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
-[`ActorContext`]: https://stokes.io/kokage/api/kokage/struct.ActorContext.html
+[`ActorContext`]: https://stokes.io/kokage/api/kokage/host/struct.ActorContext.html

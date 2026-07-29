@@ -6,7 +6,7 @@ identity an `ActorRef` points at — and turns each lifecycle transition into an
 ordinary typed message in the observer's mailbox:
 
 ```rust
-use kokage::{Actor, ActorContext, ActorRef, ActorResult, MessageContext, MonitorEvent};
+use kokage::{Actor, ActorRef, ActorResult, MessageContext, MonitorEvent, StartContext};
 
 enum CoordinatorMsg {
     Worker(MonitorEvent),
@@ -35,10 +35,10 @@ impl Actor for Coordinator {
             MonitorEvent::Up { actor_id, generation } => {
                 eprintln!("{actor_id} generation {generation} is up");
             }
-            MonitorEvent::Down(down) => {
+            MonitorEvent::Down { actor_id, generation, reason } => {
                 eprintln!(
                     "{} generation {} exited: {:?}",
-                    down.actor_id, down.generation, down.reason
+                    actor_id, generation, reason
                 );
             }
             MonitorEvent::Lagged { actor_id, dropped } => {
@@ -82,7 +82,7 @@ generation `0` starts, and a watch registered between incarnations stays
 silent until the next `Up`. This removes actor-start and restart ordering
 races from a graph: there is never a reason to retry registration.
 
-`ActorContext::watch` returns a cloneable `CancellationHandle`. Calling
+`ctx.watch` returns a cloneable `CancellationHandle`. Calling
 `cancel` on any clone suppresses future delivery. Cancellation cannot retract
 an event already accepted by the mailbox. Permanently removing either actor
 membership also ends the watch; a watched actor's final `Terminated` event is

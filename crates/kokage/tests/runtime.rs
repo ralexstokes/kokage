@@ -9,10 +9,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorContext, ActorFactory, ActorRef, ActorResult, DrainPolicy, DynamicActorOptions,
-    DynamicTree, GraphBuilder, MessageContext, OrderedTree, Reply, RuntimeHandle, SendError,
-    StartContext,
-    host::{BoxError, RawActor},
+    Actor, ActorFactory, ActorRef, ActorResult, DrainPolicy, DynamicActorOptions, DynamicTree,
+    GraphBuilder, MessageContext, OrderedTree, Reply, RuntimeHandle, SendError, StartContext,
+    host::{ActorContext, BoxError, RawActor},
     observe::{ChildLifecycleEventKind, ChildLifecycleWatch},
 };
 use kokage_supervisor::{
