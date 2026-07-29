@@ -1318,10 +1318,46 @@ async fn supervised_restart_constructs_fresh_actor_state() {
         .expect("supervisor shut down cleanly");
 }
 
-#[test]
-fn dynamic_tree_allows_an_empty_runtime() {
-    let tree = DynamicTree::new();
-    assert!(tree.outline().children.is_empty());
+#[tokio::test]
+async fn ordered_tree_spawns_and_shuts_down_without_children() {
+    let runtime = OrderedTree::new()
+        .spawn()
+        .expect("empty ordered tree builds");
+    runtime
+        .handle()
+        .wait_started()
+        .await
+        .expect("empty ordered tree starts");
+    assert!(runtime.handle().snapshot().children.is_empty());
+    runtime
+        .shutdown_and_wait()
+        .await
+        .expect("empty ordered tree shuts down");
+}
+
+#[tokio::test]
+async fn dynamic_tree_idles_empty_until_an_actor_is_added() {
+    let runtime = DynamicTree::new()
+        .spawn()
+        .expect("empty dynamic tree builds");
+    let dynamic = runtime.handle();
+    dynamic
+        .wait_started()
+        .await
+        .expect("empty dynamic tree starts");
+    assert!(dynamic.snapshot().children.is_empty());
+
+    let actor = dynamic
+        .add_actor(ActorSpec::new("worker", Drain::<()>::new))
+        .await
+        .expect("actor is added after idle startup");
+    actor.send(()).await.expect("added actor is running");
+    assert!(dynamic.snapshot().child("worker").is_some());
+
+    runtime
+        .shutdown_and_wait()
+        .await
+        .expect("dynamic tree shuts down");
 }
 
 #[derive(Clone)]

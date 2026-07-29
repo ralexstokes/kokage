@@ -27,7 +27,7 @@ use crate::actor::{
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
-    observability::{GraphObservability, MessageOperation, SendRejection, trace_actor_message},
+    observability::{MessageOperation, ScopeObservability, SendRejection, trace_actor_message},
 };
 
 macro_rules! ambient_context_method {
@@ -751,7 +751,7 @@ pub struct ActorContext<M> {
     pub(crate) mailbox: MailboxReceiver<M>,
     pub(crate) myself: ActorRef<M>,
     pub(crate) shutdown: CancellationToken,
-    pub(crate) observability: GraphObservability,
+    pub(crate) observability: ScopeObservability,
     pub(crate) timers: TimerTable<M>,
     pub(crate) lifetime: ActorLifetime,
     pub(crate) monitors: Arc<ActorMonitors>,

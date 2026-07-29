@@ -5,7 +5,7 @@ use support::TreeBuilder;
 use std::time::Duration;
 
 use kokage::{
-    ActorSpec, ActorStatus, RestartPolicy, Strategy,
+    ActorStatus, RestartPolicy, Strategy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -15,19 +15,20 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorResult, LiveContext, MessageContext, OrderedTree, Reply,
-            StartContext, StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
+            Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, LiveContext, MessageContext,
+            OrderedTree, Reply, StartContext, StopContext, SupervisorSnapshot,
+            SupervisorSnapshotReceiver,
         };
     }
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorSlot, ActorSpec, BackoffPolicy, BlockingCancelled,
-            CancellationHandle, CancellationToken, ControlError, DownReason, DrainPolicy,
-            DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, DynamicTree, MailboxMode,
-            MonitorEvent, OffloadDeadline, RestartConfig, RestartPolicy, RestrictedScope, Runtime,
-            RuntimeHandle, ScopeKind, ShutdownPolicy, Strategy, SupervisorBuildError,
-            SupervisorError, TaskHandle, TerminalMembership, TimerKey, TreeNode,
+            ActorFactory, BackoffPolicy, BlockingCancelled, CancellationHandle, CancellationToken,
+            ControlError, DownReason, DrainPolicy, DynamicRestrictedScope, DynamicRuntime,
+            DynamicRuntimeHandle, DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline,
+            RestartConfig, RestartPolicy, RestrictedScope, Runtime, RuntimeHandle, ScopeKind,
+            ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TaskHandle,
+            TerminalMembership, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
@@ -47,6 +48,20 @@ mod coverage_probe {
             SupervisionOutline, SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView,
         };
     }
+}
+
+#[test]
+fn prelude_constructs_acyclic_and_cyclic_actor_declarations() {
+    let spec = ActorSpec::new("direct", || BlockingWorker {
+        observed: mpsc::unbounded_channel().0,
+    });
+    let slot = ActorSlot::new("cyclic");
+    let _cyclic_ref = slot.actor_ref();
+    let cyclic = slot.define(|| BlockingWorker {
+        observed: mpsc::unbounded_channel().0,
+    });
+
+    let _tree = OrderedTree::new().actor(spec).actor(cyclic);
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);

@@ -12,6 +12,7 @@ use kokage::observe::{
     SupervisionOutline as _, SupervisorPathSegment as _, SupervisorSnapshot as _,
     SupervisorSnapshotReceiver as _, SupervisorStateView as _,
 };
+use kokage::{ActorSlot as _, ActorSpec as _};
 
 use kokage::ActorContext;
 use kokage::ActorRunError;

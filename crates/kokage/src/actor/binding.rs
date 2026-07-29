@@ -13,7 +13,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use crate::actor::{
     error::TrySendError,
     monitor::{ActorMonitors, MonitorHub},
-    observability::{GraphObservability, MessageSizeMetrics},
+    observability::{MessageSizeMetrics, ScopeObservability},
 };
 
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
@@ -1081,7 +1081,7 @@ impl<M> Drop for BindingCore<M> {
 /// ends.
 pub(crate) struct BindingGuard<M> {
     core: Arc<BindingCore<M>>,
-    observability: GraphObservability,
+    observability: ScopeObservability,
     restart_policy: RestartPolicy,
 }
 
@@ -1089,7 +1089,7 @@ impl<M> BindingGuard<M> {
     pub(crate) fn bind(
         core: Arc<BindingCore<M>>,
         mailbox: MailboxRef<M>,
-        observability: GraphObservability,
+        observability: ScopeObservability,
         restart_policy: RestartPolicy,
     ) -> Self {
         core.bind(mailbox);

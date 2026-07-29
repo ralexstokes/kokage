@@ -28,10 +28,9 @@ pub(crate) enum ActorOptionsValidationError {
 trait DeferredActorFactory: Send {
     fn label(&self) -> &str;
 
-    fn materialize(
-        self: Box<Self>,
-        builder: &RunnableActorBuilder,
-    ) -> Result<RunnableActor, ActorOptionsValidationError>;
+    fn validate(&self) -> Result<(), ActorOptionsValidationError>;
+
+    fn materialize(self: Box<Self>, builder: &RunnableActorBuilder) -> RunnableActor;
 }
 
 struct DeferredActorSpec<M: Send + 'static> {
@@ -46,17 +45,17 @@ impl<M: Send + 'static> DeferredActorFactory for DeferredActorSpec<M> {
         &self.actor_id
     }
 
-    fn materialize(
-        self: Box<Self>,
-        builder: &RunnableActorBuilder,
-    ) -> Result<RunnableActor, ActorOptionsValidationError> {
+    fn validate(&self) -> Result<(), ActorOptionsValidationError> {
+        self.actor_options.validate()
+    }
+
+    fn materialize(self: Box<Self>, builder: &RunnableActorBuilder) -> RunnableActor {
         let Self {
             actor_id,
             binding,
             factory,
             actor_options,
         } = *self;
-        actor_options.validate()?;
         let binding = binding
             .into_inner()
             .unwrap_or_else(|| match actor_options.size_hint {
@@ -66,13 +65,13 @@ impl<M: Send + 'static> DeferredActorFactory for DeferredActorSpec<M> {
                 )),
                 None => Arc::new(BindingCore::new(Arc::clone(&actor_id))),
             });
-        Ok(builder.actor_from_parts(
+        builder.actor_from_parts(
             actor_id,
             binding,
             factory,
             actor_options.mailbox_mode,
             actor_options.mailbox_capacity,
-        ))
+        )
     }
 }
 
@@ -83,10 +82,11 @@ impl DeferredActor {
         self.0.label()
     }
 
-    fn materialize(
-        self,
-        builder: &RunnableActorBuilder,
-    ) -> Result<RunnableActor, ActorOptionsValidationError> {
+    fn validate(&self) -> Result<(), ActorOptionsValidationError> {
+        self.0.validate()
+    }
+
+    fn materialize(self, builder: &RunnableActorBuilder) -> RunnableActor {
         self.0.materialize(builder)
     }
 }
@@ -295,23 +295,19 @@ impl<M: Send + 'static> ActorSpec<M> {
 
     /// Converts this declaration into the advanced custom-host actor.
     ///
-    /// # Panics
-    ///
-    /// Panics if this declaration configured a zero mailbox capacity. Tree
-    /// placement reports the same invalid declaration as a
-    /// [`SupervisorBuildError`](crate::SupervisorBuildError) instead.
+    /// This conversion stores configuration without applying supervision-tree
+    /// validation. Supervised placement rejects a zero mailbox capacity with
+    /// [`SupervisorBuildError`](crate::SupervisorBuildError); a direct host is
+    /// responsible for supplying a valid configuration before running it.
     pub fn into_runnable(self) -> RunnableActor {
         self.into_deferred_node()
             .materialize(&RunnableActorBuilder::new())
-            .expect("ActorSpec mailbox capacity must be non-zero")
             .actor
             .expect("materialized actor declaration carries its runnable actor")
     }
 
     pub(crate) fn into_node(self, builder: &RunnableActorBuilder) -> ActorNode {
-        self.into_deferred_node()
-            .materialize(builder)
-            .expect("ActorSpec must be validated before direct materialization")
+        self.into_deferred_node().materialize(builder)
     }
 
     pub(crate) fn into_deferred_node(self) -> ActorNode {
@@ -373,14 +369,19 @@ impl ActorNode {
         }
     }
 
-    pub(crate) fn materialize(
-        mut self,
-        builder: &RunnableActorBuilder,
-    ) -> Result<Self, ActorOptionsValidationError> {
-        if let Some(deferred) = self.deferred.take() {
-            self.actor = Some(deferred.materialize(builder)?);
+    pub(crate) fn validate(&self) -> Result<(), ActorOptionsValidationError> {
+        match (&self.actor, &self.deferred) {
+            (Some(_), None) => Ok(()),
+            (None, Some(deferred)) => deferred.validate(),
+            _ => unreachable!("an actor node has exactly one payload"),
         }
-        Ok(self)
+    }
+
+    pub(crate) fn materialize(mut self, builder: &RunnableActorBuilder) -> Self {
+        if let Some(deferred) = self.deferred.take() {
+            self.actor = Some(deferred.materialize(builder));
+        }
+        self
     }
 }
 
@@ -579,6 +580,15 @@ mod tests {
         let actor_ref = spec.actor_ref();
         let actor = spec.into_runnable();
         assert_eq!(actor_ref.id(), "worker");
+        assert_eq!(actor.label(), "worker");
+    }
+
+    #[test]
+    fn into_runnable_stores_zero_capacity_without_supervisor_validation() {
+        let actor = ActorSpec::new("worker", || OpaqueActor)
+            .mailbox_capacity(0)
+            .into_runnable();
+
         assert_eq!(actor.label(), "worker");
     }
 
