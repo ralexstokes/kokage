@@ -5,7 +5,7 @@
 # Tutorial
 
 - [Getting started](getting-started.md)
-- [Supervision fundamentals](supervision.md)
+- [Task-supervision backend](supervision.md)
 - [Actor graphs](actor-graphs.md)
 - [Bounded request/reply](request-reply.md)
 - [Bounded actor offloads](actor-offloads.md)

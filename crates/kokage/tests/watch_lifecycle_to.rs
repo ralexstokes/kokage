@@ -8,8 +8,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
-    OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, StartContext,
+    Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, GraphBuilder, LiveContext,
+    MessageContext, OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle,
+    StartContext,
     observe::{LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard},
 };
 use tokio::{

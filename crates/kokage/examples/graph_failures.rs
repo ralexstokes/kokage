@@ -9,6 +9,7 @@ use std::{
 };
 
 use kokage::{
+    ActorSpec, RestartPolicy, Strategy,
     host::{ActorContext, RawActor},
     prelude::*,
 };

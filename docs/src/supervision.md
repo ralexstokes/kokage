@@ -1,9 +1,15 @@
-# Supervision fundamentals
+# Task-supervision backend
 
-Time to open the print shop. In this chapter we stay in `kokage-supervisor`
-land and supervise two plain tasks: a `front-desk` that should run forever,
-and a `press` that keeps jamming. Along the way we meet every knob a
-[`ChildSpec`] has.
+Actor applications do not normally construct this layer directly: `kokage`'s
+trees and runtimes adapt every actor to it. This chapter deliberately steps
+down into the independent `kokage-supervisor` backend so its restart,
+shutdown, and strategy semantics are concrete. Programs made entirely from
+plain async tasks can use this crate as their front door.
+
+We supervise two such tasks: a `front-desk` that should run forever and a
+`press` that keeps jamming. The next chapter returns to the actor-facing
+`GraphBuilder` / `OrderedTree` / `Runtime` vocabulary used by the rest of the
+book.
 
 ```rust,no_run
 use std::time::Duration;

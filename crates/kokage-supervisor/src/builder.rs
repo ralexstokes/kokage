@@ -5,6 +5,7 @@ use crate::{
     error::SupervisorBuildError,
     handle::{StableSupervisorChannels, SupervisorHandle},
     restart::{RestartConfig, RestartPolicy},
+    scope::ScopeKind,
     shutdown::ShutdownPolicy,
     strategy::Strategy,
     supervisor::{
@@ -51,18 +52,6 @@ pub struct DynamicSupervisorBuilder {
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
     channels: Option<Arc<StableSupervisorChannels>>,
-}
-
-/// The immutable membership and ordering model of a supervisor scope.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ScopeKind {
-    /// A declared sequence with readiness-gated startup and reverse-order
-    /// teardown. Runtime membership operations are unsupported.
-    #[default]
-    Ordered,
-    /// A runtime-written membership set with concurrent startup and teardown.
-    Dynamic,
 }
 
 const DEFAULT_CONTROL_CHANNEL_CAPACITY: usize = 64;

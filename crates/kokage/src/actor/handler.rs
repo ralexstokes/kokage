@@ -76,7 +76,7 @@ pub enum DrainPolicy {
     /// lifecycle state. There is no separate sender-visible `Draining` state.
     ///
     /// The handler itself can see the phase:
-    /// [`MessageContext::status`](crate::MessageContext::status) is
+    /// [`LiveContext::status`](crate::LiveContext::status) is
     /// [`ActorStatus::Draining`](crate::ActorStatus::Draining) for exactly the calls made here. Use it to skip work whose only
     /// effect would be to queue something the drain will drop.
     ///

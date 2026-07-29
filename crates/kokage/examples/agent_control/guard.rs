@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use kokage::{Actor, ActorRef, ActorResult, LiveContext, MessageContext};
+use kokage::{Actor, ActorRef, ActorResult, LiveContext, MessageContext, TimerKey};
 use tokio::time::Instant;
 
 use crate::{
@@ -28,6 +28,8 @@ pub struct Guard {
     report: GuardReport,
     backoff_multiplier: u32,
 }
+
+const PROBE_TIMER: TimerKey = TimerKey::new("guard-probe");
 
 impl Guard {
     pub fn new(
@@ -60,7 +62,7 @@ impl Guard {
         self.router.send(RouterMsg::PauseChanged { paused }).await?;
         if paused {
             self.backoff_multiplier = 1;
-            ctx.send_after(GuardMsg::Probe, PROBE_BACKOFF_BASE);
+            ctx.set_timeout(PROBE_TIMER, GuardMsg::Probe, PROBE_BACKOFF_BASE);
         }
         Ok(())
     }
@@ -111,7 +113,8 @@ impl Actor for Guard {
                 } else {
                     self.report.failed_probes += 1;
                     self.backoff_multiplier = self.backoff_multiplier.saturating_mul(2).min(8);
-                    ctx.send_after(
+                    ctx.set_timeout(
+                        PROBE_TIMER,
                         GuardMsg::Probe,
                         PROBE_BACKOFF_BASE * self.backoff_multiplier,
                     );

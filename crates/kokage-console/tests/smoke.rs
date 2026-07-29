@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{Actor, ActorResult, ActorSpec, DynamicTree, MessageContext, observe::ActorStats};
-use kokage_console::{Console, ConsoleBuildError, ConsoleHandle};
+use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
 use kokage_supervisor::{ChildSpec, RunningSupervisor, Supervisor};
 use serde_json::{Value, json};
 use tokio::{
@@ -77,13 +77,11 @@ async fn spawn_console_with_stats(
         .expect("test lifecycle supervisor builds")
         .spawn();
     let lifecycle_source = lifecycle.handle();
-    let handle = Console::builder()
+    let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle())
         .actor_stats(stats)
         .bind(([127, 0, 0, 1], 0))
-        .build()
-        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn console");
@@ -225,13 +223,11 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
         .spawn();
     let snapshots_handle = snapshots.handle();
     let lifecycle_source = lifecycle.handle();
-    let handle = Console::builder()
+    let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle())
         .access_token("test-token")
         .bind(([127, 0, 0, 1], 0))
-        .build()
-        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn token-protected console");
@@ -318,13 +314,11 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
         .spawn();
     let snapshots_handle = snapshots.handle();
     let lifecycle_source = lifecycle.handle();
-    let handle = Console::builder()
+    let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle())
         .allowed_host("console.example:80")
         .bind(([127, 0, 0, 1], 0))
-        .build()
-        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn allowlisted console");
@@ -333,49 +327,53 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
 }
 
-#[test]
-fn non_loopback_bind_requires_token() {
+#[tokio::test]
+async fn non_loopback_bind_requires_token() {
     let snapshots = Supervisor::dynamic();
     let snapshot_rx = snapshots.handle().subscribe_snapshots();
     let lifecycle = Supervisor::dynamic();
     let lifecycle_handle = lifecycle.handle();
-    let error = Console::builder()
+    let error = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
         .lifecycle(move || lifecycle_handle.watch_lifecycle())
         .bind(([0, 0, 0, 0], 9100))
-        .build()
+        .spawn()
+        .await
         .err()
         .expect("non-loopback bind must require a token");
-    assert_eq!(error, ConsoleBuildError::AccessTokenRequired);
+    assert!(matches!(error, ConsoleError::AccessTokenRequired));
 }
 
-#[test]
-fn builder_reports_missing_observability_sources() {
-    let missing_snapshots = Console::builder()
-        .build()
+#[tokio::test]
+async fn builder_reports_missing_observability_sources() {
+    let missing_snapshots = ConsoleBuilder::new()
+        .spawn()
+        .await
         .err()
         .expect("snapshots must be required");
-    assert_eq!(missing_snapshots, ConsoleBuildError::MissingSnapshots);
+    assert!(matches!(missing_snapshots, ConsoleError::MissingSnapshots));
 
     let snapshots = Supervisor::dynamic();
     let snapshot_rx = snapshots.handle().subscribe_snapshots();
-    let missing_lifecycle = Console::builder()
+    let missing_lifecycle = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
-        .build()
+        .spawn()
+        .await
         .err()
         .expect("lifecycle source must be required");
-    assert_eq!(missing_lifecycle, ConsoleBuildError::MissingLifecycle);
+    assert!(matches!(missing_lifecycle, ConsoleError::MissingLifecycle));
 }
 
-#[test]
-fn builder_rejects_invalid_access_tokens() {
+#[tokio::test]
+async fn builder_rejects_invalid_access_tokens() {
     for token in ["", "contains a space", "not-ascii-é"] {
-        let error = Console::builder()
+        let error = ConsoleBuilder::new()
             .access_token(token)
-            .build()
+            .spawn()
+            .await
             .err()
             .expect("invalid token must be rejected");
-        assert_eq!(error, ConsoleBuildError::InvalidAccessToken);
+        assert!(matches!(error, ConsoleError::InvalidAccessToken));
     }
 }
 
@@ -507,10 +505,8 @@ async fn dynamic_tree_wires_public_observability() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("failed to spawn empty runtime");
-    let console = Console::for_runtime(&runtime.handle())
+    let console = ConsoleBuilder::for_runtime(&runtime.handle())
         .bind(([127, 0, 0, 1], 0))
-        .build()
-        .expect("valid console configuration")
         .spawn()
         .await
         .expect("failed to spawn console");

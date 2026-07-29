@@ -8,8 +8,8 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSpec, ControlError, DynamicRuntimeHandle, DynamicTree, GraphBuilder,
-    MessageContext, OrderedTree, RestartConfig, RestrictedScope, RuntimeHandle, ScopeKind,
-    StartContext, StopContext, Strategy, SupervisorBuildError,
+    LiveContext, MessageContext, OrderedTree, RestartConfig, RestrictedScope, RuntimeHandle,
+    ScopeKind, StartContext, StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, SupervisorSnapshotReceiver},
 };

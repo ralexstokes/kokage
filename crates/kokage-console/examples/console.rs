@@ -27,7 +27,7 @@ use kokage::{
     Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
     OrderedTree, host::BoxError,
 };
-use kokage_console::Console;
+use kokage_console::{ConsoleBuilder, ConsoleError};
 use kokage_supervisor::{BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, Strategy};
 use tokio::time::sleep;
 
@@ -169,15 +169,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .subtree("dynamic", DynamicTree::new())
         .spawn()?;
 
-    let console = Console::for_runtime(&runtime.handle())
+    let console = ConsoleBuilder::for_runtime(&runtime.handle())
         .bind(([127, 0, 0, 1], 0))
-        .build()?;
-    let console = match console.spawn().await {
+        .spawn()
+        .await;
+    let console = match console {
         Ok(console) => {
             println!("console available at http://{}", console.local_addr());
             Some(console)
         }
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+        Err(ConsoleError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied => {
             println!("console bind skipped: {error}");
             None
         }

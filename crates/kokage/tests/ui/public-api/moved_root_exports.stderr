@@ -207,26 +207,20 @@ error[E0432]: unresolved import `kokage::SupervisorLifecycleEvent`
 33 | use kokage::SupervisorLifecycleEvent;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorLifecycleEvent` in the root
 
-error[E0432]: unresolved import `kokage::SupervisorSnapshot`
+error[E0432]: unresolved import `kokage::SupervisorStateView`
   --> tests/ui/public-api/moved_root_exports.rs:34:5
    |
-34 | use kokage::SupervisorSnapshot;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorSnapshot` in the root
-
-error[E0432]: unresolved import `kokage::SupervisorStateView`
-  --> tests/ui/public-api/moved_root_exports.rs:35:5
-   |
-35 | use kokage::SupervisorStateView;
+34 | use kokage::SupervisorStateView;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorStateView` in the root
 
 error[E0432]: unresolved import `kokage::qualified_label`
-  --> tests/ui/public-api/moved_root_exports.rs:36:5
+  --> tests/ui/public-api/moved_root_exports.rs:35:5
    |
-36 | use kokage::qualified_label;
+35 | use kokage::qualified_label;
    |     ^^^^^^^^^^^^^^^^^^^^^^^ no `qualified_label` in the root
 
 error[E0432]: unresolved import `kokage::timers`
-  --> tests/ui/public-api/moved_root_exports.rs:37:5
+  --> tests/ui/public-api/moved_root_exports.rs:36:5
    |
-37 | use kokage::timers;
+36 | use kokage::timers;
    |     ^^^^^^^^^^^^^^ no `timers` in the root

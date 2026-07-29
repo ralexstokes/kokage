@@ -38,9 +38,9 @@
 //!
 //! See [`OrderedTree`] for recursive composition and per-actor policy
 //! examples. The [`prelude`] re-exports the day-one composition and actor
-//! surface plus the core `kokage-supervisor` policies. Host-facing execution
-//! types live in [`host`], observation types live in [`observe`], and advanced
-//! actor configuration stays at the crate root.
+//! surface plus snapshot observation. Host-facing execution types live in
+//! [`host`], lifecycle-history types live in [`observe`], and advanced actor
+//! and supervisor configuration stays at the crate root.
 //!
 //! These tiers are semantic, not a hard cap on the number of root exports.
 //! Types that configure actors and supervision trees, or that name the
@@ -298,9 +298,10 @@ pub mod observe {
 /// Common imports for `kokage` consumers.
 ///
 /// This prelude is intentionally limited to the actor traits and contexts,
-/// primary [`OrderedTree`] composition path, core policies, and common
-/// send/call errors. Observation and raw-hosting surfaces live in
-/// [`observe`] and [`host`] without being injected by a glob import.
+/// the primary [`OrderedTree`] composition path, and the snapshot pair used by
+/// application health and readiness code. Advanced configuration, error,
+/// dynamic-membership, lifecycle-history, and raw-hosting types remain at the
+/// crate root or in [`observe`] and [`host`].
 ///
 /// Derive macros are explicit root imports rather than prelude members. Add
 /// `use kokage::{ActorFactory, Supervision};` for unqualified
@@ -308,10 +309,8 @@ pub mod observe {
 /// qualified `kokage::...` names.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError, DynamicTree, GraphBuilder,
-        LiveContext, MessageContext, OrderedTree, Reply, RestartConfig, RestartPolicy, Runtime,
-        RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext, Strategy,
-        TrySendError,
+        Actor, ActorRef, ActorResult, GraphBuilder, LiveContext, MessageContext, OrderedTree,
+        Reply, StartContext, StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
     };
 }
 
@@ -327,7 +326,8 @@ pub use actor::{
 };
 pub use kokage_supervisor::{
     BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TerminalMembership,
+    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, SupervisorSnapshot,
+    SupervisorSnapshotReceiver, TerminalMembership,
 };
 pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

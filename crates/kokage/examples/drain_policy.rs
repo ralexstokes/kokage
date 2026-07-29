@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc};
 
-use kokage::{DrainPolicy, prelude::*};
+use kokage::{ActorSpec, DrainPolicy, prelude::*};
 use tokio::sync::{Notify, mpsc};
 
 const JOBS: usize = 5;

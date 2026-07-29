@@ -9,7 +9,7 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, CancellationHandle, GraphBuilder,
-    MessageContext, OrderedTree, StartContext, TimerKey,
+    LiveContext, MessageContext, OrderedTree, StartContext, TimerKey,
     host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::Strategy;

@@ -13,13 +13,14 @@ external message.
 
 ## Self-scheduling
 
-Handler-style actors have one loop-owned timer table. `send_after` and
-`interval` create anonymous entries and return a `CancellationHandle`:
+Handler-style actors have one loop-owned timer table. One-shot self messages
+use keyed `set_timeout`; periodic messages use `interval` and return a
+`CancellationHandle`:
 
 ```rust,ignore
 use std::time::Duration;
 
-use kokage::{CancellationHandle, prelude::*};
+use kokage::{CancellationHandle, TimerKey, prelude::*};
 
 #[derive(Clone)]
 enum Message {
@@ -29,15 +30,16 @@ enum Message {
 
 #[derive(Default)]
 struct Worker {
-    reconnect: Option<CancellationHandle>,
     reconcile: Option<CancellationHandle>,
 }
+
+const RECONNECT: TimerKey = TimerKey::new("reconnect");
 
 impl Actor for Worker {
     type Msg = Message;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        self.reconnect = Some(ctx.send_after(Message::Reconnect, Duration::from_secs(5)));
+        ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
         self.reconcile = Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
         Ok(())
     }
@@ -56,9 +58,10 @@ impl Actor for Worker {
 }
 ```
 
-`send_after` owns its message and delivers it once. `interval` keeps the
-original and clones it at each delivery, so only that method requires `Clone`.
-Dropping a handle does not cancel its entry; calling `cancel` on any clone
+`set_timeout` owns its message and delivers it once; reusing its key replaces
+the prior entry and `clear_timeout` cancels it. `interval` keeps the original
+and clones it at each delivery, so only that method requires `Clone`. Dropping
+an interval handle does not cancel its entry; calling `cancel` on any clone
 cancels it exactly until the loop takes the message for delivery. A zero-period
 interval is an already-cancelled no-op.
 
@@ -70,6 +73,11 @@ Timer deliveries count as received messages in `observe::ActorStats`, but not as
 accepted mailbox messages. The whole table drops with the incarnation, so a
 restart cannot leak a stale timer into fresh state and no helper task is
 spawned per self timer.
+
+When several independent one-shots cannot share a static protocol key, use
+`send_after_to(&ctx.myself(), message, delay)`. That deliberately takes the
+ordinary mailbox path described below rather than adding a second actor-local
+one-shot vocabulary.
 
 ## Replaceable timeouts
 

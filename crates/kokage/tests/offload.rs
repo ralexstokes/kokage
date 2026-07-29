@@ -10,7 +10,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DrainPolicy, MailboxMode, OffloadDeadline, TaskHandle,
+    ActorSlot, DrainPolicy, LiveContext, MailboxMode, OffloadDeadline, RestartPolicy,
+    RuntimeHandle, TaskHandle,
     host::{ActorContext, RawActor},
     prelude::*,
 };

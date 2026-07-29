@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{Actor, ActorResult, MessageContext};
+use kokage::{Actor, ActorResult, LiveContext, MessageContext};
 
 use crate::messages::{EffectStatus, ToolHostMsg, ToolOutcome, ToolReport};
 
