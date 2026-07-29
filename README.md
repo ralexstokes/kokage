@@ -84,7 +84,7 @@ supervising plain async tasks.
 |-------|------|
 | [`kokage`](crates/kokage) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under single-use ordered or dynamic trees with an owning runtime and non-owning control handles. |
 | [`kokage-supervisor`](crates/kokage-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
-| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic actor graphs and their supervision scopes; re-exported by `kokage` under the default `derive` feature. |
+| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic graph wiring with typed refs; re-exported by `kokage` under the default `derive` feature. |
 | [`kokage-console`](crates/kokage-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `kokage` feature and dependency surface. |
 
 ## Getting started

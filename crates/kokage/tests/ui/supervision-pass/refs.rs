@@ -17,7 +17,7 @@ mod application {
 
     #[derive(Supervision)]
     pub struct Application {
-        pub worker: Worker,
+        pub worker: fn() -> Worker,
     }
 }
 
@@ -26,15 +26,12 @@ fn assert_clone<T: Clone>(_: &T) {}
 fn main() {
     let mut builder = GraphBuilder::new();
     builder.name("application").mailbox_capacity(8);
-    let (tree, refs) = application::Application::tree_with(
-        builder,
-        |_| application::ApplicationFactories {
-            worker: || application::Worker,
-        },
-    )
-    .expect("derived tree with refs builds");
+    let refs = application::Application::wire(&mut builder, |_| application::Application {
+        worker: || application::Worker,
+    });
+    let graph = builder.build().expect("derived graph builds");
 
     assert_clone(&refs);
     assert_eq!(refs.worker.id(), "worker");
-    drop(tree);
+    drop(graph);
 }

@@ -12,9 +12,9 @@ impl RawActor for Worker {
 
 #[derive(Supervision)]
 struct Pool {
-    parse: Worker,
+    parse: fn() -> Worker,
     #[supervision(label = "parse")]
-    render: Worker,
+    render: fn() -> Worker,
 }
 
 fn main() {}

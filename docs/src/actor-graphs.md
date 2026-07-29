@@ -19,15 +19,15 @@ stop follows the same drain policy and `on_stop` hook as an external stop:
 watches and supervision. `RestartPolicy::Always` restarts it; `OnFailure` and
 `Never` do not.
 
-The usual static graph is a struct whose fields are the actors. Deriving
-`Supervision` gives that struct a `tree` method; its wiring closure receives a
-cloneable refs struct with one typed `ActorRef` per field, so cycles and
-forward references do not require string lookup. The method returns that same
-refs bundle alongside the single-use tree, for use as application entry points:
+For a cyclic static graph, derive `Supervision` on a struct whose fields are
+concrete actor factory types. Its `wire` closure receives a cloneable refs
+struct with one typed `ActorRef` per field before it constructs the factory
+bundle, so cycles and forward references do not require string lookup. Graph
+validation and the supervision tree remain explicit:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::{ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
+use kokage::{ActorFactory, ActorRef, ActorResult, Actor, GraphBuilder, MessageContext, OrderedTree, Reply, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -37,6 +37,7 @@ enum ShippingMsg {
     Total(Reply<usize>),
 }
 
+#[derive(ActorFactory)]
 struct FrontDesk {
     press: ActorRef<Order>,
 }
@@ -50,6 +51,7 @@ impl Actor for FrontDesk {
     }
 }
 
+#[derive(ActorFactory)]
 struct Press {
     shipping: ActorRef<ShippingMsg>,
 }
@@ -65,8 +67,9 @@ impl Actor for Press {
     }
 }
 
-#[derive(Default)]
+#[derive(ActorFactory)]
 struct Shipping {
+    #[factory(default)]
     shipped: usize,
 }
 
@@ -91,30 +94,24 @@ impl Actor for Shipping {
 
 #[derive(Supervision)]
 struct PrintShop {
-    front_desk: FrontDesk,
-    press: Press,
-    shipping: Shipping,
+    front_desk: FrontDeskFactory,
+    press: PressFactory,
+    shipping: ShippingFactory,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (tree, refs) = PrintShop::tree(|refs| {
-        PrintShopFactories {
-            front_desk: {
-                let refs = refs.clone();
-                move || FrontDesk {
-                    press: refs.press.clone(),
-                }
-            },
-            press: {
-                let refs = refs.clone();
-                move || Press {
-                    shipping: refs.shipping.clone(),
-                }
-            },
-            shipping: Shipping::default,
-        }
-    })?;
+    let mut graph = GraphBuilder::new();
+    let refs = PrintShop::wire(&mut graph, |refs| PrintShop {
+        front_desk: FrontDeskFactory {
+            press: refs.press.clone(),
+        },
+        press: PressFactory {
+            shipping: refs.shipping.clone(),
+        },
+        shipping: ShippingFactory {},
+    });
+    let tree = OrderedTree::graph(graph.build()?);
 
     let runtime = tree.spawn()?;
 
@@ -191,52 +188,24 @@ custom synchronous construction rather than `Default`.
 ## Struct Declarations
 
 `#[derive(Supervision)]` supports named-field structs whose fields implement
-`host::RawActor`. Field names become actor labels, qualified by the path of any
-enclosing scopes, so supervisor child ids, tracing fields, and stats stay
-human-readable without participating in type checking or message routing.
-Rename a node with `#[supervision(label = "...")]`. The generated `tree`
-returns a single-use `OrderedTree` and its cloneable typed refs. `tree_with`
-does the same from an otherwise empty `GraphBuilder` carrying graph-wide name
-and mailbox-capacity settings.
-
-The same derive can declare the supervision tree that runs those actors — see
-[Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
+`ActorFactory`. Field names become actor labels; rename one with
+`#[supervision(label = "...")]`. The generated `wire` method mutates a
+caller-owned `GraphBuilder` and returns cloneable typed refs. Build the graph,
+then select its supervision topology explicitly with `OrderedTree` or
+`DynamicTree`.
 
 The derive keeps that shape in the type system:
 
-- a field whose type is not an actor is a compile error
+- a field whose type is not an actor factory is a compile error
 - wiring a ref with the wrong message type is a compile error
-- every factory field must be present exactly once in the generated
-  `<Name>Factories` struct literal
-- each factory's `ActorFactory::Actor` must be its declared actor type
+- every factory field must be present exactly once in the derived struct literal
 - a declaration with no actors is a compile error
 - two nodes sharing a name, from field names or `label` overrides, is a
   compile error
 
-Configure an individual actor's mailbox or message-size observation with a
-normal Rust expression in `#[supervision(options = ...)]`. Fields without the
-attribute retain the default FIFO mailbox without message-size observation:
-
-```rust,ignore
-use kokage::{ActorOptions, MailboxMode, Supervision};
-
-fn snapshot_size(message: &Snapshot) -> usize {
-    message.payload.len()
-}
-
-#[derive(Supervision)]
-struct MarketData {
-    #[supervision(options = ActorOptions::new()
-        .mailbox(MailboxMode::conflate())
-        .message_size(snapshot_size))]
-    snapshots: SnapshotActor,
-    orders: OrderActor,
-}
-```
-
-The expression is type-checked against the field actor's message type. Message
-size observation accepts a bare `fn(&M) -> usize`, so it works with foreign
-message types as well as application-owned ones.
+The derive intentionally has no mailbox, restart, shutdown, nested-scope, or
+dynamic-scope attributes. Apply those concerns through the explicit graph and
+tree APIs.
 
 ## Dynamic and Advanced Builder Wiring
 

@@ -1,4 +1,4 @@
-use kokage::{MessageContext, ActorResult, GraphBuilder, Actor};
+use kokage::{Actor, ActorResult, GraphBuilder, MessageContext};
 
 #[derive(Clone)]
 struct Worker;

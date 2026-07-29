@@ -1,0 +1,5 @@
+error: `supervision` attributes on structs are no longer supported; configure topology and policy explicitly on the supervision tree
+ --> tests/ui/supervision/restart_config.rs:4:1
+  |
+4 | #[supervision(strategy = kokage::Strategy::OneForAll)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

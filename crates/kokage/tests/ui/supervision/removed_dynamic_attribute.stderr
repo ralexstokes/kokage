@@ -1,5 +1,0 @@
-error: `dynamic` is no longer supported; use a `DynamicScope` field without this attribute
-  --> tests/ui/supervision/removed_dynamic_attribute.rs:16:19
-   |
-16 |     #[supervision(dynamic)]
-   |                   ^^^^^^^
