@@ -1,3 +1,8 @@
-use kokage::{AttachedChild, AttachedChildIdentity};
+use kokage::{
+    AttachedChild, AttachedChildIdentity,
+    host::ChildSpec,
+};
 
-fn main() {}
+fn main() {
+    let _ = ChildSpec::attachment::<()>;
+}

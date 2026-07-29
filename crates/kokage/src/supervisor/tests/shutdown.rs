@@ -12,7 +12,7 @@ use tokio::{
     time::{Duration, Instant, sleep, timeout},
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 use common::ObservedEvent;
 
 async fn next_lifecycle_event(
@@ -143,8 +143,9 @@ async fn dropping_the_running_supervisor_requests_graceful_shutdown() {
                 Ok(())
             }
         }))
-        .spawn()
-        .expect("valid supervisor");
+        .build()
+        .expect("valid supervisor")
+        .spawn();
     let handle = running.handle();
 
     assert_eq!(common::recv_event(&mut lifecycle_rx).await, "started");
@@ -169,7 +170,7 @@ async fn fire_and_forget_spawn_shuts_down_immediately() {
     }));
     let handle = builder.handle();
 
-    let _ = builder.spawn().expect("valid supervisor");
+    let _ = builder.build().expect("valid supervisor").spawn();
     common::recv_event(&mut cancelled_rx).await;
     handle
         .wait()
@@ -180,8 +181,9 @@ async fn fire_and_forget_spawn_shuts_down_immediately() {
 #[tokio::test]
 async fn dropping_owner_stops_a_supervisor_idling_at_zero_children() {
     let running = Supervisor::ordered()
-        .spawn()
-        .expect("empty supervisor builds");
+        .build()
+        .expect("empty supervisor builds")
+        .spawn();
     let handle = running.handle();
     let mut events = common::event_watch(&handle);
 

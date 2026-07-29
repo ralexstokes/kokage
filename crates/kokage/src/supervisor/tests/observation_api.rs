@@ -21,7 +21,7 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
     let handle = supervisor.handle();
     let mut recursive = handle.watch_lifecycle();
     let mut direct = handle.watch_lifecycle().direct_children();
-    let running = supervisor.spawn().expect("supervisor spawns");
+    let running = supervisor.build().expect("supervisor builds").spawn();
 
     let nested_started = timeout(WAIT, async {
         loop {
@@ -69,7 +69,7 @@ async fn wait_for_child_accepts_snapshot_predicates() {
     }));
     let handle = supervisor.handle();
     let mut snapshots = handle.subscribe_snapshots();
-    let running = supervisor.spawn().expect("supervisor spawns");
+    let running = supervisor.build().expect("supervisor builds").spawn();
 
     let worker = timeout(
         WAIT,
@@ -85,7 +85,10 @@ async fn wait_for_child_accepts_snapshot_predicates() {
 
 #[tokio::test]
 async fn wait_for_child_terminates_when_an_observed_membership_is_removed() {
-    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let running = Supervisor::dynamic()
+        .build()
+        .expect("supervisor builds")
+        .spawn();
     let dynamic = running
         .handle()
         .dynamic()
@@ -133,7 +136,10 @@ async fn static_completion_wait_rejects_unknown_children() {
 
 #[tokio::test]
 async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
-    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let running = Supervisor::dynamic()
+        .build()
+        .expect("supervisor builds")
+        .spawn();
     let waiter = tokio::spawn({
         let handle = running.handle();
         async move { handle.wait_completed_dynamic(["job"]).await }

@@ -6,7 +6,7 @@ use std::sync::{
 use crate::supervisor::{ChildSpec, Restart, Shutdown, Strategy, Supervisor};
 use tokio::sync::{Notify, mpsc};
 
-use super::supervisor_test_common as common;
+use super::common;
 
 #[tokio::test]
 async fn transient_child_panic_causes_restart() {

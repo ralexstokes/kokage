@@ -299,6 +299,28 @@ begin receiving messages. The feature
 continues to enable the supervisor lifecycle counters, gauges, and histograms
 as well.
 
+### Supervisor metrics
+
+The `metrics` feature emits the following supervisor instruments:
+
+| Metric | Kind | Meaning |
+|--------|------|---------|
+| `supervisor.children.running` | gauge | Current running children in a scope. |
+| `supervisor.children.started` | counter | Child generations that reached running. |
+| `supervisor.children.exited` | counter | Child generations that exited. |
+| `supervisor.restarts` | counter | Child restarts performed by the supervisor. |
+| `supervisor.restart_intensity_exceeded` | counter | Scope failures caused by an exhausted restart budget. |
+| `supervisor.shutdown_timeouts` | counter | Cooperative child shutdowns that exceeded their grace period. |
+| `supervisor.child_shutdown.duration` | histogram | Seconds spent draining a child or scope operation. |
+
+Every instrument carries `supervisor`, `path`, and `strategy` labels. Child
+transition instruments also carry `child_id`; the exit counter adds `status`.
+Shutdown instruments add `operation` (`shutdown`, `remove_child`,
+`group_restart`, or `rest_for_one_restart`) and include `child_id` when the
+sample refers to one child. `path` is `root` for the root scope and uses
+dot-separated child ids below it. These labels are intended for diagnostics;
+avoid copying unbounded application data into child ids.
+
 ## Web Console
 
 The separate `kokage-console` workspace crate can launch a web console

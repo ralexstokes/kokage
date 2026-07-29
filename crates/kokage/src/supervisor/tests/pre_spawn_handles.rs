@@ -6,7 +6,7 @@ use crate::supervisor::{
 };
 use tokio::{sync::mpsc, time::timeout};
 
-use super::supervisor_test_common as common;
+use super::common;
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 

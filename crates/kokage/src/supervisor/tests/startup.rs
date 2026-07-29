@@ -9,7 +9,7 @@ use std::{
 use crate::supervisor::{ChildSpec, Restart, Strategy, Supervisor};
 use tokio::sync::{Mutex, Notify, mpsc};
 
-use super::supervisor_test_common as common;
+use super::common;
 
 #[tokio::test]
 async fn sequential_start_waits_for_explicit_readiness() {

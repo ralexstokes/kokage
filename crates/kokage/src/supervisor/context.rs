@@ -45,7 +45,7 @@ pub struct ChildContext {
     generation: u64,
     token: CancellationToken,
     abort_token: CancellationToken,
-    _scope: SupervisorHandle,
+    scope: SupervisorHandle,
     ready: Option<ReadySignal>,
 }
 
@@ -63,7 +63,7 @@ impl ChildContext {
             generation,
             token,
             abort_token,
-            _scope: scope,
+            scope,
             ready,
         }
     }
@@ -104,7 +104,7 @@ impl ChildContext {
     }
 
     pub(crate) fn supervisor(&self) -> SupervisorHandle {
-        self._scope.clone()
+        self.scope.clone()
     }
 
     /// Reports that this child has completed initialization.
