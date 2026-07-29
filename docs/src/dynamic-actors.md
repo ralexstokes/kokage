@@ -42,11 +42,13 @@ runtime.shutdown_and_wait().await?;
 
 `add_actor` validates the declaration, reserves its scope-local id, and
 returns the typed ref. Success means startup was scheduled; use
-`wait_child_started`, a readiness protocol, or snapshots when subsequent work
+`wait_started`, a readiness protocol, or snapshots when subsequent work
 requires the actor to be ready.
 
-Terminal dynamic actors are removed automatically. Explicit `remove_child` is
-idempotent with that cleanup.
+Terminal dynamic actors remain as inactive memberships by default. Select
+`TerminalMembership::Remove` on an `ActorSpec` for an ephemeral child that
+removes itself after terminal exit; `remove_child` explicitly removes either
+kind.
 
 ## Mailbox and restart policy
 

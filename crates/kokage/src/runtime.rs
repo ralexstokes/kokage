@@ -420,10 +420,9 @@ impl RuntimeHandle {
 
     /// Waits until every named child is simultaneously completed.
     ///
-    /// Children are addressed by their supervisor child id. That id defaults
-    /// to an actor's id, and nested scopes use the local
-    /// field or child name. Use a [`subtree`](Self::subtree) handle for nested
-    /// scopes. An unknown child returns [`CompletionError::UnknownChild`]. See
+    /// Direct children are addressed by their one scope-local id. Use a
+    /// [`subtree`](Self::subtree) handle for children of a nested scope. An
+    /// unknown child returns [`CompletionError::UnknownChild`]. See
     /// [`CompletionOutcome`] for the distinction between completion and the
     /// supervisor stopping first.
     pub async fn wait_completed<I, S>(&self, ids: I) -> Result<CompletionOutcome, CompletionError>
@@ -679,8 +678,8 @@ impl DynamicRuntimeHandle {
 
     /// Adds one actor declaration and returns its stable typed ref.
     ///
-    /// The actor's label is also its direct supervisor child id, so it can be
-    /// removed later through the dynamic capability. See [`crate::ActorFactory`] for
+    /// The actor id is its direct supervisor child id, so it can be removed
+    /// later through the dynamic capability. See [`crate::ActorFactory`] for
     /// the incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`RuntimeHandle::wait_started`] retains
