@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .restart_intensity(RestartConfig::new(5, Duration::from_secs(60)))
+        .restart_config(RestartConfig::new(5, Duration::from_secs(60)))
         .spawn()?;
 
     orders.send("business cards x100".into()).await?;
@@ -144,18 +144,17 @@ let tree = OrderedTree::new()
     .actor(graph.actor_for(&orders)?)
     .actor(
         ActorSpec::new(graph.actor_for(&press_ref)?)
-            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
+            .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
     );
 let handle = tree.spawn()?;
 ```
 
 Use `OrderedTree::task` to mix an arbitrary non-actor `host::ChildSpec` into an
-ordered scope. Its explicit restart and shutdown arguments are authoritative
-for both the tree outline and the running child, so set those policies on the
-`task` call rather than on the `ChildSpec`; readiness and restart-intensity
-settings on the spec are preserved. Use `OrderedTree::subtree` for
+ordered scope. Restart and shutdown policies set on the `ChildSpec` are
+preserved; unset policies inherit the tree's `default_*` values. Readiness and
+restart configuration on the spec are preserved too. Use `OrderedTree::subtree` for
 recursive actor-aware or graph-less scopes. A dynamic
-`RuntimeHandle::add_child` adds the same task shape at runtime; task children
+`DynamicRuntime::add_child` adds the same task shape at runtime; task children
 appear in snapshots and lifecycle watches but not actor stats.
 
 There are no string lookups anywhere on this path: every ref you need is

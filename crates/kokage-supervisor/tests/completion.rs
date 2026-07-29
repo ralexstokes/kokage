@@ -286,10 +286,14 @@ async fn a_dynamic_scope_can_await_completion() {
 
     let gate = Arc::new(Notify::new());
     spawned
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("first", |_| async { Ok(()) }))
         .await
         .expect("first added");
     spawned
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("second", {
             let gate = gate.clone();
             move |_| {
@@ -613,11 +617,25 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         .build()
         .expect("valid supervisor")
         .spawn();
-    handle.add_child(removable).await.expect("removable added");
-    handle.add_child(failing).await.expect("failing added");
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(removable)
+        .await
+        .expect("removable added");
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(failing)
+        .await
+        .expect("failing added");
     common::recv_n(&mut started_rx, 2).await;
 
-    let _ = handle.remove_child("removable").await;
+    let _ = handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .remove_child("removable")
+        .await;
     let result = timeout(common::EVENT_TIMEOUT, handle.wait())
         .await
         .expect("fatal restart observed during removal must stop supervisor");

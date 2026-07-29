@@ -21,8 +21,8 @@ pub(crate) use builder::ActorOptionsValidationError;
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder};
 pub use cancellation::CancellationHandle;
 pub use context::{
-    ActorContext, ActorRef, ActorStatus, LiveContext, MessageContext, Reply, RestrictedScope,
-    StartContext, StopContext, TaskHandle, TimerKey,
+    ActorContext, ActorRef, ActorStatus, DynamicRestrictedScope, LiveContext, MessageContext,
+    Reply, RestrictedScope, StartContext, StopContext, TaskHandle, TimerKey,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, GraphLookupError, OffloadDeadline, SendError,

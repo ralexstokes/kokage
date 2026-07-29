@@ -189,6 +189,8 @@ impl Router {
                 // skipped by the group respawn and cannot themselves recycle
                 // the session.
                 let subtree = mount
+                    .dynamic()
+                    .expect("dynamic scope")
                     .add_subtree(
                         offload_id,
                         OrderedTree::new().actor_with_scope(
@@ -229,7 +231,11 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child(remove_id).await,
+                    mount
+                        .dynamic()
+                        .expect("dynamic scope")
+                        .remove_child(remove_id)
+                        .await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -252,7 +258,11 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child(remove_id).await,
+                    mount
+                        .dynamic()
+                        .expect("dynamic scope")
+                        .remove_child(remove_id)
+                        .await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))

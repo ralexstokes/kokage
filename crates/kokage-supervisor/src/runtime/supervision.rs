@@ -951,13 +951,7 @@ impl SupervisorRuntime {
     }
 
     fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
-        if self.meta.kind == ScopeKind::Ordered {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: "add_child",
-                kind: self.meta.kind,
-            }
-            .into());
-        }
+        debug_assert_eq!(self.meta.kind, ScopeKind::Dynamic);
 
         ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
@@ -1007,13 +1001,7 @@ impl SupervisorRuntime {
     }
 
     fn add_nested(&mut self, mut pending: PendingSupervisorChild) -> CommandResult<u64> {
-        if self.meta.kind == ScopeKind::Ordered {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: "add_child",
-                kind: self.meta.kind,
-            }
-            .into());
-        }
+        debug_assert_eq!(self.meta.kind, ScopeKind::Dynamic);
         // Every early return from here on drops `pending`, which terminalizes
         // the identity its caller reserved.
         let spec = pending.spec_mut();
@@ -1110,13 +1098,7 @@ impl SupervisorRuntime {
         id: String,
         reply: oneshot::Sender<Result<(), ControlError>>,
     ) -> RuntimeResult<()> {
-        if self.meta.kind == ScopeKind::Ordered {
-            let _ = reply.send(Err(ControlError::UnsupportedByScopeKind {
-                operation: "remove_child",
-                kind: self.meta.kind,
-            }));
-            return Ok(());
-        }
+        debug_assert_eq!(self.meta.kind, ScopeKind::Dynamic);
 
         let Some(&key) = self.children_by_id.get(&id) else {
             let _ = reply.send(Err(ControlError::UnknownChildId(id)));

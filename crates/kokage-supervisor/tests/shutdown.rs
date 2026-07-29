@@ -465,6 +465,8 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
     let mut lifecycle = handle.watch_lifecycle();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(
             ChildSpec::task("short", move |ctx| {
                 let started_tx = short_started_tx.clone();
@@ -483,6 +485,8 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
         .await
         .expect("short child added");
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(
             ChildSpec::task("long", move |ctx| {
                 let started_tx = started_tx.clone();
@@ -533,6 +537,8 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .expect("valid supervisor")
         .spawn();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(
             ChildSpec::task("stubborn", move |_ctx| {
                 let started_tx = started_tx.clone();
@@ -552,6 +558,8 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .await
         .expect("stubborn child added");
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("keeper", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -562,6 +570,8 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
     let mut lifecycle = handle.watch_lifecycle();
 
     let err = handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("stubborn")
         .await
         .expect_err("pure cooperative child removal should time out");
@@ -1062,6 +1072,8 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
         let cancelled_tx = cancelled_tx.clone();
         let release = Arc::clone(&release);
         dynamic
+            .dynamic()
+            .expect("dynamic supervisor")
             .add_child(
                 ChildSpec::task(id, move |ctx| {
                     let cancelled_tx = cancelled_tx.clone();

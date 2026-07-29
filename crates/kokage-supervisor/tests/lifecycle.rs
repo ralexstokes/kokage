@@ -360,6 +360,8 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
     let mut tree = handle.watch_lifecycle_recursive();
 
     let first_lineage = handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", idle_supervisor()))
         .await
         .expect("first nested supervisor added");
@@ -378,10 +380,14 @@ async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
     assert_eq!(first.supervisor_path[0].generation, 0);
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("nested")
         .await
         .expect("first nested supervisor removed");
     let second_lineage = handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", idle_supervisor()))
         .await
         .expect("replacement nested supervisor added");
@@ -424,7 +430,12 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
     let mut tree = retained.watch_lifecycle_recursive();
     let handle = builder.build().expect("valid supervisor").spawn();
     handle.wait_started().await.expect("startup succeeds");
-    handle.add_child(child).await.expect("dynamic add succeeds");
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(child)
+        .await
+        .expect("dynamic add succeeds");
     let mut snapshots = handle.subscribe_snapshots();
     wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
@@ -561,6 +572,8 @@ async fn started_after_reports_membership_removal() {
         .expect("valid supervisor")
         .spawn();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -576,6 +589,8 @@ async fn started_after_reports_membership_removal() {
         .generation;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("worker")
         .await
         .expect("worker removal succeeds");
@@ -590,7 +605,8 @@ async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
         .build()
         .expect("valid supervisor")
         .spawn();
-    handle
+    let dynamic = handle.dynamic().expect("dynamic supervisor");
+    dynamic
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -600,7 +616,7 @@ async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
     handle.wait_started().await.expect("startup succeeds");
 
     let restarted = handle.restart_of("worker");
-    handle
+    dynamic
         .remove_child("worker")
         .await
         .expect("worker removal succeeds");
@@ -713,11 +729,22 @@ async fn cooperative_remove_publishes_removed_before_reply() {
         .build()
         .expect("valid supervisor")
         .spawn();
-    handle.add_child(worker).await.expect("worker added");
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(worker)
+        .await
+        .expect("worker added");
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
     let remover = handle.clone();
-    let removal = tokio::spawn(async move { remover.remove_child("worker").await });
+    let removal = tokio::spawn(async move {
+        remover
+            .dynamic()
+            .expect("dynamic supervisor")
+            .remove_child("worker")
+            .await
+    });
 
     let removed = next_for(&mut lifecycle, "worker", |kind| {
         matches!(kind, ChildLifecycleEventKind::Removed)
@@ -742,6 +769,8 @@ async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
         .spawn();
     let mut lifecycle = handle.watch_lifecycle();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -759,6 +788,8 @@ async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
     })
     .await;
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("worker")
         .await
         .expect("dynamic child removed");
@@ -801,7 +832,12 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
         .expect("valid supervisor")
         .spawn();
     let mut lifecycle = handle.watch_lifecycle();
-    handle.add_child(child).await.expect("dynamic add succeeds");
+    handle
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(child)
+        .await
+        .expect("dynamic add succeeds");
     let mut snapshots = handle.subscribe_snapshots();
     wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
@@ -847,6 +883,8 @@ async fn watch_snapshot_filter_is_gap_free_under_concurrent_churn() {
         for index in 0..MEMBERS {
             let id = format!("member-{index}");
             churn
+                .dynamic()
+                .expect("dynamic supervisor")
                 .add_child(
                     ChildSpec::task(id, |_ctx| async { Ok(()) })
                         .restart(RestartPolicy::Never)
@@ -1053,6 +1091,8 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
         .expect("valid supervisor")
         .spawn();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested supervisor added");
@@ -1061,6 +1101,8 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
     let mut lifecycle = nested.watch_lifecycle();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("nested")
         .await
         .expect("nested removal succeeds");
@@ -1268,6 +1310,8 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
     let middle = handle.supervisor("middle").expect("middle handle");
     let bomb_crash = Arc::clone(&crash_middle);
     middle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(
             ChildSpec::task("bomb", move |_ctx| {
                 let crash = Arc::clone(&bomb_crash);
@@ -1282,6 +1326,8 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .await
         .expect("bomb added");
     middle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("orphan", idle_supervisor()))
         .await
         .expect("dynamic descendant added");
@@ -1439,6 +1485,8 @@ async fn restart_of_reports_a_start_lost_to_overflow() {
         .expect("valid supervisor")
         .spawn();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("quiet", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -1450,6 +1498,8 @@ async fn restart_of_reports_a_start_lost_to_overflow() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(
             ChildSpec::task("storm", move |ctx| {
                 let attempts = Arc::clone(&child_attempts);

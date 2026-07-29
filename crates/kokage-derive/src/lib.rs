@@ -956,7 +956,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         scope_root = quote! { #scope_root.default_shutdown(#shutdown) };
     }
     if let Some(intensity) = &scope_attrs.restart_intensity {
-        scope_root = quote! { #scope_root.restart_intensity(#intensity) };
+        scope_root = quote! { #scope_root.restart_config(#intensity) };
     }
     let root_constructors = quote! {
         impl #declared {
@@ -1138,7 +1138,7 @@ fn actor_spec_expr(name: &str, attrs: &FieldAttrs) -> proc_macro2::TokenStream {
         spec = quote! { #spec.shutdown(#shutdown) };
     }
     if let Some(intensity) = &attrs.restart_intensity {
-        spec = quote! { #spec.restart_intensity(#intensity) };
+        spec = quote! { #spec.restart_config(#intensity) };
     }
     spec
 }
