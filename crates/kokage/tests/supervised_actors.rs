@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    ActorContext, ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
-    host::{BoxError, RawActor},
+    ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
+    host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
 use tokio::{
@@ -164,6 +164,8 @@ impl RawActor for CleanThenReceive {
 
 #[tokio::test(start_paused = true)]
 async fn send_waits_during_permanent_restart_window() {
+    let mut restart_config = RestartConfig::new(10, Duration::from_secs(1));
+    restart_config.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (first_exited_tx, first_exited_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
@@ -183,10 +185,7 @@ async fn send_waits_during_permanent_restart_window() {
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::Always)
-                .restart_intensity(
-                    RestartConfig::new(10, Duration::from_secs(1))
-                        .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-                ),
+                .restart_intensity(restart_config),
         )
         .spawn()
         .expect("runtime builds");
@@ -284,7 +283,9 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Completed)
     ));
 
@@ -324,6 +325,8 @@ impl RawActor for RestartingRpc {
 
 #[tokio::test(start_paused = true)]
 async fn call_succeeds_across_restart_window() {
+    let mut restart_config = RestartConfig::new(10, Duration::from_secs(1));
+    restart_config.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
     let (failed_tx, failed_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
     let failed = oneshot_slot(failed_tx);
@@ -341,10 +344,7 @@ async fn call_succeeds_across_restart_window() {
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(
-                    RestartConfig::new(10, Duration::from_secs(1))
-                        .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-                ),
+                .restart_intensity(restart_config),
         )
         .spawn()
         .expect("runtime builds");

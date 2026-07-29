@@ -1,6 +1,7 @@
 use kokage::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
-    GraphConfig, MailboxMode, MessageContext, Supervision, TrySendError, host::RawActor,
+    Actor, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder, MailboxMode,
+    MessageContext, Supervision, TrySendError,
+    host::{ActorContext, RawActor},
 };
 use tokio::sync::mpsc;
 
@@ -265,15 +266,14 @@ async fn derived_tree_applies_per_actor_options() {
 }
 
 #[tokio::test]
-async fn tree_with_applies_graph_config() {
+async fn tree_with_applies_graph_builder_settings() {
     let mut park = None;
-    let (tree, _refs) = ParkGraph::tree_with(
-        GraphConfig::new().name("configured").mailbox_capacity(1),
-        |refs| {
-            park = Some(refs.park.clone());
-            ParkGraphFactories { park: || Park }
-        },
-    )
+    let mut builder = GraphBuilder::new();
+    builder.name("configured").mailbox_capacity(1);
+    let (tree, _refs) = ParkGraph::tree_with(builder, |refs| {
+        park = Some(refs.park.clone());
+        ParkGraphFactories { park: || Park }
+    })
     .expect("configured graph builds");
 
     let park = park.expect("wiring closure captured park ref");
@@ -290,11 +290,11 @@ async fn tree_with_applies_graph_config() {
 }
 
 #[test]
-fn tree_with_reports_invalid_graph_config() {
+fn tree_with_reports_invalid_graph_builder_settings() {
+    let mut builder = GraphBuilder::new();
+    builder.mailbox_capacity(0);
     assert!(matches!(
-        ParkGraph::tree_with(GraphConfig::new().mailbox_capacity(0), |_| {
-            ParkGraphFactories { park: || Park }
-        }),
+        ParkGraph::tree_with(builder, |_| { ParkGraphFactories { park: || Park } }),
         Err(GraphBuildError::ZeroMailboxCapacity)
     ));
 }

@@ -8,8 +8,7 @@ use futures_util::StreamExt;
 use kokage::{Actor, ActorResult, DynamicTree, MessageContext};
 use kokage_console::{ActorStatsView, Console, ConsoleBuildError, ConsoleHandle};
 use kokage_supervisor::{
-    ChildSnapshot, ChildSpec, ChildStateView, Strategy, Supervisor, SupervisorHandle,
-    SupervisorSnapshot, SupervisorStateView,
+    ChildSpec, ChildStateView, RunningSupervisor, Supervisor, SupervisorSnapshot,
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -41,11 +40,24 @@ impl Actor for IdleActor {
 }
 
 fn snapshot(child_state: ChildStateView) -> SupervisorSnapshot {
-    SupervisorSnapshot::new(
-        SupervisorStateView::Running,
-        Strategy::OneForOne,
-        vec![ChildSnapshot::new("worker", 0, child_state)],
-    )
+    serde_json::from_value(json!({
+        "state": "Running",
+        "kind": "Ordered",
+        "strategy": "OneForOne",
+        "total_restarts": 0,
+        "lifecycle_seq": 0,
+        "children": [{
+            "id": "worker",
+            "lineage": 0,
+            "generation": 0,
+            "state": child_state,
+            "membership": "Active",
+            "restart_count": 0,
+            "next_restart_in": null,
+            "supervisor": null
+        }]
+    }))
+    .expect("test snapshot fixture is valid")
 }
 
 fn running_state() -> ChildStateView {
@@ -83,7 +95,7 @@ async fn spawn_console_with_stats(
 ) -> (
     ConsoleHandle,
     watch::Sender<SupervisorSnapshot>,
-    SupervisorHandle,
+    RunningSupervisor,
 ) {
     let (snapshot_tx, snapshot_rx) = watch::channel(snapshot(running_state()));
     let lifecycle = Supervisor::dynamic()
@@ -108,7 +120,7 @@ async fn spawn_console_with_stats(
 async fn spawn_console() -> (
     ConsoleHandle,
     watch::Sender<SupervisorSnapshot>,
-    SupervisorHandle,
+    RunningSupervisor,
 ) {
     spawn_console_with_stats(actor_stats).await
 }

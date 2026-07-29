@@ -91,11 +91,6 @@ impl BackoffPolicy {
 /// the delay between attempts because an exponential backoff resets after a
 /// run survives this window.
 ///
-/// Public `restart_intensity` setters retain the name of the supervisor
-/// behavior they configure. `RestartConfig` names the value passed through
-/// those surfaces because it contains both the restart budget and its
-/// backoff policy; this naming is deliberate rather than transitional.
-///
 /// The default is 5 restarts within 30 seconds with no backoff.
 ///
 /// [`SupervisorError::RestartIntensityExceeded`]: crate::SupervisorError::RestartIntensityExceeded
@@ -125,13 +120,6 @@ impl RestartConfig {
             within,
             backoff: BackoffPolicy::None,
         }
-    }
-
-    /// Attaches a [`BackoffPolicy`] to this intensity configuration.
-    #[must_use]
-    pub fn with_backoff(mut self, backoff: BackoffPolicy) -> Self {
-        self.backoff = backoff;
-        self
     }
 
     pub(crate) fn validate(&self) -> Result<(), SupervisorBuildError> {

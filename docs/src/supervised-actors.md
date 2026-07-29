@@ -244,12 +244,13 @@ pre-spawn identities for dynamic fields, so the mount
 handles supplied during wiring bind to the runtime eventually built from that
 exact declaration. It is also useful for asserting shape through `outline()`.
 
-The derive generates `tree` and `tree_with`. The latter takes a `GraphConfig`
-for graph-wide name and mailbox capacity without exposing mutable actor slots
-to generated composition.
+The derive generates `tree` and `tree_with`. The latter takes an otherwise
+empty `GraphBuilder` when you need to configure the graph-wide name or mailbox
+capacity before generated composition registers its actors.
 
-Use `GraphBuilder::slot(id)` plus `define` when graph actors are created in a
-loop or need hand-written wiring; choose `slot_with(id, ActorOptions)` for
+Use `GraphBuilder::actor(id, factory)` for ordinary hand-written wiring and
+`actor_with(id, ActorOptions, factory)` for per-actor options. Reserve
+`slot(id)` plus `define` for cyclic wiring; choose `slot_with(id, ActorOptions)` for
 non-default mailbox behavior. Compose the resulting graph with
 `OrderedTree`; call `handle()` before spawn when wiring needs its pre-spawn
 handle.

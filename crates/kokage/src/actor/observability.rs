@@ -115,7 +115,7 @@ impl GraphObservability {
     /// errors. This is the case it cannot reach: the drain loop hands a
     /// draining handler the same `MessageContext` as the ordinary loop, so the
     /// call type-checks and the message is dropped with the incarnation. The
-    /// phase is readable at runtime through `MessageContext::is_draining`, so a
+    /// phase is readable at runtime through `MessageContext::status`, so a
     /// handler that wants to avoid the warning can check before queueing.
     pub(crate) fn emit_continuations_dropped(&self, actor_id: &Arc<str>, dropped: usize) {
         warn!(

@@ -13,7 +13,7 @@ use crate::{
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
     ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard, CompletionOutcome,
-    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
+    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, RunningSupervisor, ShutdownPolicy,
     SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 use tokio::sync::watch;
@@ -277,17 +277,12 @@ impl LifecycleWatchGuard {
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }
-
-    /// Returns whether the lifecycle pump has been cancelled or stopped.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancellation.is_cancelled()
-    }
 }
 
 impl std::fmt::Debug for LifecycleWatchGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LifecycleWatchGuard")
-            .field("is_cancelled", &self.is_cancelled())
+            .field("cancelled", &self.cancellation.is_cancelled())
             .finish()
     }
 }
@@ -347,11 +342,27 @@ where
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
+    // Transitional ownership bridge while the higher-level runtime still
+    // returns a handle as its root owner. Nested handles never carry this.
+    _root_owner: Option<Arc<RunningSupervisor>>,
 }
 
 impl RuntimeHandle {
     pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
-        Self { supervisor, actors }
+        Self {
+            supervisor,
+            actors,
+            _root_owner: None,
+        }
+    }
+
+    pub(crate) fn root(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
+        let owner = Arc::new(supervisor);
+        Self {
+            supervisor: owner.handle(),
+            actors,
+            _root_owner: Some(owner),
+        }
     }
 
     pub(crate) fn unavailable() -> Self {
@@ -627,6 +638,22 @@ impl RuntimeHandle {
         self.supervisor.watch_lifecycle()
     }
 
+    /// Arms a watch for the next restart of `child_id`.
+    ///
+    /// The lifecycle subscription and current generation are captured before
+    /// this method returns. The restart may therefore be triggered before the
+    /// returned future is first polled without losing its `Started` event.
+    ///
+    /// Returns `None` if the child is not currently supervised, is removed
+    /// before restarting, the watch lags, or this runtime identity becomes
+    /// terminal before the restart is observed.
+    pub fn restart_of(
+        &self,
+        child_id: &str,
+    ) -> impl std::future::Future<Output = Option<u64>> + Send + 'static {
+        self.supervisor.restart_of(child_id)
+    }
+
     /// Returns the ordered lifecycle stream for this runtime's entire
     /// supervisor tree.
     ///
@@ -838,7 +865,7 @@ pub(crate) fn actor_child_spec(
     .shutdown(shutdown);
 
     if let Some(intensity) = restart_intensity {
-        child = child.restart_intensity(intensity);
+        child = child.restart_config(intensity);
     }
 
     child

@@ -1946,7 +1946,7 @@ impl SupervisorRuntime {
                 supervisor: entry
                     .nested_channels
                     .as_ref()
-                    .map(|channels| channels.internal_handle()),
+                    .map(|channels| channels.handle()),
             })
             .collect()
     }
@@ -2290,7 +2290,9 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::ZERO),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::ZERO,
+            },
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2314,7 +2316,9 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::ZERO),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::ZERO,
+            },
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2338,7 +2342,9 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::from_secs(60)),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::from_secs(60),
+            },
             grace_deadline: Instant::now() + Duration::from_secs(60),
             initiated_at: StdInstant::now(),
             grace_expired: false,
@@ -2364,7 +2370,9 @@ mod tests {
         let (reply, _reply_rx) = oneshot::channel();
         let pending = PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::ZERO),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::ZERO,
+            },
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: false,
@@ -2490,7 +2498,7 @@ mod tests {
             .build()
             .expect("dynamic supervisor builds");
         let channels = supervisor.stable_channels(false);
-        let handle = channels.internal_handle();
+        let handle = channels.handle();
         let config = supervisor.config.clone();
         let control_capacity = config.control_channel_capacity;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -2584,7 +2592,7 @@ mod tests {
             .build()
             .expect("supervisor builds");
         let channels = supervisor.stable_channels(false);
-        let handle = channels.internal_handle();
+        let handle = channels.handle();
         let config = supervisor.config.clone();
         let control_capacity = config.control_channel_capacity;
         let nested_channels = channels.nested_channels();

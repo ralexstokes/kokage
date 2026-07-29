@@ -256,8 +256,9 @@ async fn build_app() -> Result<App, AnyError> {
     // refs together: the bridge captures `core.router` and the router captures
     // `gateway.outbound` in the same literal, with no slot/define split and no
     // ordering between the two scopes.
-    let config = kokage::GraphConfig::new().name("agent-control");
-    let (tree, refs) = AgentControl::tree_with(config, |refs| AgentControlFactories {
+    let mut builder = kokage::GraphBuilder::new();
+    builder.name("agent-control");
+    let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
         gateway: GatewayFactories {
             outbound: {
                 let chat = chat.clone();
@@ -425,13 +426,19 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         .values()
         .find(|events| {
             events.iter().any(|event| {
-                matches!(event, MonitorEvent::Down(down) if down.reason == DownReason::Failure)
+                matches!(
+                    event,
+                    MonitorEvent::Down {
+                        reason: DownReason::Failure,
+                        ..
+                    }
+                )
             })
         })
         .expect("panic run monitor events");
     let down = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Down(_)))
+        .position(|event| matches!(event, MonitorEvent::Down { .. }))
         .expect("Down event");
     let terminated = panic_events
         .iter()

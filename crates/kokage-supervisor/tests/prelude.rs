@@ -11,8 +11,9 @@ mod coverage_probe {
     mod expected {
         use kokage_supervisor::prelude::{
             BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-            OrderedSupervisorBuilder, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy,
-            Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
+            OrderedSupervisorBuilder, RestartConfig, RestartPolicy, RunningSupervisor,
+            ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorError,
+            SupervisorHandle,
         };
     }
 
@@ -138,7 +139,9 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(25))),
+            .shutdown(ShutdownPolicy::Cooperative {
+                grace: Duration::from_millis(25),
+            }),
         )
         .child(ChildSpec::supervisor("nested", nested))
         .build()
@@ -166,16 +169,15 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 
 #[test]
 fn prelude_policy_types_cover_common_configuration() {
-    assert_eq!(ShutdownPolicy::abort(), ShutdownPolicy::Abort);
+    assert_eq!(ShutdownPolicy::Abort, ShutdownPolicy::Abort);
 
     assert_eq!(
         RestartConfig::new(3, Duration::from_secs(10)),
         RestartConfig::new(3, Duration::from_secs(10))
     );
-    assert_eq!(
-        RestartConfig::new(2, Duration::from_secs(5))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50))),
-        RestartConfig::new(2, Duration::from_secs(5))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50)))
-    );
+    let mut configured = RestartConfig::new(2, Duration::from_secs(5));
+    configured.backoff = BackoffPolicy::Fixed(Duration::from_millis(50));
+    let mut expected = RestartConfig::new(2, Duration::from_secs(5));
+    expected.backoff = BackoffPolicy::Fixed(Duration::from_millis(50));
+    assert_eq!(configured, expected);
 }

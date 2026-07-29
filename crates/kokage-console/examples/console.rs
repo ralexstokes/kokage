@@ -88,6 +88,8 @@ impl Actor for Burst {
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
 fn pipeline_runtime() -> OrderedTree {
+    let mut transform_restart = RestartConfig::new(60, Duration::from_secs(60));
+    transform_restart.backoff = BackoffPolicy::Fixed(Duration::from_secs(2));
     let source = ChildSpec::task("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
@@ -102,10 +104,7 @@ fn pipeline_runtime() -> OrderedTree {
             }
         }
     })
-    .restart_intensity(
-        RestartConfig::new(60, Duration::from_secs(60))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(2))),
-    );
+    .restart_config(transform_restart);
 
     OrderedTree::new()
         .strategy(Strategy::OneForAll)
@@ -158,6 +157,8 @@ fn telemetry_runtime() -> OrderedTree {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let mut worker_restart = RestartConfig::new(60, Duration::from_secs(60));
+    worker_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(1500));
     let mut builder = GraphBuilder::new();
     let (worker_slot, worker_ref) = builder.slot::<String>("worker");
     let frontend_worker = worker_ref.clone();
@@ -174,12 +175,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .strategy(Strategy::OneForOne)
         .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .actor(frontend_actor)
-        .actor(
-            ActorSpec::new(worker_actor).restart_intensity(
-                RestartConfig::new(60, Duration::from_secs(60))
-                    .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(1500))),
-            ),
-        )
+        .actor(ActorSpec::new(worker_actor).restart_intensity(worker_restart))
         .subtree("pipeline", pipeline_runtime())
         .subtree("telemetry", telemetry_runtime())
         .spawn()?;

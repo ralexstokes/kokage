@@ -1,9 +1,9 @@
 use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, Down, DownReason,
-    DynamicActorOptions, DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    ActorFactory, ActorRef, ActorResult, CancellationHandle, DownReason, DynamicActorOptions,
+    DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
+    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use kokage_supervisor::ShutdownPolicy;
 use tokio::{
@@ -188,9 +188,23 @@ fn up(actor_id: &str, generation: u64) -> MonitorEvent {
     }
 }
 
-fn expect_down(event: MonitorEvent) -> Down {
+struct TestDown {
+    actor_id: String,
+    generation: u64,
+    reason: DownReason,
+}
+
+fn expect_down(event: MonitorEvent) -> TestDown {
     match event {
-        MonitorEvent::Down(down) => down,
+        MonitorEvent::Down {
+            actor_id,
+            generation,
+            reason,
+        } => TestDown {
+            actor_id,
+            generation,
+            reason,
+        },
         other => panic!("expected Down, got {other:?}"),
     }
 }
@@ -1202,7 +1216,7 @@ impl RawActor for GatedObserver {
         self.watch.send(watch).expect("watch receiver alive");
         self.gate.notified().await;
         while let Some(event) = ctx.recv().await {
-            let done = matches!(event, MonitorEvent::Down(_));
+            let done = matches!(event, MonitorEvent::Down { .. });
             self.observed.send(event).expect("observer receiver alive");
             if done {
                 break;
@@ -1327,7 +1341,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
             move || StubbornPeer {
                 started: peer_started_tx.clone(),
             },
-            DynamicActorOptions::new().shutdown(ShutdownPolicy::abort()),
+            DynamicActorOptions::new().shutdown(ShutdownPolicy::Abort),
         )
         .await
         .expect("peer added");

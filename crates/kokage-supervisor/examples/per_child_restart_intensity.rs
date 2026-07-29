@@ -14,6 +14,8 @@ fn example_error(message: &'static str) -> BoxError {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut warm_cache_restart = RestartConfig::new(1, Duration::from_secs(1));
+    warm_cache_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
     let warm_cache_attempts = Arc::new(AtomicUsize::new(0));
 
     // Intensity uses a sliding timestamp window. Backoff attempts are tracked
@@ -41,10 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(
-        RestartConfig::new(1, Duration::from_secs(1))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-    );
+    .restart_config(warm_cache_restart);
 
     let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -55,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Supervisor default: children do not get any restart budget unless they override it.
     let supervisor = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
         .build()?;

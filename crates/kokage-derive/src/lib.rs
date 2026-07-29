@@ -207,14 +207,15 @@ fn parse_factory_attributes(
 /// * a `PipelineRefs` struct containing typed actor refs, including nested refs;
 /// * a generic `PipelineFactories` struct with actor factories and any nested
 ///   factories or dynamic trees needed to wire the declaration; and
-/// * `Pipeline::tree(wire)` and `Pipeline::tree_with(config, wire)`
+/// * `Pipeline::tree(wire)` and `Pipeline::tree_with(builder, wire)`
 ///   constructors, producing a non-cloneable `OrderedTree` declaration over
 ///   the graph, including any pre-wired dynamic-scope identities.
 ///
 /// Both constructors return the tree paired with the `PipelineRefs` bundle,
 /// for use as application entry points; write `let (tree, _) = ...` when the
-/// refs are not needed. `tree_with` takes a `GraphConfig` for the generated
-/// graph's name and mailbox capacity.
+/// refs are not needed. `tree_with` takes an otherwise empty `GraphBuilder`
+/// whose graph name and mailbox capacity can be configured before it is
+/// passed to the generated constructor.
 ///
 /// The `wire` closure receives `&PipelineRefs` before any actor incarnation is
 /// constructed, so factories can capture each other's refs even when the graph
@@ -374,7 +375,7 @@ fn parse_factory_attributes(
 ///
 /// ```
 /// # use kokage::{
-/// #     ActorContext, ActorOptions, ActorResult, MailboxMode,
+/// #     host::ActorContext, ActorOptions, ActorResult, MailboxMode,
 /// #     host::RawActor,
 /// # };
 /// # struct Snapshot(Vec<u8>);
@@ -989,16 +990,18 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             where
                 #(#factory_bounds,)*
             {
-                Self::tree_with(::kokage::GraphConfig::new(), wire)
+                Self::tree_with(::kokage::GraphBuilder::new(), wire)
             }
 
-            #[doc = "Builds this derived supervision declaration with the supplied graph configuration."]
+            #[doc = "Builds this derived supervision declaration with the supplied graph builder."]
+            #[doc = ""]
+            #[doc = "The builder should have graph-wide settings configured but no actors registered; this constructor registers the actors declared by the derive."]
             #[doc = ""]
             #[doc = "# Panics"]
             #[doc = ""]
             #[doc = "Panics if private nested-scope plumbing rejects refs created while opening the same derived graph."]
             #vis fn tree_with<#(#all_params),*>(
-                config: ::kokage::GraphConfig,
+                builder: ::kokage::GraphBuilder,
                 wire: impl FnOnce(&#refs) -> #factories<#(#all_params),*>,
             ) -> ::core::result::Result<
                 (::kokage::OrderedTree, #refs),
@@ -1007,7 +1010,6 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             where
                 #(#factory_bounds,)*
             {
-                let builder: ::kokage::GraphBuilder = config.into();
                 let (graph, refs, scopes) = Self::__supervision_graph(builder, wire)?;
                 let tree = Self::__supervision_scope(&graph, &refs, scopes)
                     .expect("derived refs belong to the graph that opened them");

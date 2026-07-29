@@ -39,7 +39,8 @@ impl LifecyclePathSegment {
     ///
     /// This is primarily useful with [`LifecycleWatch::started_after`] when a
     /// caller already knows the supervisor membership it intends to observe.
-    pub fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
         Self {
             id: id.into(),
             lineage,
@@ -72,7 +73,8 @@ pub struct ChildLifecycleEvent {
 
 impl ChildLifecycleEvent {
     /// Creates a direct-child lifecycle event with total identity and counter fields.
-    pub fn new(
+    #[allow(dead_code)]
+    pub(crate) fn new(
         seq: u64,
         child_id: impl Into<String>,
         lineage: u64,
@@ -147,7 +149,10 @@ pub struct LifecycleEvent {
 
 impl LifecycleEvent {
     /// Creates a recursive lifecycle envelope at `supervisor_path`.
-    pub fn new(supervisor_path: Vec<LifecyclePathSegment>, kind: LifecycleEventKind) -> Self {
+    pub(crate) fn new(
+        supervisor_path: Vec<LifecyclePathSegment>,
+        kind: LifecycleEventKind,
+    ) -> Self {
         Self {
             supervisor_path,
             kind,

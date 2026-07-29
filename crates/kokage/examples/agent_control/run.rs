@@ -58,12 +58,11 @@ impl AgentRun {
         };
         let model = self.model.clone();
         let cancel = self.cancel.clone();
-        ctx.offload_or(
-            MODEL_DEADLINE,
-            model.turn(request, cancel),
-            Err(ModelError::Deadline),
-            |result| RunMsg::ModelResult { result },
-        );
+        ctx.offload(MODEL_DEADLINE, model.turn(request, cancel), |result| {
+            RunMsg::ModelResult {
+                result: result.unwrap_or(Err(ModelError::Deadline)),
+            }
+        });
     }
 
     async fn start_tool(&self, index: usize, ctx: &mut impl LiveContext<RunMsg>) -> ActorResult {
@@ -77,7 +76,7 @@ impl AgentRun {
         .await?;
         let tool_host = self.tool_host.clone();
         let offload_key = key.clone();
-        ctx.offload_or(
+        ctx.offload(
             TOOL_DEADLINE + PHASE_TIMEOUT,
             async move {
                 let execute = tool_host
@@ -108,10 +107,13 @@ impl AgentRun {
                     }
                 }
             },
-            ToolOutcome {
-                output: "tool outcome remained unknown".into(),
+            move |result| RunMsg::ToolResult {
+                index,
+                key,
+                result: result.unwrap_or_else(|_| ToolOutcome {
+                    output: "tool outcome remained unknown".into(),
+                }),
             },
-            move |result| RunMsg::ToolResult { index, key, result },
         );
         Ok(())
     }

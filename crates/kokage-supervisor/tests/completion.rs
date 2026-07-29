@@ -278,7 +278,7 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
 
 #[tokio::test]
 async fn a_dynamic_scope_can_await_completion() {
-    let builder = Supervisor::dynamic().restart(RestartPolicy::Never);
+    let builder = Supervisor::dynamic().default_restart(RestartPolicy::Never);
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
     let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
@@ -571,8 +571,8 @@ async fn a_retained_guard_does_not_keep_a_root_alive() {
             Ok(())
         }
     }));
-    // The watch task holds no lifecycle lease, so dropping every public handle
-    // must still request shutdown even while the guard is retained.
+    // The watch task holds no lifecycle ownership, so dropping the explicit
+    // root owner still requests shutdown even while the guard is retained.
     let _finished = builder.handle().shutdown_on_completion(["worker"]);
     drop(builder.build().expect("valid supervisor").spawn());
 
@@ -597,7 +597,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
             }
         }
     })
-    .shutdown(ShutdownPolicy::abort());
+    .shutdown(ShutdownPolicy::Abort);
     let failing = ChildSpec::task("failing", move |_| {
         let fail = fail.clone();
         let started_tx = started_tx.clone();
@@ -609,7 +609,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
     });
 
     let handle = Supervisor::dynamic()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

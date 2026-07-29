@@ -339,9 +339,9 @@ impl RunnableActor {
     /// policy that left the binding waiting to rebind.
     ///
     /// Actors run through this unsupervised entry point receive a terminal
-    /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::ActorContext::supervisor):
+    /// [`RuntimeHandle`] from [`ActorContext::supervisor`](crate::host::ActorContext::supervisor):
     /// control operations return `ControlError::Unavailable` and observation
-    /// streams are closed. Their [`ActorContext::children`](crate::ActorContext::children)
+    /// streams are closed. Their [`ActorContext::children`](crate::host::ActorContext::children)
     /// value is `None`.
     pub async fn run_until<F>(
         &self,

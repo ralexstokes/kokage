@@ -329,7 +329,9 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: common::SHORT_GRACE,
+    });
 
     let peer_live_flag_for_child = peer_live_flag.clone();
     let peer = ChildSpec::task("stubborn-peer", move |ctx| {
@@ -349,7 +351,9 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: common::SHORT_GRACE,
+    });
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -392,7 +396,9 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
         Ok(())
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(200)));
+    .shutdown(ShutdownPolicy::Cooperative {
+        grace: Duration::from_millis(200),
+    });
 
     let release_failure_for_child = release_failure.clone();
     let trigger = ChildSpec::task("trigger", move |ctx| {
@@ -424,7 +430,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::abort());
+    .shutdown(ShutdownPolicy::Abort);
 
     let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -532,12 +538,12 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
     .expect("children should stop after generation one completes")
     .expect("snapshot stream should remain open")
     .clone();
-    assert!(
-        completed
-            .children
-            .iter()
-            .all(|child| { matches!(child.last_exit(), Some(ExitStatusView::Completed)) })
-    );
+    assert!(completed.children.iter().all(|child| {
+        matches!(
+            child.state.last_exit().map(|exit| &exit.status),
+            Some(ExitStatusView::Completed)
+        )
+    }));
 
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
@@ -565,7 +571,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartConfig::new(1, Duration::from_secs(1)));
+    .restart_config(RestartConfig::new(1, Duration::from_secs(1)));
 
     let peer = ChildSpec::task("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -578,11 +584,11 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
         }
     })
     .restart(RestartPolicy::Always)
-    .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)));
+    .restart_config(RestartConfig::new(0, Duration::from_secs(1)));
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(trigger)
         .child(peer)
         .build()
@@ -622,10 +628,11 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
 
     let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(
-            RestartConfig::new(2, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
-        )
+        .restart_config(common::restart_config(
+            2,
+            Duration::from_secs(1),
+            BackoffPolicy::Fixed(Duration::from_millis(40)),
+        ))
         .child(trigger)
         .child(peer)
         .build()
@@ -771,10 +778,11 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
 
     let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(
-            RestartConfig::new(2, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
-        )
+        .restart_config(common::restart_config(
+            2,
+            Duration::from_secs(1),
+            BackoffPolicy::Fixed(Duration::from_millis(40)),
+        ))
         .child(trigger)
         .child(peer)
         .build()

@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, GraphConfig, MessageContext, Supervision};
+use kokage::{Actor, ActorResult, GraphBuilder, MessageContext, Supervision};
 
 mod application {
     use super::*;
@@ -24,8 +24,10 @@ mod application {
 fn assert_clone<T: Clone>(_: &T) {}
 
 fn main() {
+    let mut builder = GraphBuilder::new();
+    builder.name("application").mailbox_capacity(8);
     let (tree, refs) = application::Application::tree_with(
-        GraphConfig::new().name("application").mailbox_capacity(8),
+        builder,
         |_| application::ApplicationFactories {
             worker: || application::Worker,
         },

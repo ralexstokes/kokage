@@ -260,7 +260,7 @@ child has an empty path. Stats sampled directly from an `ActorRef` report
 context.
 
 `observe::ActorStats::outstanding_offloads` is a point-in-time gauge of bounded futures
-owned by the current actor incarnation. It rises when `ActorContext::offload`
+owned by the current actor incarnation. It rises when `ctx.offload`
 starts work and falls when the actor loop reaps its completion or observes its
 abort, making actors with in-flight requests visible without inspecting
 anonymous Tokio tasks.
@@ -268,7 +268,7 @@ anonymous Tokio tasks.
 `observe::ActorStats::outstanding_scope_waits` is the corresponding
 point-in-time gauge for lifecycle waits started with
 `LiveContext::spawn_scope_wait`. It returns to zero when the actor loop reaps a
-result, an explicit `ScopeWaitHandle::abort` is observed, or the incarnation
+result, an explicit `TaskHandle::abort` is observed, or the incarnation
 ends. This makes message-driven code that accumulates never-ending lifecycle
 waits visible.
 

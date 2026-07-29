@@ -10,9 +10,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorContext, ActorFactory, ActorResult, GraphBuilder, LiveContext, MessageContext,
-    OrderedTree, Reply, RestartPolicy, RuntimeHandle,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor},
+    Actor, ActorFactory, ActorResult, GraphBuilder, MessageContext, OrderedTree, Reply,
+    RestartPolicy, RuntimeHandle,
+    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
     observe::ChildLifecycleWatch,
 };
 use tokio::sync::mpsc;

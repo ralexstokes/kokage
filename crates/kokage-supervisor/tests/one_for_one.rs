@@ -41,10 +41,11 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(
-        RestartConfig::new(4, Duration::from_secs(2))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(30))),
-    );
+    .restart_config(common::restart_config(
+        4,
+        Duration::from_secs(2),
+        BackoffPolicy::Fixed(Duration::from_secs(30)),
+    ));
     let fast = ChildSpec::task("fast", {
         let fast_failure = Arc::clone(&fast_failure);
         move |ctx| {
@@ -249,7 +250,7 @@ async fn temporary_child_does_not_restart() {
         stopped
             .child("temporary")
             .expect("temporary child remains visible")
-            .last_exit(),
+            .state.last_exit().map(|exit| &exit.status),
         Some(ExitStatusView::Failed(message)) if message.contains("no restart")
     ));
 
@@ -285,7 +286,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(child_restart_intensity);
+    .restart_config(child_restart_intensity);
 
     let child_b = ChildSpec::task("child-b", move |ctx| {
         let child_b_attempts = child_b_attempts.clone();
@@ -303,11 +304,11 @@ async fn child_restart_intensity_is_isolated_per_child() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(child_restart_intensity);
+    .restart_config(child_restart_intensity);
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(child_a)
         .child(child_b)
         .build()
@@ -329,10 +330,11 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let handle = Supervisor::ordered()
-        .restart_intensity(
-            RestartConfig::new(2, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(40))),
-        )
+        .restart_config(common::restart_config(
+            2,
+            Duration::from_secs(1),
+            BackoffPolicy::Fixed(Duration::from_millis(40)),
+        ))
         .child(
             ChildSpec::task("flaky", move |ctx| {
                 let attempts = attempts.clone();
