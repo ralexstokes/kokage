@@ -24,13 +24,11 @@
 use std::{error::Error, io, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
-    host::BoxError,
+    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
+    OrderedTree, host::BoxError,
 };
 use kokage_console::Console;
-use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy,
-};
+use kokage_supervisor::{BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, Strategy};
 use tokio::time::sleep;
 
 fn example_error(message: &'static str) -> BoxError {
@@ -108,13 +106,9 @@ fn pipeline_runtime() -> OrderedTree {
 
     OrderedTree::new()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
-        .task(source, RestartPolicy::default(), ShutdownPolicy::default())
-        .task(
-            transform,
-            RestartPolicy::default(),
-            ShutdownPolicy::default(),
-        )
+        .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
+        .task(source)
+        .task(transform)
 }
 
 /// A OneForOne group demonstrating the other restart policies, with a further
@@ -141,17 +135,13 @@ fn telemetry_runtime() -> OrderedTree {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let exporters = OrderedTree::new().task(
-        exporter,
-        RestartPolicy::default(),
-        ShutdownPolicy::default(),
-    );
+    let exporters = OrderedTree::new().task(exporter);
 
     OrderedTree::new()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
-        .task(heartbeat, RestartPolicy::Always, ShutdownPolicy::default())
-        .task(migration, RestartPolicy::Never, ShutdownPolicy::default())
+        .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
+        .task(heartbeat.restart(RestartPolicy::Always))
+        .task(migration.restart(RestartPolicy::Never))
         .subtree("exporters", exporters)
 }
 
@@ -173,11 +163,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
+        .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
         .actor(frontend_actor)
-        .actor(ActorSpec::new(worker_actor).restart_intensity(worker_restart))
+        .actor(ActorSpec::new(worker_actor).restart_config(worker_restart))
         .subtree("pipeline", pipeline_runtime())
         .subtree("telemetry", telemetry_runtime())
+        .subtree("dynamic", DynamicTree::new())
         .spawn()?;
 
     let console = Console::for_runtime(&handle)
@@ -197,7 +188,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Periodically add a dynamic actor, feed it, and remove it again, so the
     // console shows children joining and leaving the tree.
-    let dynamic = handle.clone();
+    let dynamic = handle
+        .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
+        .expect("declared dynamic scope");
     tokio::spawn(async move {
         loop {
             sleep(Duration::from_secs(12)).await;

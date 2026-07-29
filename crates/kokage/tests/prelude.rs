@@ -12,8 +12,8 @@ mod coverage_probe {
         use kokage::prelude::{
             Actor, ActorOptions, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError,
             DynamicTree, GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply,
-            RestartConfig, RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
-            StopContext, Strategy, TrySendError,
+            RestartConfig, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
+            StartContext, StopContext, Strategy, TrySendError,
         };
     }
 
@@ -21,9 +21,10 @@ mod coverage_probe {
         use kokage::{
             ActorFactory, ActorSlot, BackoffPolicy, BlockingCancelled, CancellationHandle,
             CancellationToken, ControlError, DownReason, DrainPolicy, DynamicActorOptions,
-            DynamicScope, Graph, GraphBuildError, GraphConfig, GraphLookupError, MailboxMode,
-            MonitorEvent, OffloadDeadline, RestrictedScope, ScopeKind, Supervision,
-            SupervisorBuildError, SupervisorError, TaskHandle, TimerKey, TreeNode,
+            DynamicRestrictedScope, DynamicRuntime, DynamicScope, Graph, GraphBuildError,
+            GraphConfig, GraphLookupError, MailboxMode, MonitorEvent, OffloadDeadline,
+            RestrictedScope, ScopeKind, Supervision, SupervisorBuildError, SupervisorError,
+            TaskHandle, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }

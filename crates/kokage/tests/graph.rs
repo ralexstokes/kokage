@@ -1664,6 +1664,8 @@ mod runnable_actor {
             .spawn()
             .expect("dynamic runtime builds");
         handle
+            .dynamic()
+            .expect("dynamic scope")
             .add_actor_with(
                 "worker",
                 || NeverStops,
@@ -1677,7 +1679,7 @@ mod runnable_actor {
             .expect("dynamic actor added");
         handle.wait_started().await.expect("dynamic actor started");
         assert!(matches!(
-            handle.remove_child("worker").await,
+            handle.dynamic().expect("dynamic scope").remove_child("worker").await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"
         ));

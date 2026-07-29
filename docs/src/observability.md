@@ -39,9 +39,9 @@ subtree's local lineage sequence may therefore begin at zero even if its
 predecessor used the same local lineages; the parent path distinguishes the
 two. The `u64` counter saturates at its maximum rather than changing supervisor
 control semantics in the practically unreachable overflow case. For
-dynamically added task children, `RuntimeHandle::add_child` returns the same
+dynamically added task children, `DynamicRuntime::add_child` returns the same
 lineage that the supervisor assigned while inserting the child (as does
-`SupervisorHandle::add_child` in the lower-level `kokage-supervisor` crate).
+`DynamicSupervisorHandle::add_child` in the lower-level `kokage-supervisor` crate).
 Consumers that need to associate their own state with that exact membership
 should retain the returned value rather than performing a later id-based
 snapshot lookup.
@@ -241,10 +241,9 @@ let (uploads_slot, uploads) =
 graph.define(uploads_slot, UploadActor::new);
 ```
 
-The same `ActorOptions` value works with `GraphBuilder::slot_with`. Pass it to
-`DynamicActorOptions::options` when registering an actor dynamically, so the
-same mailbox vocabulary configures graph and dynamic actors:
-`DynamicActorOptions::new().options(ActorOptions::new().mailbox(MailboxMode::conflate()).message_size(upload_size))`.
+The same mailbox vocabulary configures dynamic actors through direct forwarding
+setters:
+`DynamicActorOptions::new().mailbox(MailboxMode::conflate()).message_size(upload_size)`.
 
 `RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
 returned by `RuntimeHandle::subtree` provides the same view scoped to that
