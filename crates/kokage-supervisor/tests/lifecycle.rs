@@ -540,7 +540,7 @@ async fn restart_of_arms_before_the_returned_future_is_polled() {
     wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
             .child("worker")
-            .is_some_and(|child| child.generation == 1 && child.started())
+            .is_some_and(|child| child.generation == 1 && child.state.started())
     })
     .await;
 
@@ -551,7 +551,7 @@ async fn restart_of_arms_before_the_returned_future_is_polled() {
         Some(1)
     );
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -607,7 +607,7 @@ async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
 
     assert_eq!(restarted.await, None);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -619,7 +619,7 @@ async fn restart_of_returns_none_for_an_unknown_child() {
 
     assert_eq!(handle.restart_of("missing").await, None);
 
-    shutdown(handle).await;
+    shutdown(&handle).await;
 }
 
 #[tokio::test]

@@ -1098,7 +1098,7 @@ async fn runtime_handle_restart_of_arms_before_the_future_is_polled() {
         snapshots.wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.generation == 1 && child.started())
+                .is_some_and(|child| child.generation == 1 && child.state.started())
         }),
     )
     .await
