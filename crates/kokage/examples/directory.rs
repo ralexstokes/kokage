@@ -76,6 +76,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (printed, mut output) = mpsc::unbounded_channel();
     let printer = dynamic
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor("printer", move || Printer {
             printed: printed.clone(),
         })

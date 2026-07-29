@@ -23,8 +23,8 @@ pub(crate) use builder::ActorOptionsValidationError;
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder, GraphConfig};
 pub use cancellation::{CancellationHandle, Lifetime};
 pub use context::{
-    ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, RestrictedScope,
-    ScopeWaitHandle, StartContext, StopContext, TimerKey,
+    ActorContext, ActorRef, DynamicRestrictedScope, LiveContext, MessageContext, OffloadHandle,
+    Reply, RestrictedScope, ScopeWaitHandle, StartContext, StopContext, TimerKey,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, GraphLookupError, OffloadDeadline, SendError,

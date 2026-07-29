@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use kokage_supervisor::{ChildSpec, ControlError, ScopeKind, Supervisor};
+use kokage_supervisor::{ChildSpec, Supervisor};
 use tokio::{sync::mpsc, time::timeout};
 
 #[tokio::test]
@@ -9,10 +9,7 @@ async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
     let child = ChildSpec::task("leader", move |ctx| {
         let result_tx = result_tx.clone();
         async move {
-            let result = ctx
-                .supervisor()
-                .add_child(ChildSpec::task("late", |_| async { Ok(()) }))
-                .await;
+            let result = ctx.supervisor().dynamic().is_none();
             result_tx.send(result).expect("test receiver remains open");
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -28,13 +25,7 @@ async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
         .await
         .expect("child reports")
         .expect("report channel remains open");
-    assert!(matches!(
-        result,
-        Err(ControlError::UnsupportedByScopeKind {
-            operation: "add_child",
-            kind: ScopeKind::Ordered,
-        })
-    ));
+    assert!(result);
     handle
         .shutdown_and_wait()
         .await
@@ -49,11 +40,15 @@ async fn raw_child_can_await_a_supported_operation_on_its_own_scope() {
         .expect("dynamic supervisor builds")
         .spawn();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("leader", move |ctx| {
             let result_tx = result_tx.clone();
             async move {
                 let result = ctx
                     .supervisor()
+                    .dynamic()
+                    .expect("dynamic supervisor")
                     .add_child(ChildSpec::task("sibling", |ctx| async move {
                         ctx.shutdown_token().cancelled().await;
                         Ok(())

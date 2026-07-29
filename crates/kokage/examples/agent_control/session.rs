@@ -109,6 +109,8 @@ impl Session {
             .children()
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
+            .dynamic()
+            .expect("dynamic scope")
             .add_actor_with(
                 id.clone(),
                 AgentRunFactory {

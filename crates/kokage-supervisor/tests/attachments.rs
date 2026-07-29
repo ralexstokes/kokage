@@ -62,6 +62,8 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
         .expect("supervisor builds")
         .spawn();
     let old_lineage = handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(__private::attach(waiting_child("worker"), "old".to_owned()))
         .await
         .expect("old child added");
@@ -72,10 +74,14 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
     assert_eq!(old[0].path()[0].lineage, old_lineage);
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("worker")
         .await
         .expect("old child removed");
     let new_lineage = handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(__private::attach(waiting_child("worker"), "new".to_owned()))
         .await
         .expect("replacement child added");

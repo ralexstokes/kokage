@@ -11,9 +11,9 @@ mod coverage_probe {
     mod expected {
         use kokage_supervisor::prelude::{
             BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-            OrderedSupervisorBuilder, RestartConfig, RestartPolicy, RunningSupervisor,
-            ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorError,
-            SupervisorHandle,
+            DynamicSupervisorHandle, OrderedSupervisorBuilder, RestartConfig, RestartPolicy,
+            RunningSupervisor, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
+            SupervisorError, SupervisorHandle,
         };
     }
 

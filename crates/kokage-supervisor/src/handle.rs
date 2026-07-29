@@ -13,6 +13,7 @@ use tokio::{
 };
 
 use crate::{
+    ScopeKind,
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
@@ -1351,9 +1352,9 @@ pub(crate) enum SupervisorCommand {
 ///
 /// - **Shutdown**: [`shutdown`](Self::shutdown) /
 ///   [`shutdown_and_wait`](Self::shutdown_and_wait).
-/// - **Dynamic children**: [`add_child`](Self::add_child) /
-///   [`remove_child`](Self::remove_child). Use [`supervisor`](Self::supervisor)
-///   to obtain a scoped handle before changing a nested supervisor.
+/// - **Dynamic children**: [`dynamic`](Self::dynamic) returns the capability
+///   used to add and remove children. Use [`supervisor`](Self::supervisor) to
+///   obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`snapshot`](Self::snapshot) /
 ///   [`subscribe_snapshots`](Self::subscribe_snapshots) for state,
 ///   [`watch_lifecycle`](Self::watch_lifecycle) for direct-child transitions,
@@ -1370,6 +1371,23 @@ pub(crate) enum SupervisorCommand {
 #[derive(Clone)]
 pub struct SupervisorHandle {
     channels: Arc<StableSupervisorChannels>,
+}
+
+/// Runtime-membership capability for a dynamic supervisor.
+///
+/// Obtain this value with [`SupervisorHandle::dynamic`]. Ordered supervisors
+/// return `None`, so adding and removing children cannot be attempted through
+/// their universal observation and lifecycle handle.
+#[derive(Clone)]
+pub struct DynamicSupervisorHandle {
+    handle: SupervisorHandle,
+}
+
+impl std::fmt::Debug for DynamicSupervisorHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicSupervisorHandle")
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for SupervisorHandle {
@@ -1413,6 +1431,26 @@ impl SupervisorHandle {
         self.wait().await
     }
 
+    /// Returns this handle's dynamic-membership capability.
+    ///
+    /// Ordered supervisors have immutable membership and return `None`.
+    pub fn dynamic(&self) -> Option<DynamicSupervisorHandle> {
+        (self.snapshot().kind == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
+            handle: self.clone(),
+        })
+    }
+
+    /// Returns the restart-stable handle for a direct nested supervisor.
+    pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
+        self.nested_channels()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(StableSupervisorChannels::handle)
+    }
+}
+
+impl DynamicSupervisorHandle {
     /// Adds a new child to the supervisor at runtime.
     ///
     /// Waits if the control channel is full. On success, returns the lineage
@@ -1423,10 +1461,10 @@ impl SupervisorHandle {
     /// scheduled. This operation is supported only by dynamic supervisors,
     /// which spawn it immediately. A [`ChildSpec::supervisor`] registers the
     /// nested supervisor's restart-stable handle and attachment at insertion,
-    /// before it is spawned. Use [`wait_started`](Self::wait_started) when
-    /// readiness is required.
+    /// before it is spawned. [`SupervisorHandle::wait_started`] is available
+    /// when readiness is required.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        let endpoint = self.control_endpoint()?;
+        let endpoint = self.handle.control_endpoint()?;
         if matches!(&child.inner.kind, ChildKind::Supervisor(_)) {
             endpoint
                 .add_nested(PendingSupervisorChild::new(child))
@@ -1442,18 +1480,14 @@ impl SupervisorHandle {
     /// before being removed. Removing the last child is valid; the supervisor
     /// continues idling until shutdown or until another child is added.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        self.control_endpoint()?.remove_child(id.into()).await
+        self.handle
+            .control_endpoint()?
+            .remove_child(id.into())
+            .await
     }
+}
 
-    /// Returns the restart-stable handle for a direct nested supervisor.
-    pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
-        self.nested_channels()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(id)
-            .map(StableSupervisorChannels::handle)
-    }
-
+impl SupervisorHandle {
     /// Returns typed process-local attachments from this supervision tree.
     ///
     /// Direct children are returned before descendants. Every result includes

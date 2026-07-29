@@ -213,7 +213,7 @@ struct TradingEngine {
 }
 
 struct App {
-    handle: RuntimeHandle,
+    handle: kokage::Runtime,
     venue_a_feed: ActorRef<FeedMsg>,
     venue_b_feed: ActorRef<FeedMsg>,
     router: ActorRef<RouterMsg>,

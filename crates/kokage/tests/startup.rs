@@ -62,6 +62,8 @@ impl Actor for AddsChildOnStart {
         };
         let added_started = Arc::clone(&self.added_started);
         handle
+            .dynamic()
+            .expect("dynamic scope")
             .add_child(ChildSpec::task("added-from-on-start", move |ctx| {
                 let added_started = Arc::clone(&added_started);
                 async move {
@@ -88,6 +90,8 @@ async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
         .send(Some(handle.clone()))
         .expect("startup actor retains handle receiver");
     handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor_with(
             "starter",
             {

@@ -204,6 +204,8 @@ async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
 
     let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
     let session = sessions
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor("session-1", || Worker)
         .await
         .expect("actor added");
@@ -276,6 +278,8 @@ impl Actor for Mounter {
     ) -> ActorResult {
         let worker = self
             .sessions
+            .dynamic()
+            .expect("dynamic scope")
             .add_actor("spawned", || Worker)
             .await
             .expect("dynamic scope accepts the actor");

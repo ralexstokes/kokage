@@ -224,6 +224,8 @@ async fn dynamic_add_remove_flow() {
     let mut events = handle.watch_lifecycle();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -234,6 +236,8 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "seed").await;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("dynamic", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -243,6 +247,8 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "dynamic").await;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("dynamic")
         .await
         .expect("dynamic child should be removable");
