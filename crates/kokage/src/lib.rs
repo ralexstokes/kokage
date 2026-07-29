@@ -338,9 +338,9 @@ pub use kokage_derive::{ActorFactory, Supervision};
 pub use actor::{
     Actor, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSlot, ActorStatus,
     BlockingCancelled, CallError, CancellationHandle, DownReason, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, GraphLookupError, LiveContext, MailboxMode,
-    MessageContext, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SendError, StartContext,
-    StopContext, TaskHandle, TimerKey, TrySendError,
+    GraphBuildError, GraphBuilder, GraphLookupError, LiveContext, MailboxMode, MessageContext,
+    MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SendError, StartContext, StopContext,
+    TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
     BackoffPolicy, ControlError, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,
