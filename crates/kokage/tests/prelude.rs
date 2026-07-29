@@ -56,7 +56,7 @@ fn prelude_constructs_acyclic_and_cyclic_actor_declarations() {
         observed: mpsc::unbounded_channel().0,
     });
     let slot = ActorSlot::new("cyclic");
-    let _cyclic_ref = slot.actor_ref();
+    let (slot, _cyclic_ref) = slot.actor_ref();
     let cyclic = slot.define(|| BlockingWorker {
         observed: mpsc::unbounded_channel().0,
     });

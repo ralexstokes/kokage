@@ -56,7 +56,7 @@ impl RawActor for Parked {
 
 #[cfg(feature = "serde")]
 fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
-    let mut builder = support::TreeBuilder::new();
+    let mut builder = TreeBuilder::new();
     let ingest = builder.actor(ActorSpec::new("ingest", || Worker));
     let parse = builder.actor(ActorSpec::new("parse", || Worker));
     (builder.build(), ingest, parse)
@@ -245,7 +245,7 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
 #[tokio::test]
 async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     let nested = ActorSpec::new("nested", || Worker);
-    let nested_ref = nested.actor_ref();
+    let (nested, nested_ref) = nested.actor_ref();
     let runtime = OrderedTree::new()
         .mailbox_capacity(9)
         .subtree("nested", OrderedTree::new().actor(nested))
