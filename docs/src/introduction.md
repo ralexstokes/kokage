@@ -5,6 +5,10 @@ scheduler. Actors exchange typed messages through restart-stable
 `ActorRef<M>` values, while supervision trees decide which children restart
 together and how shutdown proceeds.
 
+The guiding idea is **let it crash**: isolate fallible work in small children,
+keep restart decisions in their supervisor, and rebuild fresh state instead of
+trying to recover every failure in place.
+
 ## The crates
 
 Most applications depend only on `kokage`. Its prelude contains the common
@@ -20,6 +24,19 @@ under `kokage::observe`.
 | `kokage-console` | An experimental live view over snapshots. |
 
 ## The mental model
+
+If you know Erlang/OTP or Elixir, the concepts map directly:
+
+| OTP concept | kokage equivalent |
+|---|---|
+| Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `host::ChildSpec` |
+| `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
+| `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
+| Restart intensity (`MaxR`/`MaxT`) | `RestartConfig::new(max_restarts, within)` |
+| GenServer-like process with a mailbox | An `Actor` with stage-specific lifecycle contexts |
+| Registered process name | A typed `ActorRef<M>` passed during wiring; ids name scope-local children rather than global addresses |
+
+If you do not know OTP, the tutorial builds these pieces from scratch.
 
 An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox
 policy, restart policy, shutdown policy, and incarnation factory. Calling
@@ -38,9 +55,14 @@ observation.
 
 The tutorial grows a small print shop:
 
+```text
+  orders ref ──▶ ┌────────────┐      ┌───────┐
+                 │ front-desk │ ───▶ │ press │
+                 └────────────┘      └───────┘
+```
+
 - a front desk accepts orders;
 - a press performs work and may fail;
-- a ledger records durable outcomes;
 - typed refs connect them;
 - the tree determines their restart relationships.
 

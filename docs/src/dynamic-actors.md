@@ -50,6 +50,30 @@ Terminal dynamic actors remain as inactive memberships by default. Select
 removes itself after terminal exit; `remove_child` explicitly removes either
 kind.
 
+The default retain/remove behavior is the same for declared and dynamically
+added actors. A declared membership that removes itself can be recreated if an
+enclosing declared supervisor later restarts; a runtime-added membership is not
+replayed automatically. Dynamic scopes always use `Strategy::OneForOne`, so an
+actor's exit, restart, or removal never initiates a sibling restart cycle.
+
+Removal is a sequenced supervisor operation. `remove_child(id)` marks the
+membership `Removing`, requests its configured shutdown, lets the actor apply
+its `DrainPolicy`, runs `on_stop` when cooperative shutdown reaches it, and
+finally detaches the child. Grace expiry or immediate abort may skip unfinished
+drain and hook work. The removal future completes after detachment.
+
+There is an intentional race boundary: a send may be accepted after removal is
+requested but before the actor observes cancellation. `Drain` handles that
+accepted prefix; `Discard` drops it. Once intake closes, `try_send` can return
+`TrySendError::Closed`, while an awaited `send` waits for the final disposition
+and returns `SendError`. Applications that cannot lose accepted work need an
+explicit [ownership protocol](ownership-transitions.md).
+
+After detachment the same id can be added again, but the old `ActorRef` remains
+terminal and never rebinds to the replacement. Compare snapshot `lineage` as
+well as `generation`: restarts preserve lineage and increment generation; a
+new membership gets a later lineage and starts at generation zero.
+
 ## Mailbox and restart policy
 
 The inserted `ActorSpec` carries its own mailbox, restart, shutdown, and
@@ -118,8 +142,9 @@ let sessions_handle = sessions.handle();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
 
 let app = OrderedTree::new()
-    .actor(router)
-    .subtree("sessions", sessions);
+    // Start the captured scope before the actor that depends on it.
+    .subtree("sessions", sessions)
+    .actor(router);
 # let _ = app;
 ```
 

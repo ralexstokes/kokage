@@ -27,6 +27,16 @@ A scope owns one namespace. Actor and subtree ids must be non-empty and unique
 among that scope's direct children. Sibling scopes have independent namespaces,
 so reusing `worker` beneath each is legal.
 
+Child order is behavior in an ordered scope. Startup waits for each declared
+child's readiness before starting the next, shutdown visits children in reverse
+order, and `Strategy::RestForOne` restarts the failed child plus the suffix
+declared after it. A dynamic scope has no declared sequence.
+
+Restart and shutdown defaults apply to every direct child edge, including an
+edge that wraps a subtree. The nested scope controls the defaults of its own
+children. Mailbox-capacity defaults apply only to actors directly in the scope;
+subtrees start from the standard default unless configured themselves.
+
 Tree lowering happens at `spawn` and at dynamic `add_subtree`. Invalid
 mailbox defaults, invalid ids, and duplicates are rejected before startup is
 scheduled.
@@ -45,14 +55,26 @@ let sessions_handle = sessions.handle();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
 
 let app = OrderedTree::new()
-    .actor(router)
-    .subtree("sessions", sessions);
+    // Moving the nested tree transfers its identity into the root. Declaring
+    // it first also makes it ready before the dependent router starts.
+    .subtree("sessions", sessions)
+    .actor(router);
 let handle = app.handle();
 # let _ = handle;
 ```
 
 Moving a tree into `subtree` transfers ownership, while previously issued
 handles continue to address the same identity.
+
+Trees deliberately do not implement `Clone`: one identity binds to one
+runtime. Before binding, control operations return `ControlError::Unavailable`,
+while projected snapshots and subscriptions are already usable. `spawn()`
+consumes the tree and returns its owning runtime. Dropping an unspawned tree or
+failing to spawn it makes issued handles terminal.
+
+Dropping a non-owning handle does not stop a runtime. Dropping the owning
+`Runtime` requests graceful shutdown, so `let _ = tree.spawn()?;` is a footgun:
+the temporary owner is dropped at the end of the statement.
 
 ## Inspect the declaration
 
@@ -101,3 +123,12 @@ exposing lifecycle waits that could deadlock an actor callback.
 The containing strategy states the fate-sharing relationship. For example,
 `OneForAll` restarts the leader when a restartable worker failure exhausts
 the inner scope, while `RestForOne` respects declaration order.
+
+[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
+[`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
+[`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
+[`DynamicRuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.DynamicRuntimeHandle.html
+[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
+[`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html
+[`ScopeKind`]: https://stokes.io/kokage/api/kokage/enum.ScopeKind.html
+[`observe::SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html

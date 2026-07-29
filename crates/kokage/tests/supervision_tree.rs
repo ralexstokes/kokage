@@ -1,8 +1,10 @@
+//! Recursive supervision-tree declarations and lowering.
+
+#[cfg(feature = "serde")]
 mod support;
 
+#[cfg(feature = "serde")]
 use support::TreeBuilder;
-
-// Recursive supervision-tree declarations and lowering.
 
 use std::{sync::Arc, time::Duration};
 
@@ -52,6 +54,7 @@ impl RawActor for Parked {
     }
 }
 
+#[cfg(feature = "serde")]
 fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
     let mut builder = TreeBuilder::new();
     let ingest = builder.actor(ActorSpec::new("ingest", || Worker));
@@ -242,6 +245,21 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
 }
 
 #[tokio::test]
+async fn nested_scope_does_not_inherit_parent_mailbox_default() {
+    let nested = ActorSpec::new("nested", || Worker);
+    let nested_ref = nested.actor_ref();
+    let runtime = OrderedTree::new()
+        .mailbox_capacity(9)
+        .subtree("nested", OrderedTree::new().actor(nested))
+        .spawn()
+        .expect("tree builds");
+    runtime.handle().wait_started().await.expect("actors start");
+
+    assert_eq!(nested_ref.stats().mailbox_capacity, 64);
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
 async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let peer = ActorSpec::new("peer", || Worker);
     let peer_ref = peer.actor_ref();
@@ -373,7 +391,7 @@ async fn leader_owned_scope_is_an_explicit_subtree() {
     assert_eq!(owned.strategy, Strategy::RestForOne);
     assert_eq!(owned.child_ids(), ["ingest", "children"]);
 
-    let handle = tree.spawn().expect("ActorWithScope lowers");
+    let handle = tree.spawn().expect("leader-owned scope lowers");
     handle
         .handle()
         .wait_started()

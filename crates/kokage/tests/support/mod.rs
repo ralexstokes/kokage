@@ -54,6 +54,10 @@ impl RunnableActors {
 pub(crate) struct RunnableNode(RunnableActor);
 
 impl RunnableNode {
+    pub(crate) fn label(&self) -> &str {
+        self.0.label()
+    }
+
     pub(crate) fn into_runnable(self) -> RunnableActor {
         self.0
     }
@@ -84,10 +88,6 @@ impl TreeBuilder {
         F::Actor: RawActor<Msg = M>,
     {
         self.actor(slot.define(factory))
-    }
-
-    pub(crate) fn name(&mut self, _name: impl Into<String>) -> &mut Self {
-        self
     }
 
     pub(crate) fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {

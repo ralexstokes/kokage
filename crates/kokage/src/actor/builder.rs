@@ -382,16 +382,12 @@ impl ActorNode {
         }
         Ok(self)
     }
-
-    pub(crate) fn resolved_id(&self) -> &str {
-        self.label()
-    }
 }
 
 impl fmt::Debug for ActorNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ActorNode")
-            .field("id", &self.resolved_id())
+            .field("id", &self.label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
             .field("restart_config", &self.restart_config)

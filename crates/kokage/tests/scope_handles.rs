@@ -719,7 +719,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
             .subtree("children", OrderedTree::new().actor(worker)),
     );
     assert_eq!(runtime.handle().snapshot().strategy, Strategy::OneForOne);
-    let handle = runtime.spawn().expect("ordered ActorWithScope builds");
+    let handle = runtime.spawn().expect("ordered leader-owned scope builds");
     assert_eq!(next_report(&mut reports_rx).await, "some");
     assert_eq!(next_report(&mut reports_rx).await, "ordered-children");
     handle

@@ -77,5 +77,5 @@ observation model.
 
 Actors and raw task children share a supervision tree. Place actors with
 `OrderedTree::actor`, nested scopes with `subtree`, and task children with
-`child`. The following chapters apply the same supervision vocabulary to
+`task`. The following chapters apply the same supervision vocabulary to
 each kind.

@@ -206,7 +206,11 @@ macro_rules! tree_common_methods {
             self
         }
 
-        /// Sets the bounded mailbox capacity inherited by actors in this scope.
+        /// Sets the bounded mailbox capacity inherited by actors directly in this scope.
+        ///
+        /// The standard default is 64 messages per actor. Nested scopes do not
+        /// inherit this value; configure each subtree explicitly when it needs
+        /// a different default.
         ///
         /// This is the FIFO queue capacity and the maximum number of distinct
         /// unread keys for keyed conflation. Unkeyed conflation always has
@@ -593,7 +597,7 @@ impl ScopeNode {
 impl SupervisionChild {
     fn declared_id(&self) -> &str {
         match self {
-            Self::Actor(actor) => actor.resolved_id(),
+            Self::Actor(actor) => actor.label(),
             Self::Task(child) => child.id(),
             Self::Scope { id, .. } => id,
         }
@@ -606,7 +610,7 @@ impl SupervisionChild {
     ) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
-                id: actor.resolved_id().to_owned(),
+                id: actor.label().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
                 restart_intensity: actor.restart_config,
