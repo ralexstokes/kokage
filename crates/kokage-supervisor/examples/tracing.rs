@@ -9,6 +9,8 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut nested_restart = RestartConfig::new(5, Duration::from_secs(5));
+    nested_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
@@ -31,10 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .restart_intensity(
-                RestartConfig::new(5, Duration::from_secs(5))
-                    .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-            ),
+            .restart_config(nested_restart),
         )
         .build()?;
 

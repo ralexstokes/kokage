@@ -875,7 +875,9 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Completed)
     ));
 
@@ -930,7 +932,9 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Completed)
     ));
 
@@ -1308,7 +1312,9 @@ async fn child_grace_bounds_the_whole_actor_drain() {
         }
     });
     let handle = OrderedTree::graph(graph.build().expect("graph builds"))
-        .default_shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20)))
+        .default_shutdown(ShutdownPolicy::Cooperative {
+            grace: Duration::from_millis(20),
+        })
         .spawn()
         .expect("runtime builds");
 
@@ -1338,7 +1344,9 @@ async fn child_grace_bounds_the_whole_actor_drain() {
             .snapshot()
             .child("worker")
             .expect("static membership remains")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Aborted { after_grace: true })
     );
 }
@@ -1364,7 +1372,9 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
         }
     });
     let handle = OrderedTree::graph(builder.build().expect("valid graph"))
-        .default_shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20)))
+        .default_shutdown(ShutdownPolicy::Cooperative {
+            grace: Duration::from_millis(20),
+        })
         .spawn()
         .expect("runtime builds");
     let mut lifecycle = handle.watch_lifecycle();
@@ -1381,7 +1391,9 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
             .snapshot()
             .child("worker")
             .expect("actor remains in static membership")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Aborted { after_grace: true })
     );
     while let Some(event) = lifecycle.next().await {

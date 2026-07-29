@@ -438,7 +438,7 @@ impl OrderedTree {
     /// from it terminal.
     pub fn spawn(self) -> Result<RuntimeHandle, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RuntimeHandle::new(supervisor.spawn(), actors))
+        Ok(RuntimeHandle::root(supervisor.spawn(), actors))
     }
 }
 
@@ -470,7 +470,7 @@ impl DynamicTree {
     /// tree and makes every handle issued from it terminal.
     pub fn spawn(self) -> Result<RuntimeHandle, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RuntimeHandle::new(supervisor.spawn(), actors))
+        Ok(RuntimeHandle::root(supervisor.spawn(), actors))
     }
 }
 
@@ -764,10 +764,10 @@ impl ScopeNode {
                     None => Supervisor::dynamic(),
                 };
                 builder = builder
-                    .restart(config.default_restart)
-                    .shutdown(config.default_shutdown);
+                    .default_restart(config.default_restart)
+                    .default_shutdown(config.default_shutdown);
                 if let Some(intensity) = config.restart_intensity {
-                    builder = builder.restart_intensity(intensity);
+                    builder = builder.restart_config(intensity);
                 }
                 Ok((builder.build()?, actors))
             }
@@ -781,10 +781,10 @@ impl ScopeNode {
                 };
                 let mut builder = builder
                     .strategy(config.strategy)
-                    .restart(config.default_restart)
-                    .shutdown(config.default_shutdown);
+                    .default_restart(config.default_restart)
+                    .default_shutdown(config.default_shutdown);
                 if let Some(intensity) = config.restart_intensity {
-                    builder = builder.restart_intensity(intensity);
+                    builder = builder.restart_config(intensity);
                 }
                 for child in children {
                     builder = child.lower(
@@ -927,8 +927,8 @@ impl SupervisionChild {
                 );
                 let owned = Supervisor::ordered()
                     .strategy(strategy)
-                    .restart(default_restart)
-                    .shutdown(default_shutdown)
+                    .default_restart(default_restart)
+                    .default_shutdown(default_shutdown)
                     .child(leader)
                     .child(__private::attach(
                         ChildSpec::supervisor("children", children_supervisor),

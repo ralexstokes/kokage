@@ -12,8 +12,9 @@
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`Supervisor`] | Constructs ordered or dynamic supervisors and spawns built ones. |
-//! | [`SupervisorHandle`] | Control and observe a running supervisor. |
+//! | [`Supervisor`] | Configured supervisor that can be nested or spawned. |
+//! | [`RunningSupervisor`] | Owns a spawned root; dropping it requests graceful shutdown. |
+//! | [`SupervisorHandle`] | Non-owning control and observation handle. |
 //! | [`ChildSpec`] | Declares a task or nested supervisor with restart/shutdown policies. |
 //! | [`ChildContext`] | Per-spawn context given to each child (id, generation, cancellation token). |
 //!
@@ -100,6 +101,16 @@
 //! idle at zero children and continue accepting control commands until
 //! shutdown. Empty ordered supervisors remain empty.
 //!
+//! # Runtime ownership
+//!
+//! [`Supervisor::spawn`] and the builders' `spawn` methods return a
+//! [`RunningSupervisor`]. Retain that owner for as long as the root should run;
+//! dropping it requests graceful shutdown. Every [`SupervisorHandle`] is
+//! non-owning, whether it was issued before spawn, cloned from the owner, or
+//! obtained for a nested supervisor. Dropping handles never changes runtime
+//! lifetime. Consequently, `let _ = Supervisor::ordered().spawn()?;` requests
+//! shutdown at the end of that statement.
+//!
 //! # Nested supervisors
 //!
 //! A [`Supervisor`] is wrapped with [`ChildSpec::supervisor`] and added through
@@ -178,18 +189,16 @@
 //! let subscriber = FmtSubscriber::builder().finish();
 //! tracing::subscriber::set_global_default(subscriber)?;
 //!
-//! let supervisor = Supervisor::ordered()
+//! let running = Supervisor::ordered()
 //!     .child(ChildSpec::task("worker", |ctx| async move {
 //!         ctx.shutdown_token().cancelled().await;
 //!         Ok(())
 //!     }))
-//!     .build()?;
-//!
-//! let handle = supervisor.spawn();
+//!     .spawn()?;
+//! let handle = running.handle();
 //! let _lifecycle = handle.watch_lifecycle();
 //! let _snapshot = handle.snapshot();
-//! # handle.shutdown();
-//! # handle.wait().await?;
+//! # running.shutdown_and_wait().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -284,4 +293,4 @@ pub use snapshot::{
     SupervisorStateView,
 };
 pub use strategy::Strategy;
-pub use supervisor::Supervisor;
+pub use supervisor::{RunningSupervisor, Supervisor};

@@ -152,7 +152,7 @@ async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) 
             if snapshots
                 .borrow()
                 .child(id)
-                .is_some_and(|child| child.generation == generation && child.started())
+                .is_some_and(|child| child.generation == generation && child.state.started())
             {
                 break;
             }

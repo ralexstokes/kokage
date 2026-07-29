@@ -1664,7 +1664,9 @@ mod runnable_actor {
                 "worker",
                 || NeverStops,
                 DynamicActorOptions::default().shutdown(
-                    kokage_supervisor::ShutdownPolicy::cooperative(Duration::from_millis(100)),
+                    kokage_supervisor::ShutdownPolicy::Cooperative {
+                        grace: Duration::from_millis(100),
+                    },
                 ),
             )
             .await
