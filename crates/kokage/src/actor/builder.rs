@@ -259,7 +259,9 @@ impl<M: Send + 'static> ActorSpec<M, true> {
         self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
+}
 
+impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
     /// Overrides the enclosing scope's restart policy.
     #[must_use]
     pub fn restart(mut self, restart: Restart) -> Self {
@@ -272,13 +274,6 @@ impl<M: Send + 'static> ActorSpec<M, true> {
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = Some(shutdown);
         self
-    }
-}
-
-impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
-    #[doc(hidden)]
-    pub fn __actor_ref(&self) -> ActorRef<M> {
-        ActorRef::from_core(self.binding(), None)
     }
 
     pub(crate) fn binding(&self) -> &Arc<BindingCore<M>> {
@@ -332,6 +327,17 @@ impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
             restart,
             shutdown,
         }
+    }
+}
+
+impl<M: Send + 'static> ActorSpec<M, false> {
+    /// Returns another handle to this sealed declaration's stable binding.
+    ///
+    /// Mailbox configuration has already been frozen by the consuming
+    /// `actor_ref` call that produced this declaration, so every handle
+    /// observes the same binding configuration.
+    pub fn actor_ref(&self) -> ActorRef<M> {
+        ActorRef::from_core(self.binding(), None)
     }
 }
 
@@ -468,22 +474,23 @@ impl<M: Send + 'static> ActorSlot<M, true> {
         self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
+}
 
+impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
     /// Overrides the enclosing scope's restart policy.
     #[must_use]
     pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = Some(restart);
         self
     }
+
     /// Overrides the enclosing scope's shutdown policy.
     #[must_use]
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = Some(shutdown);
         self
     }
-}
 
-impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
     /// Defines this cyclic-wiring slot into an ordinary actor declaration.
     ///
     /// The slot token's message type must match the actor's message type, so a
@@ -507,8 +514,10 @@ impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActorSpec, MailboxMode};
-    use crate::{Actor, ActorResult, MessageContext};
+    use std::time::Duration;
+
+    use super::{ActorSlot, ActorSpec, MailboxMode};
+    use crate::{Actor, ActorResult, MessageContext, Restart, Shutdown};
 
     struct OpaqueMessage;
 
@@ -586,7 +595,7 @@ mod tests {
             .run_until(
                 std::future::ready(()),
                 Default::default(),
-                std::time::Duration::from_secs(1),
+                Shutdown::drain_for(Duration::from_secs(1)),
             )
             .await;
 
@@ -594,6 +603,25 @@ mod tests {
             result,
             Err(crate::host::ActorRunError::ZeroMailboxCapacity { actor_id }) if actor_id == "worker"
         ));
+    }
+
+    #[test]
+    fn sealed_declarations_still_accept_non_binding_policies() {
+        let (spec, _actor_ref) = ActorSpec::new("spec", || OpaqueActor).actor_ref();
+        let spec = spec.restart(Restart::never()).shutdown(Shutdown::abort());
+        assert_eq!(spec.restart, Some(Restart::never()));
+        assert_eq!(spec.shutdown, Some(Shutdown::abort()));
+
+        let (slot, _actor_ref) = ActorSlot::<OpaqueMessage>::new("slot").actor_ref();
+        let spec = slot
+            .restart(Restart::always())
+            .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)))
+            .define(|| OpaqueActor);
+        assert_eq!(spec.restart, Some(Restart::always()));
+        assert_eq!(
+            spec.shutdown,
+            Some(Shutdown::discard_after_current(Duration::from_secs(1)))
+        );
     }
 
     struct StringActor;

@@ -1,0 +1,11 @@
+error[E0599]: no method named `__actor_ref` found for struct `ActorSpec<M, CONFIGURABLE>` in the current scope
+  --> tests/ui/declaration-sealing/actor_spec_hidden_ref_bypass.rs:19:27
+   |
+19 |     let _actor_ref = spec.__actor_ref();
+   |                           ^^^^^^^^^^^
+   |
+help: there is a method `actor_ref` with a similar name
+   |
+19 -     let _actor_ref = spec.__actor_ref();
+19 +     let _actor_ref = spec.actor_ref();
+   |
