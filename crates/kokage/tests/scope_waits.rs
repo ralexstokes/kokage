@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorStatus, DrainPolicy, GraphBuilder, MessageContext, OrderedTree,
-    StartContext, StopContext, TaskHandle,
+    Actor, ActorResult, ActorSlot, ActorStatus, DrainPolicy, GraphBuilder, MessageContext,
+    OrderedTree, StartContext, StopContext, TaskHandle,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -60,7 +60,8 @@ impl Actor for ReadyReporter {
 async fn scope_wait_maps_completion_through_the_actor_mailbox() {
     let (report, mut reports) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (slot, actor) = graph.slot("reporter");
+    let slot = ActorSlot::new("reporter");
+    let actor = slot.actor_ref();
     graph.define(slot, move || ReadyReporter {
         report: report.clone(),
     });
@@ -129,7 +130,7 @@ async fn assert_pending_scope_wait_is_cancelled(drain_policy: DrainPolicy) {
     let (started, mut starts) = mpsc::unbounded_channel();
     let (dropped, mut drops) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (slot, _) = graph.slot("pending");
+    let slot = ActorSlot::new("pending");
     graph.define(slot, move || PendingWait {
         started: started.clone(),
         dropped: dropped.clone(),
@@ -208,7 +209,8 @@ async fn message_context_scope_wait_can_be_cancelled_and_is_accounted() {
     let (handles, mut handle_rx) = mpsc::unbounded_channel();
     let (completions, mut completion_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (slot, actor) = graph.slot("cancellable-wait");
+    let slot = ActorSlot::new("cancellable-wait");
+    let actor = slot.actor_ref();
     graph.define(slot, move || CancellableWait {
         started: started.clone(),
         dropped: dropped.clone(),
@@ -306,7 +308,8 @@ async fn scope_wait_completion_obeys_full_fifo_mailbox_backpressure() {
     let (handles, mut handle_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
-    let (slot, actor) = graph.slot("backpressured-wait");
+    let slot = ActorSlot::new("backpressured-wait");
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let wait_gate = Arc::clone(&wait_gate);
         let handler_release = Arc::clone(&handler_release);
@@ -373,7 +376,8 @@ async fn handle_abort_wins_before_a_blocked_scope_wait_message_is_accepted() {
     let (handles, mut handle_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
-    let (slot, actor) = graph.slot("cancelled-backpressured-wait");
+    let slot = ActorSlot::new("cancelled-backpressured-wait");
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let wait_gate = Arc::clone(&wait_gate);
         let handler_release = Arc::clone(&handler_release);
@@ -500,7 +504,8 @@ async fn restart_cancels_pending_scope_wait_without_delivering_to_the_next_incar
     let (stale_completions, mut stale_reports) = mpsc::unbounded_channel();
     let wait_gate = Arc::new(Notify::new());
     let mut graph = GraphBuilder::new();
-    let (slot, actor) = graph.slot("restart-probe");
+    let slot = ActorSlot::new("restart-probe");
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let incarnations = Arc::clone(&incarnations);
         let starts = starts.clone();
@@ -623,7 +628,8 @@ async fn completion_racing_restart_cannot_follow_the_ref_into_the_next_incarnati
     let (stale_completions, mut stale_reports) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
-    let (slot, actor) = graph.slot("completion-race");
+    let slot = ActorSlot::new("completion-race");
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let incarnations = Arc::clone(&incarnations);
         let wait_gate = Arc::clone(&wait_gate);
@@ -711,7 +717,7 @@ impl Actor for PanicOnce {
 async fn assert_scope_wait_panic_is_supervised(panic_site: PanicSite, phase: &str) {
     let incarnations = Arc::new(AtomicUsize::new(0));
     let mut graph = GraphBuilder::new();
-    let (slot, _) = graph.slot("panic-once");
+    let slot = ActorSlot::new("panic-once");
     graph.define(slot, {
         let incarnations = incarnations.clone();
         move || PanicOnce {
@@ -802,7 +808,7 @@ impl Actor for CompletedPanicDuringDrain {
 async fn drain_discards_an_unobserved_completed_scope_wait_panic() {
     let (stopped, mut stops) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (slot, _) = graph.slot("completed-panic-drain");
+    let slot = ActorSlot::new("completed-panic-drain");
     graph.define(slot, move || CompletedPanicDuringDrain {
         stopped: stopped.clone(),
     });
@@ -912,7 +918,8 @@ async fn drain_aborts_scope_waits_but_still_waits_for_offloads() {
     let (observed, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     graph.mailbox_capacity(1);
-    let (slot, actor) = graph.slot("mixed-drain");
+    let slot = ActorSlot::new("mixed-drain");
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let offload_release = Arc::clone(&offload_release);
         let scope_release = Arc::clone(&scope_release);
