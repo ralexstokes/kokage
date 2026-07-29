@@ -12,9 +12,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree, OrderedTree, Restart, Runtime,
-    RuntimeHandle,
-    observe::{LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard},
+    Actor, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree, Guard, OrderedTree, Restart,
+    Runtime, RuntimeHandle,
+    observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -66,7 +66,7 @@ enum RestrictedSinkMsg {
 
 struct RestrictedSink {
     observed: mpsc::UnboundedSender<LifecycleEvent>,
-    watch: Option<LifecycleWatchGuard>,
+    watch: Option<Guard>,
 }
 
 impl Actor for RestrictedSink {
@@ -212,7 +212,7 @@ async fn assert_no_buffered_lifecycle(
 }
 
 #[tokio::test]
-async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_restart() {
+async fn detached_lifecycle_pump_forwards_events_without_replay_after_target_restart() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
 
@@ -247,10 +247,9 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     assert_eq!(second[0].1.seq(), first[2].1.seq().map(|seq| seq + 1));
     assert_eq!(second[1].1.seq(), second[0].1.seq().map(|seq| seq + 1));
     assert_eq!(second[2].1.seq(), second[1].1.seq().map(|seq| seq + 1));
-    assert_eq!(
-        format!("{guard:?}"),
-        "LifecycleWatchGuard { cancelled: false }"
-    );
+    assert!(!guard.is_cancelled());
+    assert!(!guard.is_finished());
+    guard.detach();
     assert_no_buffered_lifecycle(
         &sink,
         &mut observed,
@@ -266,10 +265,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     guard.cancel();
-    assert_eq!(
-        format!("{guard:?}"),
-        "LifecycleWatchGuard { cancelled: true }"
-    );
+    assert!(guard.is_cancelled());
 
     crasher.send(()).await.expect("crash request delivered");
     wait_for_generation(&watched, "crasher", 1).await;
@@ -320,12 +316,16 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         LifecycleEventKind::ChildExited { generation: 0, .. }
     ));
     timeout(Duration::from_secs(2), async {
-        while format!("{guard:?}") != "LifecycleWatchGuard { cancelled: true }" {
+        while !guard.is_finished() {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("pump stops with watched identity");
+    assert!(
+        !guard.is_cancelled(),
+        "normal completion is not cancellation"
+    );
 
     let replacement = handle
         .handle()
@@ -343,12 +343,16 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .await
         .expect("target removed");
     timeout(Duration::from_secs(2), async {
-        while format!("{guard:?}") != "LifecycleWatchGuard { cancelled: true }" {
+        while !guard.is_finished() {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("pump stops with target identity");
+    assert!(
+        !guard.is_cancelled(),
+        "normal completion is not cancellation"
+    );
 
     shutdown_runtime(&handle.handle(), "lifecycle terminality test shutdown").await;
 }

@@ -18,7 +18,8 @@ ctx.offload(
     Duration::from_millis(250),
     load(),
     |result| Msg::Loaded(result.unwrap_or_else(|_| "value remained unknown".into())),
-);
+)
+.detach();
 # }
 ```
 
@@ -28,6 +29,10 @@ the protocol needs. The actor loop owns the completion directly. It does not con
 mailbox capacity or participate in conflation, and its ordering relative to
 external mailbox messages is unspecified. The loop selects fairly between
 the two sources so neither one has priority.
+
+`offload` returns a `Guard`. Dropping it cancels the future and suppresses its
+continuation message. Retain the guard when later cancellation is useful, or
+call `detach()` to make fire-and-forget ownership explicit.
 
 The continuation receives `Result<T, OffloadDeadline>` when the actor must
 distinguish a deadline from a value returned by the future.
@@ -52,7 +57,8 @@ enum Msg {
 # fn start(ctx: &mut RawContext<Msg>, request: u64) {
 ctx.offload(Duration::from_secs(1), fetch(), move |value| {
     Msg::Fetched { request, value }
-});
+})
+.detach();
 # }
 ```
 
@@ -129,7 +135,8 @@ impl Actor for Router {
                         accepted: result.unwrap_or(false),
                         reply,
                     },
-                );
+                )
+                .detach();
             }
             RouterMsg::Resolved { order, accepted, reply } => {
                 // Back on the handle loop: apply the outcome to actor state.
@@ -160,7 +167,7 @@ while another venue's call is still waiting out its timeout.
 
 ## Abort is not undo
 
-`TaskHandle::abort`, timeout, actor failure, and discard shutdown all abandon
+`Guard::cancel`, timeout, actor failure, and discard shutdown all abandon
 the local future. They cannot retract a request another actor or external
 service already accepted. Its outcome is unknown, not "not executed."
 

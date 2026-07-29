@@ -171,7 +171,7 @@ intermediate lifecycle messages even though the watch buffer itself reports
 lag explicitly. As with every actor send, acceptance is not acknowledgement
 that the handler processed the message.
 
-Keep the returned `LifecycleWatchGuard` alive. Dropping or cancelling it stops
+Keep the returned `Guard` alive. Dropping or cancelling it stops
 the pump, as does permanent target termination. Watched-scope terminality
 closes the pump after its staged events have drained. If the live target's
 mailbox remains full, cancellation or target termination is the escape hatch.
@@ -281,7 +281,7 @@ anonymous Tokio tasks.
 `observe::ActorStats::outstanding_scope_waits` is the corresponding
 point-in-time gauge for lifecycle waits started with
 `Context::spawn_scope_wait`. It returns to zero when the actor loop reaps a
-result, an explicit `TaskHandle::abort` is observed, or the incarnation
+result, an explicit `Guard::cancel` is observed, or the incarnation
 ends. This makes message-driven code that accumulates never-ending lifecycle
 waits visible.
 

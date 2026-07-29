@@ -61,6 +61,7 @@
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
+//! | [`Guard`] | Cancel-on-drop ownership for watches, timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
 //! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
 //!
 //! # Composition modes
@@ -101,8 +102,10 @@
 //! logical membership across restarts and maps [`MonitorEvent`]s — `Up`,
 //! `Down`, terminal `Terminated`, or overload `Lagged` — into the observer's
 //! ordinary mailbox. Watches survive restarts of both actors;
-//! [`CancellationHandle::cancel`] stops future delivery, and permanent removal
-//! of either membership ends the watch.
+//! [`Guard::cancel`] stops future delivery, and permanent removal of either
+//! membership ends the watch. Watches, mailbox timers, offloads, and
+//! lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
+//! operation; retain it or call [`Guard::detach`] to keep the work alive.
 //!
 //! # Static declarations
 //!
@@ -240,13 +243,12 @@ pub mod host {
 pub mod observe {
     pub use crate::{
         actor::{ActorStats, SupervisorPathSegment},
-        runtime::LifecycleWatchGuard,
         supervision::{ChildOutline, SupervisionOutline},
     };
     pub use kokage_supervisor::{
         ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-        CompletionGuard, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
-        LifecyclePathSegment, LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
+        CompletionOutcome, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
+        LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
     };
 }
@@ -277,12 +279,12 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
-    BlockingCancelled, CallError, CancellationHandle, Context, DownReason, DynamicRestrictedScope,
-    MailboxMode, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot,
-    SealedActorSpec, SendError, StopContext, TaskHandle, TimerKey, TrySendError,
+    BlockingCancelled, CallError, Context, DownReason, DynamicRestrictedScope, MailboxMode,
+    MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot, SealedActorSpec,
+    SendError, StopContext, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
-    Backoff, BackoffParts, CancellationToken, ControlError, Restart, RestartMode, Shutdown,
+    Backoff, BackoffParts, CancellationToken, ControlError, Guard, Restart, RestartMode, Shutdown,
     ShutdownMode, Strategy, SupervisorBuildError, SupervisorError,
 };
 pub use runtime::{DynamicRuntimeHandle, Runtime, RuntimeHandle};

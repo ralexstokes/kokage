@@ -7,13 +7,10 @@
 //! rather than as supervisor configuration, so the completion rule lives with
 //! the code that cares about it instead of in the control loop.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CancellationToken, ChildExitView, LifecycleEvent, LifecycleEventKind,
+    CancellationToken, ChildExitView, Guard, LifecycleEvent, LifecycleEventKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
@@ -40,42 +37,6 @@ pub enum CompletionError {
         /// Child id supplied to the wait.
         child_id: String,
     },
-}
-
-/// Cancellation guard for a
-/// [`shutdown_on_completion`](crate::SupervisorHandle::shutdown_on_completion)
-/// task.
-///
-/// Dropping the guard cancels the watch, leaving the supervisor running. The
-/// task also stops on its own once it has requested shutdown, or once the
-/// watched supervisor identity becomes terminal.
-#[must_use = "dropping the guard immediately cancels the completion watch"]
-pub struct CompletionGuard {
-    cancellation: CancellationToken,
-}
-
-impl CompletionGuard {
-    /// Cancels the completion watch.
-    ///
-    /// Cancellation is idempotent. A shutdown already requested cannot be
-    /// retracted.
-    pub fn cancel(&self) {
-        self.cancellation.cancel();
-    }
-}
-
-impl fmt::Debug for CompletionGuard {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CompletionGuard")
-            .field("is_cancelled", &self.cancellation.is_cancelled())
-            .finish()
-    }
-}
-
-impl Drop for CompletionGuard {
-    fn drop(&mut self) {
-        self.cancel();
-    }
 }
 
 impl SupervisorHandle {
@@ -173,7 +134,7 @@ impl SupervisorHandle {
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> Guard
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -182,9 +143,7 @@ impl SupervisorHandle {
         let handle = self.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
-
-        tokio::spawn(async move {
-            let _cancel_on_exit = task_cancellation.clone().drop_guard();
+        let task = tokio::spawn(async move {
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
@@ -195,7 +154,8 @@ impl SupervisorHandle {
             }
         });
 
-        CompletionGuard { cancellation }
+        let task = task.abort_handle();
+        Guard::from_probe(cancellation, move || task.is_finished())
     }
 
     /// Shuts this supervisor down once children that may be added later have
@@ -208,7 +168,7 @@ impl SupervisorHandle {
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_dynamic_completion<I, S>(&self, ids: I) -> CompletionGuard
+    pub fn shutdown_on_dynamic_completion<I, S>(&self, ids: I) -> Guard
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -217,9 +177,7 @@ impl SupervisorHandle {
         let handle = self.clone();
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
-
-        tokio::spawn(async move {
-            let _cancel_on_exit = task_cancellation.clone().drop_guard();
+        let task = tokio::spawn(async move {
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
@@ -230,7 +188,8 @@ impl SupervisorHandle {
             }
         });
 
-        CompletionGuard { cancellation }
+        let task = task.abort_handle();
+        Guard::from_probe(cancellation, move || task.is_finished())
     }
 }
 

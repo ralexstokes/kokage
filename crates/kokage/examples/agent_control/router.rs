@@ -9,12 +9,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, Context, ControlError, DynamicTree, OrderedTree,
-    RuntimeHandle, Shutdown, Strategy, SupervisorError,
-    observe::{
-        ChildMembershipView, LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard,
-        SupervisorSnapshot,
-    },
+    Actor, ActorRef, ActorResult, ActorSlot, Context, ControlError, DynamicTree, Guard,
+    OrderedTree, RuntimeHandle, Shutdown, Strategy, SupervisorError,
+    observe::{ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
 };
 
 use crate::{
@@ -127,7 +124,7 @@ pub struct Router {
     session_epoch: Arc<AtomicU64>,
     proof: Proof,
     #[factory(default)]
-    mount_watch: Option<LifecycleWatchGuard>,
+    mount_watch: Option<Guard>,
     #[factory(default)]
     alignment_seq: u64,
 }
@@ -199,7 +196,8 @@ impl Router {
                 chat,
                 ok: result.unwrap_or(false),
             },
-        );
+        )
+        .detach();
         self.sessions.insert(
             chat,
             SessionSlot::Mounting {
@@ -233,7 +231,8 @@ impl Router {
                 subtree_id,
                 done: result.unwrap_or(false),
             },
-        );
+        )
+        .detach();
     }
 
     /// Removes a subtree that no live slot routes to: an orphan minted by a
@@ -260,7 +259,8 @@ impl Router {
                 subtree_id,
                 done: result.unwrap_or(false),
             },
-        );
+        )
+        .detach();
     }
 
     async fn forward(

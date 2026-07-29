@@ -20,9 +20,8 @@ mod coverage_probe {
     mod advanced_root {
         use kokage_supervisor::{
             Backoff, ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,
-            CompletionError, CompletionGuard, CompletionOutcome, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, ScopeKind, SupervisorSnapshot,
-            SupervisorStateView,
+            CompletionError, CompletionOutcome, Guard, LifecycleEvent, LifecyclePathSegment,
+            LifecycleWatch, ScopeKind, SupervisorSnapshot, SupervisorStateView,
         };
     }
 }

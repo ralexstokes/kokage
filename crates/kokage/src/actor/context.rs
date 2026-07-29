@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::CancellationToken;
+use kokage_supervisor::{CancellationToken, Guard};
 use tokio::{
     sync::{oneshot, watch},
     task::{AbortHandle, Id as TaskId, JoinError, JoinSet},
@@ -23,7 +23,7 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, GatedSendOutcome,
         MailboxReceiver, MailboxRef, MessageSizeObserver, SendGate, SendOutcome,
     },
-    cancellation::{CancelOnDrop, CancellationHandle},
+    cancellation::CancelOnDrop,
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
@@ -436,46 +436,25 @@ pub struct Reply<T> {
     sender: oneshot::Sender<T>,
 }
 
-/// Handle for one actor-owned background task.
-///
-/// Returned by [`Context::offload`] and [`Context::spawn_scope_wait`].
-/// Dropping the handle does not affect the task. [`abort`](Self::abort)
-/// abandons its work and suppresses its mapped mailbox message when
-/// cancellation wins before delivery. An already accepted scope-wait message
-/// cannot be retracted, and aborting an offload cannot undo work already
-/// accepted by another actor or external service. The actor aborts every
-/// outstanding task when its current incarnation ends.
-#[derive(Clone, Debug)]
-pub struct TaskHandle {
-    abort: AbortHandle,
-    cancellation: TaskCancellation,
-}
-
 #[derive(Clone, Debug)]
 enum TaskCancellation {
     Offload(Arc<AtomicBool>),
     ScopeWait(Arc<SendGate>),
 }
 
-impl TaskHandle {
-    /// Aborts the task and suppresses its continuation message.
-    pub fn abort(&self) {
-        match &self.cancellation {
+impl TaskCancellation {
+    fn cancel(&self, abort: &AbortHandle) {
+        match self {
             TaskCancellation::Offload(cancelled) => {
                 cancelled.store(true, Ordering::Release);
-                self.abort.abort();
+                abort.abort();
             }
             TaskCancellation::ScopeWait(gate) => {
                 if gate.cancel() {
-                    self.abort.abort();
+                    abort.abort();
                 }
             }
         }
-    }
-
-    /// Returns whether the task has finished or its abort has been observed.
-    pub fn is_finished(&self) -> bool {
-        self.abort.is_finished()
     }
 }
 
@@ -608,10 +587,6 @@ impl<M> TimerTable<M> {
         if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.swap_remove(index);
         }
-    }
-
-    fn is_armed(&self, key: TimerKey) -> bool {
-        self.entries.iter().any(|entry| entry.key == key)
     }
 
     fn next_wake(&mut self) -> Option<TimerWake> {
@@ -841,7 +816,7 @@ impl<M: Send + 'static> RawContext<M> {
         scope: &RestrictedScope,
         wait: W,
         map: Map,
-    ) -> TaskHandle
+    ) -> Guard
     where
         W: FnOnce(RuntimeHandle) -> F + Send + 'static,
         F: Future<Output = T> + Send + 'static,
@@ -869,10 +844,14 @@ impl<M: Send + 'static> RawContext<M> {
         });
         self.scope_wait_gates.insert(abort.id(), Arc::clone(&gate));
         self.sync_scope_wait_gauge();
-        TaskHandle {
-            abort,
-            cancellation: TaskCancellation::ScopeWait(gate),
-        }
+        let cancellation = CancellationToken::new();
+        let cancel = TaskCancellation::ScopeWait(gate);
+        let guard_abort = abort.clone();
+        Guard::from_probe_with_cancel(
+            cancellation,
+            move || abort.is_finished(),
+            move || cancel.cancel(&guard_abort),
+        )
     }
 
     /// Runs a bounded future without blocking this actor's receive loop and
@@ -891,7 +870,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// completions until both are exhausted; the required deadline bounds
     /// every offload's future during that drain.
     ///
-    /// Aborting or timing out an offload is not undo. If the future sent a request
+    /// Cancelling or timing out an offload is not undo. If the future sent a request
     /// before being dropped, the receiver may still perform it and the outcome
     /// is unknown. Put effects behind actors and use idempotency keys plus
     /// reconciliation; offload futures should initiate requests, not mutate
@@ -900,7 +879,11 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Panics in the future or continuation resume on the actor task, so
     /// supervision treats them like an ordinary actor panic.
-    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> TaskHandle
+    ///
+    /// Dropping the returned [`Guard`] cancels the offload and suppresses its
+    /// continuation message. Call [`Guard::detach`] for explicit
+    /// fire-and-forget ownership.
+    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> Guard
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -915,10 +898,14 @@ impl<M: Send + 'static> RawContext<M> {
             }
         });
         self.sync_offload_gauge();
-        TaskHandle {
-            abort,
-            cancellation: TaskCancellation::Offload(cancelled),
-        }
+        let cancellation = CancellationToken::new();
+        let cancel = TaskCancellation::Offload(cancelled);
+        let guard_abort = abort.clone();
+        Guard::from_probe_with_cancel(
+            cancellation,
+            move || abort.is_finished(),
+            move || cancel.cancel(&guard_abort),
+        )
     }
 
     pub(crate) fn close_external_intake(&mut self) {
@@ -982,57 +969,64 @@ impl<M: Send + 'static> RawContext<M> {
     /// It is cancelled if this incarnation stops or restarts. Delivery uses an
     /// ordinary awaited [`ActorRef::send`], including the target mailbox's
     /// capacity and conflation behavior.
-    pub fn send_after_to<T: Send + 'static>(
+    /// Dropping the returned [`Guard`] cancels delivery; call
+    /// [`Guard::detach`] to leave it running.
+    pub fn send_after<T: Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
         delay: Duration,
-    ) -> CancellationHandle {
-        let timer = CancellationHandle::new();
-        let task_timer = timer.clone();
+    ) -> Guard {
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
         let lifetime = self.lifetime.token();
         let target = target.clone();
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             tokio::select! {
                 biased;
-                () = task_timer.cancelled() => {}
-                () = lifetime.cancelled() => task_timer.cancel(),
+                () = task_cancellation.cancelled() => {}
+                () = lifetime.cancelled() => task_cancellation.cancel(),
                 () = tokio::time::sleep(delay) => {
                     tokio::select! {
                         biased;
-                        () = task_timer.cancelled() => {}
-                        () = lifetime.cancelled() => task_timer.cancel(),
+                        () = task_cancellation.cancelled() => {}
+                        () = lifetime.cancelled() => task_cancellation.cancel(),
                         _ = target.send(message) => {}
                     }
                 }
             }
         });
 
-        timer
+        let task = task.abort_handle();
+        Guard::from_probe(cancellation, move || task.is_finished())
     }
 
     /// Sends a clone of `message` to `target` after every `period`.
     ///
     /// Missed ticks are skipped. The timer stops when cancelled, when this
     /// scheduling incarnation ends, or when the target permanently terminates.
-    /// A zero period returns an already-cancelled handle and sends no messages.
-    pub fn interval_to<T: Clone + Send + 'static>(
+    /// Dropping the returned [`Guard`] cancels it; call [`Guard::detach`] to
+    /// leave it running. A zero period returns an already-cancelled guard and
+    /// sends no messages.
+    pub fn interval<T: Clone + Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
         period: Duration,
-    ) -> CancellationHandle {
-        let timer = CancellationHandle::new();
+    ) -> Guard {
+        let cancellation = CancellationToken::new();
         if period.is_zero() {
-            timer.cancel();
-            return timer;
+            let finished = CancellationToken::new();
+            cancellation.cancel();
+            finished.cancel();
+            return Guard::from_tokens(cancellation, finished);
         }
 
-        let task_timer = timer.clone();
+        let task_cancellation = cancellation.clone();
         let lifetime = self.lifetime.token();
         let target = target.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let start = deadline_after(period);
             let mut interval = tokio::time::interval_at(start, period);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -1040,23 +1034,23 @@ impl<M: Send + 'static> RawContext<M> {
             loop {
                 tokio::select! {
                     biased;
-                    () = task_timer.cancelled() => break,
+                    () = task_cancellation.cancelled() => break,
                     () = lifetime.cancelled() => {
-                        task_timer.cancel();
+                        task_cancellation.cancel();
                         break;
                     }
                     _ = interval.tick() => {
                         let sent = tokio::select! {
                             biased;
-                            () = task_timer.cancelled() => break,
+                            () = task_cancellation.cancelled() => break,
                             () = lifetime.cancelled() => {
-                                task_timer.cancel();
+                                task_cancellation.cancel();
                                 break;
                             }
                             sent = target.send(message.clone()) => sent,
                         };
                         if sent.is_err() {
-                            task_timer.cancel();
+                            task_cancellation.cancel();
                             break;
                         }
                     }
@@ -1064,7 +1058,8 @@ impl<M: Send + 'static> RawContext<M> {
             }
         });
 
-        timer
+        let task = task.abort_handle();
+        Guard::from_probe(cancellation, move || task.is_finished())
     }
 
     /// Watches the target logical actor across restarts.
@@ -1102,26 +1097,31 @@ impl<M: Send + 'static> RawContext<M> {
     /// without bound. On overflow the oldest transitions are dropped and the
     /// loss surfaces as a [`MonitorEvent::Lagged`] resync marker rather than
     /// silently; the terminal `Terminated` is never dropped.
-    pub fn watch<T, F>(&self, target: &ActorRef<T>, mut map: F) -> CancellationHandle
+    /// Dropping the returned [`Guard`] cancels the watch; call
+    /// [`Guard::detach`] when membership ownership should keep it alive.
+    pub fn watch<T, F>(&self, target: &ActorRef<T>, mut map: F) -> Guard
     where
         T: Send + 'static,
         F: FnMut(MonitorEvent) -> M + Send + 'static,
     {
-        let (cancellation, install) = self.monitors.register(&target.monitors);
-        let monitor = CancellationHandle::from_token(cancellation.clone());
+        let (cancellation, finished, install) = self.monitors.register(&target.monitors);
         if !install {
-            return monitor;
+            return Guard::from_tokens(cancellation, finished);
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             cancellation.cancel();
-            return monitor;
+            finished.cancel();
+            return Guard::from_tokens(cancellation, finished);
         };
         // The guard closes the queue on drop, so the hub stops staging events
         // whether this task exits normally or unwinds through a panicking
         // `map` closure.
         let guard = target.monitors.register_watch(cancellation.clone());
         let myself = self.myself();
+        let task_cancellation = cancellation.clone();
+        let task_finished = finished.clone();
         runtime.spawn(async move {
+            let _finished_on_exit = CancelOnDrop::new(task_finished);
             loop {
                 // Arm the wake-up before observing the queue so a push that
                 // races an empty drain is not lost.
@@ -1131,7 +1131,7 @@ impl<M: Send + 'static> RawContext<M> {
                     let message = map(event);
                     tokio::select! {
                         biased;
-                        () = cancellation.cancelled() => break,
+                        () = task_cancellation.cancelled() => break,
                         _ = myself.send(message) => {}
                     }
                     if terminal {
@@ -1141,13 +1141,13 @@ impl<M: Send + 'static> RawContext<M> {
                 }
                 tokio::select! {
                     biased;
-                    () = cancellation.cancelled() => break,
+                    () = task_cancellation.cancelled() => break,
                     _ = waiter => {}
                 }
             }
         });
 
-        monitor
+        Guard::from_tokens(cancellation, finished)
     }
 
     /// Waits for the next mailbox message or offload completion, or `None`
@@ -1416,7 +1416,7 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Watches the target logical actor across restarts.
     ///
     /// See [`RawContext::watch`] for the full contract.
-    pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> CancellationHandle
+    pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> Guard
     where
         T: Send + 'static,
         F: FnMut(MonitorEvent) -> A::Msg + Send + 'static,
@@ -1439,12 +1439,12 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// so capacity, FIFO ordering, and conflation apply normally. It cannot
     /// follow this actor's stable ref into a later incarnation.
     ///
-    /// The returned [`TaskHandle`] is optional: dropping it leaves the
-    /// actor-owned wait running, while [`TaskHandle::abort`] cancels it
-    /// explicitly. Lifecycle waits need not have a natural deadline, but code
-    /// that starts them from ordinary messages should retain a handle or apply
-    /// its own bound rather than accumulating one never-ending wait per
-    /// message. [`ActorStats::outstanding_scope_waits`](crate::observe::ActorStats::outstanding_scope_waits)
+    /// Dropping the returned [`Guard`] cancels the wait. Call
+    /// [`Guard::detach`] for explicit fire-and-forget ownership. Lifecycle
+    /// waits need not have a natural deadline, but code that starts them from
+    /// ordinary messages should retain a guard or apply its own bound rather
+    /// than accumulating one never-ending wait per message.
+    /// [`ActorStats::outstanding_scope_waits`](crate::observe::ActorStats::outstanding_scope_waits)
     /// exposes the current number for operational accounting.
     ///
     /// A panic in `wait`, its future, or `map` that is observed while the
@@ -1458,7 +1458,7 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         scope: &RestrictedScope,
         wait: W,
         map: Map,
-    ) -> TaskHandle
+    ) -> Guard
     where
         W: FnOnce(RuntimeHandle) -> F + Send + 'static,
         F: Future<Output = T> + Send + 'static,
@@ -1482,39 +1482,34 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         self.cx.timers.clear(key);
     }
 
-    /// Returns whether the timeout at `key` is armed.
-    pub fn timeout_armed(&self, key: TimerKey) -> bool {
-        self.cx.timers.is_armed(key)
-    }
-
     /// Sends `message` to `target` after `delay`, bound to this incarnation.
     ///
-    /// See [`RawContext::send_after_to`] for the full contract.
-    pub fn send_after_to<T: Send + 'static>(
+    /// See [`RawContext::send_after`] for the full contract.
+    pub fn send_after<T: Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
         delay: Duration,
-    ) -> CancellationHandle {
-        self.cx.send_after_to(target, message, delay)
+    ) -> Guard {
+        self.cx.send_after(target, message, delay)
     }
 
     /// Periodically sends `message` to `target`, bound to this incarnation.
     ///
-    /// See [`RawContext::interval_to`] for the full contract.
-    pub fn interval_to<T: Clone + Send + 'static>(
+    /// See [`RawContext::interval`] for the full contract.
+    pub fn interval<T: Clone + Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
         period: Duration,
-    ) -> CancellationHandle {
-        self.cx.interval_to(target, message, period)
+    ) -> Guard {
+        self.cx.interval(target, message, period)
     }
 
     /// Runs a bounded future without blocking this actor's receive loop.
     ///
     /// See [`RawContext::offload`] for the full contract.
-    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> TaskHandle
+    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> Guard
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -1618,11 +1613,7 @@ macro_rules! restricted_scope_forwards {
         /// hook does not block that hook. Retain the returned guard for as long
         /// as delivery is wanted; dropping or cancelling it stops the pump.
         /// See [`RuntimeHandle::watch_lifecycle_to`].
-        pub fn watch_lifecycle_to<M, F>(
-            &self,
-            target: &ActorRef<M>,
-            map: F,
-        ) -> crate::observe::LifecycleWatchGuard
+        pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> crate::Guard
         where
             M: Send + 'static,
             F: FnMut(crate::observe::LifecycleEvent) -> M + Send + 'static,
@@ -1638,7 +1629,7 @@ macro_rules! restricted_scope_forwards {
         /// requirements. An unknown id is rejected;
         /// [`DynamicRestrictedScope::shutdown_on_completion`] instead treats
         /// absent ids as future dynamic membership.
-        pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::observe::CompletionGuard
+        pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::Guard
         where
             I: IntoIterator<Item = S>,
             S: Into<String>,

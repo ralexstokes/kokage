@@ -7,20 +7,20 @@ is important:
 - arbitrary one-shots and periodic work use an `ActorRef`, even when the
   destination is the scheduling actor itself.
 
-Only keyed loop-owned timeouts bypass the mailbox. `send_after_to` and
-`interval_to` use ordinary mailbox delivery, so capacity, FIFO backpressure,
+Only keyed loop-owned timeouts bypass the mailbox. `send_after` and
+`interval` use ordinary mailbox delivery, so capacity, FIFO backpressure,
 conflation, and accepted-message statistics all apply.
 
 ## Self-scheduling
 
 Handler-style actors have one loop-owned keyed timer table for one-shot self
-messages. Periodic work uses `interval_to(&ctx.myself(), ...)` and returns a
-`CancellationHandle`:
+messages. Periodic work uses `interval(&ctx.myself(), ...)` and returns a
+`Guard`:
 
 ```rust,ignore
 use std::time::Duration;
 
-use kokage::{CancellationHandle, TimerKey, prelude::*};
+use kokage::{Guard, TimerKey, prelude::*};
 
 #[derive(Clone)]
 enum Message {
@@ -30,7 +30,7 @@ enum Message {
 
 #[derive(Default)]
 struct Worker {
-    reconcile: Option<CancellationHandle>,
+    reconcile: Option<Guard>,
 }
 
 const RECONNECT: TimerKey = TimerKey::new("reconnect");
@@ -40,7 +40,7 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
-        self.reconcile = Some(ctx.interval_to(
+        self.reconcile = Some(ctx.interval(
             &ctx.myself(),
             Message::Reconcile,
             Duration::from_secs(30),
@@ -68,24 +68,27 @@ deliveries count as received messages but not accepted mailbox messages. The
 keyed table drops with the incarnation, so a restart cannot leak stale local
 timeouts into fresh state.
 
-`interval_to` clones its message for each tick and awaits `ActorRef::send`.
+`interval` clones its message for each tick and awaits `ActorRef::send`.
 Missed ticks are skipped, but a full target mailbox delays the next send. A
 conflating target may replace an unread tick, and each successful send counts
-as an accepted mailbox message. The returned handle is cloneable; dropping it
-does not cancel the interval, while calling `cancel` on any clone does. A zero
-period returns an already-cancelled handle. The interval also ends with the
-scheduling incarnation or when the target permanently terminates.
+as an accepted mailbox message. The returned `Guard` cancels the interval when
+dropped; retain it for the desired lifetime or call `detach()` for explicit
+fire-and-forget scheduling. Calling `cancel` on any clone also cancels the
+shared operation. A zero period returns an already-cancelled guard. The
+interval also ends with the scheduling incarnation or when the target
+permanently terminates.
 
 When several independent one-shots cannot share a static protocol key, use
-`send_after_to(&ctx.myself(), message, delay)`. That deliberately takes the
+`send_after(&ctx.myself(), message, delay)`. That deliberately takes the
 same ordinary mailbox path as periodic work rather than adding a second
 actor-local one-shot vocabulary.
 
 ## Replaceable timeouts
 
 Replaceable timeouts are keyed with `TimerKey`. `set_timeout` replaces the
-entry at that key, `clear_timeout` retracts it, and `timeout_armed` reports
-whether it exists. Other keys remain independent:
+entry at that key and `clear_timeout` retracts it. Actor state should track
+whether the protocol currently expects a timeout; the timer table does not
+expose a second source of truth. Other keys remain independent:
 
 ```rust,ignore
 use std::time::Duration;
@@ -177,21 +180,23 @@ an order deadline can clear the timeout instead of allowing a stale
 
 ## Cross-actor timers
 
-`send_after_to` and `interval_to` live on `Context` and `host::RawContext`.
+`send_after` and `interval` live on `Context` and `host::RawContext`.
 Pass the target's `ActorRef`; the context binds the timer to the scheduling
 incarnation internally:
 
 ```rust,ignore
-ctx.send_after_to(
+ctx.send_after(
     &ledger,
     LedgerMsg::Expire { key },
     Duration::from_secs(30),
-);
-ctx.interval_to(
+)
+.detach();
+ctx.interval(
     &monitor,
     MonitorMsg::Heartbeat,
     Duration::from_secs(5),
-);
+)
+.detach();
 ```
 
 These timers really do cross an actor boundary, so delivery uses the target's
@@ -205,9 +210,10 @@ the target permanently terminates. A target that merely restarts receives
 later deliveries through its restart-stable ref. Messages should carry a key
 or generation when the target must reject stale cross-actor work.
 
-`CancellationHandle` owns the authority to stop the timer operation and
-exposes the awaitable `cancelled`; the actor lifetime token itself remains
-private to the context.
+`Guard` owns the authority to stop the timer operation. It exposes `cancel`,
+`is_cancelled`, and `is_finished`; the actor lifetime token itself remains
+private to the context. Dropping a guard cancels its operation, while
+`detach()` deliberately leaves it running.
 
 ## `host::RawActor` deadlines
 

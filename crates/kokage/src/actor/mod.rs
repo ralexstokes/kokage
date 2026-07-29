@@ -20,10 +20,9 @@ pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec, SealedActorSlot, SealedActorSpec};
 pub(crate) use cancellation::CancelOnDrop;
-pub use cancellation::CancellationHandle;
 pub use context::{
     ActorRef, ActorStatus, Context, DynamicRestrictedScope, RawContext, Reply, RestrictedScope,
-    StopContext, TaskHandle, TimerKey,
+    StopContext, TimerKey,
 };
 pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError};
 pub use factory::ActorFactory;

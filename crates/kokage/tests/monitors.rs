@@ -5,8 +5,8 @@ use support::RunnableBuilder;
 use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, DownReason,
-    DynamicTree, MonitorEvent, Restart,
+    ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, DownReason, DynamicTree, Guard,
+    MonitorEvent, Restart,
     host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 use kokage_supervisor::Shutdown;
@@ -50,7 +50,14 @@ struct Observer {
     peer: ActorRef<PeerMessage>,
     observed: mpsc::UnboundedSender<MonitorEvent>,
     started: mpsc::UnboundedSender<()>,
-    cancel_watch: bool,
+    watch_mode: WatchMode,
+}
+
+#[derive(Clone, Copy)]
+enum WatchMode {
+    Cancel,
+    Drop,
+    Detach,
 }
 
 impl RawActor for Observer {
@@ -58,8 +65,10 @@ impl RawActor for Observer {
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
         let watch = ctx.watch(&self.peer, ObserverMessage::Event);
-        if self.cancel_watch {
-            watch.cancel();
+        match self.watch_mode {
+            WatchMode::Cancel => watch.cancel(),
+            WatchMode::Drop => drop(watch),
+            WatchMode::Detach => watch.detach(),
         }
         self.started.send(()).expect("start receiver alive");
 
@@ -108,7 +117,7 @@ where
     (actor, actor_ref)
 }
 
-fn fixture(cancel_watch: bool) -> Fixture {
+fn fixture(watch_mode: WatchMode) -> Fixture {
     let (peer_started_tx, peer_started) = mpsc::unbounded_channel();
     let (peer, peer_ref) = runnable_actor("peer", move || Peer {
         started: peer_started_tx.clone(),
@@ -121,7 +130,7 @@ fn fixture(cancel_watch: bool) -> Fixture {
             peer: peer_ref.clone(),
             observed: observed_tx.clone(),
             started: observer_started_tx.clone(),
-            cancel_watch,
+            watch_mode,
         }
     });
     Fixture {
@@ -178,7 +187,7 @@ async fn assert_silence(
     }
 }
 
-async fn watch_cancelled(watch: &CancellationHandle) {
+async fn watch_cancelled(watch: &Guard) {
     timeout(Duration::from_secs(1), async {
         while !watch.is_cancelled() {
             tokio::task::yield_now().await;
@@ -232,7 +241,7 @@ fn expect_terminated(event: MonitorEvent, actor_id: &str) -> Option<u64> {
 
 #[tokio::test]
 async fn watch_reports_panicked_peer_as_failure() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
         peer.run_until(
@@ -283,7 +292,7 @@ async fn watch_reports_panicked_peer_as_failure() {
 
 #[tokio::test]
 async fn watch_reports_clean_stop_as_normal() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
         peer.run_until(
@@ -336,7 +345,34 @@ async fn watch_reports_clean_stop_as_normal() {
 
 #[tokio::test]
 async fn cancelled_watch_suppresses_delivery() {
-    let mut fixture = fixture(true);
+    let mut fixture = fixture(WatchMode::Cancel);
+    let peer = fixture.peer.clone();
+    let peer_task = tokio::spawn(async move {
+        peer.run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .await
+    });
+    let observer = fixture.observer.clone();
+    let observer_task = tokio::spawn(async move {
+        observer
+            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .await
+    });
+    started(&mut fixture.peer_started).await;
+    started(&mut fixture.observer_started).await;
+
+    fixture
+        .peer_ref
+        .send(PeerMessage::Panic)
+        .await
+        .expect("panic command sent");
+    assert!(peer_task.await.expect_err("peer task panicked").is_panic());
+    assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
+    observer_task.abort();
+}
+
+#[tokio::test]
+async fn dropped_watch_suppresses_delivery() {
+    let mut fixture = fixture(WatchMode::Drop);
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
         peer.run_until(
@@ -371,7 +407,7 @@ async fn cancelled_watch_suppresses_delivery() {
 
 #[tokio::test]
 async fn watch_survives_observer_restart_without_duplicate_registration() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
         peer.run_until(
@@ -470,7 +506,8 @@ impl RawActor for TaggedObserver {
         ctx.watch(&self.peer, move |event| TaggedObserverMessage::Event {
             registration,
             event,
-        });
+        })
+        .detach();
         self.started.send(()).expect("start receiver alive");
         while let Some(message) = ctx.recv().await {
             match message {
@@ -606,7 +643,7 @@ enum AliasedObserverMessage {
 #[derive(Clone)]
 struct AliasedObserver {
     peer: ActorRef<PeerMessage>,
-    watches: mpsc::UnboundedSender<CancellationHandle>,
+    watches: mpsc::UnboundedSender<Guard>,
     started: mpsc::UnboundedSender<()>,
     observed: mpsc::UnboundedSender<(usize, MonitorEvent)>,
 }
@@ -731,7 +768,7 @@ enum ManagedObserverMessage {
 #[derive(Clone)]
 struct ManagedObserver {
     peer: ActorRef<PeerMessage>,
-    watch: mpsc::UnboundedSender<CancellationHandle>,
+    watch: mpsc::UnboundedSender<Guard>,
     observed: mpsc::UnboundedSender<MonitorEvent>,
 }
 
@@ -865,7 +902,7 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
 
 #[tokio::test]
 async fn watching_terminated_peer_delivers_immediate_terminated() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     fixture.peer.terminate_binding();
     let observer = fixture.observer.clone();
     let observer_task = tokio::spawn(async move {
@@ -902,7 +939,7 @@ async fn watching_detached_peer_delivers_immediate_terminated() {
         peer: detached_peer.clone(),
         observed: observed_tx.clone(),
         started: started_tx.clone(),
-        cancel_watch: false,
+        watch_mode: WatchMode::Detach,
     });
     let observer_task = tokio::spawn(async move {
         observer
@@ -924,7 +961,7 @@ async fn watching_detached_peer_delivers_immediate_terminated() {
 
 #[tokio::test]
 async fn watch_survives_peer_restart_without_reregistration() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let observer = fixture.observer.clone();
     let observer_task = tokio::spawn(async move {
         observer
@@ -997,7 +1034,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
 
 #[tokio::test]
 async fn watch_registered_between_incarnations_waits_for_next_up() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let first_peer = fixture.peer.clone();
     let first_task = tokio::spawn(async move {
         first_peer
@@ -1057,7 +1094,7 @@ async fn watch_registered_between_incarnations_waits_for_next_up() {
 
 #[tokio::test]
 async fn pre_start_watch_attaches_to_first_incarnation() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let observer = fixture.observer.clone();
     let observer_task = tokio::spawn(async move {
         observer
@@ -1100,7 +1137,7 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
 
 #[tokio::test]
 async fn shutdown_request_reports_normal_exit() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let peer_stop = CancellationToken::new();
     let stop = peer_stop.clone();
     let peer = fixture.peer.clone();
@@ -1144,7 +1181,7 @@ async fn shutdown_request_reports_normal_exit() {
 
 #[tokio::test]
 async fn two_observers_receive_the_same_events() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(WatchMode::Detach);
     let (second_observed_tx, mut second_observed) = mpsc::unbounded_channel();
     let (second_started_tx, mut second_started) = mpsc::unbounded_channel();
     let (second_observer, _) = runnable_actor("second-observer", {
@@ -1153,7 +1190,7 @@ async fn two_observers_receive_the_same_events() {
             peer: peer_ref.clone(),
             observed: second_observed_tx.clone(),
             started: second_started_tx.clone(),
-            cancel_watch: false,
+            watch_mode: WatchMode::Detach,
         }
     });
     let first_observer = fixture.observer.clone();
@@ -1211,7 +1248,7 @@ async fn two_observers_receive_the_same_events() {
 struct GatedObserver {
     peer: ActorRef<PeerMessage>,
     gate: Arc<Notify>,
-    watch: mpsc::UnboundedSender<CancellationHandle>,
+    watch: mpsc::UnboundedSender<Guard>,
     observed: mpsc::UnboundedSender<MonitorEvent>,
 }
 
@@ -1329,7 +1366,7 @@ impl RawActor for UnitObserver {
     type Msg = MonitorEvent;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
-        ctx.watch(&self.peer, |event| event);
+        ctx.watch(&self.peer, |event| event).detach();
         self.started.send(()).expect("start receiver alive");
         while let Some(event) = ctx.recv().await {
             self.observed.send(event).expect("observer receiver alive");
@@ -1402,7 +1439,8 @@ impl RawActor for PanickingMapper {
         ctx.watch(&self.peer, move |_event| {
             mapped.send(()).expect("mapping receiver alive");
             panic!("deliberate mapping panic")
-        });
+        })
+        .detach();
         self.started.send(()).expect("start receiver alive");
         while ctx.recv().await.is_some() {}
         Ok(())
@@ -1471,7 +1509,7 @@ async fn pending_target_can_be_dropped_from_non_runtime_thread() {
         peer: peer_ref.clone(),
         observed: observed_tx.clone(),
         started: observer_started_tx.clone(),
-        cancel_watch: false,
+        watch_mode: WatchMode::Detach,
     });
     let observer_task = tokio::spawn(async move {
         observer

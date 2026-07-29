@@ -85,6 +85,11 @@ non-owning control or observation. Dropping handles has no lifecycle effect,
 while dropping the owner requests graceful shutdown—so a discarded
 `let _ = tree.spawn()?;` shuts down immediately.
 
+Background actor operations such as watches, mailbox timers, offloads, and
+lifecycle/completion pumps return one `kokage::Guard` type. A guard cancels
+its operation when dropped. Retain it for scoped ownership, or call
+`.detach()` when fire-and-forget behavior is intentional.
+
 The full runnable version is
 [`crates/kokage/examples/supervised_actors.rs`](crates/kokage/examples/supervised_actors.rs).
 

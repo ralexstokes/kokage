@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    Backoff, ChildSpec, CompletionGuard, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    Restart, Shutdown, Strategy, Supervisor, SupervisorError,
+    Backoff, ChildSpec, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart,
+    Shutdown, Strategy, Supervisor, SupervisorError,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -1178,9 +1178,7 @@ fn middle_supervisor(
         .expect("middle supervisor builds")
 }
 
-fn completing_supervisor(
-    complete: &Arc<Notify>,
-) -> (kokage_supervisor::Supervisor, CompletionGuard) {
+fn completing_supervisor(complete: &Arc<Notify>) -> (kokage_supervisor::Supervisor, Guard) {
     let complete = Arc::clone(complete);
     let builder = Supervisor::ordered().child(
         ChildSpec::task("worker", move |_| {

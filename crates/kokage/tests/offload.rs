@@ -14,7 +14,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, MailboxMode, OffloadDeadline, Restart, RuntimeHandle, Shutdown, TaskHandle,
+    ActorSlot, Guard, MailboxMode, OffloadDeadline, Restart, RuntimeHandle, Shutdown,
     host::{RawActor, RawContext},
     prelude::*,
 };
@@ -66,18 +66,22 @@ impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
-        ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
+        ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success)
+            .detach();
         ctx.offload(
             Duration::from_millis(10),
             pending::<()>(),
             OutcomeMsg::Timeout,
-        );
+        )
+        .detach();
         ctx.offload(Duration::from_secs(1), async { 42 }, |result| {
             OutcomeMsg::OrSuccess(result.unwrap_or(0))
-        });
+        })
+        .detach();
         ctx.offload(Duration::from_millis(10), pending::<u32>(), |result| {
             OutcomeMsg::OrFallback(result.unwrap_or(7))
-        });
+        })
+        .detach();
         Ok(())
     }
 
@@ -194,7 +198,8 @@ impl Actor for StaleActor {
                         release_drop: self.release_drop.clone(),
                     },
                     |_| StaleMsg::Done,
-                );
+                )
+                .detach();
                 return Err(std::io::Error::other("restart after starting offload").into());
             }
             StaleMsg::Done => {
@@ -274,7 +279,7 @@ enum AbortMsg {
 
 #[derive(Clone)]
 struct AbortActor {
-    handle: Arc<Mutex<Option<TaskHandle>>>,
+    handle: Arc<Mutex<Option<Guard>>>,
     done: Arc<AtomicUsize>,
 }
 
@@ -297,7 +302,7 @@ impl Actor for AbortActor {
 }
 
 #[tokio::test]
-async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
+async fn dropping_offload_guard_cancels_and_updates_the_outstanding_gauge() {
     let handle_slot = Arc::new(Mutex::new(None));
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
@@ -322,9 +327,9 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
     .await
     .unwrap();
     let offload = handle_slot.lock().unwrap().take().unwrap();
-    offload.abort();
+    drop(offload);
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !offload.is_finished() || actor.stats().outstanding_offloads != 0 {
+        while actor.stats().outstanding_offloads != 0 {
             tokio::task::yield_now().await;
         }
     })
@@ -341,7 +346,7 @@ enum ReadyAbortMsg {
 }
 
 struct ReadyAbortActor {
-    handle: mpsc::UnboundedSender<TaskHandle>,
+    handle: mpsc::UnboundedSender<Guard>,
     release: Arc<Notify>,
     observed: mpsc::UnboundedSender<()>,
 }
@@ -389,7 +394,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     })
     .await
     .expect("offload future should finish before the abort");
-    offload.abort();
+    offload.cancel();
     release.notify_one();
     assert!(
         tokio::time::timeout(Duration::from_millis(50), observed_rx.recv())
@@ -399,13 +404,40 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     shutdown_runtime(&runtime.handle(), "ready-abort runtime shutdown").await;
 }
 
+#[tokio::test]
+async fn detached_offload_guard_preserves_completion_delivery() {
+    let (handle_tx, mut handle_rx) = mpsc::unbounded_channel();
+    let (observed, mut observed_rx) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let mut graph = TreeBuilder::new();
+    let actor_slot = ActorSlot::new("DetachedOffloadActor");
+    let (actor_slot, actor) = actor_slot.actor_ref();
+    graph.define(actor_slot, {
+        let release = release.clone();
+        move || ReadyAbortActor {
+            handle: handle_tx.clone(),
+            release: release.clone(),
+            observed: observed.clone(),
+        }
+    });
+    let runtime = graph.build().spawn().unwrap();
+    wait_runtime_started(&runtime.handle(), "detached-offload runtime startup").await;
+    actor.send(ReadyAbortMsg::Start).await.unwrap();
+    let offload = recv_test_event(&mut handle_rx, "detached offload guard").await;
+    offload.detach();
+    release.notify_one();
+
+    recv_test_event(&mut observed_rx, "detached offload completion").await;
+    shutdown_runtime(&runtime.handle(), "detached-offload runtime shutdown").await;
+}
+
 enum DrainAbortMsg {
     Start,
     Done,
 }
 
 struct DrainAbortActor {
-    handle: mpsc::UnboundedSender<TaskHandle>,
+    handle: mpsc::UnboundedSender<Guard>,
     shutdown_seen: Arc<Notify>,
 }
 
@@ -455,7 +487,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
     let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
     wait_notification(&shutdown_seen, "drain-abort offload observing shutdown").await;
     tokio::task::yield_now().await;
-    offload.abort();
+    offload.cancel();
     tokio::time::timeout(TEST_TIMEOUT, shutdown)
         .await
         .expect("drain-abort shutdown task timed out")
@@ -493,11 +525,13 @@ impl Actor for ShutdownActor {
                         release.notified().await;
                     },
                     |_| DrainMsg::Done,
-                );
+                )
+                .detach();
             }
             DrainMsg::Queued => {
                 self.observed.send("queued").unwrap();
-                ctx.offload(Duration::from_secs(1), async {}, |_| DrainMsg::Nested);
+                ctx.offload(Duration::from_secs(1), async {}, |_| DrainMsg::Nested)
+                    .detach();
             }
             DrainMsg::Nested => self.observed.send("nested").unwrap(),
             DrainMsg::Done => self.observed.send("done").unwrap(),
@@ -591,7 +625,8 @@ impl Actor for BackpressureActor {
                     Duration::from_secs(1),
                     async move { release.notified().await },
                     |_| BackpressureMsg::Done,
-                );
+                )
+                .detach();
                 self.offload_registered.notify_one();
                 self.handler_release.notified().await;
             }
@@ -715,7 +750,8 @@ impl Actor for DeadlineDrainActor {
                     Duration::from_millis(100),
                     pending::<()>(),
                     DeadlineDrainMsg::Done,
-                );
+                )
+                .detach();
                 self.registered.notify_one();
             }
             DeadlineDrainMsg::Done(outcome) => self.observed.send(outcome).unwrap(),
@@ -763,7 +799,8 @@ impl RawActor for RawCompletion {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
-        ctx.offload(Duration::from_secs(1), async {}, |_| "done");
+        ctx.offload(Duration::from_secs(1), async {}, |_| "done")
+            .detach();
         let message = ctx.recv().await.expect("offload completion");
         self.observed.send(message).unwrap();
         while ctx.recv().await.is_some() {}
@@ -801,7 +838,8 @@ impl Actor for PanicActor {
             Duration::from_secs(1),
             async { panic!("offload panic") },
             |_| PanicMsg::Start,
-        );
+        )
+        .detach();
         Ok(())
     }
 }
