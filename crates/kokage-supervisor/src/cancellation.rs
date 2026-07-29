@@ -78,10 +78,6 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
     }
-
-    pub(crate) fn drop_guard(self) -> impl Drop {
-        self.inner.drop_guard()
-    }
 }
 
 impl Default for CancellationToken {

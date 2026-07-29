@@ -22,12 +22,11 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, Backoff, BackoffParts, BlockingCancelled, CancellationHandle,
-            CancellationToken, ControlError, DownReason, DynamicRestrictedScope,
-            DynamicRuntimeHandle, DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline, Restart,
-            RestartMode, RestrictedScope, Runtime, RuntimeHandle, SealedActorSlot, SealedActorSpec,
-            Shutdown, ShutdownMode, Strategy, SupervisorBuildError, SupervisorError, TaskHandle,
-            TimerKey, TreeNode,
+            ActorFactory, Backoff, BackoffParts, BlockingCancelled, CancellationToken, ControlError,
+            DownReason, DynamicRestrictedScope, DynamicRuntimeHandle, DynamicTree, Guard,
+            MailboxMode, MonitorEvent, OffloadDeadline, Restart, RestartMode, RestrictedScope,
+            Runtime, RuntimeHandle, SealedActorSlot, SealedActorSpec, Shutdown, ShutdownMode,
+            Strategy, SupervisorBuildError, SupervisorError, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }
@@ -42,10 +41,9 @@ mod coverage_probe {
     mod observe {
         use kokage::observe::{
             ActorStats, ChildExitView, ChildMembershipView, ChildOutline, ChildSnapshot,
-            ChildStateView, CompletionError, CompletionGuard, CompletionOutcome, LifecycleEvent,
-            LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard,
-            ScopeKind, SupervisionOutline, SupervisorPathSegment, SupervisorSnapshot,
-            SupervisorStateView,
+            ChildStateView, CompletionError, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
+            LifecyclePathSegment, LifecycleWatch, ScopeKind, SupervisionOutline,
+            SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView,
         };
     }
 }

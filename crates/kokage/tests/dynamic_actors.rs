@@ -15,10 +15,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, Context, ControlError,
-    DownReason, DynamicTree, MailboxMode, MonitorEvent, OrderedTree, Restart, Runtime,
-    RuntimeHandle, SendError, Shutdown, StopContext, SupervisorBuildError, SupervisorError,
-    TrySendError,
+    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, ControlError, DownReason,
+    DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, Runtime, RuntimeHandle,
+    SendError, Shutdown, StopContext, SupervisorBuildError, SupervisorError, TrySendError,
     host::{BoxError, ChildSpec, RawActor, RawContext},
     observe::ChildMembershipView,
 };
@@ -120,7 +119,7 @@ impl RawActor for Watcher {
     type Msg = WatchMsg;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
-        let mut watch: Option<CancellationHandle> = None;
+        let mut watch: Option<Guard> = None;
         while let Some(message) = ctx.recv().await {
             match message {
                 WatchMsg::Watch(target) => {

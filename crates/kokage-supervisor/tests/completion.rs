@@ -656,6 +656,26 @@ async fn a_dropped_guard_leaves_the_supervisor_running() {
 }
 
 #[tokio::test]
+async fn a_detached_guard_preserves_completion_shutdown() {
+    let builder = Supervisor::ordered()
+        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(ChildSpec::task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }));
+    builder
+        .handle()
+        .shutdown_on_completion(["trigger"])
+        .detach();
+    let owner = builder.build().expect("valid supervisor").spawn();
+
+    timeout(common::EVENT_TIMEOUT, owner.handle().wait())
+        .await
+        .expect("detached completion guard still requests shutdown")
+        .expect("completion shutdown succeeds");
+}
+
+#[tokio::test]
 async fn a_retained_guard_does_not_keep_a_root_alive() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {

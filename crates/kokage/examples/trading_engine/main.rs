@@ -128,9 +128,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, DownReason, MailboxMode, Restart, RuntimeHandle,
-    observe::{LifecycleWatchGuard, SupervisorSnapshotReceiver},
-    prelude::*,
+    ActorSlot, CancellationToken, DownReason, Guard, MailboxMode, Restart, RuntimeHandle,
+    observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
 use tokio::time::Instant;
@@ -188,7 +187,7 @@ struct App {
     intake_gate: Arc<AtomicBool>,
     background_stop: CancellationToken,
     sampler: tokio::task::JoinHandle<()>,
-    lifecycle_watch: LifecycleWatchGuard,
+    lifecycle_watch: Guard,
 }
 
 #[tokio::main]

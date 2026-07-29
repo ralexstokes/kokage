@@ -103,7 +103,8 @@ impl Actor for ScopeProbe {
                 Ok::<_, ()>(())
             },
             |result| LeaderMsg::OnStartAdded(result.is_ok()),
-        );
+        )
+        .detach();
         Ok(())
     }
 

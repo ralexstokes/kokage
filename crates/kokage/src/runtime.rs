@@ -6,16 +6,16 @@ use std::{
 use crate::{
     ActorRef, SealedActorSpec,
     actor::{
-        ActorNode, ActorOptionsValidationError, ActorStats, CancelOnDrop, RunnableActor,
-        RunnableActorBuilder, SupervisorPathSegment,
+        ActorNode, ActorOptionsValidationError, ActorStats, RunnableActor, RunnableActorBuilder,
+        SupervisorPathSegment,
     },
 };
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
-    CancellationToken, ChildSpec, CompletionError, CompletionGuard, CompletionOutcome,
-    ControlError, DynamicSupervisorHandle, LifecycleEvent, LifecycleWatch, Restart,
-    RunningSupervisor, Shutdown, ShutdownMode, SupervisorBuildError, SupervisorError,
-    SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+    CancellationToken, ChildSpec, CompletionError, CompletionOutcome, ControlError,
+    DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
+    Shutdown, ShutdownMode, SupervisorBuildError, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot, SupervisorSnapshotReceiver,
 };
 
 #[derive(Debug)]
@@ -120,54 +120,18 @@ struct DynamicChildOptions {
     shutdown: Shutdown,
 }
 
-/// Cancellation guard for a lifecycle-event mailbox pump.
-///
-/// Created by [`RuntimeHandle::watch_lifecycle_to`]. Dropping the guard
-/// cancels the pump. It also stops automatically when the watched supervisor
-/// identity or target actor permanently terminates.
-#[must_use = "dropping the guard immediately cancels the lifecycle watch"]
-pub struct LifecycleWatchGuard {
-    cancellation: CancellationToken,
-}
-
-impl LifecycleWatchGuard {
-    /// Cancels the lifecycle pump.
-    ///
-    /// Cancellation is idempotent. A message already accepted by the target
-    /// mailbox cannot be retracted.
-    pub fn cancel(&self) {
-        self.cancellation.cancel();
-    }
-}
-
-impl std::fmt::Debug for LifecycleWatchGuard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LifecycleWatchGuard")
-            .field("cancelled", &self.cancellation.is_cancelled())
-            .finish()
-    }
-}
-
-impl Drop for LifecycleWatchGuard {
-    fn drop(&mut self) {
-        self.cancel();
-    }
-}
-
 fn spawn_lifecycle_watch_to<M, F>(
     mut lifecycle: LifecycleWatch,
     target: ActorRef<M>,
     mut map: F,
-) -> LifecycleWatchGuard
+) -> Guard
 where
     M: Send + 'static,
     F: FnMut(LifecycleEvent) -> M + Send + 'static,
 {
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
-
-    tokio::spawn(async move {
-        let _cancel_on_exit = CancelOnDrop::new(task_cancellation.clone());
+    let task = tokio::spawn(async move {
         loop {
             let Some(event) = (tokio::select! {
                 biased;
@@ -199,7 +163,8 @@ where
         }
     });
 
-    LifecycleWatchGuard { cancellation }
+    let task = task.abort_handle();
+    Guard::from_probe(cancellation, move || task.is_finished())
 }
 
 /// Owns a spawned actor runtime.
@@ -375,7 +340,7 @@ impl RuntimeHandle {
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> Guard
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -408,7 +373,7 @@ impl RuntimeHandle {
     /// The pump stops when the returned guard is dropped or cancelled, when
     /// this runtime's identity becomes terminal after draining its staged
     /// events, or when the target actor permanently terminates.
-    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> LifecycleWatchGuard
+    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
     where
         M: Send + 'static,
         F: FnMut(LifecycleEvent) -> M + Send + 'static,
@@ -559,7 +524,7 @@ impl DynamicRuntimeHandle {
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> Guard
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,

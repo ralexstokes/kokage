@@ -9,8 +9,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, CancellationHandle, CancellationToken, Context,
-    Restart, TimerKey,
+    Actor, ActorRef, ActorResult, ActorSpec, CancellationToken, Context, Guard, Restart, TimerKey,
 };
 use tokio::time::Instant;
 
@@ -59,7 +58,7 @@ pub struct Session {
     #[factory(default)]
     active: Option<ActiveRun>,
     #[factory(default)]
-    heartbeat: Option<CancellationHandle>,
+    heartbeat: Option<Guard>,
     #[factory(default)]
     evict_requested: bool,
 }
@@ -90,7 +89,7 @@ impl Session {
     ) -> ActorResult {
         ctx.clear_timeout(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
-            self.heartbeat = Some(ctx.interval_to(
+            self.heartbeat = Some(ctx.interval(
                 &self.progress,
                 ProgressMsg::Typing { chat: self.chat },
                 TYPING_PERIOD,
@@ -135,7 +134,8 @@ impl Session {
             task,
             role,
             event,
-        });
+        })
+        .detach();
         self.active = Some(ActiveRun {
             task,
             role,

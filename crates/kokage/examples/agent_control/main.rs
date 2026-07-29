@@ -131,8 +131,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DownReason, DynamicTree, MailboxMode, MonitorEvent, RuntimeHandle, Strategy,
-    observe::LifecycleWatchGuard, prelude::*,
+    ActorSlot, DownReason, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent,
+    RuntimeHandle, Strategy, prelude::*,
 };
 use tokio::time::Instant;
 
@@ -170,7 +170,7 @@ struct App {
     tool_host: ActorRef<ToolHostMsg>,
     proof: Proof,
     gate: Arc<AtomicBool>,
-    lifecycle_watch: LifecycleWatchGuard,
+    lifecycle_watch: OperationGuard,
 }
 
 #[tokio::main]
@@ -373,7 +373,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
     println!(
-        "PHASE 1 OK — DynamicRuntimeHandle::add_subtree per conversation; continue_with; interval_to"
+        "PHASE 1 OK — DynamicRuntimeHandle::add_subtree per conversation; continue_with; interval"
     );
     Ok(())
 }

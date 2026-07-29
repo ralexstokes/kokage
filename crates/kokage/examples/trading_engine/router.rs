@@ -139,7 +139,8 @@ impl Actor for OrderRouter {
                             reply,
                         }
                     },
-                );
+                )
+                .detach();
             }
             RouterMsg::SubmitResolved {
                 key,
@@ -193,7 +194,8 @@ impl Actor for OrderRouter {
                         outcome: result.unwrap_or(CancelOutcome::Unknown),
                         reply,
                     },
-                );
+                )
+                .detach();
             }
             RouterMsg::CancelResolved { outcome, reply } => reply.send(outcome),
             RouterMsg::ReconcileAll { reply } => {

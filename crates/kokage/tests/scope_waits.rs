@@ -13,9 +13,7 @@ use std::{
     time::Duration,
 };
 
-use kokage::{
-    Actor, ActorResult, ActorSlot, ActorStatus, Context, Shutdown, StopContext, TaskHandle,
-};
+use kokage::{Actor, ActorResult, ActorSlot, ActorStatus, Context, Guard, Shutdown, StopContext};
 use tokio::sync::{Notify, mpsc};
 
 const WAIT: Duration = Duration::from_secs(3);
@@ -44,7 +42,8 @@ impl Actor for ReadyReporter {
             &scope,
             |handle| async move { handle.wait_started().await },
             ReadyMsg::ScopeStarted,
-        );
+        )
+        .detach();
         Ok(())
     }
 
@@ -56,7 +55,7 @@ impl Actor for ReadyReporter {
 }
 
 #[tokio::test]
-async fn scope_wait_maps_completion_through_the_actor_mailbox() {
+async fn detached_scope_wait_maps_completion_through_the_actor_mailbox() {
     let (report, mut reports) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("reporter");
@@ -105,7 +104,8 @@ impl Actor for PendingWait {
                 pending::<()>().await;
             },
             |()| PendingMsg::Completed,
-        );
+        )
+        .detach();
         Ok(())
     }
 
@@ -155,7 +155,7 @@ enum CancelMsg {
 struct CancellableWait {
     started: mpsc::UnboundedSender<()>,
     dropped: mpsc::UnboundedSender<()>,
-    handles: mpsc::UnboundedSender<TaskHandle>,
+    handles: mpsc::UnboundedSender<Guard>,
     completions: mpsc::UnboundedSender<()>,
 }
 
@@ -188,7 +188,7 @@ impl Actor for CancellableWait {
 }
 
 #[tokio::test]
-async fn handle_context_scope_wait_can_be_cancelled_and_is_accounted() {
+async fn dropping_scope_wait_guard_cancels_and_is_accounted() {
     let (started, mut starts) = mpsc::unbounded_channel();
     let (dropped, mut drops) = mpsc::unbounded_channel();
     let (handles, mut handle_rx) = mpsc::unbounded_channel();
@@ -209,8 +209,8 @@ async fn handle_context_scope_wait_can_be_cancelled_and_is_accounted() {
     wait_for(&mut starts, "handle context scope wait to start").await;
     assert_eq!(actor.stats().outstanding_scope_waits, 1);
 
-    handle.abort();
-    wait_for(&mut drops, "explicit scope-wait cancellation").await;
+    drop(handle);
+    wait_for(&mut drops, "dropped scope-wait guard cancellation").await;
     tokio::time::timeout(WAIT, async {
         while actor.stats().outstanding_scope_waits != 0 {
             tokio::task::yield_now().await;
@@ -218,7 +218,6 @@ async fn handle_context_scope_wait_can_be_cancelled_and_is_accounted() {
     })
     .await
     .expect("cancelled scope wait is reaped");
-    assert!(handle.is_finished());
     assert!(completion_rx.try_recv().is_err());
 
     runtime.shutdown_and_wait().await.expect("clean shutdown");
@@ -237,7 +236,7 @@ struct BackpressureWait {
     handler_started: mpsc::UnboundedSender<()>,
     handler_release: Arc<Notify>,
     observed: mpsc::UnboundedSender<&'static str>,
-    handles: mpsc::UnboundedSender<TaskHandle>,
+    handles: mpsc::UnboundedSender<Guard>,
 }
 
 impl Actor for BackpressureWait {
@@ -385,7 +384,7 @@ async fn handle_abort_wins_before_a_blocked_scope_wait_message_is_accepted() {
     wait_for(&mut mapped_rx, "scope-wait mapper").await;
     assert_eq!(actor.stats().mailbox_depth, 1);
 
-    wait_handle.abort();
+    wait_handle.cancel();
     tokio::time::timeout(WAIT, async {
         while !wait_handle.is_finished() {
             tokio::task::yield_now().await;
@@ -448,7 +447,8 @@ impl Actor for RestartProbe {
                     wait_gate.notified().await;
                 },
                 |()| RestartMsg::OldWaitCompleted,
-            );
+            )
+            .detach();
         }
         Ok(())
     }
@@ -561,7 +561,8 @@ impl Actor for CompletionRaceProbe {
                     mapped.notify_one();
                     CompletionRaceMsg::OldWaitCompleted
                 },
-            );
+            )
+            .detach();
         }
         Ok(())
     }
@@ -654,14 +655,16 @@ impl Actor for PanicOnce {
                         ()
                     },
                     |()| -> Infallible { unreachable!("panicking future cannot complete") },
-                );
+                )
+                .detach();
             }
             Some(PanicSite::Mapper) => {
                 ctx.spawn_scope_wait(
                     &scope,
                     |_handle| async {},
                     |()| -> Infallible { panic!("scripted scope-wait mapper panic") },
-                );
+                )
+                .detach();
             }
             None => {}
         }
@@ -803,7 +806,8 @@ impl Actor for MixedDrain {
                 scope_mapped.send(()).expect("receiver open");
                 MixedDrainMsg::ScopeDone
             },
-        );
+        )
+        .detach();
         Ok(())
     }
 
@@ -819,7 +823,8 @@ impl Actor for MixedDrain {
                         offload_release.notified().await;
                     },
                     |_| MixedDrainMsg::OffloadDone,
-                );
+                )
+                .detach();
                 self.begin_started.send(()).expect("receiver open");
                 self.allow_stop.notified().await;
                 ctx.stop();

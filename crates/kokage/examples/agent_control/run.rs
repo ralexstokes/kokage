@@ -61,7 +61,8 @@ impl AgentRun {
             RunMsg::ModelResult {
                 result: result.unwrap_or(Err(ModelError::Deadline)),
             }
-        });
+        })
+        .detach();
     }
 
     async fn start_tool(&self, index: usize, ctx: &mut Context<'_, Self>) -> ActorResult {
@@ -113,7 +114,8 @@ impl AgentRun {
                     output: "tool outcome remained unknown".into(),
                 }),
             },
-        );
+        )
+        .detach();
         Ok(())
     }
 

@@ -270,7 +270,7 @@ impl Actor for VenueGateway {
                         })
                         .await?;
                     if symbol != "OPEN" {
-                        ctx.send_after_to(
+                        ctx.send_after(
                             &ctx.myself(),
                             GatewayMsg::DeliverFill {
                                 key,
@@ -278,7 +278,8 @@ impl Actor for VenueGateway {
                                 enqueued_at: Instant::now(),
                             },
                             Duration::from_millis(25),
-                        );
+                        )
+                        .detach();
                     }
                 }
             }

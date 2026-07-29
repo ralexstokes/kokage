@@ -12,8 +12,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, CancellationHandle, Context,
-    OrderedTree, TimerKey,
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, Context, Guard, OrderedTree, TimerKey,
     host::{BoxError, RawActor, RawContext},
 };
 use kokage_supervisor::Strategy;
@@ -92,7 +91,6 @@ impl Actor for CancelledTimer {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.set_timeout(CANCELLED, "cancelled", Duration::from_millis(20));
         ctx.clear_timeout(CANCELLED);
-        assert!(!ctx.timeout_armed(CANCELLED));
         Ok(())
     }
 
@@ -130,16 +128,13 @@ impl Actor for ReplaceableTimeout {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
-        assert!(!ctx.timeout_armed(REPLACEABLE));
         ctx.clear_timeout(REPLACEABLE);
         ctx.set_timeout(REPLACEABLE, "old", Duration::from_millis(20));
-        assert!(ctx.timeout_armed(REPLACEABLE));
         ctx.set_timeout(REPLACEABLE, "new", Duration::from_millis(40));
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
-        assert!(!ctx.timeout_armed(REPLACEABLE));
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(())
     }
@@ -285,23 +280,15 @@ impl Actor for KeyedTimeouts {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         let first = TimerKey::new("first");
         let second = TimerKey::new("second");
-        assert!(!ctx.timeout_armed(first));
         ctx.set_timeout(first, "stale", Duration::from_millis(10));
         ctx.set_timeout(first, "first", Duration::from_millis(20));
         ctx.set_timeout(second, "second", Duration::from_millis(40));
-        assert!(ctx.timeout_armed(first));
-        assert!(ctx.timeout_armed(second));
         let absent = TimerKey::new("absent");
         ctx.clear_timeout(absent);
-        assert!(!ctx.timeout_armed(absent));
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
-        // Delivered payloads intentionally match their timer-key names so this
-        // post-delivery check can reconstruct the key.
-        let key = TimerKey::new(message);
-        assert!(!ctx.timeout_armed(key));
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
         self.observed.send(message).expect("observer alive");
         Ok(())
     }
@@ -323,7 +310,7 @@ async fn keyed_timeouts_replace_per_key_and_remain_independent() {
 }
 
 struct FarFutureTimers {
-    timers: Vec<CancellationHandle>,
+    timers: Vec<Guard>,
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
@@ -335,7 +322,7 @@ impl Actor for FarFutureTimers {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         ctx.set_timeout(FAR_FUTURE_TIMEOUT, "never-timeout", Duration::MAX);
         self.timers
-            .push(ctx.interval_to(&ctx.myself(), "never-interval", Duration::MAX));
+            .push(ctx.interval(&ctx.myself(), "never-interval", Duration::MAX));
         Ok(())
     }
 
@@ -368,7 +355,7 @@ async fn far_future_delays_saturate_instead_of_panicking() {
 
 struct IntervalActor {
     observed: mpsc::UnboundedSender<usize>,
-    timer: Option<CancellationHandle>,
+    timer: Option<Guard>,
     ticks: usize,
 }
 
@@ -376,7 +363,7 @@ impl Actor for IntervalActor {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
-        self.timer = Some(ctx.interval_to(&ctx.myself(), (), Duration::from_millis(10)));
+        self.timer = Some(ctx.interval(&ctx.myself(), (), Duration::from_millis(10)));
         Ok(())
     }
 
@@ -391,7 +378,7 @@ impl Actor for IntervalActor {
 }
 
 #[tokio::test(start_paused = true)]
-async fn interval_repeats_until_cancelled() {
+async fn self_interval_repeats_until_cancelled() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (runtime, _) = build_runtime(move || IntervalActor {
         observed: observed_tx.clone(),
@@ -418,7 +405,7 @@ struct SlowInterval {
     release: Arc<Notify>,
     started: Option<Instant>,
     ticks: usize,
-    timer: Option<CancellationHandle>,
+    timer: Option<Guard>,
 }
 
 impl Actor for SlowInterval {
@@ -426,7 +413,7 @@ impl Actor for SlowInterval {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         self.started = Some(Instant::now());
-        self.timer = Some(ctx.interval_to(&ctx.myself(), (), Duration::from_millis(10)));
+        self.timer = Some(ctx.interval(&ctx.myself(), (), Duration::from_millis(10)));
         Ok(())
     }
 
@@ -562,7 +549,25 @@ impl Actor for CrossScheduler {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
-        let _timer = ctx.send_after_to(&self.target, "cross", Duration::from_millis(20));
+        ctx.send_after(&self.target, "cross", Duration::from_millis(20))
+            .detach();
+        Ok(())
+    }
+
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+        Ok(())
+    }
+}
+
+struct DroppedCrossScheduler {
+    target: ActorRef<&'static str>,
+}
+
+impl Actor for DroppedCrossScheduler {
+    type Msg = ();
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+        drop(ctx.send_after(&self.target, "dropped", Duration::from_millis(20)));
         Ok(())
     }
 
@@ -579,7 +584,7 @@ impl RawActor for RawCrossScheduler {
     type Msg = ();
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
-        let _timer = ctx.send_after_to(&self.target, "raw-cross", Duration::from_millis(20));
+        let _timer = ctx.send_after(&self.target, "raw-cross", Duration::from_millis(20));
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -599,7 +604,7 @@ async fn raw_context_can_schedule_cross_actor_timer() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn send_after_to_delivers_through_the_public_target_ref() {
+async fn detached_send_after_delivers_through_the_public_target_ref() {
     let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
         move || CrossScheduler {
             target: target.clone(),
@@ -618,6 +623,25 @@ async fn send_after_to_delivers_through_the_public_target_ref() {
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
+#[tokio::test(start_paused = true)]
+async fn dropped_send_after_guard_cancels_delivery() {
+    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+        move || DroppedCrossScheduler {
+            target: target.clone(),
+        }
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert!(
+        timeout(Duration::from_millis(60), observed_rx.recv())
+            .await
+            .is_err(),
+        "a dropped send-after guard delivered its message"
+    );
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
 struct RestartingCrossScheduler {
     target: ActorRef<&'static str>,
     runs: Arc<AtomicUsize>,
@@ -628,10 +652,12 @@ impl Actor for RestartingCrossScheduler {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            let _old = ctx.send_after_to(&self.target, "old", Duration::from_millis(150));
+            ctx.send_after(&self.target, "old", Duration::from_millis(150))
+                .detach();
             ctx.continue_with(());
         } else {
-            let _new = ctx.send_after_to(&self.target, "new", Duration::from_millis(10));
+            ctx.send_after(&self.target, "new", Duration::from_millis(10))
+                .detach();
         }
         Ok(())
     }
@@ -665,14 +691,31 @@ async fn restart_ends_cross_actor_timer_lifetime() {
 
 struct CrossInterval {
     target: ActorRef<&'static str>,
-    timer: Option<CancellationHandle>,
+    timer: Option<Guard>,
+}
+
+struct DroppedCrossInterval {
+    target: ActorRef<&'static str>,
+}
+
+impl Actor for DroppedCrossInterval {
+    type Msg = ();
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+        drop(ctx.interval(&self.target, "dropped-tick", Duration::from_millis(10)));
+        Ok(())
+    }
+
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+        Ok(())
+    }
 }
 
 impl Actor for CrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
-        self.timer = Some(ctx.interval_to(&self.target, "tick", Duration::from_millis(10)));
+        self.timer = Some(ctx.interval(&self.target, "tick", Duration::from_millis(10)));
         Ok(())
     }
 
@@ -683,7 +726,7 @@ impl Actor for CrossInterval {
 }
 
 #[tokio::test(start_paused = true)]
-async fn interval_to_repeats_until_cancelled() {
+async fn cross_actor_interval_repeats_until_cancelled() {
     let (runtime, scheduler_ref, mut observed_rx) = build_cross_runtime(|target| {
         move || CrossInterval {
             target: target.clone(),
@@ -701,6 +744,25 @@ async fn interval_to_repeats_until_cancelled() {
             .await
             .is_err(),
         "cross-actor interval continued after cancellation"
+    );
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropped_interval_guard_cancels_delivery() {
+    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+        move || DroppedCrossInterval {
+            target: target.clone(),
+        }
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert!(
+        timeout(Duration::from_millis(50), observed_rx.recv())
+            .await
+            .is_err(),
+        "a dropped interval guard delivered a tick"
     );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");

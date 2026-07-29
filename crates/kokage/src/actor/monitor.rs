@@ -382,6 +382,7 @@ impl Drop for MonitorExitGuard {
 struct MembershipWatch {
     subject: Weak<MonitorHub>,
     cancellation: CancellationToken,
+    finished: CancellationToken,
 }
 
 /// Owns the watches created by one actor membership.
@@ -403,9 +404,12 @@ impl ActorMonitors {
         }
     }
 
-    /// Returns the cancellation token for the unique live watch on `subject`
-    /// and whether the caller must install its forwarder.
-    pub(crate) fn register(&self, subject: &Arc<MonitorHub>) -> (CancellationToken, bool) {
+    /// Returns the shared state for the unique live watch on `subject` and
+    /// whether the caller must install its forwarder.
+    pub(crate) fn register(
+        &self,
+        subject: &Arc<MonitorHub>,
+    ) -> (CancellationToken, CancellationToken, bool) {
         let mut watches = self.watches.lock().unwrap_or_else(PoisonError::into_inner);
         watches
             .retain(|watch| !watch.cancellation.is_cancelled() && watch.subject.strong_count() > 0);
@@ -415,15 +419,17 @@ impl ActorMonitors {
                 .upgrade()
                 .is_some_and(|registered| Arc::ptr_eq(&registered, subject))
         }) {
-            return (watch.cancellation.clone(), false);
+            return (watch.cancellation.clone(), watch.finished.clone(), false);
         }
 
         let cancellation = self.lifetime.child_token();
+        let finished = CancellationToken::new();
         watches.push(MembershipWatch {
             subject: Arc::downgrade(subject),
             cancellation: cancellation.clone(),
+            finished: finished.clone(),
         });
-        (cancellation, true)
+        (cancellation, finished, true)
     }
 
     pub(crate) fn terminate(&self) {
