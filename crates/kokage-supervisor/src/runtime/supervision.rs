@@ -950,8 +950,14 @@ impl SupervisorRuntime {
         }
     }
 
+    fn assert_dynamic_membership(&self) {
+        if self.meta.kind != ScopeKind::Dynamic {
+            unreachable!("dynamic membership command reached an ordered supervisor");
+        }
+    }
+
     fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
-        debug_assert_eq!(self.meta.kind, ScopeKind::Dynamic);
+        self.assert_dynamic_membership();
 
         ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
@@ -1001,7 +1007,7 @@ impl SupervisorRuntime {
     }
 
     fn add_nested(&mut self, mut pending: PendingSupervisorChild) -> CommandResult<u64> {
-        debug_assert_eq!(self.meta.kind, ScopeKind::Dynamic);
+        self.assert_dynamic_membership();
         // Every early return from here on drops `pending`, which terminalizes
         // the identity its caller reserved.
         let spec = pending.spec_mut();
@@ -1098,7 +1104,7 @@ impl SupervisorRuntime {
         id: String,
         reply: oneshot::Sender<Result<(), ControlError>>,
     ) -> RuntimeResult<()> {
-        debug_assert_eq!(self.meta.kind, ScopeKind::Dynamic);
+        self.assert_dynamic_membership();
 
         let Some(&key) = self.children_by_id.get(&id) else {
             let _ = reply.send(Err(ControlError::UnknownChildId(id)));
@@ -2172,6 +2178,14 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "dynamic membership command reached an ordered supervisor")]
+    fn ordered_runtime_rejects_internal_dynamic_membership_commands() {
+        let mut runtime = runtime_with_child("static");
+
+        let _ = runtime.add_child(ChildSpec::task("dynamic", |_| async { Ok(()) }));
     }
 
     #[tokio::test]

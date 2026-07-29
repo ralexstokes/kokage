@@ -352,6 +352,9 @@ where
 ///
 /// Dropping this value requests graceful shutdown. Handles cloned from it are
 /// non-owning and may be dropped without affecting runtime lifetime.
+/// Because `Runtime` dereferences to [`RuntimeHandle`], `runtime.clone()` also
+/// compiles, but returns a non-owning `RuntimeHandle`; use [`handle`](Self::handle)
+/// to make that ownership transition explicit.
 #[must_use = "dropping the runtime requests graceful shutdown"]
 pub struct Runtime {
     supervisor: RunningSupervisor,
@@ -416,7 +419,7 @@ pub struct RuntimeHandle {
 /// operations that can change membership.
 #[derive(Clone, Debug)]
 pub struct DynamicRuntime {
-    handle: RuntimeHandle,
+    actors: Arc<ActorRuntimeState>,
     supervisor: DynamicSupervisorHandle,
 }
 
@@ -461,55 +464,9 @@ impl RuntimeHandle {
     /// `Some` before and after spawn.
     pub fn dynamic(&self) -> Option<DynamicRuntime> {
         self.supervisor.dynamic().map(|supervisor| DynamicRuntime {
-            handle: self.clone(),
+            actors: Arc::clone(&self.actors),
             supervisor,
         })
-    }
-
-    /// Builds and adds an actor-aware runtime subtree dynamically.
-    ///
-    /// The returned handle can add actors or further subtrees, and recursive
-    /// [`actor_stats`](Self::actor_stats) include the new subtree. Removing the
-    /// child detaches its actor metadata with the supervisor membership;
-    /// retained subtree handles then fail control operations with
-    /// [`ControlError::Unavailable`].
-    ///
-    /// If the subtree itself restarts, its statically declared graph actors
-    /// is recreated, while children added later through the returned handle
-    /// are lost and must be replayed by the application. If this handle's
-    /// supervisor restarts, the dynamically added subtree is not recreated.
-    ///
-    /// Restart intensity remains tracked per child across this boundary.
-    /// Dynamic additions start immediately and dynamic siblings stop
-    /// concurrently under one shared maximum-grace deadline. Use
-    /// [`wait_started`](Self::wait_started) when readiness is needed.
-    ///
-    /// Both failure phases use [`ControlError::Rejected`]: first the supplied
-    /// tree is lowered and validated, then the parent validates insertion of
-    /// the resulting child. For example, a duplicate actor binding fails the
-    /// first phase, while an already-occupied child id fails the second. The
-    /// nested [`SupervisorBuildError`] identifies the validation rule, but a
-    /// caller should not infer the phase solely from an error variant because
-    /// some rules, such as duplicate child ids, can arise in either phase.
-    /// Any error consumes the supplied tree and makes handles previously issued
-    /// from it terminal.
-    async fn add_subtree_dynamic(
-        &self,
-        supervisor: &DynamicSupervisorHandle,
-        id: impl Into<String>,
-        tree: impl Into<crate::TreeNode>,
-    ) -> Result<RuntimeHandle, ControlError> {
-        let id = id.into();
-        let parts = tree.into().into_parts();
-        let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
-        let lineage = supervisor
-            .add_child(__private::attach(
-                ChildSpec::supervisor(id.clone(), nested_supervisor),
-                RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
-            ))
-            .await?;
-        self.subtree_membership(&id, Some(lineage))
-            .ok_or(ControlError::Unavailable)
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -520,139 +477,12 @@ impl RuntimeHandle {
     }
 
     fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<RuntimeHandle> {
-        __private::attached_children::<RuntimeAttachment>(&self.supervisor)
-            .into_iter()
-            .find_map(|attached| {
-                let [identity] = attached.path() else {
-                    return None;
-                };
-                if identity.id != id
-                    || lineage.is_some_and(|lineage| identity.lineage != lineage)
-                    || !attached.attachment().belongs_to(&self.actors)
-                {
-                    return None;
-                }
-                let RuntimeAttachmentKind::Subtree(actors) = &attached.attachment().kind else {
-                    return None;
-                };
-                Some(Self::new(
-                    attached.supervisor()?.clone(),
-                    Arc::clone(actors),
-                ))
-            })
-    }
-
-    /// Adds an arbitrary supervised task child to this runtime.
-    ///
-    /// This is the task-level counterpart to adding an actor. Success means
-    /// the membership was inserted and startup was scheduled, and returns the
-    /// lineage assigned to that membership. Task children do not appear in
-    /// [`actor_stats`](Self::actor_stats), but remain visible through snapshots
-    /// and lifecycle watches.
-    async fn add_child_dynamic(
-        &self,
-        supervisor: &DynamicSupervisorHandle,
-        child: ChildSpec,
-    ) -> Result<u64, ControlError> {
-        supervisor.add_child(child).await
-    }
-
-    /// Adds a supervised runtime actor with default options and returns its
-    /// stable typed ref.
-    ///
-    /// See [`DynamicRuntime::add_actor_with`] for child-id, readiness, and
-    /// explicit mailbox-option details.
-    async fn add_actor_dynamic<F>(
-        &self,
-        supervisor: &DynamicSupervisorHandle,
-        label: impl Into<String>,
-        factory: F,
-    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
-    where
-        F: ActorFactory,
-    {
-        self.add_actor_with_dynamic(supervisor, label, factory, DynamicActorOptions::new())
-            .await
-    }
-
-    /// Adds a supervised runtime actor from an incarnation factory with
-    /// explicit options and returns its stable typed ref.
-    ///
-    /// The actor's label is also its direct supervisor child id, so it can be
-    /// removed later through the dynamic capability. See
-    /// [`ActorFactory`] for the incarnation lifecycle contract. Success means
-    /// membership was inserted and immediate startup was scheduled. The returned stable ref
-    /// can be used immediately, while [`wait_started`](Self::wait_started)
-    /// retains the stronger readiness contract. A zero
-    /// [`ActorOptions::mailbox_capacity`] is rejected with
-    /// [`ControlError::Rejected`].
-    async fn add_actor_with_dynamic<F>(
-        &self,
-        supervisor: &DynamicSupervisorHandle,
-        label: impl Into<String>,
-        factory: F,
-        options: DynamicActorOptions<<F::Actor as RawActor>::Msg>,
-    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
-    where
-        F: ActorFactory,
-    {
-        let (default_restart, default_shutdown) = self.actors.actor_defaults();
-        let (actor_options, dynamic_options) =
-            options.into_parts(default_restart, default_shutdown);
-        actor_options
-            .validate()
-            .map_err(|error: ActorOptionsValidationError| {
-                ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
-            })?;
-        let actor = self.actors.make_actor(label, factory, actor_options);
-        self.add_constructed_actor(supervisor, actor, dynamic_options)
-            .await
-    }
-
-    async fn add_constructed_actor<M>(
-        &self,
-        supervisor: &DynamicSupervisorHandle,
-        (actor, actor_ref): (RunnableActor, ActorRef<M>),
-        options: DynamicChildOptions,
-    ) -> Result<ActorRef<M>, ControlError> {
-        let child = actor_child_spec(
-            actor.clone(),
+        runtime_subtree_membership(
+            __private::attached_children::<RuntimeAttachment>(&self.supervisor),
             &self.actors,
-            ActorChildOptions::new(options.restart, options.shutdown)
-                .restart_config(options.restart_config)
-                .remove_on_exit(options.remove_on_exit),
-        );
-        supervisor.add_child(child).await?;
-
-        Ok(actor_ref)
-    }
-
-    /// Removes a child from the supervisor.
-    ///
-    /// Removal marks the membership as removing and starts its configured
-    /// shutdown. When cooperative shutdown completes within its grace period,
-    /// an [`Actor`](crate::Actor) stops its normal receive loop, closes external
-    /// intake, applies its [`DrainPolicy`](crate::DrainPolicy), runs `on_stop`,
-    /// makes the mailbox binding terminal, and is then detached. Immediate
-    /// abort, or expiry of the cooperative grace period, can skip any remaining
-    /// drain or hook work before detachment. The returned future completes
-    /// after detachment (or after the configured shutdown backstop aborts it).
-    ///
-    /// A send racing with removal may still be accepted. With
-    /// `DrainPolicy::Drain`, work accepted before drain closes intake belongs
-    /// to the queued prefix handled before `on_stop`. With `Discard`, accepted
-    /// work that remains queued is dropped. Once the actor closes intake,
-    /// `try_send` may briefly return
-    /// [`TrySendError::Closed`](crate::TrySendError::Closed), while an awaited
-    /// `send` waits and then returns [`SendError`](crate::SendError).
-    /// Removal does not return queued messages: end-to-end delivery ownership
-    /// belongs in an application acknowledgement and replay protocol.
-    async fn remove_child_dynamic(
-        &self,
-        supervisor: &DynamicSupervisorHandle,
-        id: impl Into<String>,
-    ) -> Result<(), ControlError> {
-        supervisor.remove_child(id).await
+            id,
+            lineage,
+        )
     }
 
     /// Waits for the supervisor to stop.
@@ -719,6 +549,9 @@ impl RuntimeHandle {
     /// The lifecycle subscription and current generation are captured before
     /// this method returns. The restart may therefore be triggered before the
     /// returned future is first polled without losing its `Started` event.
+    /// A restart already reflected in the captured generation becomes the
+    /// baseline, even if its `Started` event is buffered, so only a later
+    /// generation can complete the future.
     ///
     /// Returns `None` if the child is not currently supervised, is removed
     /// before restarting, the watch lags, or this runtime identity becomes
@@ -821,27 +654,100 @@ impl RuntimeHandle {
     }
 }
 
+fn runtime_subtree_membership(
+    attached_children: Vec<__private::AttachedChild<RuntimeAttachment>>,
+    actors: &Arc<ActorRuntimeState>,
+    id: &str,
+    lineage: Option<u64>,
+) -> Option<RuntimeHandle> {
+    attached_children.into_iter().find_map(|attached| {
+        let [identity] = attached.path() else {
+            return None;
+        };
+        if identity.id != id
+            || lineage.is_some_and(|lineage| identity.lineage != lineage)
+            || !attached.attachment().belongs_to(actors)
+        {
+            return None;
+        }
+        let RuntimeAttachmentKind::Subtree(subtree_actors) = &attached.attachment().kind else {
+            return None;
+        };
+        Some(RuntimeHandle::new(
+            attached.supervisor()?.clone(),
+            Arc::clone(subtree_actors),
+        ))
+    })
+}
+
 impl DynamicRuntime {
     /// Builds and adds an actor-aware runtime subtree dynamically.
     ///
-    /// Success means insertion completed and startup was scheduled. The
-    /// returned handle is non-owning and scoped to the inserted subtree.
+    /// The returned handle can add actors or further subtrees, and recursive
+    /// [`RuntimeHandle::actor_stats`] include the new subtree. Removing the
+    /// child detaches its actor metadata with the supervisor membership;
+    /// retained subtree handles then fail control operations with
+    /// [`ControlError::Unavailable`].
+    ///
+    /// If the subtree itself restarts, its statically declared graph actors
+    /// are recreated, while children added later through the returned handle
+    /// are lost and must be replayed by the application. If this scope's
+    /// supervisor restarts, the dynamically added subtree is not recreated.
+    ///
+    /// Restart intensity remains tracked per child across this boundary.
+    /// Dynamic additions start immediately and dynamic siblings stop
+    /// concurrently under one shared maximum-grace deadline. Use
+    /// [`RuntimeHandle::wait_started`] when readiness is needed.
+    ///
+    /// Both failure phases use [`ControlError::Rejected`]: first the supplied
+    /// tree is lowered and validated, then the parent validates insertion of
+    /// the resulting child. For example, a duplicate actor binding fails the
+    /// first phase, while an already-occupied child id fails the second. The
+    /// nested [`SupervisorBuildError`] identifies the validation rule, but a
+    /// caller should not infer the phase solely from an error variant because
+    /// some rules, such as duplicate child ids, can arise in either phase.
+    /// Any error consumes the supplied tree and makes handles previously issued
+    /// from it terminal.
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
         tree: impl Into<crate::TreeNode>,
     ) -> Result<RuntimeHandle, ControlError> {
-        self.handle
-            .add_subtree_dynamic(&self.supervisor, id, tree)
-            .await
+        let id = id.into();
+        let parts = tree.into().into_parts();
+        let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
+        let lineage = self
+            .supervisor
+            .add_child(__private::attach(
+                ChildSpec::supervisor(id.clone(), nested_supervisor),
+                RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
+            ))
+            .await?;
+        runtime_subtree_membership(
+            __private::dynamic_attached_children::<RuntimeAttachment>(&self.supervisor),
+            &self.actors,
+            &id,
+            Some(lineage),
+        )
+        .ok_or(ControlError::Unavailable)
     }
 
-    /// Adds an arbitrary supervised task child and returns its lineage.
+    /// Adds an arbitrary supervised task child to this runtime.
+    ///
+    /// This is the task-level counterpart to adding an actor. Success means
+    /// the membership was inserted and startup was scheduled, and returns the
+    /// lineage assigned to that membership. Task children do not appear in
+    /// [`RuntimeHandle::actor_stats`], but remain visible through snapshots and
+    /// lifecycle watches.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.handle.add_child_dynamic(&self.supervisor, child).await
+        self.supervisor.add_child(child).await
     }
 
-    /// Adds a supervised actor using the dynamic scope's defaults.
+    /// Adds a supervised runtime actor with default options and returns its
+    /// stable typed ref.
+    ///
+    /// See [`Self::add_actor_with`] for child-id, readiness, and explicit
+    /// mailbox-option details.
     pub async fn add_actor<F>(
         &self,
         label: impl Into<String>,
@@ -850,12 +756,21 @@ impl DynamicRuntime {
     where
         F: ActorFactory,
     {
-        self.handle
-            .add_actor_dynamic(&self.supervisor, label, factory)
+        self.add_actor_with(label, factory, DynamicActorOptions::new())
             .await
     }
 
-    /// Adds a supervised actor with explicit child and mailbox options.
+    /// Adds a supervised runtime actor from an incarnation factory with
+    /// explicit options and returns its stable typed ref.
+    ///
+    /// The actor's label is also its direct supervisor child id, so it can be
+    /// removed later through the dynamic capability. See [`ActorFactory`] for
+    /// the incarnation lifecycle contract. Success means membership was
+    /// inserted and immediate startup was scheduled. The returned stable ref
+    /// can be used immediately, while [`RuntimeHandle::wait_started`] retains
+    /// the stronger readiness contract. A zero
+    /// [`ActorOptions::mailbox_capacity`] is rejected with
+    /// [`ControlError::Rejected`].
     pub async fn add_actor_with<F>(
         &self,
         label: impl Into<String>,
@@ -865,14 +780,57 @@ impl DynamicRuntime {
     where
         F: ActorFactory,
     {
-        self.handle
-            .add_actor_with_dynamic(&self.supervisor, label, factory, options)
-            .await
+        let (default_restart, default_shutdown) = self.actors.actor_defaults();
+        let (actor_options, dynamic_options) =
+            options.into_parts(default_restart, default_shutdown);
+        actor_options
+            .validate()
+            .map_err(|error: ActorOptionsValidationError| {
+                ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
+            })?;
+        let actor = self.actors.make_actor(label, factory, actor_options);
+        self.add_constructed_actor(actor, dynamic_options).await
     }
 
-    /// Removes a child after applying its shutdown policy.
+    async fn add_constructed_actor<M>(
+        &self,
+        (actor, actor_ref): (RunnableActor, ActorRef<M>),
+        options: DynamicChildOptions,
+    ) -> Result<ActorRef<M>, ControlError> {
+        let child = actor_child_spec(
+            actor.clone(),
+            &self.actors,
+            ActorChildOptions::new(options.restart, options.shutdown)
+                .restart_config(options.restart_config)
+                .remove_on_exit(options.remove_on_exit),
+        );
+        self.supervisor.add_child(child).await?;
+
+        Ok(actor_ref)
+    }
+
+    /// Removes a child from the supervisor.
+    ///
+    /// Removal marks the membership as removing and starts its configured
+    /// shutdown. When cooperative shutdown completes within its grace period,
+    /// an [`Actor`](crate::Actor) stops its normal receive loop, closes external
+    /// intake, applies its [`DrainPolicy`](crate::DrainPolicy), runs `on_stop`,
+    /// makes the mailbox binding terminal, and is then detached. Immediate
+    /// abort, or expiry of the cooperative grace period, can skip any remaining
+    /// drain or hook work before detachment. The returned future completes
+    /// after detachment (or after the configured shutdown backstop aborts it).
+    ///
+    /// A send racing with removal may still be accepted. With
+    /// `DrainPolicy::Drain`, work accepted before drain closes intake belongs
+    /// to the queued prefix handled before `on_stop`. With `Discard`, accepted
+    /// work that remains queued is dropped. Once the actor closes intake,
+    /// `try_send` may briefly return
+    /// [`TrySendError::Closed`](crate::TrySendError::Closed), while an awaited
+    /// `send` waits and then returns [`SendError`](crate::SendError).
+    /// Removal does not return queued messages: end-to-end delivery ownership
+    /// belongs in an application acknowledgement and replay protocol.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        self.handle.remove_child_dynamic(&self.supervisor, id).await
+        self.supervisor.remove_child(id).await
     }
 }
 

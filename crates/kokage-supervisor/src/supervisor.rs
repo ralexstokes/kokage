@@ -70,6 +70,8 @@ pub struct Supervisor {
 /// graceful shutdown, while any [`SupervisorHandle`] values obtained through
 /// [`handle`](Self::handle) remain non-owning and may be dropped freely.
 /// Retain the owner for as long as the root supervisor should keep running.
+/// Calling `clone()` through [`Deref`](std::ops::Deref) clones only the
+/// non-owning [`SupervisorHandle`]; it does not create another owner.
 #[must_use = "dropping the running supervisor requests graceful shutdown"]
 pub struct RunningSupervisor {
     handle: SupervisorHandle,

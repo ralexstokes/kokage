@@ -164,9 +164,9 @@ let subscription = venue
 
 The actor's label (`"btc-usd"` above) is its child id within the nested
 supervisor, so remove it through the same handle with
-`venue.dynamic().unwrap().remove_child("btc-usd")`. Actors added this way are supervised, restart
-normally, and appear in both `venue.actor_stats()` and the parent handle's
-recursive `actor_stats()` result.
+`venue.dynamic().expect("dynamic venue").remove_child("btc-usd")`. Actors added
+this way are supervised, restart normally, and appear in both
+`venue.actor_stats()` and the parent handle's recursive `actor_stats()` result.
 
 Subtrees can also be added dynamically. `add_subtree` consumes an
 `OrderedTree` or `DynamicTree` and returns its actor-aware handle:

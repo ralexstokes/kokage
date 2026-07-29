@@ -1429,26 +1429,22 @@ mod sealed {
 
 macro_rules! live_context_inherent_methods {
     () => {
-        /// Returns the lifecycle state of this live callback.
-        ///
-        /// `Draining` takes precedence over a local stop request. Graph-wide
-        /// shutdown is intentionally orthogonal; inspect
-        /// [`shutdown_token`](Self::shutdown_token) for that signal.
+        /// See [`LiveContext::status`] for this capability's contract.
         pub fn status(&self) -> ActorStatus {
             sealed::Sealed::status(self)
         }
 
-        /// Requests a clean stop of this actor incarnation.
+        /// See [`LiveContext::stop`] for this capability's contract.
         pub fn stop(&mut self) {
             self.cx.request_stop();
         }
 
-        /// Queues follow-up work as the actor's next message.
+        /// See [`LiveContext::continue_with`] for this capability's contract.
         pub fn continue_with(&mut self, message: A::Msg) {
             self.cx.push_continuation(message);
         }
 
-        /// Watches the target logical actor across restarts.
+        /// See [`LiveContext::watch`] for this capability's contract.
         pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> CancellationHandle
         where
             T: Send + 'static,
@@ -1457,8 +1453,7 @@ macro_rules! live_context_inherent_methods {
             self.cx.watch(target, map)
         }
 
-        /// Runs a lifecycle wait as incarnation-owned background work and maps
-        /// its result into this actor's mailbox.
+        /// See [`LiveContext::spawn_scope_wait`] for this capability's contract.
         pub fn spawn_scope_wait<W, F, T, Map>(
             &mut self,
             scope: &RestrictedScope,
@@ -1474,24 +1469,24 @@ macro_rules! live_context_inherent_methods {
             self.cx.spawn_scope_wait(scope, wait, map)
         }
 
-        /// Arms a keyed one-shot timeout, replacing the timeout at the same key.
+        /// See [`LiveContext::set_timeout`] for this capability's contract.
         pub fn set_timeout(&mut self, key: TimerKey, message: A::Msg, delay: Duration) {
             self.cx
                 .timers
                 .insert(TimerSlot::Keyed(key), message, delay, None, None);
         }
 
-        /// Clears the timeout at `key`, if one is armed.
+        /// See [`LiveContext::clear_timeout`] for this capability's contract.
         pub fn clear_timeout(&mut self, key: TimerKey) {
             self.cx.timers.clear(TimerSlot::Keyed(key));
         }
 
-        /// Returns whether the timeout at `key` is armed.
+        /// See [`LiveContext::timeout_armed`] for this capability's contract.
         pub fn timeout_armed(&self, key: TimerKey) -> bool {
             self.cx.timers.is_armed(TimerSlot::Keyed(key))
         }
 
-        /// Schedules an anonymous one-shot actor-local message.
+        /// See [`LiveContext::send_after`] for this capability's contract.
         pub fn send_after(&mut self, message: A::Msg, delay: Duration) -> CancellationHandle {
             let timer = CancellationHandle::new();
             self.cx.timers.insert(
@@ -1504,7 +1499,7 @@ macro_rules! live_context_inherent_methods {
             timer
         }
 
-        /// Schedules a periodic actor-local message.
+        /// See [`LiveContext::interval`] for this capability's contract.
         pub fn interval(&mut self, message: A::Msg, period: Duration) -> CancellationHandle
         where
             A::Msg: Clone,
@@ -1524,8 +1519,7 @@ macro_rules! live_context_inherent_methods {
             timer
         }
 
-        /// Sends `message` to `target` after `delay`, bound to this actor
-        /// incarnation.
+        /// See [`LiveContext::send_after_to`] for this capability's contract.
         pub fn send_after_to<T: Send + 'static>(
             &self,
             target: &ActorRef<T>,
@@ -1535,8 +1529,7 @@ macro_rules! live_context_inherent_methods {
             self.cx.send_after_to(target, message, delay)
         }
 
-        /// Periodically sends `message` to `target`, bound to this actor
-        /// incarnation.
+        /// See [`LiveContext::interval_to`] for this capability's contract.
         pub fn interval_to<T: Clone + Send + 'static>(
             &self,
             target: &ActorRef<T>,
@@ -1546,7 +1539,7 @@ macro_rules! live_context_inherent_methods {
             self.cx.interval_to(target, message, period)
         }
 
-        /// Runs a bounded future without blocking this actor's receive loop.
+        /// See [`LiveContext::offload`] for this capability's contract.
         pub fn offload<F, T, C>(
             &mut self,
             deadline: Duration,
@@ -1620,16 +1613,68 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Returns the lifecycle state of this live callback.
+    ///
+    /// The provided receive loop calls [`Actor::handle`](crate::Actor::handle)
+    /// from two phases. Ordinary calls report [`ActorStatus::Running`] until
+    /// this callback requests a local stop. Once the receive loop exits,
+    /// [`DrainPolicy::Drain`](crate::DrainPolicy) replays already accepted
+    /// mailbox messages and offload completions as [`ActorStatus::Draining`].
+    /// Nothing follows the drain except
+    /// [`on_stop`](crate::Actor::on_stop), so work deferred from that phase
+    /// will not run: continuations are dropped, new timers and intervals never
+    /// fire, and a fresh [`offload`](Self::offload) races the shutdown budget.
+    /// `StartContext` never reports `Draining`.
+    ///
+    /// This status is deliberately distinct from graph shutdown. A local
+    /// [`stop`](Self::stop) can lead to `Draining` while
+    /// [`shutdown_token`](Self::shutdown_token) remains live; conversely,
+    /// graph shutdown requested during an in-flight ordinary callback cancels
+    /// that token while this method still reports `Running`. Ask `status` when
+    /// the question is whether work queued by this callback can run, and
+    /// inspect the token when the question is about the graph. `Draining`
+    /// takes precedence when local stop and graph shutdown overlap.
     fn status(&self) -> ActorStatus {
         sealed::Sealed::status(self)
     }
 
     /// Requests a clean stop of this actor incarnation.
+    ///
+    /// The request takes effect after the current `on_start` or `handle` call
+    /// returns successfully. The provided receive loop then applies the
+    /// actor's [`DrainPolicy`](crate::DrainPolicy), runs
+    /// [`on_stop`](crate::Actor::on_stop), and reports a normal exit to
+    /// monitoring and supervision. Returning an error from the same callback
+    /// still fails the actor; the error takes precedence over this request.
+    ///
+    /// A startup request skips the ordinary receive loop but still reports
+    /// readiness before clean shutdown, preserving the lifecycle boundary for
+    /// ordered supervision. A handler whose [`status`](Self::status) is
+    /// [`ActorStatus::Draining`] is already on the stop path, so another
+    /// request there has no additional effect. Repeated calls are harmless.
     fn stop(&mut self) {
         self.cx_mut().request_stop();
     }
 
     /// Queues follow-up work as the actor's next message.
+    ///
+    /// Continuations are taken ahead of the mailbox on every iteration of the
+    /// provided receive loop, so they are a priority self-send that does not
+    /// consume mailbox capacity. Calls made from
+    /// [`Actor::on_start`](crate::Actor::on_start) are processed after startup
+    /// readiness is reported and before ordinary mailbox messages, which keeps
+    /// expensive warm-up work out of the readiness-critical initialization
+    /// path.
+    ///
+    /// Continuations count as received messages in
+    /// [`ActorStats`](crate::observe::ActorStats), but not as externally
+    /// accepted mailbox messages. They are abandoned once the actor begins
+    /// stopping, which is why [`StopContext`] does not expose this method.
+    ///
+    /// Two stopping paths still reach this method: a handler called during
+    /// [`ActorStatus::Draining`] and an `on_start` callback that also calls
+    /// [`stop`](Self::stop). Continuations queued there are dropped with the
+    /// incarnation. The provided receive loop emits a `WARN` naming the actor
+    /// and the number dropped before `on_stop` runs.
     fn continue_with(&mut self, message: M) {
         self.cx_mut().push_continuation(message);
     }
@@ -1643,7 +1688,35 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         self.cx().watch(target, map)
     }
 
-    /// Runs a lifecycle wait as incarnation-owned background work.
+    /// Runs a lifecycle wait outside the actor task and maps its result back
+    /// into the actor's ordinary mailbox.
+    ///
+    /// The `wait` closure receives the full handle for `scope`, so it may use
+    /// lifecycle operations intentionally withheld from [`RestrictedScope`].
+    /// It runs outside the actor task, allowing the current hook to return and
+    /// avoiding a deadlock when progress depends on that return.
+    ///
+    /// The task belongs to this actor incarnation. It is aborted when the
+    /// incarnation stops or restarts and is never awaited by
+    /// [`DrainPolicy::Drain`](crate::DrainPolicy). A mapped result is sent only
+    /// to the incarnation that started the wait, through its ordinary mailbox,
+    /// so capacity, FIFO ordering, and conflation apply normally. It cannot
+    /// follow this actor's stable ref into a later incarnation.
+    ///
+    /// The returned [`TaskHandle`] is optional: dropping it leaves the
+    /// actor-owned wait running, while [`TaskHandle::abort`] cancels it
+    /// explicitly. Lifecycle waits need not have a natural deadline, but code
+    /// that starts them from ordinary messages should retain a handle or apply
+    /// its own bound rather than accumulating one never-ending wait per
+    /// message. [`ActorStats::outstanding_scope_waits`](crate::observe::ActorStats::outstanding_scope_waits)
+    /// exposes the current number for operational accounting.
+    ///
+    /// A panic in `wait`, its future, or `map` that is observed while the
+    /// incarnation is live resumes on the actor task, matching
+    /// [`offload`](Self::offload), so supervision observes an ordinary actor
+    /// panic. Also like an offload, a scope wait is aborted when shutdown or a
+    /// restart wins the race; an unobserved task result, including a panic, may
+    /// then be discarded with the ending incarnation.
     fn spawn_scope_wait<W, F, T, Map>(
         &mut self,
         scope: &RestrictedScope,
@@ -1660,6 +1733,10 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Arms a keyed one-shot timeout, replacing the timeout at the same key.
+    ///
+    /// The timeout is owned by the actor loop rather than sent through its
+    /// mailbox. Replacement and [`clear_timeout`](Self::clear_timeout) are
+    /// therefore exact until delivery. Timeouts at other keys are unchanged.
     fn set_timeout(&mut self, key: TimerKey, message: M, delay: Duration) {
         self.cx_mut()
             .timers
@@ -1676,7 +1753,11 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         self.cx().timers.is_armed(TimerSlot::Keyed(key))
     }
 
-    /// Schedules an anonymous one-shot actor-local message.
+    /// Schedules an anonymous one-shot message and returns its exact
+    /// cancellation handle.
+    ///
+    /// Self-timer delivery bypasses mailbox capacity and conflation, counts as
+    /// a received message, and is cancelled structurally on restart.
     fn send_after(&mut self, message: M, delay: Duration) -> CancellationHandle {
         let timer = CancellationHandle::new();
         self.cx_mut().timers.insert(
@@ -1690,6 +1771,10 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     }
 
     /// Schedules a periodic actor-local message.
+    ///
+    /// The first message is delivered after one full period. Each delivery
+    /// arms the next one, so missed ticks never pile up. A zero period returns
+    /// an already-cancelled handle and sends no messages.
     fn interval(&mut self, message: M, period: Duration) -> CancellationHandle
     where
         M: Clone,

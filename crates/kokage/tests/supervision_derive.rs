@@ -300,6 +300,22 @@ fn tree_with_reports_invalid_graph_builder_settings() {
 }
 
 #[test]
+fn tree_with_rejects_registered_actors_before_wiring() {
+    let mut builder = GraphBuilder::new();
+    let _extra = builder.actor("extra", || Park);
+    let mut wired = false;
+
+    assert!(matches!(
+        ParkGraph::tree_with(builder, |_| {
+            wired = true;
+            ParkGraphFactories { park: || Park }
+        }),
+        Err(GraphBuildError::NonEmptyGraphBuilder)
+    ));
+    assert!(!wired, "wiring closure must not run for an invalid builder");
+}
+
+#[test]
 fn empty_slot_name_records_empty_name_error_and_detaches() {
     let mut builder = GraphBuilder::new();
     let (slot, actor_ref) = builder.slot::<()>("");

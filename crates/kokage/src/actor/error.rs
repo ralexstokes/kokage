@@ -24,6 +24,9 @@ pub enum GraphBuildError {
     /// The graph was built without any actors.
     #[error("graph must contain at least one actor")]
     EmptyGraph,
+    /// A builder passed to a generated supervision constructor already had actors registered.
+    #[error("graph builder passed to generated supervision must not contain registered actors")]
+    NonEmptyGraphBuilder,
     /// Two actor implementations shared the same id.
     #[error("duplicate actor id `{actor_id}`")]
     #[non_exhaustive]
