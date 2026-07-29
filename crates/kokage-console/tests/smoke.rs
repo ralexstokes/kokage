@@ -5,7 +5,7 @@ use std::{
 };
 
 use futures_util::StreamExt;
-use kokage::{Actor, ActorResult, DynamicTree, MessageContext, observe::ActorStats};
+use kokage::{Actor, ActorResult, ActorSpec, DynamicTree, MessageContext, observe::ActorStats};
 use kokage_console::{Console, ConsoleBuildError, ConsoleHandle};
 use kokage_supervisor::{ChildSpec, RunningSupervisor, Supervisor};
 use serde_json::{Value, json};
@@ -530,7 +530,7 @@ async fn dynamic_tree_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
-        .add_actor("tracked", || IdleActor)
+        .add_actor(ActorSpec::new("tracked", || IdleActor))
         .await
         .expect("failed to add runtime actor");
 
