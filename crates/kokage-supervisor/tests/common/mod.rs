@@ -12,8 +12,8 @@ use std::{
 
 use kokage_supervisor::{
     BoxError, ChildExitView, ChildSnapshot, ChildSpec, LifecycleEvent, LifecycleEventKind,
-    LifecycleWatch, RestartConfig, RestartPolicy, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSnapshotReceiver,
+    LifecycleWatch, Restart, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSnapshotReceiver,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -44,12 +44,14 @@ impl From<ChildExitView> for ExitStatusView {
     }
 }
 
-pub fn restart_config(
+pub fn restart_with_backoff(
     max_restarts: usize,
     within: Duration,
-    backoff: kokage_supervisor::BackoffPolicy,
-) -> RestartConfig {
-    RestartConfig::new(max_restarts, within).backoff(backoff)
+    backoff: kokage_supervisor::Backoff,
+) -> Restart {
+    Restart::on_failure()
+        .limit(max_restarts, within)
+        .backoff(backoff)
 }
 
 pub fn test_error(message: &'static str) -> BoxError {
@@ -363,7 +365,7 @@ pub fn fail_on_generations(
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
+    .restart(Restart::on_failure())
 }
 
 pub fn failing_child(
@@ -379,8 +381,7 @@ pub fn failing_child(
             Err(test_error(error))
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+    .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(

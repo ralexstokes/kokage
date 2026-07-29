@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .restart(RestartPolicy::Always)
+        .restart(Restart::always())
     };
 
     let decode = {
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .restart(RestartPolicy::Always)
+        .restart(Restart::always())
     };
 
     let running_owner = Supervisor::ordered()

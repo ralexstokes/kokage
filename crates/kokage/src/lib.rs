@@ -28,7 +28,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let echo = ActorSpec::new("echo", || Echo);
-//! let echo_ref = echo.actor_ref();
+//! let (echo, echo_ref) = echo.actor_ref();
 //! let runtime = OrderedTree::new().actor(echo).spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
@@ -88,7 +88,7 @@
 //!
 //! [`host::ActorContext::recv`] returns `None` as soon as shutdown is
 //! requested. [`Actor`]'s framework-owned loop defaults to
-//! [`DrainPolicy::Drain`] and finishes queued messages before stopping; a
+//! [`Shutdown::drain_for`] and finishes queued messages before stopping; a
 //! hand-written [`host::RawActor`] loop can inspect remaining work with
 //! [`host::ActorContext::try_recv`].
 //!
@@ -125,9 +125,9 @@
 //! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 //! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 //! let left_slot = ActorSlot::<()>::new("left");
-//! let left = left_slot.actor_ref();
+//! let (left_slot, left) = left_slot.actor_ref();
 //! let right_slot = ActorSlot::<()>::new("right");
-//! let right = right_slot.actor_ref();
+//! let (right_slot, right) = right_slot.actor_ref();
 //!
 //! let left_actor = left_slot.define({ let right = right.clone(); move || Left(right.clone()) });
 //! let right_actor = right_slot.define({ let left = left.clone(); move || Right(left.clone()) });
@@ -143,7 +143,7 @@
 //! ```
 //! use kokage::{
 //!     Actor, ActorResult, ActorSpec, CancellationToken, MessageContext,
-//!     RestartPolicy, host::DEFAULT_SHUTDOWN_BOUND,
+//!     Restart, Shutdown, host::DEFAULT_SHUTDOWN_BOUND,
 //! };
 //! # struct Worker;
 //! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult { Ok(()) } }
@@ -155,7 +155,11 @@
 //!     let stop = stop.clone();
 //!     async move {
 //!         actor
-//!             .run_until(stop.cancelled(), RestartPolicy::Never, DEFAULT_SHUTDOWN_BOUND)
+//!             .run_until(
+//!                 stop.cancelled(),
+//!                 Restart::never(),
+//!                 Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+//!             )
 //!             .await
 //!     }
 //! });
@@ -275,14 +279,13 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
-    BlockingCancelled, CallError, CancellationHandle, DownReason, DrainPolicy,
-    DynamicRestrictedScope, LiveContext, MailboxMode, MessageContext, MonitorEvent,
-    OffloadDeadline, Reply, RestrictedScope, SendError, StartContext, StopContext, TaskHandle,
-    TimerKey, TrySendError,
+    BlockingCancelled, CallError, CancellationHandle, DownReason, DynamicRestrictedScope,
+    LiveContext, MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, Reply,
+    RestrictedScope, SendError, StartContext, StopContext, TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
-    BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TerminalMembership,
+    Backoff, CancellationToken, ControlError, Restart, ScopeKind, Shutdown, Strategy,
+    SupervisorBuildError, SupervisorError,
 };
 pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

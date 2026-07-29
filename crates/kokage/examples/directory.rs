@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let directory_spec = ActorSpec::new("directory", || Directory::<String> {
         entries: HashMap::new(),
     });
-    let directory = directory_spec.actor_ref();
+    let (directory_spec, directory) = directory_spec.actor_ref();
     let dynamic_tree = DynamicTree::new();
     let dynamic = dynamic_tree.handle();
     let runtime = OrderedTree::new()

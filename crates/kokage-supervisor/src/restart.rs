@@ -2,73 +2,74 @@ use std::time::Duration;
 
 use crate::error::SupervisorBuildError;
 
-/// Controls whether a child is restarted after it exits.
+/// Delay applied between restart attempts.
 ///
-/// The default is [`OnFailure`](RestartPolicy::OnFailure).
+/// Use [`fixed`](Self::fixed) for a constant delay or
+/// [`exponential`](Self::exponential) for a delay that grows after consecutive
+/// short-lived incarnations. The default restarts immediately.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum RestartPolicy {
-    /// Always restart the child, regardless of exit status. Equivalent to
-    /// OTP's `permanent`.
-    Always,
-    /// Restart only on failure (`Err`, panic, or abort). A clean `Ok(())`
-    /// exit is treated as intentional completion and is not restarted.
-    /// Equivalent to OTP's `transient`.
-    #[default]
-    OnFailure,
-    /// Never restart. The child runs at most once and is not restarted after
-    /// any exit. Equivalent to OTP's `temporary`.
-    Never,
+pub struct Backoff {
+    kind: BackoffKind,
 }
 
-impl RestartPolicy {
-    pub(crate) fn should_restart(self, is_failure: bool) -> bool {
-        match self {
-            Self::Always => true,
-            Self::OnFailure => is_failure,
-            Self::Never => false,
-        }
-    }
-}
-
-/// Delay strategy applied between restart attempts.
-///
-/// The default is [`None`](BackoffPolicy::None) (immediate restart).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum BackoffPolicy {
-    /// Restart immediately with no delay.
+enum BackoffKind {
     #[default]
     None,
-    /// Wait a constant duration before every restart attempt.
     Fixed(Duration),
-    /// Wait an exponentially increasing duration: `base * factor^attempt`,
-    /// clamped to `max`. The attempt count tracks consecutive restarts and
-    /// resets after an incarnation runs longer than the restart intensity's
-    /// `within` duration. It is independent of the sliding intensity window.
-    /// When `jitter` is enabled, each delay is uniformly jittered into
-    /// `[delay/2, delay]` (equal jitter) to decorrelate concurrent restarts.
     Exponential {
-        /// Initial delay applied on the first restart.
         base: Duration,
-        /// Multiplicative factor applied per attempt.
         factor: u32,
-        /// Upper bound on the computed delay.
         max: Duration,
-        /// Whether to apply equal jitter to the computed delay.
         jitter: bool,
     },
 }
 
-impl BackoffPolicy {
+impl Backoff {
+    /// Restarts immediately.
+    pub const fn none() -> Self {
+        Self {
+            kind: BackoffKind::None,
+        }
+    }
+
+    /// Waits the same `delay` before every restart.
+    pub const fn fixed(delay: Duration) -> Self {
+        Self {
+            kind: BackoffKind::Fixed(delay),
+        }
+    }
+
+    /// Uses `base * factor^attempt`, clamped to `max`.
+    pub const fn exponential(base: Duration, factor: u32, max: Duration) -> Self {
+        Self {
+            kind: BackoffKind::Exponential {
+                base,
+                factor,
+                max,
+                jitter: false,
+            },
+        }
+    }
+
+    /// Applies equal jitter in `[delay / 2, delay]` to exponential delays.
+    #[must_use]
+    pub const fn jitter(mut self) -> Self {
+        if let BackoffKind::Exponential { jitter, .. } = &mut self.kind {
+            *jitter = true;
+        }
+        self
+    }
+
     fn validate(self) -> Result<(), SupervisorBuildError> {
-        match self {
-            Self::None => Ok(()),
-            Self::Fixed(delay) => {
+        match self.kind {
+            BackoffKind::None => Ok(()),
+            BackoffKind::Fixed(delay) => {
                 require_non_zero_duration(delay, "fixed backoff delay must be non-zero")
             }
-            Self::Exponential {
+            BackoffKind::Exponential {
                 base, factor, max, ..
             } => {
                 require_non_zero_duration(base, "exponential backoff base must be non-zero")?;
@@ -83,70 +84,156 @@ impl BackoffPolicy {
     }
 }
 
-/// Restart-budget and backoff configuration for a child or child group.
+/// Complete restart behavior for a supervised child.
 ///
-/// The budget tracks a sliding window of restart timestamps: if more than
-/// `max_restarts` occur within `within`, the supervisor gives up and exits with
-/// [`SupervisorError::RestartIntensityExceeded`]. The same value configures
-/// the delay between attempts because an exponential backoff resets after a
-/// run survives this window.
-///
-/// The default is 5 restarts within 30 seconds with no backoff.
-///
-/// [`SupervisorError::RestartIntensityExceeded`]: crate::SupervisorError::RestartIntensityExceeded
+/// A single value selects which exits restart, the restart budget and delay,
+/// and whether a terminal dynamic membership is removed. The default is
+/// [`on_failure`](Self::on_failure), limited to five restarts within thirty
+/// seconds, with immediate retries and retained terminal membership.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub struct RestartConfig {
-    /// Maximum number of restarts allowed inside the sliding window.
-    pub(crate) max_restarts: usize,
-    /// Length of the sliding window. Must be non-zero.
-    pub(crate) within: Duration,
-    /// Delay strategy inserted before each restart attempt.
-    pub(crate) backoff: BackoffPolicy,
+pub struct Restart {
+    mode: RestartMode,
+    max_restarts: usize,
+    within: Duration,
+    backoff: Backoff,
+    remove_when_done: bool,
 }
 
-impl Default for RestartConfig {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+enum RestartMode {
+    Always,
+    #[default]
+    OnFailure,
+    Never,
+}
+
+impl Default for Restart {
     fn default() -> Self {
-        Self::new(5, Duration::from_secs(30))
+        Self::on_failure()
     }
 }
 
-impl RestartConfig {
-    /// Creates restart configuration with the given budget and no backoff.
-    pub fn new(max_restarts: usize, within: Duration) -> Self {
+impl Restart {
+    const fn with_mode(mode: RestartMode) -> Self {
         Self {
-            max_restarts,
-            within,
-            backoff: BackoffPolicy::None,
+            mode,
+            max_restarts: 5,
+            within: Duration::from_secs(30),
+            backoff: Backoff::none(),
+            remove_when_done: false,
         }
     }
 
-    /// Returns the maximum restarts allowed inside the sliding window.
-    pub fn max_restarts(&self) -> usize {
-        self.max_restarts
+    /// Restarts after every exit, including clean completion.
+    pub const fn always() -> Self {
+        Self::with_mode(RestartMode::Always)
     }
 
-    /// Returns the sliding restart-budget window.
-    pub fn within(&self) -> Duration {
-        self.within
+    /// Restarts after an error, panic, or abort, but not clean completion.
+    pub const fn on_failure() -> Self {
+        Self::with_mode(RestartMode::OnFailure)
     }
 
-    /// Returns the configured delay strategy.
-    pub fn backoff_policy(&self) -> BackoffPolicy {
-        self.backoff
+    /// Never restarts; the child runs at most once.
+    pub const fn never() -> Self {
+        Self::with_mode(RestartMode::Never)
     }
 
-    /// Sets the delay strategy inserted before each restart attempt.
+    /// Sets the sliding restart budget.
     #[must_use]
-    pub fn backoff(mut self, backoff: BackoffPolicy) -> Self {
+    pub const fn limit(mut self, max_restarts: usize, within: Duration) -> Self {
+        self.max_restarts = max_restarts;
+        self.within = within;
+        self
+    }
+
+    /// Sets the delay between restart attempts.
+    #[must_use]
+    pub const fn backoff(mut self, backoff: Backoff) -> Self {
         self.backoff = backoff;
         self
     }
 
-    pub(crate) fn validate(&self) -> Result<(), SupervisorBuildError> {
+    /// Removes the membership after an exit this policy does not restart.
+    #[must_use]
+    pub const fn remove_when_done(mut self) -> Self {
+        self.remove_when_done = true;
+        self
+    }
+
+    /// Returns the maximum restarts allowed inside the sliding window.
+    pub const fn max_restarts(self) -> usize {
+        self.max_restarts
+    }
+
+    /// Returns the sliding restart-budget window.
+    pub const fn within(self) -> Duration {
+        self.within
+    }
+
+    /// Returns the configured retry delay.
+    pub const fn backoff_value(self) -> Backoff {
+        self.backoff
+    }
+
+    #[doc(hidden)]
+    pub const fn should_restart(self, is_failure: bool) -> bool {
+        match self.mode {
+            RestartMode::Always => true,
+            RestartMode::OnFailure => is_failure,
+            RestartMode::Never => false,
+        }
+    }
+
+    pub(crate) const fn is_always(self) -> bool {
+        matches!(self.mode, RestartMode::Always)
+    }
+
+    #[doc(hidden)]
+    pub const fn is_never(self) -> bool {
+        matches!(self.mode, RestartMode::Never)
+    }
+
+    pub(crate) const fn remove_on_exit(self) -> bool {
+        self.remove_when_done
+    }
+
+    pub(crate) fn validate(self) -> Result<(), SupervisorBuildError> {
         require_non_zero_duration(self.within, "restart intensity window must be non-zero")?;
         self.backoff.validate()
+    }
+}
+
+pub(crate) enum BackoffParts {
+    None,
+    Fixed(Duration),
+    Exponential {
+        base: Duration,
+        factor: u32,
+        max: Duration,
+        jitter: bool,
+    },
+}
+
+impl Backoff {
+    pub(crate) const fn parts(self) -> BackoffParts {
+        match self.kind {
+            BackoffKind::None => BackoffParts::None,
+            BackoffKind::Fixed(delay) => BackoffParts::Fixed(delay),
+            BackoffKind::Exponential {
+                base,
+                factor,
+                max,
+                jitter,
+            } => BackoffParts::Exponential {
+                base,
+                factor,
+                max,
+                jitter,
+            },
+        }
     }
 }
 
@@ -157,6 +244,5 @@ fn require_non_zero_duration(
     if duration.is_zero() {
         return Err(SupervisorBuildError::InvalidConfig(message));
     }
-
     Ok(())
 }

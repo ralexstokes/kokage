@@ -134,10 +134,7 @@ impl SupervisorRuntime {
             .as_ref()
             .is_some_and(|channels| channels.statically_configured());
         let child_revivable = (self.meta.revivable && statically_configured)
-            || !matches!(
-                self.children[key].runtime.definition.restart,
-                crate::restart::RestartPolicy::Never
-            );
+            || !self.children[key].runtime.definition.restart.is_never();
         let nested_run = if matches!(&kind, ChildKind::Supervisor(_)) {
             let channels = nested_channels.ok_or_else(|| {
                 SupervisorError::Internal(format!(

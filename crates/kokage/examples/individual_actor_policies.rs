@@ -11,7 +11,7 @@ use kokage::{
     Actor, ActorRef, ActorResult, ActorSpec, MessageContext, OrderedTree, StartContext,
     host::BoxError,
 };
-use kokage_supervisor::RestartConfig;
+use kokage_supervisor::Restart;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -61,19 +61,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runs: worker_runs.clone(),
         observed: observed_tx.clone(),
         run: 0,
-    });
-    let worker = worker_spec.actor_ref();
+    })
+    .restart(Restart::on_failure().limit(5, std::time::Duration::from_secs(5)));
+    let (worker_spec, worker) = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
         move || Frontend {
             worker: worker.clone(),
         }
     });
-    let frontend = frontend_spec.actor_ref();
+    let (frontend_spec, frontend) = frontend_spec.actor_ref();
 
     let runtime = OrderedTree::new()
         .actor(frontend_spec)
-        .actor(worker_spec.restart_config(RestartConfig::new(5, std::time::Duration::from_secs(5))))
+        .actor(worker_spec)
         .spawn()?;
     let handle = runtime.handle();
 

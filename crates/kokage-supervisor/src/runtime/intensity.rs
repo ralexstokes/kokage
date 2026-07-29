@@ -5,7 +5,7 @@ use std::{
 
 use tokio::time::Instant;
 
-use crate::restart::{BackoffPolicy, RestartConfig};
+use crate::restart::{BackoffParts, Restart};
 
 /// Sliding-window restart rate limiter.
 ///
@@ -14,11 +14,11 @@ use crate::restart::{BackoffPolicy, RestartConfig};
 /// `intensity.max_restarts`, [`exceeded`](Self::exceeded) returns `true`.
 ///
 /// Also computes the backoff delay for the next restart attempt based on the
-/// configured [`BackoffPolicy`]. Backoff uses a consecutive-restart counter
+/// configured [`Backoff`]. Backoff uses a consecutive-restart counter
 /// that resets after an incarnation runs longer than `intensity.within`; it is
 /// independent of timestamp eviction from the intensity window.
 pub(crate) struct RestartTracker {
-    intensity: RestartConfig,
+    intensity: Restart,
     times: VecDeque<Instant>,
     rng: JitterRng,
     total_restarts: u64,
@@ -27,7 +27,7 @@ pub(crate) struct RestartTracker {
 }
 
 impl RestartTracker {
-    pub(crate) fn new(intensity: RestartConfig) -> Self {
+    pub(crate) fn new(intensity: Restart) -> Self {
         Self {
             intensity,
             times: VecDeque::new(),
@@ -46,7 +46,7 @@ impl RestartTracker {
         if self
             .run_started_at
             .take()
-            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within)
+            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within())
         {
             self.consecutive_restarts = 0;
         }
@@ -54,7 +54,7 @@ impl RestartTracker {
 
     pub(crate) fn record_restart(&mut self, now: Instant) {
         while let Some(front) = self.times.front() {
-            if now.duration_since(*front) > self.intensity.within {
+            if now.duration_since(*front) > self.intensity.within() {
                 self.times.pop_front();
             } else {
                 break;
@@ -66,14 +66,14 @@ impl RestartTracker {
     }
 
     pub(crate) fn exceeded(&self) -> bool {
-        self.times.len() > self.intensity.max_restarts
+        self.times.len() > self.intensity.max_restarts()
     }
 
     pub(crate) fn backoff(&mut self) -> Duration {
-        let (deterministic, jitter) = match self.intensity.backoff {
-            BackoffPolicy::None => return Duration::ZERO,
-            BackoffPolicy::Fixed(delay) => return delay,
-            BackoffPolicy::Exponential {
+        let (deterministic, jitter) = match self.intensity.backoff_value().parts() {
+            BackoffParts::None => return Duration::ZERO,
+            BackoffParts::Fixed(delay) => return delay,
+            BackoffParts::Exponential {
                 base,
                 factor,
                 max,
@@ -170,9 +170,12 @@ fn duration_from_nanos(nanos: u128) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Backoff;
 
-    fn tracker(policy: BackoffPolicy) -> RestartTracker {
-        let intensity = RestartConfig::new(10, Duration::from_secs(10)).backoff(policy);
+    fn tracker(policy: Backoff) -> RestartTracker {
+        let intensity = Restart::on_failure()
+            .limit(10, Duration::from_secs(10))
+            .backoff(policy);
         RestartTracker {
             intensity,
             times: VecDeque::new(),
@@ -201,12 +204,11 @@ mod tests {
 
     #[test]
     fn exponential_backoff_progresses_by_factor() {
-        let mut tracker = tracker(BackoffPolicy::Exponential {
-            base: Duration::from_millis(10),
-            factor: 2,
-            max: Duration::from_millis(500),
-            jitter: false,
-        });
+        let mut tracker = tracker(Backoff::exponential(
+            Duration::from_millis(10),
+            2,
+            Duration::from_millis(500),
+        ));
 
         let started_at = Instant::now();
         record_short_restart(&mut tracker, started_at);
@@ -224,12 +226,11 @@ mod tests {
 
     #[test]
     fn exponential_backoff_with_factor_one_stays_constant() {
-        let mut tracker = tracker(BackoffPolicy::Exponential {
-            base: Duration::from_millis(25),
-            factor: 1,
-            max: Duration::from_millis(500),
-            jitter: false,
-        });
+        let mut tracker = tracker(Backoff::exponential(
+            Duration::from_millis(25),
+            1,
+            Duration::from_millis(500),
+        ));
 
         let started_at = Instant::now();
         for offset in 0..4 {
@@ -252,12 +253,9 @@ mod tests {
 
     #[test]
     fn jittered_backoff_stays_within_equal_jitter_bounds() {
-        let mut tracker = tracker(BackoffPolicy::Exponential {
-            base: Duration::from_millis(80),
-            factor: 2,
-            max: Duration::from_millis(500),
-            jitter: true,
-        });
+        let mut tracker = tracker(
+            Backoff::exponential(Duration::from_millis(80), 2, Duration::from_millis(500)).jitter(),
+        );
         let started_at = Instant::now();
         record_short_restart(&mut tracker, started_at);
         record_short_restart(&mut tracker, started_at + Duration::from_millis(2));
@@ -270,12 +268,11 @@ mod tests {
 
     #[test]
     fn exponential_backoff_does_not_shrink_when_intensity_timestamps_age_out() {
-        let mut tracker = tracker(BackoffPolicy::Exponential {
-            base: Duration::from_millis(10),
-            factor: 2,
-            max: Duration::from_millis(500),
-            jitter: false,
-        });
+        let mut tracker = tracker(Backoff::exponential(
+            Duration::from_millis(10),
+            2,
+            Duration::from_millis(500),
+        ));
         let started_at = Instant::now();
 
         record_short_restart(&mut tracker, started_at);
@@ -288,12 +285,11 @@ mod tests {
 
     #[test]
     fn exponential_backoff_resets_after_a_run_outlives_intensity_window() {
-        let mut tracker = tracker(BackoffPolicy::Exponential {
-            base: Duration::from_millis(10),
-            factor: 2,
-            max: Duration::from_millis(500),
-            jitter: false,
-        });
+        let mut tracker = tracker(Backoff::exponential(
+            Duration::from_millis(10),
+            2,
+            Duration::from_millis(500),
+        ));
         let started_at = Instant::now();
 
         record_short_restart(&mut tracker, started_at);

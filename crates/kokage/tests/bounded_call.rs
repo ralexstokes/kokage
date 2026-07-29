@@ -7,7 +7,7 @@ use std::{
 };
 
 use kokage::{
-    ActorResult, ActorSpec, CallError, Reply, RestartPolicy,
+    ActorResult, ActorSpec, CallError, Reply, Restart,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
@@ -24,11 +24,7 @@ fn start(actor: RunnableActor) -> (CancellationToken, tokio::task::JoinHandle<()
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
-                    stop.cancelled(),
-                    RestartPolicy::Never,
-                    DEFAULT_SHUTDOWN_BOUND,
-                )
+                .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                 .await
                 .expect("actor run succeeds");
         }
@@ -65,7 +61,7 @@ impl RawActor for ReplyImmediately {
 #[tokio::test(start_paused = true)]
 async fn timeout_before_mailbox_binding_drops_the_request() {
     let spec = ActorSpec::new("rpc", || ReplyImmediately);
-    let rpc = spec.actor_ref();
+    let (spec, rpc) = spec.actor_ref();
     let actor = spec.into_runnable();
 
     assert!(matches!(
@@ -132,7 +128,7 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
         }
     })
     .mailbox_capacity(1);
-    let rpc = spec.actor_ref();
+    let (spec, rpc) = spec.actor_ref();
     let (stop_token, task) = start(spec.into_runnable());
     started_rx.recv().await.expect("actor started");
 
@@ -198,7 +194,7 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
             replied: replied_tx.clone(),
         }
     });
-    let rpc = spec.actor_ref();
+    let (spec, rpc) = spec.actor_ref();
     let (stop_token, task) = start(spec.into_runnable());
 
     let call = tokio::spawn({
@@ -251,7 +247,7 @@ async fn accepted_unread_request_lost_with_incarnation_reports_reply_dropped() {
             exit: exit.clone(),
         }
     });
-    let rpc = spec.actor_ref();
+    let (spec, rpc) = spec.actor_ref();
     let (_stop_token, task) = start(spec.into_runnable());
     started_rx.recv().await.expect("actor started");
 

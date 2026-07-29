@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use kokage_supervisor::{
-    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, RestartPolicy,
-    SnapshotRecvError, Supervisor,
+    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, Restart, SnapshotRecvError,
+    Supervisor,
 };
 use tokio::time::timeout;
 
@@ -143,7 +143,7 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
         .handle()
         .dynamic()
         .expect("dynamic capability")
-        .add_child(ChildSpec::task("job", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .add_child(ChildSpec::task("job", |_| async { Ok(()) }).restart(Restart::never()))
         .await
         .expect("future child is added");
 

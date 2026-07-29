@@ -212,7 +212,7 @@ dashboards, and any observer that needs a single feed. The
 `trading_engine` example's breaker consumes the child event's `total_restarts`;
 that counter records scheduled restarts — the
 same occurrences as the restart-intensity window, including clean exits
-restarted under `RestartPolicy::Always`. Group-strategy sibling respawns do not
+restarted under `Restart::always()`. Group-strategy sibling respawns do not
 increment it.
 
 ## Tracing And Stats
@@ -250,7 +250,7 @@ fn upload_size(message: &Upload) -> usize {
 
 let uploads = ActorSpec::new("uploads", UploadActor::new)
     .message_size(upload_size);
-let uploads_ref = uploads.actor_ref();
+let (uploads, uploads_ref) = uploads.actor_ref();
 let tree = OrderedTree::new().actor(uploads);
 ```
 

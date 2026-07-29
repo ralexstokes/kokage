@@ -15,7 +15,7 @@ use kokage::{
     ActorRef, ActorResult, ActorSpec, OrderedTree, Reply, SendError,
     host::{ActorContext, BoxError, RawActor},
 };
-use kokage_supervisor::{BackoffPolicy, RestartConfig, RestartPolicy, Strategy};
+use kokage_supervisor::{Backoff, Restart, Strategy};
 use tokio::{
     sync::{mpsc, oneshot},
     time::{advance, timeout},
@@ -102,7 +102,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::OnFailure)
+        .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -166,8 +166,9 @@ impl RawActor for CleanThenReceive {
 
 #[tokio::test(start_paused = true)]
 async fn send_waits_during_permanent_restart_window() {
-    let restart_config = RestartConfig::new(10, Duration::from_secs(1))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
+    let restart = Restart::always()
+        .limit(10, Duration::from_secs(1))
+        .backoff(Backoff::fixed(Duration::from_millis(100)));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (first_exited_tx, first_exited_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
@@ -178,9 +179,8 @@ async fn send_waits_during_permanent_restart_window() {
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
     })
-    .restart(RestartPolicy::Always)
-    .restart_config(restart_config);
-    let worker_ref = worker.actor_ref();
+    .restart(restart);
+    let (worker, worker_ref) = worker.actor_ref();
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
@@ -247,7 +247,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(RestartPolicy::OnFailure)
+        .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -321,8 +321,9 @@ impl RawActor for RestartingRpc {
 
 #[tokio::test(start_paused = true)]
 async fn call_succeeds_across_restart_window() {
-    let restart_config = RestartConfig::new(10, Duration::from_secs(1))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
+    let restart = Restart::on_failure()
+        .limit(10, Duration::from_secs(1))
+        .backoff(Backoff::fixed(Duration::from_millis(100)));
     let (failed_tx, failed_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
     let failed = oneshot_slot(failed_tx);
@@ -331,9 +332,8 @@ async fn call_succeeds_across_restart_window() {
         runs: runs.clone(),
         failed: failed.clone(),
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_config(restart_config);
-    let rpc_ref = rpc.actor_ref();
+    .restart(restart);
+    let (rpc, rpc_ref) = rpc.actor_ref();
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)

@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use kokage::{DrainPolicy, prelude::*};
+use kokage::prelude::*;
 use tokio::time::Instant;
 
 use crate::{
@@ -335,9 +335,5 @@ impl Actor for VenueGateway {
         }
         self.latency.record("handler.gateway", started.elapsed());
         Ok(())
-    }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
     }
 }

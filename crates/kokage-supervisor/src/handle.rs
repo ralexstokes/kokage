@@ -354,7 +354,7 @@ impl StableSupervisorChannels {
         });
     }
 
-    pub(crate) fn project_declared_children(&self, children: Vec<(String, crate::RestartPolicy)>) {
+    pub(crate) fn project_declared_children(&self, children: Vec<(String, crate::Restart)>) {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what
         // makes the documented `(child_id, lineage)` upsert on
@@ -1486,7 +1486,7 @@ impl DynamicSupervisorHandle {
 
     /// Removes a child by id from this supervisor.
     ///
-    /// The child is stopped according to its [`ShutdownPolicy`](crate::ShutdownPolicy)
+    /// The child is stopped according to its [`Shutdown`](crate::Shutdown)
     /// before being removed. Removing the last child is valid; the supervisor
     /// continues idling until shutdown or until another child is added.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {

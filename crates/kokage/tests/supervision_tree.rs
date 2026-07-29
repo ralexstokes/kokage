@@ -11,8 +11,8 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time::sleep};
 
 use kokage::{
-    ActorSpec, DynamicTree, MailboxMode, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy,
-    Strategy, SupervisorBuildError, TerminalMembership,
+    ActorSpec, DynamicTree, MailboxMode, Restart, ScopeKind, Shutdown, Strategy,
+    SupervisorBuildError,
     host::{ActorContext, ChildSpec, RawActor},
     observe::ChildOutline,
     prelude::*,
@@ -56,7 +56,7 @@ impl RawActor for Parked {
 
 #[cfg(feature = "serde")]
 fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
-    let mut builder = TreeBuilder::new();
+    let mut builder = support::TreeBuilder::new();
     let ingest = builder.actor(ActorSpec::new("ingest", || Worker));
     let parse = builder.actor(ActorSpec::new("parse", || Worker));
     (builder.build(), ingest, parse)
@@ -66,24 +66,24 @@ fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>)
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     let outline = OrderedTree::new()
         .strategy(Strategy::RestForOne)
-        .default_restart(RestartPolicy::Always)
+        .default_restart(Restart::always())
         .subtree("workers", OrderedTree::new().strategy(Strategy::OneForAll))
         .task(
             ChildSpec::task("clock", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartPolicy::Always)
-            .shutdown(ShutdownPolicy::Abort),
+            .restart(Restart::always())
+            .shutdown(Shutdown::abort()),
         )
-        .actor(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never))
+        .actor(ActorSpec::new("ingest", || Worker).restart(Restart::never()))
         .actor(ActorSpec::new("parse", || Worker))
         .outline();
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
     assert_eq!(outline.strategy, Strategy::RestForOne);
-    assert_eq!(outline.default_restart, RestartPolicy::Always);
-    assert_eq!(outline.default_shutdown, ShutdownPolicy::default());
+    assert_eq!(outline.default_restart, Restart::always());
+    assert_eq!(outline.default_shutdown, Shutdown::default());
     assert_eq!(outline.child_ids(), ["workers", "clock", "ingest", "parse"]);
 
     let ChildOutline::Scope {
@@ -101,19 +101,19 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     else {
         panic!("expected a task");
     };
-    assert_eq!(*restart, RestartPolicy::Always);
-    assert_eq!(*shutdown, ShutdownPolicy::Abort);
+    assert_eq!(*restart, Restart::always());
+    assert_eq!(*shutdown, Shutdown::abort());
 
     let ChildOutline::Actor { restart, .. } = outline.child("ingest").expect("ingest is present")
     else {
         panic!("expected an actor");
     };
-    assert_eq!(*restart, RestartPolicy::Never);
+    assert_eq!(*restart, Restart::never());
     let ChildOutline::Actor { restart, .. } = outline.child("parse").expect("parse is present")
     else {
         panic!("expected an actor");
     };
-    assert_eq!(*restart, RestartPolicy::Always);
+    assert_eq!(*restart, Restart::always());
     assert!(matches!(
         outline.child("clock"),
         Some(ChildOutline::Task { .. })
@@ -122,16 +122,14 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 
 #[test]
 fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
-    let explicit_shutdown = ShutdownPolicy::Cooperative {
-        grace: Duration::from_millis(17),
-    };
+    let explicit_shutdown = Shutdown::drain_for(Duration::from_millis(17));
     let outline = OrderedTree::new()
-        .default_restart(RestartPolicy::Always)
-        .default_shutdown(ShutdownPolicy::Abort)
+        .default_restart(Restart::always())
+        .default_shutdown(Shutdown::abort())
         .task(ChildSpec::task("inherited", |_| async { Ok(()) }))
         .task(
             ChildSpec::task("explicit", |_| async { Ok(()) })
-                .restart(RestartPolicy::Never)
+                .restart(Restart::never())
                 .shutdown(explicit_shutdown),
         )
         .outline();
@@ -139,27 +137,27 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     assert!(matches!(
         outline.child("inherited"),
         Some(ChildOutline::Task {
-            restart: RestartPolicy::Always,
-            shutdown: ShutdownPolicy::Abort,
+            restart,
+            shutdown,
             ..
-        })
+        }) if *restart == Restart::always() && *shutdown == Shutdown::abort()
     ));
     assert!(matches!(
         outline.child("explicit"),
         Some(ChildOutline::Task {
-            restart: RestartPolicy::Never,
+            restart,
             shutdown,
             ..
-        }) if *shutdown == explicit_shutdown
+        }) if *restart == Restart::never() && *shutdown == explicit_shutdown
     ));
 }
 
 #[tokio::test]
 async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
     let ingest_actor = ActorSpec::new("ingest", || Worker);
-    let ingest = ingest_actor.actor_ref();
+    let (ingest_actor, ingest) = ingest_actor.actor_ref();
     let parse_actor = ActorSpec::new("parse", || Worker);
-    let parse = parse_actor.actor_ref();
+    let (parse_actor, parse) = parse_actor.actor_ref();
     let handle = OrderedTree::new()
         .actor(ingest_actor)
         .subtree(
@@ -228,9 +226,9 @@ fn tree_placement_rejects_zero_scope_mailbox_capacity() {
 #[tokio::test]
 async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
     let first = ActorSpec::new("first", || Worker);
-    let first_actor = first.actor_ref();
+    let (first, first_actor) = first.actor_ref();
     let direct = ActorSpec::new("direct-actor", || Worker);
-    let direct_actor = direct.actor_ref();
+    let (direct, direct_actor) = direct.actor_ref();
     let runtime = OrderedTree::new()
         .mailbox_capacity(9)
         .actor(first)
@@ -262,9 +260,9 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
 #[tokio::test]
 async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let peer = ActorSpec::new("peer", || Worker);
-    let peer_ref = peer.actor_ref();
+    let (peer, peer_ref) = peer.actor_ref();
     let leader = ActorSpec::new("leader", || Worker);
-    let leader_ref = leader.actor_ref();
+    let (leader, leader_ref) = leader.actor_ref();
     let runtime = OrderedTree::new()
         .actor(peer)
         .subtree(
@@ -287,8 +285,8 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
 #[test]
 fn pre_spawn_projection_preserves_declared_restart_policies() {
     let tree = OrderedTree::new()
-        .default_restart(RestartPolicy::Always)
-        .actor(ActorSpec::new("explicit", || Worker).restart(RestartPolicy::Never))
+        .default_restart(Restart::always())
+        .actor(ActorSpec::new("explicit", || Worker).restart(Restart::never()))
         .actor(ActorSpec::new("inherited", || Worker));
     let snapshot = tree.handle().snapshot();
 
@@ -297,14 +295,14 @@ fn pre_spawn_projection_preserves_declared_restart_policies() {
             .child("explicit")
             .expect("explicit actor is projected")
             .restart_policy,
-        RestartPolicy::Never
+        Restart::never()
     );
     assert_eq!(
         snapshot
             .child("inherited")
             .expect("inherited actor is projected")
             .restart_policy,
-        RestartPolicy::Always
+        Restart::always()
     );
 }
 
@@ -313,7 +311,7 @@ async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() 
     let spec = ActorSpec::new("buffered", || Parked)
         .mailbox(MailboxMode::conflate())
         .message_size(|message: &Vec<u8>| message.len());
-    let actor = spec.actor_ref();
+    let (spec, actor) = spec.actor_ref();
     let runtime = OrderedTree::new().actor(spec).spawn().expect("tree builds");
     runtime.handle().wait_started().await.expect("actor starts");
 
@@ -334,11 +332,9 @@ async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() 
 }
 
 #[tokio::test]
-async fn static_tree_actor_can_remove_its_terminal_membership() {
-    let spec = ActorSpec::new("finite", || Finite)
-        .restart(RestartPolicy::Never)
-        .terminal_membership(TerminalMembership::Remove);
-    let actor = spec.actor_ref();
+async fn static_tree_actor_can_remove_itself_when_done() {
+    let spec = ActorSpec::new("finite", || Finite).restart(Restart::never().remove_when_done());
+    let (spec, actor) = spec.actor_ref();
     let tree = OrderedTree::new().actor(spec);
     let mut snapshots = tree.handle().subscribe_snapshots();
     let runtime = tree.spawn().expect("tree builds");
@@ -363,13 +359,13 @@ async fn static_tree_actor_can_remove_its_terminal_membership() {
 fn dynamic_outlines_include_future_member_policy_defaults() {
     let standard = DynamicTree::new().outline();
     let customized = DynamicTree::new()
-        .default_restart(RestartPolicy::Never)
-        .default_shutdown(ShutdownPolicy::Abort)
+        .default_restart(Restart::never())
+        .default_shutdown(Shutdown::abort())
         .outline();
 
     assert_ne!(standard, customized);
-    assert_eq!(customized.default_restart, RestartPolicy::Never);
-    assert_eq!(customized.default_shutdown, ShutdownPolicy::Abort);
+    assert_eq!(customized.default_restart, Restart::never());
+    assert_eq!(customized.default_shutdown, Shutdown::abort());
 }
 
 #[tokio::test]
@@ -422,7 +418,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
     let children = OrderedTree::new()
-        .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
         .task(
             ChildSpec::task("fatal", move |_| {
                 let fail = Arc::clone(&fail_child);
@@ -431,14 +427,14 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
                     Err(std::io::Error::other("fatal child failure").into())
                 }
             })
-            .restart(RestartPolicy::Always)
-            .shutdown(ShutdownPolicy::Abort),
+            .restart(Restart::always().limit(0, Duration::from_secs(60)))
+            .shutdown(Shutdown::abort()),
         );
     let handle = OrderedTree::new()
         .subtree(
             "owned",
             OrderedTree::new()
-                .default_restart(RestartPolicy::Never)
+                .default_restart(Restart::never())
                 .actor(ingest)
                 .subtree("children", children),
         )
@@ -498,8 +494,8 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         .subtree(
             "workers",
             DynamicTree::new()
-                .default_restart(RestartPolicy::Never)
-                .default_shutdown(ShutdownPolicy::Abort),
+                .default_restart(Restart::never())
+                .default_shutdown(Shutdown::abort()),
         )
         .task(ChildSpec::task("clock", |_ctx| async { Ok(()) }))
         .outline();
@@ -517,8 +513,8 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     else {
         panic!("expected dynamic scope");
     };
-    assert_eq!(workers.default_restart, RestartPolicy::Never);
-    assert_eq!(workers.default_shutdown, ShutdownPolicy::Abort);
+    assert_eq!(workers.default_restart, Restart::never());
+    assert_eq!(workers.default_shutdown, Shutdown::abort());
     assert!(matches!(
         decoded.child("clock"),
         Some(ChildOutline::Task { .. })

@@ -1,0 +1,14 @@
+error[E0599]: no method named `message_size` found for struct `ActorSlot<String, false>` in the current scope
+  --> tests/ui/declaration-sealing/actor_slot_message_size_after_ref.rs:10:22
+   |
+10 |     let _slot = slot.message_size(message_size);
+   |                      ^^^^^^^^^^^^ method not found in `ActorSlot<String, false>`
+   |
+note: there's an earlier shadowed binding `slot` of type `ActorSlot<String>` that has method `message_size` available
+  --> tests/ui/declaration-sealing/actor_slot_message_size_after_ref.rs:8:9
+   |
+ 8 |     let slot = ActorSlot::<String>::new("idle");
+   |         ^^^^ `slot` of type `ActorSlot<String>` that has method `message_size` defined earlier here
+ 9 |     let (slot, _actor_ref) = slot.actor_ref();
+   |          ---- earlier `slot` shadowed here with type `ActorSlot<String, false>`
+   = note: the method was found for `ActorSlot<M>`

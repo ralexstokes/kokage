@@ -13,7 +13,7 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, LiveContext, MessageContext,
-    OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, StartContext,
+    OrderedTree, Restart, Runtime, RuntimeHandle, StartContext,
     observe::{LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard},
 };
 use tokio::{
@@ -117,13 +117,13 @@ async fn runtime_with_watched_subtree() -> (
                     observed: observed_tx.clone(),
                 }
             })
-            .restart(RestartPolicy::OnFailure),
+            .restart(Restart::on_failure()),
         )
         .await
         .expect("sink added");
     let mut graph = TreeBuilder::new();
     let crasher_slot = ActorSlot::new("crasher");
-    let crasher = crasher_slot.actor_ref();
+    let (crasher_slot, crasher) = crasher_slot.actor_ref();
     graph.define(crasher_slot, || Crasher);
     let watched = runtime
         .handle()
@@ -131,8 +131,7 @@ async fn runtime_with_watched_subtree() -> (
             "watched",
             graph
                 .build()
-                .default_restart(RestartPolicy::OnFailure)
-                .restart_config(RestartConfig::new(8, Duration::from_secs(1))),
+                .default_restart(Restart::on_failure().limit(8, Duration::from_secs(1))),
         )
         .await
         .expect("watched subtree added");
@@ -378,7 +377,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         .expect("restricted sink added");
     let crasher = runtime
         .handle()
-        .add_actor(ActorSpec::new("crasher", || Crasher).restart(RestartPolicy::OnFailure))
+        .add_actor(ActorSpec::new("crasher", || Crasher).restart(Restart::on_failure()))
         .await
         .expect("crasher added");
     runtime

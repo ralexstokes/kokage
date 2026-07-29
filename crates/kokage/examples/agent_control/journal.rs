@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use kokage::{Actor, ActorResult, DrainPolicy, MessageContext};
+use kokage::{Actor, ActorResult, MessageContext};
 
 use crate::messages::{AppendAck, JournalEntry, JournalMsg, JournalReport, StoredEntry};
 
@@ -62,9 +62,5 @@ impl Actor for Journal {
             }),
         }
         Ok(())
-    }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
     }
 }

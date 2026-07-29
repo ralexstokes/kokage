@@ -88,7 +88,7 @@ impl SupervisorHandle {
     /// a sibling-driven group restart — must complete again. Failed exits never
     /// count, matching the rule that failures follow the restart policy rather
     /// than signalling finished work. A child configured with
-    /// [`RestartPolicy::Always`](crate::RestartPolicy::Always) never counts as
+    /// [`Restart::always()`](crate::Restart::always()) never counts as
     /// completed while it remains a member, even between its clean exit and
     /// replacement. A child whose membership is removed drops out of the set:
     /// its work is not coming back.
@@ -152,12 +152,12 @@ impl SupervisorHandle {
     /// is still observed:
     ///
     /// ```no_run
-    /// use kokage_supervisor::{ChildSpec, RestartPolicy, Supervisor};
+    /// use kokage_supervisor::{ChildSpec, Restart, Supervisor};
     ///
     /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let builder = Supervisor::ordered()
-    ///     .child(ChildSpec::task("source", |_| async { Ok(()) }).restart(RestartPolicy::OnFailure))
-    ///     .child(ChildSpec::task("indexer", |_| async { Ok(()) }).restart(RestartPolicy::Never));
+    ///     .child(ChildSpec::task("source", |_| async { Ok(()) }).restart(Restart::on_failure()))
+    ///     .child(ChildSpec::task("indexer", |_| async { Ok(()) }).restart(Restart::never()));
     /// let handle = builder.handle();
     /// let _finished = handle.shutdown_on_completion(["source", "indexer"]);
     /// let supervisor = builder.build()?;
@@ -245,7 +245,7 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
         if set.is_complete() {
             // `Exited` is emitted before its immediately following
             // restart-scheduled transition. Recheck state before completing so
-            // `RestartPolicy::Always` cannot expose that transient stop as
+            // `Restart::always()` cannot expose that transient stop as
             // finished work.
             baseline = set.realign(&handle.snapshot());
             if set.is_complete() {
@@ -297,7 +297,7 @@ struct CompletionSet {
     /// membership's completion state.
     latest_lineages: HashMap<String, u64>,
     /// Restart policy of the newest snapshot-aligned membership for each id.
-    restart_policies: HashMap<String, crate::RestartPolicy>,
+    restart_policies: HashMap<String, crate::Restart>,
 }
 
 impl CompletionSet {
@@ -371,7 +371,10 @@ impl CompletionSet {
             CompletionTransition::Exited(exit) => {
                 if exit.is_completed()
                     && !exit.cancelled()
-                    && self.restart_policies.get(child_id) != Some(&crate::RestartPolicy::Always)
+                    && !self
+                        .restart_policies
+                        .get(child_id)
+                        .is_some_and(|restart| restart.is_always())
                 {
                     self.satisfied.insert(child_id.clone());
                 } else {
@@ -426,7 +429,7 @@ fn is_completed(child: &ChildSnapshot) -> bool {
     if child.membership == ChildMembershipView::Removing {
         return true;
     }
-    child.restart_policy != crate::RestartPolicy::Always
+    !child.restart_policy.is_always()
         && child.next_restart_in.is_none()
         && matches!(
             &child.state,

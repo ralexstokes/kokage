@@ -1,9 +1,8 @@
 use std::{ops::Deref, sync::Arc, time::Duration};
 
 use kokage_supervisor::{
-    ChildSpec, ControlError, DynamicSupervisorBuilder, RestartConfig, RestartPolicy,
-    RunningSupervisor, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError,
-    SupervisorError, SupervisorHandle, TerminalMembership,
+    ChildSpec, ControlError, DynamicSupervisorBuilder, Restart, RunningSupervisor, ScopeKind,
+    Shutdown, Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -95,7 +94,7 @@ async fn empty_supervisor_starts_empty_and_accepts_children() {
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(
-            ChildSpec::task("dynamic", |_ctx| async move { Ok(()) }).restart(RestartPolicy::Never),
+            ChildSpec::task("dynamic", |_ctx| async move { Ok(()) }).restart(Restart::never()),
         )
         .await
         .expect("empty supervisor accepts a child");
@@ -152,9 +151,9 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
             Ok(())
         }
     })
-    .restart(RestartPolicy::Never);
+    .restart(Restart::never());
     let handle_owner = Supervisor::dynamic()
-        .default_restart(RestartPolicy::Always)
+        .default_restart(Restart::always())
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
@@ -195,8 +194,7 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
         .expect("dynamic supervisor")
         .add_child(
             ChildSpec::task("temporary", |_ctx| async move { Ok(()) })
-                .restart(RestartPolicy::Never)
-                .terminal_membership(TerminalMembership::Remove),
+                .restart(Restart::never().remove_when_done()),
         )
         .await
         .expect("temporary child added");
@@ -236,8 +234,7 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartPolicy::Never)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::never().remove_when_done()),
         )
         .child(
             ChildSpec::task("trigger", {
@@ -250,7 +247,7 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Abort),
+            .shutdown(Shutdown::abort()),
         )
         .build()
         .expect("ordered group supervisor builds");
@@ -295,26 +292,22 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
                     }
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::on_failure().remove_when_done()),
         )
-        .child(
-            ChildSpec::task("trigger", {
+        .child(ChildSpec::task("trigger", {
+            let fail_trigger = fail_trigger.clone();
+            move |ctx| {
                 let fail_trigger = fail_trigger.clone();
-                move |ctx| {
-                    let fail_trigger = fail_trigger.clone();
-                    async move {
-                        if ctx.generation() == 0 {
-                            fail_trigger.notified().await;
-                            return Err(common::test_error("restart group"));
-                        }
-                        ctx.shutdown_token().cancelled().await;
-                        Ok(())
+                async move {
+                    if ctx.generation() == 0 {
+                        fail_trigger.notified().await;
+                        return Err(common::test_error("restart group"));
                     }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+            }
+        }))
         .build()
         .expect("ordered group supervisor builds");
     let handle_owner = supervisor.spawn();
@@ -367,8 +360,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::on_failure().remove_when_done()),
         )
         .child(
             ChildSpec::task("trigger", {
@@ -385,7 +377,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     }
                 }
             })
-            .restart(RestartPolicy::OnFailure),
+            .restart(Restart::on_failure()),
         )
         .build()
         .expect("ordered group supervisor builds");
@@ -502,8 +494,7 @@ async fn transient_success_idles_until_shutdown() {
                 release.notified().await;
                 Ok(())
             }
-        })
-        .restart(RestartPolicy::OnFailure)],
+        })],
     )
     .await;
     let mut events = common::event_watch(&handle);
@@ -553,7 +544,7 @@ async fn terminal_failure_remains_visible_while_idle() {
                 Err(common::test_error("terminal failure"))
             }
         })
-        .restart(RestartPolicy::Never)],
+        .restart(Restart::never())],
     )
     .await;
     let mut events = common::event_watch(&handle);
@@ -642,8 +633,7 @@ async fn remove_child_stops_it_without_restarting() {
                     ctx.shutdown_token().cancelled().await;
                     Err(common::test_error("do not restart on remove"))
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
+            }),
             ChildSpec::task("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -764,7 +754,7 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::OnFailure),
+            .restart(Restart::on_failure()),
             ChildSpec::task("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -820,9 +810,7 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
 async fn shutdown_completes_a_pending_removal_and_preserves_its_timeout() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let fast_shutdown = ShutdownPolicy::Cooperative {
-        grace: common::SHORT_GRACE,
-    };
+    let fast_shutdown = Shutdown::drain_for(common::SHORT_GRACE);
 
     let handle = spawn_dynamic(
         Supervisor::dynamic(),
@@ -838,7 +826,7 @@ async fn shutdown_completes_a_pending_removal_and_preserves_its_timeout() {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::OnFailure)
+            .restart(Restart::on_failure())
             .shutdown(fast_shutdown),
             ChildSpec::task("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -882,7 +870,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
     let fail_now = Arc::new(Notify::new());
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart_config(RestartConfig::new(0, Duration::from_secs(1))),
+        Supervisor::dynamic().restart(Restart::on_failure().limit(0, Duration::from_secs(1))),
         [
             ChildSpec::task("removable", {
                 let removable_started = Arc::clone(&removable_started);
@@ -899,9 +887,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: Duration::from_secs(5),
-            }),
+            .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
             ChildSpec::task("failing", {
                 let failing_started = Arc::clone(&failing_started);
                 let fail_now = Arc::clone(&fail_now);
@@ -961,9 +947,7 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
                 Ok(())
             }
         })
-        .shutdown(ShutdownPolicy::Cooperative {
-            grace: Duration::from_secs(1),
-        })],
+        .shutdown(Shutdown::drain_for(Duration::from_secs(1)))],
     )
     .await;
     common::recv_event(&mut started_rx).await;
@@ -1105,9 +1089,7 @@ async fn cooperative_removal_reports_timeout_after_the_abort_join() {
                 Ok(())
             }
         })
-        .shutdown(ShutdownPolicy::Cooperative {
-            grace: common::SHORT_GRACE,
-        })],
+        .shutdown(Shutdown::drain_for(common::SHORT_GRACE))],
     )
     .await;
     common::recv_event(&mut started_rx).await;
@@ -1136,7 +1118,7 @@ async fn cooperative_removal_reports_timeout_after_the_abort_join() {
 async fn control_plane_remains_available_after_all_children_exit() {
     let handle = spawn_dynamic(
         Supervisor::dynamic(),
-        [ChildSpec::task("done", |_ctx| async move { Ok(()) }).restart(RestartPolicy::Never)],
+        [ChildSpec::task("done", |_ctx| async move { Ok(()) }).restart(Restart::never())],
     )
     .await;
 
@@ -1169,10 +1151,10 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart_config(common::restart_config(
+        Supervisor::dynamic().restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(60),
-            kokage_supervisor::BackoffPolicy::Fixed(std::time::Duration::from_secs(30)),
+            kokage_supervisor::Backoff::fixed(std::time::Duration::from_secs(30)),
         )),
         [
             ChildSpec::task("removable", move |ctx| {
@@ -1183,8 +1165,7 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
                         .expect("test receiver dropped");
                     Err(common::test_error("restart me later"))
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
+            }),
             ChildSpec::task("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -1227,10 +1208,9 @@ async fn remove_child_preempts_zero_delay_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart_config(kokage_supervisor::RestartConfig::new(
-            8,
-            std::time::Duration::from_secs(1),
-        )),
+        Supervisor::dynamic().restart(
+            kokage_supervisor::Restart::on_failure().limit(8, std::time::Duration::from_secs(1)),
+        ),
         [ChildSpec::task("removable", move |ctx| {
             let starts_tx = starts_tx.clone();
             async move {
@@ -1239,8 +1219,7 @@ async fn remove_child_preempts_zero_delay_restart() {
                     .expect("test receiver dropped");
                 Err(common::test_error("restart immediately"))
             }
-        })
-        .restart(RestartPolicy::OnFailure)],
+        })],
     )
     .await;
     let mut events = common::event_watch(&handle);
@@ -1283,10 +1262,9 @@ async fn remove_child_preempts_zero_delay_restart() {
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
     let handle_owner = Supervisor::dynamic()
-        .restart_config(kokage_supervisor::RestartConfig::new(
-            8,
-            std::time::Duration::from_secs(1),
-        ))
+        .restart(
+            kokage_supervisor::Restart::on_failure().limit(8, std::time::Duration::from_secs(1)),
+        )
         .build()
         .expect("valid dynamic supervisor")
         .spawn();
@@ -1295,12 +1273,9 @@ async fn queued_command_batch_preempts_zero_delay_restart() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(
-            ChildSpec::task("removable", |_ctx| async move {
-                Err(common::test_error("restart immediately"))
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
+        .add_child(ChildSpec::task("removable", |_ctx| async move {
+            Err(common::test_error("restart immediately"))
+        }))
         .await
         .expect("initial dynamic child should be accepted");
 
@@ -1361,10 +1336,10 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     let backoff = std::time::Duration::from_millis(80);
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart_config(common::restart_config(
+        Supervisor::dynamic().restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(1),
-            kokage_supervisor::BackoffPolicy::Fixed(backoff),
+            kokage_supervisor::Backoff::fixed(backoff),
         )),
         [
             ChildSpec::task("removable", move |ctx| {
@@ -1375,8 +1350,7 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
                         .expect("test receiver dropped");
                     Err(common::test_error("restart me later"))
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
+            }),
             ChildSpec::task("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())

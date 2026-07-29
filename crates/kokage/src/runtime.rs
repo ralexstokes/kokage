@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    ActorRef, ActorSpec, TerminalMembership,
+    ActorRef, ActorSpec,
     actor::{
         ActorNode, ActorOptionsValidationError, ActorStats, CancelOnDrop, RunnableActor,
         RunnableActorBuilder, SupervisorPathSegment,
@@ -13,9 +13,9 @@ use crate::{
 use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
     CancellationToken, ChildSpec, CompletionError, CompletionGuard, CompletionOutcome,
-    ControlError, DynamicSupervisorHandle, LifecycleEvent, LifecycleWatch, RestartConfig,
-    RestartPolicy, RunningSupervisor, ShutdownPolicy, SupervisorBuildError, SupervisorError,
-    SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+    ControlError, DynamicSupervisorHandle, LifecycleEvent, LifecycleWatch, Restart,
+    RunningSupervisor, Shutdown, SupervisorBuildError, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot, SupervisorSnapshotReceiver,
 };
 
 #[derive(Debug)]
@@ -26,15 +26,15 @@ pub(crate) struct ActorRuntimeState {
 #[derive(Debug)]
 struct ActorRuntimeConfig {
     actor_builder: RunnableActorBuilder,
-    default_restart: RestartPolicy,
-    default_shutdown: ShutdownPolicy,
+    default_restart: Restart,
+    default_shutdown: Shutdown,
 }
 
 impl ActorRuntimeState {
     pub(crate) fn new(
         actor_builder: RunnableActorBuilder,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
+        default_restart: Restart,
+        default_shutdown: Shutdown,
     ) -> Self {
         Self {
             config: Mutex::new(ActorRuntimeConfig {
@@ -48,8 +48,8 @@ impl ActorRuntimeState {
     pub(crate) fn configure(
         &self,
         actor_builder: RunnableActorBuilder,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
+        default_restart: Restart,
+        default_shutdown: Shutdown,
     ) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
             actor_builder,
@@ -58,7 +58,7 @@ impl ActorRuntimeState {
         };
     }
 
-    fn actor_defaults(&self) -> (RestartPolicy, ShutdownPolicy) {
+    fn actor_defaults(&self) -> (Restart, Shutdown) {
         let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
         (config.default_restart, config.default_shutdown)
     }
@@ -74,7 +74,10 @@ impl ActorRuntimeState {
             .clone()
     }
 
-    fn make_actor<M: Send + 'static>(&self, spec: ActorSpec<M>) -> ActorNode {
+    fn make_actor<M: Send + 'static, const CONFIGURABLE: bool>(
+        &self,
+        spec: ActorSpec<M, CONFIGURABLE>,
+    ) -> ActorNode {
         spec.into_node(&self.actor_builder())
     }
 
@@ -116,10 +119,8 @@ impl RuntimeAttachment {
 }
 
 struct DynamicChildOptions {
-    restart: RestartPolicy,
-    shutdown: ShutdownPolicy,
-    restart_config: Option<RestartConfig>,
-    remove_on_exit: bool,
+    restart: Restart,
+    shutdown: Shutdown,
 }
 
 /// Cancellation guard for a lifecycle-event mailbox pump.
@@ -358,8 +359,8 @@ impl RuntimeHandle {
                     supervisor,
                     Arc::new(ActorRuntimeState::new(
                         RunnableActorBuilder::new(),
-                        RestartPolicy::default(),
-                        ShutdownPolicy::default(),
+                        Restart::default(),
+                        Shutdown::default(),
                     )),
                 )
             })
@@ -683,11 +684,11 @@ impl DynamicRuntimeHandle {
     /// the stronger readiness contract. A zero
     /// [`ActorSpec::mailbox_capacity`] is rejected with
     /// [`ControlError::Rejected`].
-    pub async fn add_actor<M: Send + 'static>(
+    pub async fn add_actor<M: Send + 'static, const CONFIGURABLE: bool>(
         &self,
-        spec: ActorSpec<M>,
+        spec: ActorSpec<M, CONFIGURABLE>,
     ) -> Result<ActorRef<M>, ControlError> {
-        let actor_ref = spec.actor_ref();
+        let actor_ref = ActorRef::from_core(spec.binding(), None);
         spec.actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
@@ -697,8 +698,6 @@ impl DynamicRuntimeHandle {
         let dynamic_options = DynamicChildOptions {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
-            restart_config: spec.restart_config,
-            remove_on_exit: matches!(spec.terminal_membership, TerminalMembership::Remove),
         };
         let actor = self.handle.actors.make_actor(spec);
         self.add_constructed_actor(
@@ -721,9 +720,7 @@ impl DynamicRuntimeHandle {
         let child = actor_child_spec(
             actor.clone(),
             &self.handle.actors,
-            ActorChildOptions::new(options.restart, options.shutdown)
-                .restart_config(options.restart_config)
-                .remove_on_exit(options.remove_on_exit),
+            ActorChildOptions::new(options.restart, options.shutdown),
         );
         self.supervisor.add_child(child).await?;
 
@@ -735,16 +732,18 @@ impl DynamicRuntimeHandle {
     /// Removal marks the membership as removing and starts its configured
     /// shutdown. When cooperative shutdown completes within its grace period,
     /// an [`Actor`](crate::Actor) stops its normal receive loop, closes external
-    /// intake, applies its [`DrainPolicy`](crate::DrainPolicy), runs `on_stop`,
+    /// intake, applies its [`Shutdown`](crate::Shutdown), runs `on_stop`,
     /// makes the mailbox binding terminal, and is then detached. Immediate
     /// abort, or expiry of the cooperative grace period, can skip any remaining
     /// drain or hook work before detachment. The returned future completes
     /// after detachment (or after the configured shutdown backstop aborts it).
     ///
     /// A send racing with removal may still be accepted. With
-    /// `DrainPolicy::Drain`, work accepted before drain closes intake belongs
-    /// to the queued prefix handled before `on_stop`. With `Discard`, accepted
-    /// work that remains queued is dropped. Once the actor closes intake,
+    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for), work accepted before
+    /// drain closes intake belongs to the queued prefix handled before
+    /// `on_stop`. With
+    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current),
+    /// accepted work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly return
     /// [`TrySendError::Closed`](crate::TrySendError::Closed), while an awaited
     /// `send` waits and then returns [`SendError`](crate::SendError).
@@ -804,32 +803,13 @@ impl Drop for TerminateBindingOnDrop {
 
 /// How one actor is supervised as a child of its enclosing scope.
 pub(crate) struct ActorChildOptions {
-    pub(crate) restart: RestartPolicy,
-    pub(crate) shutdown: ShutdownPolicy,
-    pub(crate) restart_config: Option<RestartConfig>,
-    /// Whether the membership disappears when the actor exits, rather than
-    /// resting as an inactive entry.
-    pub(crate) remove_on_exit: bool,
+    pub(crate) restart: Restart,
+    pub(crate) shutdown: Shutdown,
 }
 
 impl ActorChildOptions {
-    pub(crate) fn new(restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
-        Self {
-            restart,
-            shutdown,
-            restart_config: None,
-            remove_on_exit: false,
-        }
-    }
-
-    pub(crate) fn restart_config(mut self, config: Option<RestartConfig>) -> Self {
-        self.restart_config = config;
-        self
-    }
-
-    pub(crate) fn remove_on_exit(mut self, remove_on_exit: bool) -> Self {
-        self.remove_on_exit = remove_on_exit;
-        self
+    pub(crate) fn new(restart: Restart, shutdown: Shutdown) -> Self {
+        Self { restart, shutdown }
     }
 }
 
@@ -838,18 +818,13 @@ pub(crate) fn actor_child_spec(
     owner: &Arc<ActorRuntimeState>,
     options: ActorChildOptions,
 ) -> ChildSpec {
-    let ActorChildOptions {
-        restart,
-        shutdown,
-        restart_config,
-        remove_on_exit,
-    } = options;
+    let ActorChildOptions { restart, shutdown } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
-    let mut child = __private::attach(
+    __private::attach(
         ChildSpec::task(actor_id, move |ctx| {
             let actor = child_guard.actor.clone();
             let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
@@ -859,6 +834,7 @@ pub(crate) fn actor_child_spec(
                         ctx.shutdown_token().cancelled(),
                         ctx.abort_token().cancelled(),
                         restart,
+                        shutdown.drains_messages(),
                         supervisor,
                         || ctx.mark_ready(),
                     )
@@ -870,18 +846,7 @@ pub(crate) fn actor_child_spec(
     )
     .wait_for_ready()
     .restart(restart)
-    .terminal_membership(if remove_on_exit {
-        TerminalMembership::Remove
-    } else {
-        TerminalMembership::Retain
-    })
-    .shutdown(shutdown);
-
-    if let Some(config) = restart_config {
-        child = child.restart_config(config);
-    }
-
-    child
+    .shutdown(shutdown)
 }
 
 fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSegment {
@@ -896,8 +861,7 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 mod tests {
     use crate::{
         Actor, ActorResult, ActorSpec, DynamicRuntime, DynamicRuntimeHandle, DynamicTree,
-        MessageContext, OrderedTree, RestartPolicy, Runtime, RuntimeHandle, SupervisorBuildError,
-        TerminalMembership,
+        MessageContext, OrderedTree, Restart, Runtime, RuntimeHandle, SupervisorBuildError,
     };
 
     #[test]
@@ -932,8 +896,8 @@ mod tests {
 
     #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
-        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartPolicy::Never);
-        let static_ref = static_spec.actor_ref();
+        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(Restart::never());
+        let (static_spec, static_ref) = static_spec.actor_ref();
         let static_runtime = OrderedTree::new()
             .actor(static_spec)
             .spawn()
@@ -961,7 +925,7 @@ mod tests {
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic_ref = dynamic_runtime
             .handle()
-            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartPolicy::Never))
+            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(Restart::never()))
             .await
             .expect("dynamic actor is inserted");
         dynamic_runtime
@@ -995,8 +959,7 @@ mod tests {
             .handle()
             .add_actor(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
-                    .restart(RestartPolicy::Never)
-                    .terminal_membership(TerminalMembership::Remove),
+                    .restart(Restart::never().remove_when_done()),
             )
             .await
             .expect("dynamic actor is inserted");

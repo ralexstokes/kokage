@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use kokage_supervisor::{BackoffPolicy, prelude::*};
+use kokage_supervisor::{Backoff, prelude::*};
 use tokio::{sync::mpsc, time::timeout};
 
 mod common;
@@ -11,15 +11,15 @@ mod coverage_probe {
     mod expected {
         use kokage_supervisor::prelude::{
             BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-            DynamicSupervisorHandle, OrderedSupervisorBuilder, RestartConfig, RestartPolicy,
-            RunningSupervisor, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
-            SupervisorError, SupervisorHandle,
+            DynamicSupervisorHandle, OrderedSupervisorBuilder, Restart, RunningSupervisor,
+            Shutdown, Strategy, Supervisor, SupervisorBuildError, SupervisorError,
+            SupervisorHandle,
         };
     }
 
     mod advanced_root {
         use kokage_supervisor::{
-            BackoffPolicy, ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,
+            Backoff, ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,
             CompletionError, CompletionGuard, CompletionOutcome, LifecycleEvent,
             LifecyclePathSegment, LifecycleWatch, ScopeKind, SupervisorSnapshot,
             SupervisorStateView,
@@ -37,11 +37,13 @@ fn closed_policy_sets_can_be_matched_exhaustively_in_the_supervisor_crate() {
         }
     }
 
-    fn restart_name(policy: RestartPolicy) -> &'static str {
-        match policy {
-            RestartPolicy::Always => "always",
-            RestartPolicy::OnFailure => "on-failure",
-            RestartPolicy::Never => "never",
+    fn restart_name(policy: Restart) -> &'static str {
+        if policy == Restart::always() {
+            "always"
+        } else if policy == Restart::never() {
+            "never"
+        } else {
+            "on-failure"
         }
     }
 
@@ -53,7 +55,7 @@ fn closed_policy_sets_can_be_matched_exhaustively_in_the_supervisor_crate() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_eq!(restart_name(RestartPolicy::default()), "on-failure");
+    assert_eq!(restart_name(Restart::default()), "on-failure");
     assert_eq!(
         scope_name(kokage_supervisor::ScopeKind::default()),
         "ordered"
@@ -141,9 +143,7 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(ShutdownPolicy::Cooperative {
-                grace: Duration::from_millis(25),
-            }),
+            .shutdown(Shutdown::drain_for(Duration::from_millis(25))),
         )
         .child(ChildSpec::supervisor("nested", nested))
         .build()
@@ -172,15 +172,17 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 
 #[test]
 fn prelude_policy_types_cover_common_configuration() {
-    assert_eq!(ShutdownPolicy::Abort, ShutdownPolicy::Abort);
+    assert_eq!(Shutdown::abort(), Shutdown::abort());
 
     assert_eq!(
-        RestartConfig::new(3, Duration::from_secs(10)),
-        RestartConfig::new(3, Duration::from_secs(10))
+        Restart::on_failure().limit(3, Duration::from_secs(10)),
+        Restart::on_failure().limit(3, Duration::from_secs(10))
     );
-    let configured = RestartConfig::new(2, Duration::from_secs(5))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(50)));
-    let expected = RestartConfig::new(2, Duration::from_secs(5))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(50)));
+    let configured = Restart::on_failure()
+        .limit(2, Duration::from_secs(5))
+        .backoff(Backoff::fixed(Duration::from_millis(50)));
+    let expected = Restart::on_failure()
+        .limit(2, Duration::from_secs(5))
+        .backoff(Backoff::fixed(Duration::from_millis(50)));
     assert_eq!(configured, expected);
 }

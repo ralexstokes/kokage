@@ -12,8 +12,8 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSpec, ControlError, DynamicRuntimeHandle, DynamicTree, LiveContext,
-    MessageContext, OrderedTree, RestartConfig, RestrictedScope, RuntimeHandle, ScopeKind,
-    StartContext, StopContext, Strategy, SupervisorBuildError,
+    MessageContext, OrderedTree, Restart, RestrictedScope, RuntimeHandle, ScopeKind, StartContext,
+    StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, SupervisorSnapshotReceiver},
 };
@@ -468,7 +468,8 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     assert!(tree.spawn().is_err());
     assert_snapshot_receiver_closes(failed_ordered_snapshots).await;
 
-    let builder = DynamicTree::new().restart_config(RestartConfig::new(1, Duration::ZERO));
+    let builder =
+        DynamicTree::new().default_restart(Restart::on_failure().limit(1, Duration::ZERO));
     let failed_dynamic = builder.handle();
     let failed_dynamic_snapshots = failed_dynamic.subscribe_snapshots();
     assert!(builder.spawn().is_err());
@@ -591,7 +592,7 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
             mutate_children_on_start: true,
         }
     });
-    let leader = leader_spec.actor_ref();
+    let (leader_spec, leader) = leader_spec.actor_ref();
     let handle = OrderedTree::new()
         .subtree(
             "owned",
@@ -652,7 +653,7 @@ async fn restricted_scope_add_child_returns_the_inserted_lineage() {
         lineage: lineage_tx.clone(),
         subtree: subtree_tx.clone(),
     });
-    let adder = adder_spec.actor_ref();
+    let (adder_spec, adder) = adder_spec.actor_ref();
     let handle = OrderedTree::new()
         .subtree(
             "owned",
@@ -788,14 +789,14 @@ async fn leader_owned_scope_uses_explicit_rest_for_one() {
             starts: Arc::clone(&starts),
         }
     });
-    let leader = leader_spec.actor_ref();
+    let (leader_spec, leader) = leader_spec.actor_ref();
     let worker_spec = ActorSpec::new("worker", {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
         }
     });
-    let worker = worker_spec.actor_ref();
+    let (worker_spec, worker) = worker_spec.actor_ref();
     let tree = OrderedTree::new().subtree(
         "owned",
         OrderedTree::new()
@@ -838,10 +839,10 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
             starts: Arc::clone(&starts),
         }
     });
-    let worker = worker_spec.actor_ref();
+    let (worker_spec, worker) = worker_spec.actor_ref();
     let inner = OrderedTree::new()
         .actor(worker_spec)
-        .restart_config(RestartConfig::new(1, Duration::from_secs(30)));
+        .default_restart(Restart::on_failure().limit(1, Duration::from_secs(30)));
     let handle = OrderedTree::new()
         .subtree(
             "owned",

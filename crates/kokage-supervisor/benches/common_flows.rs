@@ -11,7 +11,7 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BoxError, ChildSpec, LifecycleEventKind, LifecycleWatch, RestartPolicy, Strategy, Supervisor,
+    BoxError, ChildSpec, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -141,7 +141,7 @@ async fn one_for_one_restart_flow() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let mut builder = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
@@ -193,7 +193,7 @@ async fn one_for_all_restart_flow() {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 
     let mut builder = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -204,7 +204,7 @@ async fn one_for_all_restart_flow() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartPolicy::Always),
+            .restart(Restart::always()),
         );
     }
 

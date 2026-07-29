@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("worker stopping");
             Ok(())
         }))
-        .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
+        .child(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
         .spawn()?;
     let handle = running.handle();
     let mut snapshots = handle.subscribe_snapshots();

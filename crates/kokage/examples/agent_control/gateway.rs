@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use kokage::{
-    Actor, ActorRef, ActorResult, DrainPolicy, MessageContext,
+    Actor, ActorRef, ActorResult, MessageContext,
     host::{ActorContext, RawActor},
 };
 
@@ -39,10 +39,6 @@ impl Actor for Outbound {
             }
         }
         Ok(())
-    }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
     }
 }
 

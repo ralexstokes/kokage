@@ -29,6 +29,6 @@ pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySen
 pub use factory::ActorFactory;
 pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActorBuilder};
-pub use handler::{Actor, DrainPolicy};
+pub use handler::Actor;
 pub use monitor::{DownReason, MonitorEvent};
 pub use raw::{ActorResult, RawActor};

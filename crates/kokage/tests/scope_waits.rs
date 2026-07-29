@@ -14,7 +14,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorStatus, DrainPolicy, LiveContext, MessageContext,
+    Actor, ActorResult, ActorSlot, ActorStatus, LiveContext, MessageContext, Shutdown,
     StartContext, StopContext, TaskHandle,
 };
 use tokio::sync::{Notify, mpsc};
@@ -65,7 +65,7 @@ async fn scope_wait_maps_completion_through_the_actor_mailbox() {
     let (report, mut reports) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("reporter");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, move || ReadyReporter {
         report: report.clone(),
     });
@@ -93,7 +93,6 @@ enum PendingMsg {
 struct PendingWait {
     started: mpsc::UnboundedSender<()>,
     dropped: mpsc::UnboundedSender<()>,
-    drain_policy: DrainPolicy,
 }
 
 impl Actor for PendingWait {
@@ -122,21 +121,16 @@ impl Actor for PendingWait {
     ) -> ActorResult {
         panic!("a pending scope wait must not complete")
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        self.drain_policy
-    }
 }
 
-async fn assert_pending_scope_wait_is_cancelled(drain_policy: DrainPolicy) {
+async fn assert_pending_scope_wait_is_cancelled(shutdown: Shutdown) {
     let (started, mut starts) = mpsc::unbounded_channel();
     let (dropped, mut drops) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
-    let slot = ActorSlot::new("pending");
+    let slot = ActorSlot::new("pending").shutdown(shutdown);
     graph.define(slot, move || PendingWait {
         started: started.clone(),
         dropped: dropped.clone(),
-        drain_policy,
     });
     let runtime = graph.build().spawn().expect("tree builds");
 
@@ -150,12 +144,16 @@ async fn assert_pending_scope_wait_is_cancelled(drain_policy: DrainPolicy) {
 
 #[tokio::test]
 async fn pending_scope_wait_is_cancelled_and_exempt_from_drain() {
-    assert_pending_scope_wait_is_cancelled(DrainPolicy::Drain).await;
+    assert_pending_scope_wait_is_cancelled(Shutdown::drain_for(std::time::Duration::from_secs(5)))
+        .await;
 }
 
 #[tokio::test]
 async fn pending_scope_wait_is_cancelled_before_discard_shutdown() {
-    assert_pending_scope_wait_is_cancelled(DrainPolicy::Discard).await;
+    assert_pending_scope_wait_is_cancelled(Shutdown::discard_after_current(
+        std::time::Duration::from_secs(5),
+    ))
+    .await;
 }
 
 enum CancelMsg {
@@ -210,7 +208,7 @@ async fn message_context_scope_wait_can_be_cancelled_and_is_accounted() {
     let (completions, mut completion_rx) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("cancellable-wait");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, move || CancellableWait {
         started: started.clone(),
         dropped: dropped.clone(),
@@ -307,7 +305,7 @@ async fn scope_wait_completion_obeys_full_fifo_mailbox_backpressure() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("backpressured-wait");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, {
         let wait_gate = Arc::clone(&wait_gate);
         let handler_release = Arc::clone(&handler_release);
@@ -373,7 +371,7 @@ async fn handle_abort_wins_before_a_blocked_scope_wait_message_is_accepted() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("cancelled-backpressured-wait");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, {
         let wait_gate = Arc::clone(&wait_gate);
         let handler_release = Arc::clone(&handler_release);
@@ -499,7 +497,7 @@ async fn restart_cancels_pending_scope_wait_without_delivering_to_the_next_incar
     let wait_gate = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("restart-probe");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, {
         let incarnations = Arc::clone(&incarnations);
         let starts = starts.clone();
@@ -621,7 +619,7 @@ async fn completion_racing_restart_cannot_follow_the_ref_into_the_next_incarnati
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("completion-race");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, {
         let incarnations = Arc::clone(&incarnations);
         let wait_gate = Arc::clone(&wait_gate);
@@ -786,10 +784,6 @@ impl Actor for CompletedPanicDuringDrain {
         self.stopped.send(()).expect("receiver open");
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::test]
@@ -886,10 +880,6 @@ impl Actor for MixedDrain {
         self.observed.send("stop").expect("receiver open");
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::test]
@@ -905,7 +895,7 @@ async fn drain_aborts_scope_waits_but_still_waits_for_offloads() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("mixed-drain");
-    let actor = slot.actor_ref();
+    let (slot, actor) = slot.actor_ref();
     graph.define(slot, {
         let offload_release = Arc::clone(&offload_release);
         let scope_release = Arc::clone(&scope_release);

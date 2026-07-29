@@ -23,13 +23,20 @@ impl RunnableBuilder {
         Self { actors: Vec::new() }
     }
 
-    pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
-        let actor_ref = spec.actor_ref();
+    pub(crate) fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+        &mut self,
+        spec: ActorSpec<M, CONFIGURABLE>,
+    ) -> ActorRef<M> {
+        let actor_ref = spec.__actor_ref();
         self.actors.push(spec.into_runnable());
         actor_ref
     }
 
-    pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
+    pub(crate) fn define<M, F, const CONFIGURABLE: bool>(
+        &mut self,
+        slot: ActorSlot<M, CONFIGURABLE>,
+        factory: F,
+    ) -> ActorRef<M>
     where
         M: Send + 'static,
         F: ActorFactory,
@@ -70,8 +77,11 @@ impl TreeBuilder {
         }
     }
 
-    pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
-        let actor_ref = spec.actor_ref();
+    pub(crate) fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+        &mut self,
+        spec: ActorSpec<M, CONFIGURABLE>,
+    ) -> ActorRef<M> {
+        let actor_ref = spec.__actor_ref();
         self.tree = Some(
             self.tree
                 .take()
@@ -81,7 +91,11 @@ impl TreeBuilder {
         actor_ref
     }
 
-    pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
+    pub(crate) fn define<M, F, const CONFIGURABLE: bool>(
+        &mut self,
+        slot: ActorSlot<M, CONFIGURABLE>,
+        factory: F,
+    ) -> ActorRef<M>
     where
         M: Send + 'static,
         F: ActorFactory,

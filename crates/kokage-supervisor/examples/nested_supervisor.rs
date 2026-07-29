@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("metrics observed shutdown");
         Ok(())
     })
-    .restart(RestartPolicy::Always);
+    .restart(Restart::always());
 
     let running_owner = Supervisor::dynamic().spawn()?;
     let running = running_owner.handle();

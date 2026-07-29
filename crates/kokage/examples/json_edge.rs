@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, Cursor};
 
-use kokage::{Actor, ActorResult, ActorSpec, DrainPolicy, MessageContext, OrderedTree};
+use kokage::{Actor, ActorResult, ActorSpec, MessageContext, OrderedTree, Shutdown};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -21,17 +21,13 @@ impl Actor for Printer {
         println!("{} x {}", order.quantity, order.item);
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        // Print every accepted order before the runtime shuts down.
-        DrainPolicy::Drain
-    }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let printer_spec = ActorSpec::new("Printer", || Printer);
-    let printer = printer_spec.actor_ref();
+    let printer_spec = ActorSpec::new("Printer", || Printer)
+        .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
+    let (printer_spec, printer) = printer_spec.actor_ref();
     let runtime = OrderedTree::new().actor(printer_spec).spawn()?;
 
     // A socket or file framing layer can supply the same byte slices.

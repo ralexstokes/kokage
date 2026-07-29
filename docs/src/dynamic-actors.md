@@ -80,13 +80,13 @@ The inserted `ActorSpec` carries its own mailbox, restart, shutdown, and
 message-size settings:
 
 ```rust
-# use kokage::{ActorSpec, MailboxMode, RestartPolicy};
+# use kokage::{ActorSpec, MailboxMode, Restart};
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(32)
     .mailbox(MailboxMode::queue())
-    .restart(RestartPolicy::OnFailure);
+    .restart(Restart::on_failure());
 # let _ = worker;
 ```
 

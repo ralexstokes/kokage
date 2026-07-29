@@ -1,4 +1,4 @@
-use kokage::{DrainPolicy, prelude::*};
+use kokage::prelude::*;
 use tokio::time::Instant;
 
 use crate::{
@@ -54,9 +54,5 @@ impl Actor for Ledger {
             LedgerMsg::Report { reply } => reply.send(self.report.clone()),
         }
         Ok(())
-    }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        DrainPolicy::Drain
     }
 }

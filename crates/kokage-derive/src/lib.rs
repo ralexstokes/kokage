@@ -44,7 +44,7 @@ use syn::{Data, DeriveInput, Field, Fields, parse_macro_input, spanned::Spanned}
 /// # }
 ///
 /// let worker = ActorSpec::new("worker", WorkerFactory { client: Client });
-/// let _worker_ref = worker.actor_ref();
+/// let (worker, _worker_ref) = worker.actor_ref();
 /// ```
 ///
 /// The generated factory and its configuration fields inherit the actor's

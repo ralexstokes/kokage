@@ -1,11 +1,6 @@
 use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 
-use crate::{
-    context::ChildContext,
-    restart::{RestartConfig, RestartPolicy},
-    shutdown::ShutdownPolicy,
-    supervisor::Supervisor,
-};
+use crate::{context::ChildContext, restart::Restart, shutdown::Shutdown, supervisor::Supervisor};
 
 /// A type-erased, thread-safe error type used as the `Err` half of
 /// [`ChildResult`].
@@ -17,31 +12,18 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// Returning `Ok(())` signals a clean exit. Returning an error signals a
 /// failure, which may trigger a restart depending on the child's
-/// [`RestartPolicy`].
+/// [`Restart`].
 pub type ChildResult = Result<(), BoxError>;
 
 pub(crate) type ChildFuture = Pin<Box<dyn Future<Output = ChildResult> + Send + 'static>>;
 pub(crate) type OpaqueAttachment = Arc<dyn Any + Send + Sync>;
 
-/// What happens to a child membership after a terminal exit.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum TerminalMembership {
-    /// Preserve the inactive child in supervisor state.
-    #[default]
-    Retain,
-    /// Remove the child and make its id available for reuse.
-    Remove,
-}
-
 #[derive(Clone)]
 pub(crate) struct ChildDefinition {
     pub(crate) id: String,
-    pub(crate) restart: RestartPolicy,
+    pub(crate) restart: Restart,
     restart_is_default: bool,
-    pub(crate) remove_on_exit: bool,
-    pub(crate) restart_intensity: Option<RestartConfig>,
-    pub(crate) shutdown_policy: ShutdownPolicy,
+    pub(crate) shutdown_policy: Shutdown,
     shutdown_is_default: bool,
     pub(crate) readiness: ChildReadiness,
     pub(crate) attachment: Option<OpaqueAttachment>,
@@ -118,11 +100,9 @@ impl ChildSpec {
         Self {
             inner: Arc::new(ChildDefinition {
                 id: id.into(),
-                restart: RestartPolicy::default(),
+                restart: Restart::default(),
                 restart_is_default: true,
-                remove_on_exit: false,
-                restart_intensity: None,
-                shutdown_policy: ShutdownPolicy::default(),
+                shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
                 readiness: ChildReadiness::Immediate,
                 attachment: None,
@@ -138,11 +118,9 @@ impl ChildSpec {
         Self {
             inner: Arc::new(ChildDefinition {
                 id: id.into(),
-                restart: RestartPolicy::default(),
+                restart: Restart::default(),
                 restart_is_default: true,
-                remove_on_exit: false,
-                restart_intensity: None,
-                shutdown_policy: ShutdownPolicy::default(),
+                shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
                 readiness: ChildReadiness::Explicit,
                 attachment: None,
@@ -151,59 +129,23 @@ impl ChildSpec {
         }
     }
 
-    /// Sets the restart policy for this child. See [`RestartPolicy`] for options.
+    /// Sets the restart policy for this child. See [`Restart`] for options.
     #[must_use]
-    pub fn restart(self, restart: RestartPolicy) -> Self {
+    pub fn restart(self, restart: Restart) -> Self {
         self.map_inner(|inner| {
             inner.restart = restart;
             inner.restart_is_default = false;
         })
     }
 
-    /// Selects what happens after an exit that this child's restart policy
-    /// declines to restart.
-    ///
-    /// This defaults to `false`, preserving the terminal child in supervisor
-    /// snapshots. It is primarily useful for children added at runtime, where
-    /// removal also makes the child id available for reuse. Restarted exits do
-    /// not remove the child.
-    ///
-    /// Under [`Strategy::OneForAll`](crate::Strategy::OneForAll) and
-    /// [`Strategy::RestForOne`](crate::Strategy::RestForOne), opting a
-    /// non-[`RestartPolicy::Never`] child into removal makes a non-restarted
-    /// exit permanent: a later group restart cannot revive the removed child.
-    /// If the exit is instead observed while a group restart is already
-    /// draining that child, it is part of the restart cycle and the child is
-    /// respawned rather than removed.
-    ///
-    /// Removing a child also removes its exit status from supervisor
-    /// snapshots, and so from any
-    /// [`wait_completed`](crate::SupervisorHandle::wait_completed) set that
-    /// awaits it.
-    #[must_use]
-    pub fn terminal_membership(self, membership: TerminalMembership) -> Self {
-        self.map_inner(|inner| {
-            inner.remove_on_exit = matches!(membership, TerminalMembership::Remove)
-        })
-    }
-
-    /// Sets the shutdown policy for this child. See [`ShutdownPolicy`] for
+    /// Sets the shutdown policy for this child. See [`Shutdown`] for
     /// options.
     #[must_use]
-    pub fn shutdown(self, policy: ShutdownPolicy) -> Self {
+    pub fn shutdown(self, policy: Shutdown) -> Self {
         self.map_inner(|inner| {
             inner.shutdown_policy = policy;
             inner.shutdown_is_default = false;
         })
-    }
-
-    /// Overrides the supervisor-level [`RestartConfig`] for this child.
-    ///
-    /// When set, this child tracks its own sliding restart window instead of
-    /// sharing the supervisor's default.
-    #[must_use]
-    pub fn restart_config(self, config: RestartConfig) -> Self {
-        self.map_inner(|inner| inner.restart_intensity = Some(config))
     }
 
     /// Attaches process-local metadata to this supervised child.
@@ -241,15 +183,11 @@ impl ChildSpec {
         &self.inner.id
     }
 
-    pub(crate) fn restart_intensity_override(&self) -> Option<RestartConfig> {
-        self.inner.restart_intensity
-    }
-
     pub(crate) fn resolved_policies(
         &self,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
-    ) -> (RestartPolicy, ShutdownPolicy) {
+        default_restart: Restart,
+        default_shutdown: Shutdown,
+    ) -> (Restart, Shutdown) {
         let restart = if self.inner.restart_is_default {
             default_restart
         } else {
@@ -270,7 +208,7 @@ impl ChildDefinition {
         Arc::get_mut(definition).expect("a child specification is uniquely owned while edited")
     }
 
-    pub(crate) fn apply_defaults(&mut self, restart: RestartPolicy, shutdown: ShutdownPolicy) {
+    pub(crate) fn apply_defaults(&mut self, restart: Restart, shutdown: Shutdown) {
         if self.restart_is_default {
             self.restart = restart;
         }

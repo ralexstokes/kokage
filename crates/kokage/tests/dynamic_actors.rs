@@ -16,10 +16,9 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, ControlError,
-    DownReason, DrainPolicy, DynamicRuntime, DynamicTree, LiveContext, MailboxMode, MessageContext,
-    MonitorEvent, OrderedTree, RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy,
-    StartContext, StopContext, SupervisorBuildError, SupervisorError, TerminalMembership,
-    TrySendError,
+    DownReason, DynamicRuntime, DynamicTree, LiveContext, MailboxMode, MessageContext,
+    MonitorEvent, OrderedTree, Restart, RuntimeHandle, SendError, Shutdown, StartContext,
+    StopContext, SupervisorBuildError, SupervisorError, TrySendError,
     host::{ActorContext, BoxError, ChildSpec, RawActor},
     observe::ChildMembershipView,
 };
@@ -464,7 +463,6 @@ struct RemovalProbe {
     release_handler: Arc<Notify>,
     release_on_stop: Arc<Notify>,
     events: mpsc::UnboundedSender<RemovalEvent>,
-    drain_policy: DrainPolicy,
 }
 
 impl Actor for RemovalProbe {
@@ -501,10 +499,6 @@ impl Actor for RemovalProbe {
             .expect("receiver alive");
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        self.drain_policy
-    }
 }
 
 #[tokio::test]
@@ -517,16 +511,18 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect("graphless runtime builds");
     let actor = runtime
         .handle()
-        .add_actor(ActorSpec::new("removable", {
-            let release_handler = release_handler.clone();
-            let release_on_stop = release_on_stop.clone();
-            move || RemovalProbe {
-                release_handler: release_handler.clone(),
-                release_on_stop: release_on_stop.clone(),
-                events: events_tx.clone(),
-                drain_policy: DrainPolicy::Drain,
-            }
-        }))
+        .add_actor(
+            ActorSpec::new("removable", {
+                let release_handler = release_handler.clone();
+                let release_on_stop = release_on_stop.clone();
+                move || RemovalProbe {
+                    release_handler: release_handler.clone(),
+                    release_on_stop: release_on_stop.clone(),
+                    events: events_tx.clone(),
+                }
+            })
+            .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
+        )
         .await
         .expect("actor added");
 
@@ -630,16 +626,18 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         .expect("graphless runtime builds");
     let actor = runtime
         .handle()
-        .add_actor(ActorSpec::new("discarding", {
-            let release_handler = release_handler.clone();
-            let release_on_stop = release_on_stop.clone();
-            move || RemovalProbe {
-                release_handler: release_handler.clone(),
-                release_on_stop: release_on_stop.clone(),
-                events: events_tx.clone(),
-                drain_policy: DrainPolicy::Discard,
-            }
-        }))
+        .add_actor(
+            ActorSpec::new("discarding", {
+                let release_handler = release_handler.clone();
+                let release_on_stop = release_on_stop.clone();
+                move || RemovalProbe {
+                    release_handler: release_handler.clone(),
+                    release_on_stop: release_on_stop.clone(),
+                    events: events_tx.clone(),
+                }
+            })
+            .shutdown(Shutdown::discard_after_current(Duration::from_secs(5))),
+        )
         .await
         .expect("actor added");
 
@@ -708,7 +706,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let watcher_slot = ActorSlot::new("watcher");
-    let watcher = watcher_slot.actor_ref();
+    let (watcher_slot, watcher) = watcher_slot.actor_ref();
     graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
@@ -733,8 +731,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::on_failure().remove_when_done()),
         )
         .await
         .expect("temporary actor added");
@@ -789,8 +786,7 @@ async fn message_context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::on_failure().remove_when_done()),
         )
         .await
         .expect("transient actor added");
@@ -812,7 +808,7 @@ async fn message_context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartPolicy::Always),
+            .restart(Restart::always()),
         )
         .await
         .expect("permanent actor added");
@@ -838,8 +834,8 @@ async fn message_context_stop_applies_restart_policy_before_explicit_removal() {
 #[tokio::test]
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     let runtime = DynamicTree::new()
-        .default_restart(RestartPolicy::Always)
-        .default_shutdown(ShutdownPolicy::Abort)
+        .default_restart(Restart::always())
+        .default_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic runtime builds");
     let inherited_starts = Arc::new(AtomicUsize::new(0));
@@ -863,8 +859,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
                     starts: Arc::clone(&starts),
                 }
             })
-            .restart(RestartPolicy::Never)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::never().remove_when_done()),
         )
         .await
         .expect("explicit actor added");
@@ -887,8 +882,8 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
 #[tokio::test]
 async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     let runtime = DynamicTree::new()
-        .default_restart(RestartPolicy::Always)
-        .default_shutdown(ShutdownPolicy::Abort)
+        .default_restart(Restart::always())
+        .default_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic tree builds");
     let starts = Arc::new(AtomicUsize::new(0));
@@ -943,8 +938,7 @@ async fn never_actor_auto_removes_after_failure() {
                     fail: true,
                 }
             })
-            .restart(RestartPolicy::Never)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::never().remove_when_done()),
         )
         .await
         .expect("temporary actor added");
@@ -959,7 +953,7 @@ async fn never_actor_auto_removes_after_failure() {
 }
 
 #[tokio::test]
-async fn terminal_membership_defaults_to_retain_and_remove_override_is_order_independent() {
+async fn completed_membership_is_retained_unless_restart_removes_it() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -974,8 +968,7 @@ async fn terminal_membership_defaults_to_retain_and_remove_override_is_order_ind
                     fail: false,
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::on_failure().remove_when_done()),
         )
         .await
         .expect("transient actor added");
@@ -993,7 +986,7 @@ async fn terminal_membership_defaults_to_retain_and_remove_override_is_order_ind
                     fail: false,
                 }
             })
-            .restart(RestartPolicy::OnFailure),
+            .restart(Restart::on_failure()),
         )
         .await
         .expect("retained transient actor added");
@@ -1011,8 +1004,7 @@ async fn terminal_membership_defaults_to_retain_and_remove_override_is_order_ind
                     fail: false,
                 }
             })
-            .terminal_membership(TerminalMembership::Retain)
-            .restart(RestartPolicy::OnFailure),
+            .restart(Restart::on_failure()),
         )
         .await
         .expect("reversed retained transient actor added");
@@ -1030,8 +1022,7 @@ async fn terminal_membership_defaults_to_retain_and_remove_override_is_order_ind
                     fail: false,
                 }
             })
-            .restart(RestartPolicy::Never)
-            .terminal_membership(TerminalMembership::Retain),
+            .restart(Restart::never()),
         )
         .await
         .expect("retained never actor added");
@@ -1042,7 +1033,7 @@ async fn terminal_membership_defaults_to_retain_and_remove_override_is_order_ind
 }
 
 #[tokio::test]
-async fn remove_terminal_membership_does_not_remove_an_actor_that_restarts() {
+async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -1056,8 +1047,7 @@ async fn remove_terminal_membership_does_not_remove_an_actor_that_restarts() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .terminal_membership(TerminalMembership::Remove),
+            .restart(Restart::on_failure().remove_when_done()),
         )
         .await
         .expect("restartable actor added");
@@ -1223,7 +1213,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = TreeBuilder::new();
     let forwarder_slot = ActorSlot::new("forwarder");
-    let forwarder = forwarder_slot.actor_ref();
+    let (forwarder_slot, forwarder) = forwarder_slot.actor_ref();
     builder.define(forwarder_slot, || Forwarder);
     let graph = builder.build();
     let handle = graph
@@ -1285,7 +1275,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = TreeBuilder::new();
     let sink_slot = ActorSlot::new("sink");
-    let sink = sink_slot.actor_ref();
+    let (sink_slot, sink) = sink_slot.actor_ref();
     builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });
@@ -1341,11 +1331,10 @@ async fn timed_out_removal_terminates_the_typed_ref() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let actor_ref = runtime
         .handle()
-        .add_actor(ActorSpec::new("dynamic", || PendingActor).shutdown(
-            ShutdownPolicy::Cooperative {
-                grace: Duration::from_millis(20),
-            },
-        ))
+        .add_actor(
+            ActorSpec::new("dynamic", || PendingActor)
+                .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
+        )
         .await
         .expect("actor added");
 

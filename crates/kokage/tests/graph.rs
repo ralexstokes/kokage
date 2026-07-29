@@ -16,8 +16,8 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus, CallError,
-    DrainPolicy, LiveContext, MessageContext, Reply, RestartPolicy, SendError, StartContext,
-    StopContext, TrySendError,
+    LiveContext, MessageContext, Reply, Restart, SendError, Shutdown, StartContext, StopContext,
+    TrySendError,
     host::{
         ActorContext, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
     },
@@ -86,11 +86,38 @@ fn start_graph(
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(
-                        stop.cancelled(),
-                        RestartPolicy::Never,
-                        DEFAULT_SHUTDOWN_BOUND,
-                    )
+                    .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+                    .await
+            })
+        })
+        .collect::<Vec<_>>();
+    let task = tokio::spawn(async move {
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            results.push(task.await.expect("actor task joined"));
+        }
+        results
+    });
+    (stop, task)
+}
+
+fn start_graph_with_shutdown(
+    graph: RunnableSet,
+    shutdown: Shutdown,
+) -> (
+    CancellationToken,
+    JoinHandle<Vec<Result<(), ActorRunError>>>,
+) {
+    let stop = CancellationToken::new();
+    let tasks = graph
+        .into_nodes()
+        .into_iter()
+        .map(|actor| {
+            let actor = actor.into_runnable();
+            let stop = stop.clone();
+            tokio::spawn(async move {
+                actor
+                    .run_until(stop.cancelled(), Restart::never(), shutdown)
                     .await
             })
         })
@@ -173,7 +200,7 @@ async fn typed_pipeline_end_to_end() {
 
     let mut builder = RunnableSetBuilder::new();
     let worker_slot = ActorSlot::<Job>::new("worker");
-    let worker = worker_slot.actor_ref();
+    let (worker_slot, worker) = worker_slot.actor_ref();
     let frontend_slot = ActorSlot::new("frontend");
     let frontend = builder.define(frontend_slot, move || Frontend {
         worker: worker.clone(),
@@ -460,11 +487,7 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let graph = builder.build();
 
     let result = runnable(graph, "worker")
-        .run_until(
-            pending::<()>(),
-            RestartPolicy::Never,
-            DEFAULT_SHUTDOWN_BOUND,
-        )
+        .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
         .await;
     assert!(matches!(
         result,
@@ -497,11 +520,7 @@ async fn handler_error_fails_the_actor_run() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                RestartPolicy::Never,
-                DEFAULT_SHUTDOWN_BOUND,
-            )
+            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
             .await
     });
     actor.send(()).await.expect("message sent");
@@ -549,11 +568,7 @@ async fn message_context_stop_is_idempotent_and_exits_normally() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                RestartPolicy::Never,
-                DEFAULT_SHUTDOWN_BOUND,
-            )
+            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
             .await
     });
 
@@ -581,11 +596,7 @@ async fn message_context_error_takes_precedence_over_a_stop_request() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                RestartPolicy::Never,
-                DEFAULT_SHUTDOWN_BOUND,
-            )
+            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
             .await
     });
 
@@ -612,7 +623,6 @@ enum GateMsg {
 #[derive(Clone)]
 struct GateHandler {
     total: u32,
-    policy: DrainPolicy,
     started: mpsc::UnboundedSender<()>,
     release: Arc<Notify>,
     events: mpsc::UnboundedSender<GateEvent>,
@@ -655,10 +665,6 @@ impl Actor for GateHandler {
             .expect("receiver alive");
         Ok(())
     }
-
-    fn drain_policy(&self) -> DrainPolicy {
-        self.policy
-    }
 }
 
 #[tokio::test]
@@ -671,7 +677,6 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
         let release = release.clone();
         move || GateHandler {
             total: 0,
-            policy: DrainPolicy::Discard,
             started: started_tx.clone(),
             release: release.clone(),
             events: events_tx.clone(),
@@ -683,8 +688,8 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
         worker
             .run_until(
                 pending::<()>(),
-                RestartPolicy::Never,
-                DEFAULT_SHUTDOWN_BOUND,
+                Restart::never(),
+                Shutdown::discard_after_current(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
     });
@@ -717,7 +722,6 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
         let release = release.clone();
         move || GateHandler {
             total: 0,
-            policy: DrainPolicy::Drain,
             started: started_tx.clone(),
             release: release.clone(),
             events: events_tx.clone(),
@@ -729,8 +733,8 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
         worker
             .run_until(
                 pending::<()>(),
-                RestartPolicy::Never,
-                DEFAULT_SHUTDOWN_BOUND,
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
     });
@@ -782,7 +786,6 @@ async fn handler_discard_drops_queued_messages_and_call_reply() {
         let release = release.clone();
         move || GateHandler {
             total: 0,
-            policy: DrainPolicy::Discard,
             started: started_tx.clone(),
             release: release.clone(),
             events: events_tx.clone(),
@@ -790,7 +793,10 @@ async fn handler_discard_drops_queued_messages_and_call_reply() {
     });
     let graph = builder.build();
 
-    let (stop, task) = start_graph(graph);
+    let (stop, task) = start_graph_with_shutdown(
+        graph,
+        Shutdown::discard_after_current(DEFAULT_SHUTDOWN_BOUND),
+    );
     actor.send(GateMsg::Hold).await.expect("hold sent");
     recv(&mut started_rx, "handler entered hold").await;
 
@@ -823,7 +829,6 @@ async fn handler_drain_handles_queued_messages_and_replies_before_stop() {
         let release = release.clone();
         move || GateHandler {
             total: 0,
-            policy: DrainPolicy::Drain,
             started: started_tx.clone(),
             release: release.clone(),
             events: events_tx.clone(),
@@ -831,7 +836,8 @@ async fn handler_drain_handles_queued_messages_and_replies_before_stop() {
     });
     let graph = builder.build();
 
-    let (stop, task) = start_graph(graph);
+    let (stop, task) =
+        start_graph_with_shutdown(graph, Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND));
     actor.send(GateMsg::Hold).await.expect("hold sent");
     recv(&mut started_rx, "handler entered hold").await;
 
@@ -998,9 +1004,9 @@ async fn cyclic_wiring_via_slot() {
 
     let mut builder = RunnableSetBuilder::new();
     let pong_slot = ActorSlot::<Ball>::new("pong");
-    let pong = pong_slot.actor_ref();
+    let (pong_slot, pong) = pong_slot.actor_ref();
     let ping_slot = ActorSlot::new("ping");
-    let ping = ping_slot.actor_ref();
+    let (ping_slot, ping) = ping_slot.actor_ref();
     builder.define(ping_slot, {
         let done_tx = done_tx.clone();
         move || Paddle {
@@ -1026,7 +1032,7 @@ async fn cyclic_wiring_via_slot() {
 #[test]
 fn dropping_an_unfilled_actor_slot_terminates_its_ref() {
     let slot = ActorSlot::<u32>::new("ghost");
-    let ghost = slot.actor_ref();
+    let (slot, ghost) = slot.actor_ref();
     drop(slot);
 
     assert!(matches!(
@@ -1038,7 +1044,7 @@ fn dropping_an_unfilled_actor_slot_terminates_its_ref() {
 #[test]
 fn dropping_an_unplaced_actor_spec_terminates_its_ref() {
     let spec = ActorSpec::new("ghost", Drain::<u32>::new);
-    let ghost = spec.actor_ref();
+    let (spec, ghost) = spec.actor_ref();
     drop(spec);
 
     assert!(matches!(
@@ -1065,11 +1071,7 @@ async fn actors_can_declare_distinct_mailbox_capacities() {
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(
-                        stop.cancelled(),
-                        RestartPolicy::Never,
-                        DEFAULT_SHUTDOWN_BOUND,
-                    )
+                    .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
                     .await
             })
         })
@@ -1111,11 +1113,7 @@ async fn actor_error_fails_its_run() {
     let graph = builder.build();
 
     let result = runnable(graph, "bad")
-        .run_until(
-            pending::<()>(),
-            RestartPolicy::Never,
-            DEFAULT_SHUTDOWN_BOUND,
-        )
+        .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
         .await;
     assert!(matches!(
         result,
@@ -1141,11 +1139,7 @@ async fn early_clean_exit_is_a_clean_actor_run() {
     let graph = builder.build();
 
     runnable(graph, "quitter")
-        .run_until(
-            pending::<()>(),
-            RestartPolicy::Never,
-            DEFAULT_SHUTDOWN_BOUND,
-        )
+        .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
         .await
         .expect("clean early exit is ordinary completion");
 }
@@ -1198,7 +1192,7 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
             worker
                 .run_until(
                     stop.cancelled(),
-                    RestartPolicy::Never,
+                    Restart::never(),
                     Duration::from_millis(50),
                 )
                 .await
@@ -1245,9 +1239,8 @@ mod runnable_actor {
     };
 
     use kokage::{
-        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, ControlError, DrainPolicy, DynamicTree,
-        MessageContext, RestartPolicy, SendError, ShutdownPolicy, StartContext, SupervisorError,
-        TrySendError,
+        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, ControlError, DynamicTree,
+        MessageContext, Restart, SendError, Shutdown, StartContext, SupervisorError, TrySendError,
         host::{
             ActorContext, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
         },
@@ -1360,14 +1353,14 @@ mod runnable_actor {
         let actor_slot = ActorSlot::new("worker").message_size(sized_payload_size);
         builder.define(actor_slot, Drain::<SizedPayload>::new);
         let detached_slot = ActorSlot::new("worker").message_size(sized_payload_size);
-        let detached = detached_slot.actor_ref();
+        let (detached_slot, detached) = detached_slot.actor_ref();
         builder.define(detached_slot, Drain::<SizedPayload>::new);
 
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
 
         let detached_slot =
             ActorSlot::<SizedPayload>::new("worker").message_size(sized_payload_size);
-        let detached = detached_slot.actor_ref();
+        let (detached_slot, detached) = detached_slot.actor_ref();
         drop(detached_slot);
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
         assert!(matches!(
@@ -1392,12 +1385,12 @@ mod runnable_actor {
     fn start_actor(
         actor: RunnableActor,
     ) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
-        start_actor_with_policy(actor, RestartPolicy::Never)
+        start_actor_with_policy(actor, Restart::never())
     }
 
     fn start_actor_with_policy(
         actor: RunnableActor,
-        restart: RestartPolicy,
+        restart: Restart,
     ) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
         let stop = CancellationToken::new();
         let task = tokio::spawn({
@@ -1532,7 +1525,7 @@ mod runnable_actor {
             worker
                 .run_until(
                     async {},
-                    RestartPolicy::Never,
+                    Restart::never(),
                     Duration::from_millis(100),
                 )
                 .await,
@@ -1548,7 +1541,7 @@ mod runnable_actor {
         let worker = single_actor(graph, "worker");
 
         worker
-            .run_until(async {}, RestartPolicy::Never, Duration::from_secs(30))
+            .run_until(async {}, Restart::never(), Duration::from_secs(30))
             .await
             .expect("cooperative shutdown completes cleanly");
     }
@@ -1558,11 +1551,10 @@ mod runnable_actor {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         runtime
             .handle()
-            .add_actor(ActorSpec::new("worker", || NeverStops).shutdown(
-                ShutdownPolicy::Cooperative {
-                    grace: Duration::from_millis(100),
-                },
-            ))
+            .add_actor(
+                ActorSpec::new("worker", || NeverStops)
+                    .shutdown(Shutdown::drain_for(Duration::from_millis(100))),
+            )
             .await
             .expect("dynamic actor added");
         runtime
@@ -1647,8 +1639,7 @@ mod runnable_actor {
         let graph = builder.build();
 
         let worker = single_actor(graph, "worker");
-        let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), RestartPolicy::Always);
+        let (_first_stop, first_task) = start_actor_with_policy(worker.clone(), Restart::always());
 
         timeout(Duration::from_secs(1), entered_rx.recv())
             .await
@@ -1676,7 +1667,7 @@ mod runnable_actor {
             .expect("first actor task joined")
             .expect("first actor run completed cleanly");
 
-        let (second_stop, second_task) = start_actor_with_policy(worker, RestartPolicy::Always);
+        let (second_stop, second_task) = start_actor_with_policy(worker, Restart::always());
         assert_eq!(
             timeout(Duration::from_secs(1), observed_rx.recv())
                 .await
@@ -1714,7 +1705,7 @@ mod runnable_actor {
             worker
                 .run_until(
                     pending::<()>(),
-                    RestartPolicy::Never,
+                    Restart::never(),
                     DEFAULT_SHUTDOWN_BOUND,
                 )
                 .await,
@@ -1740,7 +1731,7 @@ mod runnable_actor {
 
     #[tokio::test]
     async fn restart_policy_default_is_on_failure_for_run_until() {
-        assert_eq!(RestartPolicy::default(), RestartPolicy::OnFailure);
+        assert_eq!(Restart::default(), Restart::on_failure());
 
         let mut builder = RunnableSetBuilder::new();
         let worker_ref = add_actor(&mut builder, "worker", || FailsOnMessage);
@@ -1768,9 +1759,9 @@ mod runnable_actor {
     #[tokio::test]
     async fn dropped_run_follows_restart_policy() {
         for (policy, expect_terminated) in [
-            (RestartPolicy::Always, false),
-            (RestartPolicy::OnFailure, false),
-            (RestartPolicy::Never, true),
+            (Restart::always(), false),
+            (Restart::on_failure(), false),
+            (Restart::never(), true),
         ] {
             let mut builder = RunnableSetBuilder::new();
             let worker_ref = add_actor(&mut builder, "worker", Drain::<()>::new);
@@ -1823,7 +1814,7 @@ mod runnable_actor {
 
         // First run declares OnFailure: the failed exit leaves the binding
         // waiting to rebind.
-        let (_stop, task) = start_actor_with_policy(worker.clone(), RestartPolicy::OnFailure);
+        let (_stop, task) = start_actor_with_policy(worker.clone(), Restart::on_failure());
         worker_ref.send(()).await.expect("send accepted");
         let result = timeout(Duration::from_secs(1), task)
             .await
@@ -1838,7 +1829,7 @@ mod runnable_actor {
         // A second run of the same actor declares Never: the same failed exit
         // now terminates the binding — this run's argument wins over any state
         // left behind by the first run.
-        let (_stop, task) = start_actor_with_policy(worker, RestartPolicy::Never);
+        let (_stop, task) = start_actor_with_policy(worker, Restart::never());
         worker_ref
             .send(())
             .await
@@ -1900,7 +1891,7 @@ mod runnable_actor {
 
         let mut builder = RunnableSetBuilder::new();
         let worker_slot = ActorSlot::<Work>::new("worker");
-        let worker_ref = worker_slot.actor_ref();
+        let (worker_slot, worker_ref) = worker_slot.actor_ref();
         let frontend_ref_slot = ActorSlot::new("frontend");
         let frontend_ref = builder.define(frontend_ref_slot, move || Forwarder {
             worker: worker_ref.clone(),
@@ -1921,7 +1912,7 @@ mod runnable_actor {
 
         let (frontend_stop, frontend_task) = start_actor(frontend);
         let (_first_worker_stop, first_worker_task) =
-            start_actor_with_policy(worker.clone(), RestartPolicy::OnFailure);
+            start_actor_with_policy(worker.clone(), Restart::on_failure());
 
         frontend_ref.send(Work("first")).await.expect("first send");
         assert_eq!(
@@ -1956,7 +1947,7 @@ mod runnable_actor {
         ));
 
         let (second_worker_stop, second_worker_task) =
-            start_actor_with_policy(worker, RestartPolicy::OnFailure);
+            start_actor_with_policy(worker, Restart::on_failure());
         assert_eq!(
             timeout(Duration::from_secs(1), observed_rx.recv())
                 .await
@@ -2011,8 +2002,7 @@ mod runnable_actor {
 
         // Each run ends by clean early exit (not requested shutdown), so the
         // `Always` policy leaves the binding unbound and rebindable.
-        let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), RestartPolicy::Always);
+        let (_first_stop, first_task) = start_actor_with_policy(worker.clone(), Restart::always());
         worker_ref
             .send("first".to_owned())
             .await
@@ -2027,7 +2017,7 @@ mod runnable_actor {
 
         // The same ref rides into the next incarnation without re-minting.
         let (_second_stop, second_task) =
-            start_actor_with_policy(worker.clone(), RestartPolicy::Always);
+            start_actor_with_policy(worker.clone(), Restart::always());
         worker_ref
             .send("second".to_owned())
             .await
@@ -2104,7 +2094,7 @@ mod runnable_actor {
         // Run 1: a poison message plus two messages queued behind it, all
         // accepted by the first incarnation's mailbox before it reads any.
         let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), RestartPolicy::OnFailure);
+            start_actor_with_policy(worker.clone(), Restart::on_failure());
         started_rx.recv().await.expect("first incarnation started");
         worker_ref.send(0).await.expect("poison accepted");
         worker_ref
@@ -2128,7 +2118,7 @@ mod runnable_actor {
 
         // Run 2 binds a fresh mailbox: the accepted-but-unread messages died
         // with the first incarnation.
-        let (second_stop, second_task) = start_actor_with_policy(worker, RestartPolicy::OnFailure);
+        let (second_stop, second_task) = start_actor_with_policy(worker, Restart::on_failure());
         started_rx.recv().await.expect("second incarnation started");
         release.notify_one();
         worker_ref
@@ -2178,10 +2168,6 @@ mod runnable_actor {
             let outcome = self.sink.send(message).await;
             self.outcomes.send(outcome).expect("receiver alive");
             Ok(())
-        }
-
-        fn drain_policy(&self) -> DrainPolicy {
-            DrainPolicy::Drain
         }
     }
 
@@ -2245,7 +2231,7 @@ mod runnable_actor {
         }
     }
 
-    /// Sets no `drain_policy`, so it drains by default, and propagates the
+    /// Sets no shutdown override, so it drains by default, and propagates the
     /// sibling send with `?` instead of tolerating it.
     #[derive(Clone)]
     struct StrictDrainForwarder {
@@ -2274,11 +2260,11 @@ mod runnable_actor {
     }
 
     /// The cost of drain-by-default: an actor that never mentions
-    /// `drain_policy` still drains, so a `handle` that propagates a sibling
+    /// The default shutdown still drains, so a `handle` that propagates a sibling
     /// `SendError` turns what would have been a clean stop into a failed run.
     /// This is the counterpart to
     /// [`drain_tolerates_send_errors_from_a_stopped_sibling`] and the reason
-    /// the ordering rules on `DrainPolicy` require drain handlers to tolerate
+    /// the ordering rules on `Shutdown` require drain handlers to tolerate
     /// a stopped sibling.
     #[tokio::test]
     async fn a_drain_that_propagates_a_sibling_send_error_fails_the_actor() {

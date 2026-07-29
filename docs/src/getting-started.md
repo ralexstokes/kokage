@@ -41,7 +41,7 @@ impl Actor for Greeter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let greeter_actor = ActorSpec::new("greeter", || Greeter);
-    let greeter = greeter_actor.actor_ref();
+    let (greeter_actor, greeter) = greeter_actor.actor_ref();
 
     let runtime = OrderedTree::new().actor(greeter_actor).spawn()?;
     greeter.send("world".to_owned()).await?;
