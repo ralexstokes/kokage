@@ -35,5 +35,5 @@ tracing-subscriber.workspace = true
 trybuild.workspace = true
 
 [[example]]
-name = "trading_engine"
+name = "trading_engine_acceptance"
 required-features = ["metrics"]

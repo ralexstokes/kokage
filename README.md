@@ -106,8 +106,9 @@ supervising plain async tasks.
   `just serve-book` for a local copy.
 - **API docs** — `just doc` builds and opens the rustdoc for the workspace.
 - **Examples** — each crate ships runnable examples under its `examples/`
-  directory, e.g. `cargo run -p kokage --example supervised_actors`. Try
-  the console locally with `cargo run -p kokage-console --example console`.
+  directory. Start with the end-to-end trading engine using
+  `cargo run -p kokage --example trading_engine`, or try the console locally
+  with `cargo run -p kokage-console --example console`.
 
 ## Status
 

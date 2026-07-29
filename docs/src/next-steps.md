@@ -37,6 +37,9 @@ cargo run -p <crate> --example <name>
 
 | Example | Shows |
 |---------|-------|
+| `trading_engine` | An end-to-end actor application and a restart-stable venue ref. |
+| `trading_engine_acceptance` | The exhaustive multi-venue regression and observability scenario (needs `--features metrics`). |
+| `agent_control` | Dynamic per-conversation subtrees and advanced lifecycle patterns (needs `--features metrics`). |
 | `supervised_actors` | Per-actor supervision with default policies. |
 | `supervision` | A cyclic graph wired with `#[derive(Supervision)]`. |
 | `individual_actor_policies` | Per-actor restart/shutdown overrides. |

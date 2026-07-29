@@ -154,9 +154,9 @@ offloads completed.
 
 When per-callee state outgrows what a resolution message can carry, promote
 the callee to a dedicated child actor and let supervision manage its lifecycle
-instead. The `trading_engine` example's order router demonstrates the full
-pattern, including a phase that proves an order for a healthy venue completes
-while another venue's call is still waiting out its timeout.
+instead. The `trading_engine_acceptance` fixture's order router demonstrates
+the full pattern, including a phase that proves an order for a healthy venue
+completes while another venue's call is still waiting out its timeout.
 
 ## Abort is not undo
 
