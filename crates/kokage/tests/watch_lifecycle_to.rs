@@ -8,7 +8,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, DynamicActorOptions, DynamicTree, GraphBuilder, MessageContext,
+    Actor, ActorResult, ActorSlot, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
     OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, StartContext,
     observe::{LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard},
 };
@@ -104,21 +104,21 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = runtime
-        .add_actor_with(
-            "sink",
-            move || {
+        .add_actor(
+            ActorSpec::new("sink", move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
                 Sink {
                     generation,
                     observed: observed_tx.clone(),
                 }
-            },
-            DynamicActorOptions::new().restart(RestartPolicy::OnFailure),
+            })
+            .restart(RestartPolicy::OnFailure),
         )
         .await
         .expect("sink added");
     let mut graph = GraphBuilder::new();
-    let (crasher_slot, crasher) = graph.slot("crasher");
+    let crasher_slot = ActorSlot::new("crasher");
+    let crasher = crasher_slot.actor_ref();
     graph.define(crasher_slot, || Crasher);
     let watched = runtime
         .add_subtree(
@@ -362,18 +362,14 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     runtime
-        .add_actor("sink", move || RestrictedSink {
+        .add_actor(ActorSpec::new("sink", move || RestrictedSink {
             observed: observed_tx.clone(),
             watch: None,
-        })
+        }))
         .await
         .expect("restricted sink added");
     let crasher = runtime
-        .add_actor_with(
-            "crasher",
-            || Crasher,
-            DynamicActorOptions::new().restart(RestartPolicy::OnFailure),
-        )
+        .add_actor(ActorSpec::new("crasher", || Crasher).restart(RestartPolicy::OnFailure))
         .await
         .expect("crasher added");
     runtime

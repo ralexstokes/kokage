@@ -1,7 +1,7 @@
 use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorFactory, ActorRef, ActorResult, CancellationHandle, DownReason, DynamicActorOptions,
+    ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, DownReason,
     DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
@@ -92,12 +92,15 @@ where
     F: ActorFactory,
 {
     let mut builder = GraphBuilder::new();
-    let (slot, actor_ref) = builder.slot(label);
+    let slot = ActorSlot::new(label);
+    let actor_ref = slot.actor_ref();
     builder.define(slot, factory);
     let graph = builder.build().expect("test graph builds");
     let actor = graph
-        .actor_for(&actor_ref)
-        .expect("test actor is registered");
+        .into_nodes()
+        .pop()
+        .expect("test actor is registered")
+        .into_runnable();
     (actor, actor_ref)
 }
 
@@ -1336,30 +1339,25 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = runtime
-        .add_actor_with(
-            "peer",
-            move || StubbornPeer {
+        .add_actor(
+            ActorSpec::new("peer", move || StubbornPeer {
                 started: peer_started_tx.clone(),
-            },
-            DynamicActorOptions::new().shutdown(ShutdownPolicy::Abort),
+            })
+            .shutdown(ShutdownPolicy::Abort),
         )
         .await
         .expect("peer added");
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     runtime
-        .add_actor_with(
-            "observer",
-            {
-                let peer_ref = peer_ref.clone();
-                move || UnitObserver {
-                    peer: peer_ref.clone(),
-                    observed: observed_tx.clone(),
-                    started: observer_started_tx.clone(),
-                }
-            },
-            DynamicActorOptions::default(),
-        )
+        .add_actor(ActorSpec::new("observer", {
+            let peer_ref = peer_ref.clone();
+            move || UnitObserver {
+                peer: peer_ref.clone(),
+                observed: observed_tx.clone(),
+                started: observer_started_tx.clone(),
+            }
+        }))
         .await
         .expect("observer added");
     started(&mut peer_started).await;
