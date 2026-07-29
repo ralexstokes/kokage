@@ -281,11 +281,12 @@ pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, CancellationHandle, DownReason, DynamicRestrictedScope,
     LiveContext, MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, Reply,
-    RestrictedScope, SendError, StartContext, StopContext, TaskHandle, TimerKey, TrySendError,
+    RestrictedScope, SealedActorSlot, SealedActorSpec, SendError, StartContext, StopContext,
+    TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
-    Backoff, CancellationToken, ControlError, Restart, ScopeKind, Shutdown, Strategy,
-    SupervisorBuildError, SupervisorError,
+    Backoff, BackoffParts, CancellationToken, ControlError, Restart, RestartMode, ScopeKind,
+    Shutdown, ShutdownMode, Strategy, SupervisorBuildError, SupervisorError,
 };
 pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

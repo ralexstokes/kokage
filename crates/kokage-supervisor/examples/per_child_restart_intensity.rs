@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Supervisor default: children do not get any restart budget unless they override it.
     let running_owner = Supervisor::ordered()
-        .restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
         .spawn()?;

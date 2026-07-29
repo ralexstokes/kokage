@@ -129,7 +129,11 @@ impl ChildSpec {
         }
     }
 
-    /// Sets the restart policy for this child. See [`Restart`] for options.
+    /// Sets this child's complete restart declaration. See [`Restart`] for
+    /// options.
+    ///
+    /// This replaces the inherited mode, budget, backoff, and terminal-removal
+    /// behavior. Restate any scope-level values this child should retain.
     #[must_use]
     pub fn restart(self, restart: Restart) -> Self {
         self.map_inner(|inner| {

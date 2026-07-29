@@ -23,6 +23,25 @@ pub(crate) fn tidy_abort_beat(grace: Duration) -> Duration {
 /// For handler actors the value controls both the actor receive loop and the
 /// supervisor grace period, so a drain can never be configured without the
 /// bound that contains it. For task children, the actor-drain half is inert.
+///
+/// The default is [`drain_for`](Self::drain_for) with a five-second bound:
+/// accepted work is finished unless the bound expires. Keep draining when a
+/// dropped message would lose work no peer will redo, such as an unflushed
+/// write or a request whose caller awaits a reply.
+/// Choose [`discard_after_current`](Self::discard_after_current) for
+/// replaceable work such as snapshots, ticks, polls, or requests the sender
+/// retries. Neither mode is an end-to-end delivery guarantee; applications
+/// that require one need acknowledgements and replay.
+///
+/// A draining actor must remain correct while peers stop. Ordered siblings
+/// stop in reverse declaration order, so a handler that sends during its drain
+/// must tolerate a sibling already being gone. Size the bound for the whole
+/// queued prefix—roughly mailbox depth times worst-case handler latency—plus
+/// cleanup. Expiry discards the remaining queue and can skip cleanup.
+///
+/// [`abort`](Self::abort) has no cooperative grace. For a nested supervisor it
+/// cascades recursively through the subtree rather than leaving descendants to
+/// drain without a supervisor above them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Shutdown {
@@ -30,11 +49,15 @@ pub struct Shutdown {
     grace: Duration,
 }
 
+/// How a child handles work after shutdown is requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-enum ShutdownMode {
+pub enum ShutdownMode {
+    /// Close actor intake and drain every accepted message within the grace.
     Drain,
+    /// Finish only the in-flight actor message and discard queued work.
     Discard,
+    /// Abort the child immediately without cooperative grace.
     Abort,
 }
 
@@ -64,20 +87,18 @@ impl Shutdown {
         }
     }
 
-    #[doc(hidden)]
+    /// Returns the cooperative grace period, or zero for [`ShutdownMode::Abort`].
     pub const fn grace(self) -> Duration {
         self.grace
     }
 
-    #[doc(hidden)]
-    pub const fn is_abort(self) -> bool {
-        matches!(self.mode, ShutdownMode::Abort)
+    /// Returns how the child handles work after shutdown is requested.
+    pub const fn mode(self) -> ShutdownMode {
+        self.mode
     }
 
-    /// Returns whether handler actors drain their queued mailbox.
-    #[doc(hidden)]
-    pub const fn drains_messages(self) -> bool {
-        matches!(self.mode, ShutdownMode::Drain)
+    pub(crate) const fn is_abort(self) -> bool {
+        matches!(self.mode, ShutdownMode::Abort)
     }
 }
 

@@ -181,6 +181,11 @@ impl<M> Default for ActorOptions<M> {
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
 /// the declaration through [`crate::OrderedTree::actor`] or
 /// [`crate::DynamicRuntimeHandle::add_actor`].
+///
+/// `CONFIGURABLE` is `true` until [`actor_ref`](Self::actor_ref) mints the
+/// stable binding. That transition returns [`SealedActorSpec`], whose mailbox
+/// configuration is frozen. Most code can omit the parameter and use the
+/// default configurable state.
 pub struct ActorSpec<M: Send + 'static, const CONFIGURABLE: bool = true> {
     pub(crate) actor_id: Arc<str>,
     pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,
@@ -214,7 +219,7 @@ impl<M: Send + 'static> ActorSpec<M, true> {
     /// The returned declaration can be placed in a tree, but no longer has
     /// `mailbox`, `mailbox_capacity`, or `message_size` methods. Configure the
     /// declaration first, then destructure this result.
-    pub fn actor_ref(self) -> (ActorSpec<M, false>, ActorRef<M>) {
+    pub fn actor_ref(self) -> (SealedActorSpec<M>, ActorRef<M>) {
         let binding = Arc::clone(self.binding());
         let actor_ref = ActorRef::from_core(&binding, None);
         let Self {
@@ -261,8 +266,15 @@ impl<M: Send + 'static> ActorSpec<M, true> {
     }
 }
 
+/// An [`ActorSpec`] whose stable binding has been minted and whose mailbox
+/// configuration is frozen.
+pub type SealedActorSpec<M> = ActorSpec<M, false>;
+
 impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
-    /// Overrides the enclosing scope's restart policy.
+    /// Overrides the enclosing scope's complete restart declaration.
+    ///
+    /// This replaces the inherited mode, budget, backoff, and terminal-removal
+    /// behavior. Restate any scope-level values this actor should retain.
     #[must_use]
     pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = Some(restart);
@@ -399,6 +411,8 @@ impl fmt::Debug for ActorNode {
 /// Create the slot and its ref before factories that close a cycle, then pass
 /// the factory to [`define`](Self::define) to obtain an ordinary [`ActorSpec`].
 /// A slot has the same fluent configuration vocabulary as `ActorSpec`.
+/// `CONFIGURABLE` follows the same transition: [`actor_ref`](Self::actor_ref)
+/// returns a [`SealedActorSlot`] whose mailbox configuration is frozen.
 pub struct ActorSlot<M: Send + 'static, const CONFIGURABLE: bool = true> {
     actor_id: Arc<str>,
     binding: OnceLock<Arc<BindingCore<M>>>,
@@ -421,7 +435,7 @@ impl<M: Send + 'static> ActorSlot<M, true> {
 
     /// Mints this slot's restart-stable typed ref and seals mailbox
     /// configuration.
-    pub fn actor_ref(self) -> (ActorSlot<M, false>, ActorRef<M>) {
+    pub fn actor_ref(self) -> (SealedActorSlot<M>, ActorRef<M>) {
         let binding = Arc::clone(self.binding());
         let actor_ref = ActorRef::from_core(&binding, None);
         let Self {
@@ -476,8 +490,30 @@ impl<M: Send + 'static> ActorSlot<M, true> {
     }
 }
 
+/// An [`ActorSlot`] whose stable binding has been minted and whose mailbox
+/// configuration is frozen.
+pub type SealedActorSlot<M> = ActorSlot<M, false>;
+
+impl<M: Send + 'static> ActorSlot<M, false> {
+    /// Returns another handle to this sealed slot's stable binding.
+    ///
+    /// Mailbox configuration has already been frozen by the consuming
+    /// `actor_ref` call that produced this slot, so every handle observes the
+    /// same binding configuration.
+    pub fn actor_ref(&self) -> ActorRef<M> {
+        let binding = self
+            .binding
+            .get()
+            .expect("a sealed actor slot has already minted its binding");
+        ActorRef::from_core(binding, None)
+    }
+}
+
 impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
-    /// Overrides the enclosing scope's restart policy.
+    /// Overrides the enclosing scope's complete restart declaration.
+    ///
+    /// This replaces the inherited mode, budget, backoff, and terminal-removal
+    /// behavior. Restate any scope-level values this actor should retain.
     #[must_use]
     pub fn restart(mut self, restart: Restart) -> Self {
         self.restart = Some(restart);

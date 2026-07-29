@@ -14,8 +14,8 @@ use kokage_supervisor::{
     __private::{self, AttachedChildIdentity},
     CancellationToken, ChildSpec, CompletionError, CompletionGuard, CompletionOutcome,
     ControlError, DynamicSupervisorHandle, LifecycleEvent, LifecycleWatch, Restart,
-    RunningSupervisor, Shutdown, SupervisorBuildError, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot, SupervisorSnapshotReceiver,
+    RunningSupervisor, Shutdown, ShutdownMode, SupervisorBuildError, SupervisorError,
+    SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
 };
 
 #[derive(Debug)]
@@ -834,7 +834,7 @@ pub(crate) fn actor_child_spec(
                         ctx.shutdown_token().cancelled(),
                         ctx.abort_token().cancelled(),
                         restart,
-                        shutdown.drains_messages(),
+                        shutdown.mode() == ShutdownMode::Drain,
                         supervisor,
                         || ctx.mark_ready(),
                     )

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{CancellationToken, Restart, Shutdown};
+use kokage_supervisor::{CancellationToken, Restart, Shutdown, ShutdownMode};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
 use tokio_util::task::AbortOnDropHandle;
@@ -313,7 +313,7 @@ impl RunnableActor {
         };
         let abort = async move {
             deadline_start.cancelled().await;
-            if shutdown_policy.is_abort() {
+            if shutdown_policy.mode() == ShutdownMode::Abort {
                 return;
             }
             sleep(shutdown_policy.grace()).await;
@@ -322,7 +322,7 @@ impl RunnableActor {
             bounded_shutdown,
             abort,
             restart,
-            shutdown_policy.drains_messages(),
+            shutdown_policy.mode() == ShutdownMode::Drain,
             RuntimeHandle::unavailable(),
             || {},
         )

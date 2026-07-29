@@ -15,7 +15,6 @@ fn message_size(message: &String) -> usize {
 }
 
 fn main() {
-    let spec = ActorSpec::new("idle", || Idle);
-    let _actor_ref = spec.__actor_ref();
-    let _spec = spec.message_size(message_size);
+    let (sealed, _actor_ref) = ActorSpec::new("idle", || Idle).actor_ref();
+    let _sealed = sealed.message_size(message_size);
 }

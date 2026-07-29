@@ -10,7 +10,7 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorResult, ActorSlot, ControlError, DynamicTree, LiveContext,
-    MessageContext, OrderedTree, RuntimeHandle, StartContext, Strategy, SupervisorError,
+    MessageContext, OrderedTree, RuntimeHandle, Shutdown, StartContext, Strategy, SupervisorError,
     observe::{
         ChildMembershipView, LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard,
         SupervisorSnapshot,
@@ -154,22 +154,26 @@ impl Router {
         let subtree_id = format!("session:{chat}#{generation}");
         let actor_slot = ActorSlot::new("session");
         let (actor_slot, actor) = actor_slot.actor_ref();
-        let session_actor = actor_slot.define(SessionFactory {
-            chat,
-            generation,
-            subtree_id: subtree_id.clone(),
-            journal: self.journal.clone(),
-            budget: self.budget.clone(),
-            tool_host: self.tool_host.clone(),
-            guard: self.guard.clone(),
-            outbound: self.outbound.clone(),
-            progress: self.progress.clone(),
-            router: ctx.myself(),
-            gate: self.gate.clone(),
-            model: self.model.clone(),
-            task_sequence: self.task_sequence.clone(),
-            proof: self.proof.clone(),
-        });
+        let session_actor = actor_slot
+            .define(SessionFactory {
+                chat,
+                generation,
+                subtree_id: subtree_id.clone(),
+                journal: self.journal.clone(),
+                budget: self.budget.clone(),
+                tool_host: self.tool_host.clone(),
+                guard: self.guard.clone(),
+                outbound: self.outbound.clone(),
+                progress: self.progress.clone(),
+                router: ctx.myself(),
+                gate: self.gate.clone(),
+                model: self.model.clone(),
+                task_sequence: self.task_sequence.clone(),
+                proof: self.proof.clone(),
+            })
+            // Draining is load-bearing for eviction: a message forwarded before
+            // `Evict` must be bounced to the router for the replacement session.
+            .shutdown(Shutdown::drain_for(PHASE_TIMEOUT));
         let mount = self.mount();
         let offload_id = subtree_id.clone();
         ctx.offload(

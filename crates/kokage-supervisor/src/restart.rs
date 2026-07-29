@@ -54,13 +54,19 @@ impl Backoff {
         }
     }
 
-    /// Applies equal jitter in `[delay / 2, delay]` to exponential delays.
-    #[must_use]
-    pub const fn jitter(mut self) -> Self {
-        if let BackoffKind::Exponential { jitter, .. } = &mut self.kind {
-            *jitter = true;
+    /// Uses jittered `base * factor^attempt`, clamped to `max`.
+    ///
+    /// Each delay is selected from the equal-jitter interval
+    /// `[deterministic_delay / 2, deterministic_delay]`.
+    pub const fn exponential_with_jitter(base: Duration, factor: u32, max: Duration) -> Self {
+        Self {
+            kind: BackoffKind::Exponential {
+                base,
+                factor,
+                max,
+                jitter: true,
+            },
         }
-        self
     }
 
     fn validate(self) -> Result<(), SupervisorBuildError> {
@@ -102,10 +108,14 @@ pub struct Restart {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-enum RestartMode {
+/// Which child exits trigger a restart.
+pub enum RestartMode {
+    /// Restart after every exit, including clean completion.
     Always,
+    /// Restart after an error, panic, or abort, but not clean completion.
     #[default]
     OnFailure,
+    /// Never restart; the child runs at most once.
     Never,
 }
 
@@ -178,6 +188,11 @@ impl Restart {
         self.backoff
     }
 
+    /// Returns which exits trigger a restart.
+    pub const fn mode(self) -> RestartMode {
+        self.mode
+    }
+
     #[doc(hidden)]
     pub const fn should_restart(self, is_failure: bool) -> bool {
         match self.mode {
@@ -191,8 +206,7 @@ impl Restart {
         matches!(self.mode, RestartMode::Always)
     }
 
-    #[doc(hidden)]
-    pub const fn is_never(self) -> bool {
+    pub(crate) const fn is_never(self) -> bool {
         matches!(self.mode, RestartMode::Never)
     }
 
@@ -206,19 +220,30 @@ impl Restart {
     }
 }
 
-pub(crate) enum BackoffParts {
+/// Exhaustive read-only view of a [`Backoff`] declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackoffParts {
+    /// Restart immediately.
     None,
+    /// Wait the same duration before every restart.
     Fixed(Duration),
+    /// Grow the delay exponentially, optionally applying equal jitter.
     Exponential {
+        /// Initial deterministic delay.
         base: Duration,
+        /// Multiplier applied for each consecutive short-lived incarnation.
         factor: u32,
+        /// Maximum deterministic delay.
         max: Duration,
+        /// Whether equal jitter selects a delay between half and all of the
+        /// deterministic value.
         jitter: bool,
     },
 }
 
 impl Backoff {
-    pub(crate) const fn parts(self) -> BackoffParts {
+    /// Returns an exhaustive view of this delay declaration.
+    pub const fn parts(self) -> BackoffParts {
         match self.kind {
             BackoffKind::None => BackoffParts::None,
             BackoffKind::Fixed(delay) => BackoffParts::Fixed(delay),

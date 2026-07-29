@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree, SealedActorSpec,
     host::{RawActor, RunnableActor},
 };
 
@@ -19,17 +19,17 @@ pub(crate) struct RunnableBuilder {
 }
 
 pub(crate) trait SealTestSpec<M: Send + 'static> {
-    fn seal(self) -> (ActorSpec<M, false>, ActorRef<M>);
+    fn seal(self) -> (SealedActorSpec<M>, ActorRef<M>);
 }
 
-impl<M: Send + 'static> SealTestSpec<M> for ActorSpec<M, true> {
-    fn seal(self) -> (ActorSpec<M, false>, ActorRef<M>) {
+impl<M: Send + 'static> SealTestSpec<M> for ActorSpec<M> {
+    fn seal(self) -> (SealedActorSpec<M>, ActorRef<M>) {
         self.actor_ref()
     }
 }
 
-impl<M: Send + 'static> SealTestSpec<M> for ActorSpec<M, false> {
-    fn seal(self) -> (ActorSpec<M, false>, ActorRef<M>) {
+impl<M: Send + 'static> SealTestSpec<M> for SealedActorSpec<M> {
+    fn seal(self) -> (SealedActorSpec<M>, ActorRef<M>) {
         let actor_ref = self.actor_ref();
         (self, actor_ref)
     }

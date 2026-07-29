@@ -870,7 +870,8 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
     let fail_now = Arc::new(Notify::new());
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart(Restart::on_failure().limit(0, Duration::from_secs(1))),
+        Supervisor::dynamic()
+            .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1))),
         [
             ChildSpec::task("removable", {
                 let removable_started = Arc::clone(&removable_started);
@@ -1151,7 +1152,7 @@ async fn remove_child_completes_promptly_during_restart_backoff() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart(common::restart_with_backoff(
+        Supervisor::dynamic().default_restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(60),
             kokage_supervisor::Backoff::fixed(std::time::Duration::from_secs(30)),
@@ -1208,7 +1209,7 @@ async fn remove_child_preempts_zero_delay_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart(
+        Supervisor::dynamic().default_restart(
             kokage_supervisor::Restart::on_failure().limit(8, std::time::Duration::from_secs(1)),
         ),
         [ChildSpec::task("removable", move |ctx| {
@@ -1262,7 +1263,7 @@ async fn remove_child_preempts_zero_delay_restart() {
 #[tokio::test(flavor = "current_thread")]
 async fn queued_command_batch_preempts_zero_delay_restart() {
     let handle_owner = Supervisor::dynamic()
-        .restart(
+        .default_restart(
             kokage_supervisor::Restart::on_failure().limit(8, std::time::Duration::from_secs(1)),
         )
         .build()
@@ -1336,7 +1337,7 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
     let backoff = std::time::Duration::from_millis(80);
 
     let handle = spawn_dynamic(
-        Supervisor::dynamic().restart(common::restart_with_backoff(
+        Supervisor::dynamic().default_restart(common::restart_with_backoff(
             4,
             std::time::Duration::from_secs(1),
             kokage_supervisor::Backoff::fixed(backoff),

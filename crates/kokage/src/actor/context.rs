@@ -962,7 +962,8 @@ impl<M: Send + 'static> ActorContext<M> {
     /// mailbox capacity or participate in conflation.
     ///
     /// Offloads are incarnation-owned. They are aborted when the incarnation
-    /// fails, restarts, or uses [`Shutdown::discard_after_current(std::time::Duration::from_secs(5))`](crate::Shutdown).
+    /// fails, restarts, or uses
+    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current).
     /// A draining handler actor keeps processing queued messages and offload
     /// completions until both are exhausted; the required deadline bounds
     /// every offload's future during that drain.
@@ -1221,7 +1222,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// returns `None`, even when messages are still queued. Queued messages
     /// are dropped when the actor exits unless the actor drains them with
     /// [`try_recv`](Self::try_recv), or uses [`Actor`](crate::Actor)
-    /// with [`Shutdown::drain_for(std::time::Duration::from_secs(5))`](crate::Shutdown). Queued
+    /// with [`Shutdown::drain_for`](crate::Shutdown::drain_for). Queued
     /// [`call`](ActorRef::call)s whose reply messages are dropped observe
     /// [`CallError::ReplyDropped`](crate::CallError::ReplyDropped).
     ///
@@ -1255,7 +1256,7 @@ impl<M: Send + 'static> ActorContext<M> {
     /// not prove the mailbox is fully drained while senders hold permits. For
     /// typical actors, prefer
     /// [`Actor`](crate::Actor) with
-    /// [`Shutdown::drain_for(std::time::Duration::from_secs(5))`](crate::Shutdown) so the framework owns the
+    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) so the framework owns the
     /// drain loop.
     ///
     /// A panic in an [`offload`](Self::offload) future or continuation resumes
@@ -1393,7 +1394,7 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// The provided receive loop calls [`Actor::handle`](crate::Actor::handle)
     /// from two phases. Ordinary calls report [`ActorStatus::Running`] until
     /// this callback requests a local stop. Once the receive loop exits,
-    /// [`Shutdown::drain_for(std::time::Duration::from_secs(5))`](crate::Shutdown) replays already accepted
+    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) replays already accepted
     /// mailbox messages and offload completions as [`ActorStatus::Draining`].
     /// Nothing follows the drain except
     /// [`on_stop`](crate::Actor::on_stop), so work deferred from that phase
@@ -1476,7 +1477,7 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     ///
     /// The task belongs to this actor incarnation. It is aborted when the
     /// incarnation stops or restarts and is never awaited by
-    /// [`Shutdown::drain_for(std::time::Duration::from_secs(5))`](crate::Shutdown). A mapped result is sent only
+    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for). A mapped result is sent only
     /// to the incarnation that started the wait, through its ordinary mailbox,
     /// so capacity, FIFO ordering, and conflation apply normally. It cannot
     /// follow this actor's stable ref into a later incarnation.

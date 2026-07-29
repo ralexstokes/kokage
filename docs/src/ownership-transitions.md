@@ -70,11 +70,11 @@ The protocol has five parts:
 The runnable `agent_control` example implements a conservative version of this
 recipe. Its offload-based router retains symmetric `Mounting` and `Removing`
 states, although only the removal must be pipelined for control-plane safety.
-The slot machine and epoch-minted `add_subtree` membership live in
-`crates/kokage/examples/agent_control/router.rs`; the
-retiree bounce, retirement re-request, and draining shutdown live in
-`session.rs`; phase 7 in `main.rs` injects traffic inside the eviction window
-and proves the replacement session answers it with replayed context.
+The slot machine, epoch-minted `add_subtree` membership, and explicit draining
+shutdown declaration live in `crates/kokage/examples/agent_control/router.rs`;
+the retiree bounce and retirement re-request live in `session.rs`; phase 7 in
+`main.rs` injects traffic inside the eviction window and proves the replacement
+session answers it with replayed context.
 
 An earlier revision of the example negotiated the same transition over a
 *reused* child id: a generation counter shared between router and sessions and
