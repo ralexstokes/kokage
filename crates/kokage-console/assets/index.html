@@ -545,7 +545,9 @@
   function formatExit(exit) {
     if (exit === null || exit === undefined) return null;
     if (typeof exit === "string") return exit;
-    if (exit.Failed !== undefined) return "Failed: " + exit.Failed;
+    if (exit.Completed !== undefined) return "Completed";
+    if (exit.Failed !== undefined) return "Failed: " + exit.Failed.message;
+    if (exit.Panicked !== undefined) return "Panicked";
     if (exit.Aborted !== undefined) {
       return exit.Aborted.after_grace ? "Aborted after grace" : "Aborted";
     }
@@ -609,7 +611,7 @@
     }
 
     const exit = childExit(child);
-    const exitStr = formatExit(exit && exit.status);
+    const exitStr = formatExit(exit);
     if (exitStr) {
       const chip = el("span", "chip " + (isFailureExit(exitStr) ? "chip-critical" : "chip-quiet"), exitStr);
       chip.title = exitStr;
@@ -813,14 +815,6 @@
     const envelopePayload = variantPayload(envelope.kind);
     let eventName = envelopeName;
     let lifecycle = envelopePayload;
-    if (envelopeName === "Supervisor") {
-      eventName = "Supervisor" + envelopePayload;
-      lifecycle = {};
-    } else if (envelopeName === "Child") {
-      const child = envelopePayload || {};
-      eventName = variantName(child.kind);
-      lifecycle = Object.assign({}, child, variantPayload(child.kind) || {});
-    }
     let info;
     if (eventName === "SupervisorStarted") {
       info = { kind: "started", cls: "kind-good", msg: "Supervisor started" };
@@ -828,25 +822,25 @@
       info = { kind: "stopping", cls: "kind-warn", msg: "Supervisor stopping" };
     } else if (eventName === "SupervisorStopped") {
       info = { kind: "stopped", cls: "kind-muted", msg: "Supervisor stopped" };
-    } else if (eventName === "Added") {
+    } else if (eventName === "ChildAdded") {
       info = { kind: "added", cls: "kind-accent", msg: "Child '" + lifecycle.child_id + "' added" };
-    } else if (eventName === "Started") {
+    } else if (eventName === "ChildStarted") {
       info = {
         kind: lifecycle.generation > 0 ? "restarted" : "started",
         cls: lifecycle.generation > 0 ? "kind-warn" : "kind-good",
         msg: "Child '" + lifecycle.child_id + "' started (gen " + lifecycle.generation + ")",
       };
-    } else if (eventName === "Exited") {
-      const st = formatExit(lifecycle.reason) || "unknown";
+    } else if (eventName === "ChildExited") {
+      const st = formatExit(lifecycle.exit) || "unknown";
       const failed = isFailureExit(st);
       info = {
         kind: failed ? "failed" : "exited",
         cls: failed ? "kind-critical" : "kind-muted",
         msg: "Child '" + lifecycle.child_id + "' exited: " + st + " (gen " + lifecycle.generation + ")",
       };
-    } else if (eventName === "Removed") {
+    } else if (eventName === "ChildRemoved") {
       info = { kind: "removed", cls: "kind-muted", msg: "Child '" + lifecycle.child_id + "' removed" };
-    } else if (eventName === "RestartScheduled") {
+    } else if (eventName === "ChildRestartScheduled") {
       info = {
         kind: "scheduled", cls: "kind-accent",
         msg: "Restart scheduled for '" + lifecycle.child_id + "' in " +

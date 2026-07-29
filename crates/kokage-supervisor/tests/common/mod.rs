@@ -39,6 +39,7 @@ impl From<ChildExitView> for ExitStatusView {
             ChildExitView::Failed { message, .. } => Self::Failed(message),
             ChildExitView::Panicked { .. } => Self::Panicked,
             ChildExitView::Aborted { after_grace, .. } => Self::Aborted { after_grace },
+            _ => unreachable!("unknown non-exhaustive child exit variant"),
         }
     }
 }

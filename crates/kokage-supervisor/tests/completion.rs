@@ -14,8 +14,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    ChildSpec, ChildStateView, CompletionOutcome, ExitStatusView, RestartConfig, RestartPolicy,
-    ShutdownPolicy, Strategy, Supervisor, SupervisorError,
+    ChildSpec, ChildStateView, CompletionOutcome, RestartConfig, RestartPolicy, ShutdownPolicy,
+    Strategy, Supervisor, SupervisorError,
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -23,7 +23,7 @@ use tokio::{
 };
 
 mod common;
-use common::ObservedEvent;
+use common::{ExitStatusView, ObservedEvent};
 
 struct NotifyOnDrop(Arc<Notify>);
 
@@ -97,7 +97,9 @@ async fn a_completion_set_waits_for_its_last_child() {
             })
             .restart(RestartPolicy::Never),
         );
-    let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
+    let _finished = builder
+        .handle()
+        .shutdown_on_dynamic_completion(["first", "second"]);
     let supervisor = builder.build().expect("valid supervisor");
 
     let handle_owner = supervisor.spawn();
@@ -159,7 +161,7 @@ async fn wait_completed_reports_a_supervisor_that_stopped_first() {
         .await
         .expect("the wait must resolve once the identity is terminal")
         .expect("waiter task panicked");
-    assert_eq!(outcome, CompletionOutcome::Closed);
+    assert_eq!(outcome, Ok(CompletionOutcome::Closed));
 }
 
 #[tokio::test]
@@ -178,7 +180,7 @@ async fn an_empty_completion_set_is_already_satisfied() {
     )
     .await
     .expect("an empty set must not block");
-    assert_eq!(outcome, CompletionOutcome::Completed);
+    assert_eq!(outcome, Ok(CompletionOutcome::Completed));
     spawned
         .shutdown_and_wait()
         .await
@@ -216,7 +218,7 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
     let outcome = timeout(common::EVENT_TIMEOUT, handle.wait_completed(["worker"]))
         .await
         .expect("snapshot realignment recognizes the completed exit");
-    assert_eq!(outcome, CompletionOutcome::Completed);
+    assert_eq!(outcome, Ok(CompletionOutcome::Completed));
 
     let _finished = handle.shutdown_on_completion(["worker"]);
     timeout(common::EVENT_TIMEOUT, handle.wait())
@@ -288,7 +290,9 @@ async fn a_dynamic_scope_can_await_completion() {
     let builder = Supervisor::dynamic().default_restart(RestartPolicy::Never);
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
-    let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
+    let _finished = builder
+        .handle()
+        .shutdown_on_dynamic_completion(["first", "second"]);
     let spawned_owner = builder.build().expect("valid dynamic supervisor").spawn();
     let spawned = spawned_owner.handle();
 

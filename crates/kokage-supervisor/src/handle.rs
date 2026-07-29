@@ -1361,9 +1361,7 @@ pub(crate) enum SupervisorCommand {
 ///   obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`snapshot`](Self::snapshot) /
 ///   [`subscribe_snapshots`](Self::subscribe_snapshots) for state,
-///   [`watch_lifecycle`](Self::watch_lifecycle) for direct-child transitions,
-///   and [`watch_lifecycle_recursive`](Self::watch_lifecycle_recursive) for
-///   the whole tree.
+///   and [`watch_lifecycle`](Self::watch_lifecycle) for the whole tree.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
 /// Handles never own a supervisor's lifecycle. Dropping a root or nested

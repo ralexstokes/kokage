@@ -65,11 +65,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .spawn()?;
 
     orders.send("business cards x100".into()).await?;
-    let restarted = runtime.restart_of("press");
+    let baseline = runtime.snapshot().child("press").unwrap().generation;
+    let mut snapshots = runtime.subscribe_snapshots();
     orders.send("origami cranes x1000".into()).await?;
-    restarted
-        .await
-        .expect("press restart is observed");
+    snapshots
+        .wait_for_child("press", |child| {
+            child.generation > baseline && child.state.is_running()
+        })
+        .await?;
     orders.send("flyers x500".into()).await?;
 
     runtime.shutdown_and_wait().await?;
@@ -111,14 +114,13 @@ waits until the named child has exited successfully without a pending restart.
 the scope down at the same boundary; take the runtime's handle before spawning
 to avoid racing a fast child, and retain the returned guard.
 
-Arming `restart_of` before sending `origami cranes x1000` is deliberate.
+Subscribing to snapshots before sending `origami cranes x1000` is deliberate.
 A worker gets a fresh mailbox on restart; anything queued behind the crashing
 `origami` order would be dropped with the old mailbox. `send` waits while the
 actor is unbound, but it cannot recover messages already accepted by the
-failed run. `restart_of` subscribes and captures the baseline generation when
-called, before its returned future is polled, then resolves with the replacement
-generation. That gives a one-shot recovery boundary without a lost-wakeup
-window or a separate monitor type.
+failed run. Capturing the baseline and creating the receiver before the send,
+then waiting for a later running generation, gives a recovery boundary without
+a lost-wakeup window or a separate monitor type.
 
 Per-actor policies — say a tighter restart budget for the press alone — belong
 on that actor's `ActorSpec`. Scope methods set inherited defaults, while an

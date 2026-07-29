@@ -12,7 +12,7 @@ use tokio::{
 };
 
 mod common;
-use common::{ExitStatusView, ObservedEvent};
+use common::ObservedEvent;
 
 #[tokio::test]
 async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates() {

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kokage_supervisor::{
-    ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec, ControlError, RestartConfig, Strategy,
+    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, RestartConfig, Strategy,
     Supervisor, SupervisorError,
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -17,7 +17,7 @@ fn waiting_child(id: &str) -> ChildSpec {
     })
 }
 
-async fn wait_for_lifecycle_end(watch: &mut ChildLifecycleWatch, message: &str) {
+async fn wait_for_lifecycle_end(watch: &mut LifecycleWatch, message: &str) {
     timeout(EVENT_TIMEOUT, async {
         while watch.next().await.is_some() {}
     })
@@ -32,8 +32,10 @@ async fn retained_builder_handle_preserves_kind_then_binds_to_the_spawned_root()
     assert!(handle.dynamic().is_none());
     let declared = handle.snapshot();
     let worker = declared.child("worker").expect("worker is declared");
-    assert!(worker.state.is_starting());
-    assert!(!worker.state.started());
+    assert!(matches!(
+        worker.state,
+        kokage_supervisor::ChildStateView::Starting { .. }
+    ));
 
     let supervisor = builder.build().expect("builder is valid");
     let spawned_owner = supervisor.spawn();
@@ -82,28 +84,43 @@ async fn fluent_reconfiguration_updates_snapshot_without_pre_spawn_lifecycle_eve
 async fn watch_before_spawn_observes_first_added_and_started_after_declared_baseline() {
     let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
-    let mut lifecycle = handle.watch_lifecycle();
+    let mut lifecycle = handle.watch_lifecycle().direct_children();
     let baseline = handle.snapshot();
     let declared = baseline.child("worker").expect("worker is declared");
     let spawned_owner = builder.build().expect("builder is valid").spawn();
     let spawned = spawned_owner.handle();
 
-    let added = timeout(EVENT_TIMEOUT, lifecycle.next())
-        .await
-        .expect("Added arrives")
-        .expect("watch remains open");
-    let started = timeout(EVENT_TIMEOUT, lifecycle.next())
-        .await
-        .expect("Started arrives")
-        .expect("watch remains open");
-    assert!(matches!(added.kind, ChildLifecycleEventKind::Added));
+    let added = timeout(EVENT_TIMEOUT, async {
+        loop {
+            let event = lifecycle.next().await.expect("watch remains open");
+            if matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("Added arrives");
+    let started = timeout(EVENT_TIMEOUT, async {
+        loop {
+            let event = lifecycle.next().await.expect("watch remains open");
+            if matches!(event.kind, LifecycleEventKind::ChildStarted { .. }) {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("Started arrives");
+    assert!(matches!(&added.kind, LifecycleEventKind::ChildAdded { .. }));
     assert!(matches!(
         started.kind,
-        ChildLifecycleEventKind::Started { generation: 0 }
+        LifecycleEventKind::ChildStarted { generation: 0, .. }
     ));
-    assert_eq!(added.seq, baseline.lifecycle_seq + 1);
-    assert_eq!(added.lineage, declared.lineage);
-    assert_eq!(started.seq, added.seq + 1);
+    assert_eq!(added.seq(), Some(baseline.lifecycle_seq + 1));
+    assert!(matches!(
+        &added.kind,
+        LifecycleEventKind::ChildAdded { lineage, .. } if *lineage == declared.lineage
+    ));
+    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
 
     spawned
         .shutdown_and_wait()
@@ -228,7 +245,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
             .expect("nested scope remains attached")
             .snapshot()
             .child("worker")
-            .is_some_and(|worker| worker.state.started())
+            .is_some_and(|worker| worker.state.is_running())
     );
 
     parent

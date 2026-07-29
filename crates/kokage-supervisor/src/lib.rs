@@ -117,8 +117,7 @@
 //! an ordered builder's `child` method or [`DynamicSupervisorHandle::add_child`]. The
 //! nested supervisor:
 //!
-//! - Appears in ancestor
-//!   [`watch_lifecycle_recursive`](SupervisorHandle::watch_lifecycle_recursive)
+//! - Appears in ancestor [`watch_lifecycle`](SupervisorHandle::watch_lifecycle)
 //!   streams with a path that identifies each exact supervisor incarnation.
 //! - Publishes its snapshot into the parent's
 //!   [`ChildSnapshot::supervisor`] field.
@@ -138,12 +137,11 @@
 //!
 //! - **[`SupervisorSnapshot`] state** — current state and cumulative counters,
 //!   read directly or through [`SupervisorHandle::subscribe_snapshots`].
-//! - **Lifecycle streams** — ordered direct-child
-//!   [`ChildLifecycleEvent`]s from
-//!   [`SupervisorHandle::watch_lifecycle`] (including scheduled restarts), or
-//!   the whole tree (adding supervisor transitions and restart-intensity
-//!   failures) from [`SupervisorHandle::watch_lifecycle_recursive`]. Both
-//!   report overflow explicitly rather than losing events silently.
+//! - **[`LifecycleEvent`] history** — one ordered, path-carrying tree stream
+//!   from [`SupervisorHandle::watch_lifecycle`], including child transitions,
+//!   supervisor transitions, scheduled restarts, and restart-intensity
+//!   failures. [`LifecycleWatch::direct_children`] applies a local-depth
+//!   filter. Overflow is explicit rather than silent.
 //! - **`tracing` spans and logs** — automatic structured output for every
 //!   lifecycle event. The supervisor runs inside an `info_span!("supervisor")`
 //!   and each child inside an `info_span!("child")`, both carrying
@@ -158,10 +156,10 @@
 //! ## Snapshot/lifecycle alignment
 //!
 //! Create a lifecycle watch first, then read a snapshot, then discard watched
-//! child transition events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
-//! state-plus-stream view without replay. Direct lifecycle overflow is
-//! explicit as [`ChildLifecycleEventKind::Lagged`]; recursive stream overflow
-//! uses [`LifecycleEventKind::Lagged`] as a tree-wide marker.
+//! local child transition events whose [`LifecycleEvent::seq`] is at most
+//! `snapshot.lifecycle_seq`. This yields a gap-free state-plus-stream view
+//! without replay. [`LifecycleEventKind::Lagged`] is a tree-wide overflow
+//! marker.
 //!
 //! # Runtime-independent boundaries
 //!
@@ -214,8 +212,8 @@
 //! - `examples/per_child_restart_intensity.rs` — per-child intensity overrides.
 //! - `examples/shutdown_with_cancellation_token.rs` — graceful shutdown driven
 //!   by a signal.
-//! - `examples/watch_lifecycle_recursive.rs` — reacting to tree lifecycle
-//!   events.
+//! - `examples/watch_lifecycle_recursive.rs` — reacting to the recursive
+//!   lifecycle stream returned by `watch_lifecycle`.
 //! - `examples/subscribe_to_snapshots.rs` — polling supervisor state.
 //! - `examples/tracing.rs` — structured logging output.
 //! - `examples/metrics.rs` — Prometheus metrics (requires `--features metrics`).
