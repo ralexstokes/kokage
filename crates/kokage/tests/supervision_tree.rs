@@ -4,12 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::sleep};
 
-use kokage::{
-    ActorSpec, Graph, ScopeKind,
-    host::ChildSpec,
-    observe::{ChildOutline, ExitStatusView},
-    prelude::*,
-};
+use kokage::{ActorSpec, Graph, ScopeKind, host::ChildSpec, observe::ChildOutline, prelude::*};
 
 struct Worker;
 
@@ -290,11 +285,11 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
                 .and_then(|child| child.supervisor.as_ref())
                 .and_then(|owned| owned.child("children"))
                 .is_some_and(|children| {
-                    children.state.is_stopped()
-                        && matches!(
-                            children.state.last_exit().map(|exit| &exit.status),
-                            Some(ExitStatusView::Failed(_))
-                        )
+                    children.state.is_terminal()
+                        && children
+                            .state
+                            .last_exit()
+                            .is_some_and(|exit| exit.failure_message().is_some())
                 })
         })
         .await
@@ -314,7 +309,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
         .expect("generated children edge remains visible");
     assert_eq!(children_edge.generation, 0);
     assert_eq!(children_edge.restart_count, 0);
-    assert!(children_edge.state.is_stopped());
+    assert!(children_edge.state.is_terminal());
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

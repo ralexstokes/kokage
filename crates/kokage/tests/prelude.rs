@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
-    observe::{ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind},
+    observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -38,12 +38,10 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind,
-            ChildLifecycleWatch, ChildMembershipView, ChildOutline, ChildSnapshot, ChildStateView,
-            CompletionGuard, CompletionOutcome, ExitStatusView, LifecycleEvent, LifecycleEventKind,
-            LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard, SupervisionOutline,
-            SupervisorLifecycleEvent, SupervisorPathSegment, SupervisorSnapshot,
-            SupervisorStateView,
+            ActorStats, ChildExitView, ChildMembershipView, ChildOutline, ChildSnapshot,
+            ChildStateView, CompletionError, CompletionGuard, CompletionOutcome, LifecycleEvent,
+            LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, LifecycleWatchGuard,
+            SupervisionOutline, SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView,
         };
     }
 
@@ -154,7 +152,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.handle().watch_lifecycle_recursive();
+    let mut events = handle.handle().watch_lifecycle();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -168,11 +166,11 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             if matches!(
                 event,
                 LifecycleEvent {
-                    kind: LifecycleEventKind::Child(ChildLifecycleEvent {
+                    kind: LifecycleEventKind::ChildStarted {
                         ref child_id,
-                        kind: ChildLifecycleEventKind::Started { generation: 0 },
+                        generation: 0,
                         ..
-                    }),
+                    },
                     ..
                 } if child_id == "worker"
             ) {
@@ -185,11 +183,11 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     assert!(matches!(
         started,
         LifecycleEvent {
-            kind: LifecycleEventKind::Child(ChildLifecycleEvent {
+            kind: LifecycleEventKind::ChildStarted {
                 ref child_id,
-                kind: ChildLifecycleEventKind::Started { generation: 0 },
+                generation: 0,
                 ..
-            }),
+            },
             ..
         } if child_id == "worker"
     ));

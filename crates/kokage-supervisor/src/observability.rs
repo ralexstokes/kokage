@@ -5,7 +5,7 @@ use metrics::{Label, counter, gauge, histogram};
 use tracing::{debug, info, trace, warn};
 
 use crate::{
-    event::{ExitStatusView, RuntimeEvent},
+    event::{ExitKind, RuntimeEvent},
     strategy::Strategy,
 };
 
@@ -160,7 +160,7 @@ impl SupervisorObservability {
             } => {
                 let status_label = exit_status_label(status);
                 match status {
-                    ExitStatusView::Completed => trace!(
+                    ExitKind::Completed => trace!(
                         supervisor_name = %self.supervisor_name,
                         supervisor_path = %self.supervisor_path,
                         child_id = %id,
@@ -170,7 +170,7 @@ impl SupervisorObservability {
                         strategy = self.strategy_label,
                         "child exited"
                     ),
-                    ExitStatusView::Failed(message) => warn!(
+                    ExitKind::Failed(message) => warn!(
                         supervisor_name = %self.supervisor_name,
                         supervisor_path = %self.supervisor_path,
                         child_id = %id,
@@ -181,7 +181,7 @@ impl SupervisorObservability {
                         strategy = self.strategy_label,
                         "child exited"
                     ),
-                    ExitStatusView::Panicked | ExitStatusView::Aborted { .. } => warn!(
+                    ExitKind::Panicked | ExitKind::Aborted { .. } => warn!(
                         supervisor_name = %self.supervisor_name,
                         supervisor_path = %self.supervisor_path,
                         child_id = %id,
@@ -334,13 +334,13 @@ pub(crate) fn strategy_label(strategy: Strategy) -> &'static str {
     }
 }
 
-fn exit_status_label(status: &ExitStatusView) -> &'static str {
+fn exit_status_label(status: &ExitKind) -> &'static str {
     match status {
-        ExitStatusView::Completed => "completed",
-        ExitStatusView::Failed(_) => "failed",
-        ExitStatusView::Panicked => "panicked",
-        ExitStatusView::Aborted { after_grace: false } => "aborted",
-        ExitStatusView::Aborted { after_grace: true } => "shutdown_timed_out",
+        ExitKind::Completed => "completed",
+        ExitKind::Failed(_) => "failed",
+        ExitKind::Panicked => "panicked",
+        ExitKind::Aborted { after_grace: false } => "aborted",
+        ExitKind::Aborted { after_grace: true } => "shutdown_timed_out",
     }
 }
 
@@ -420,7 +420,7 @@ mod tests {
                     &RuntimeEvent::ChildExited {
                         id: "worker".to_owned(),
                         generation: 0,
-                        status: ExitStatusView::Failed("boom".to_owned()),
+                        status: ExitKind::Failed("boom".to_owned()),
                     },
                     0,
                     None,
@@ -433,9 +433,9 @@ mod tests {
             ],
         );
         for status in [
-            ExitStatusView::Panicked,
-            ExitStatusView::Aborted { after_grace: false },
-            ExitStatusView::Aborted { after_grace: true },
+            ExitKind::Panicked,
+            ExitKind::Aborted { after_grace: false },
+            ExitKind::Aborted { after_grace: true },
         ] {
             let output = capture_tracing_output(|| {
                 root.emit_event(
@@ -528,7 +528,7 @@ mod tests {
                 &RuntimeEvent::ChildExited {
                     id: "leaf".to_owned(),
                     generation: 1,
-                    status: ExitStatusView::Failed("boom".to_owned()),
+                    status: ExitKind::Failed("boom".to_owned()),
                 },
                 0,
                 None,

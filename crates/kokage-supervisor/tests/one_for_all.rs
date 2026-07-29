@@ -4,8 +4,7 @@ use std::sync::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, ExitStatusView, RestartConfig, RestartPolicy, ShutdownPolicy,
-    Strategy, Supervisor,
+    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
 };
 use tokio::{
     sync::{Barrier, Notify, mpsc},
@@ -13,7 +12,7 @@ use tokio::{
 };
 
 mod common;
-use common::ObservedEvent;
+use common::{ExitStatusView, ObservedEvent};
 
 #[tokio::test]
 async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates() {
@@ -538,7 +537,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
             snapshot
                 .children
                 .iter()
-                .all(|child| child.state.is_stopped())
+                .all(|child| child.state.is_terminal())
         }),
     )
     .await
@@ -546,10 +545,10 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
     .expect("snapshot stream should remain open")
     .clone();
     assert!(completed.children.iter().all(|child| {
-        matches!(
-            child.state.last_exit().map(|exit| &exit.status),
-            Some(ExitStatusView::Completed)
-        )
+        child
+            .state
+            .last_exit()
+            .is_some_and(|exit| exit.is_completed())
     }));
 
     handle.shutdown();

@@ -1,10 +1,10 @@
 use crate::{
     child::{BoxError, ChildResult},
-    event::ExitStatusView,
+    event::ExitKind,
 };
 
 /// Internal exit classification used by the runtime before public projection
-/// into [`ExitStatusView`].
+/// into [`ExitKind`].
 #[derive(Debug)]
 pub(crate) enum ExitStatus {
     Completed,
@@ -26,13 +26,13 @@ impl ExitStatus {
         !matches!(self, Self::Completed)
     }
 
-    pub(crate) fn view(&self) -> ExitStatusView {
+    pub(crate) fn view(&self) -> ExitKind {
         match self {
-            Self::Completed => ExitStatusView::Completed,
-            Self::Failed(err) => ExitStatusView::Failed(err.to_string()),
-            Self::Panicked => ExitStatusView::Panicked,
-            Self::Aborted => ExitStatusView::Aborted { after_grace: false },
-            Self::ShutdownTimedOut => ExitStatusView::Aborted { after_grace: true },
+            Self::Completed => ExitKind::Completed,
+            Self::Failed(err) => ExitKind::Failed(err.to_string()),
+            Self::Panicked => ExitKind::Panicked,
+            Self::Aborted => ExitKind::Aborted { after_grace: false },
+            Self::ShutdownTimedOut => ExitKind::Aborted { after_grace: true },
         }
     }
 }

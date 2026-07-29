@@ -11,7 +11,7 @@ use kokage::{
     MessageContext, OrderedTree, RestartConfig, RestartPolicy, RestrictedScope, RuntimeHandle,
     ScopeKind, StartContext, StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
-    observe::{ChildStateView, ExitStatusView, SupervisorSnapshotReceiver},
+    observe::{ChildStateView, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -367,16 +367,13 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
         .expect("worker is projected before spawn")
         .clone();
     assert!(matches!(declared.state, ChildStateView::Starting { .. }));
-    assert!(!declared.state.started());
 
     let spawned = tree.spawn().expect("tree builds and spawns");
     timeout(
         WAIT,
         snapshots.wait_for(|snapshot| {
             snapshot.child("worker").is_some_and(|worker| {
-                worker.lineage == declared.lineage
-                    && worker.state.is_running()
-                    && worker.state.started()
+                worker.lineage == declared.lineage && worker.state.is_running()
             })
         }),
     )
@@ -934,26 +931,26 @@ async fn actor_binding_cloned_across_trees_fails_on_the_second_concurrent_run() 
         WAIT,
         snapshots.wait_for(|snapshot| {
             snapshot.child("actor").is_some_and(|actor| {
-                actor.state.is_stopped()
-                    && matches!(
-                        actor.state.last_exit().map(|exit| &exit.status),
-                        Some(ExitStatusView::Failed(message))
-                            if message == "actor `actor` is already running"
-                    )
+                actor.state.is_terminal()
+                    && actor.state.last_exit().is_some_and(|exit| {
+                        exit.failure_message() == Some("actor `actor` is already running")
+                    })
             })
         }),
     )
     .await
     .expect("second tree reports the late runtime conflict")
     .expect("second tree snapshot stream remains available");
-    assert!(matches!(
+    assert!(
         stopped
             .child("actor")
             .expect("actor remains declared")
-            .state.last_exit().map(|exit| &exit.status),
-        Some(ExitStatusView::Failed(message))
-            if message == "actor `actor` is already running"
-    ));
+            .state
+            .last_exit()
+            .is_some_and(|exit| {
+                exit.failure_message() == Some("actor `actor` is already running")
+            })
+    );
 
     first.shutdown_and_wait().await.expect("first tree stops");
 }

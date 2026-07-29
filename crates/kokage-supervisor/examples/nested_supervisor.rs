@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{ChildLifecycleEventKind, prelude::*};
+use kokage_supervisor::{LifecycleEventKind, prelude::*};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -66,12 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .ok_or_else(|| std::io::Error::other("nested lifecycle stream closed"))?;
         println!("nested event: {event:?}");
-        if event.child_id == "nested-worker"
-            && matches!(
-                event.kind,
-                ChildLifecycleEventKind::Started { generation: 1 }
-            )
-        {
+        if matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted { ref child_id, generation: 1, .. }
+                if child_id == "nested-worker"
+        ) {
             break;
         }
     }

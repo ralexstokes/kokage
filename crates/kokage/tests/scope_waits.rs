@@ -11,7 +11,7 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorStatus, DrainPolicy, GraphBuilder, MessageContext, OrderedTree,
-    StartContext, StopContext, TaskHandle, observe::ExitStatusView,
+    StartContext, StopContext, TaskHandle,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -727,9 +727,11 @@ async fn assert_scope_wait_panic_is_supervised(panic_site: PanicSite, phase: &st
             let snapshot = runtime.handle().snapshot();
             let child = snapshot.child("panic-once").expect("child exists");
             if child.generation >= 1 {
-                assert_eq!(
-                    child.state.last_exit().map(|exit| &exit.status),
-                    Some(&ExitStatusView::Panicked)
+                assert!(
+                    child
+                        .state
+                        .last_exit()
+                        .is_some_and(|exit| exit.is_panicked())
                 );
                 break;
             }

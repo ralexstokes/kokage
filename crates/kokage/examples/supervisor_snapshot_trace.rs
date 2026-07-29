@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .spawn()?;
     let runtime = runtime_owner.handle();
-    let mut events = runtime.watch_lifecycle_recursive();
+    let mut events = runtime.watch_lifecycle();
     let mut snapshots = runtime.subscribe_snapshots();
 
     let event_task = tokio::spawn(async move {
@@ -101,17 +101,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     frontend.send("hello".to_owned()).await?;
-    let mut lifecycle = runtime.watch_lifecycle();
     let baseline = runtime
         .snapshot()
         .child("worker")
         .expect("worker is supervised")
         .generation;
     frontend.send("fail-worker".to_owned()).await?;
-    lifecycle
-        .started_after("worker", baseline)
+    snapshots
+        .wait_for_child("worker", |child| {
+            child.generation > baseline && child.state.is_running()
+        })
         .await
-        .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
+        .map_err(|_| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;
 
     // Wait for the worker to finish the last order before shutting down.

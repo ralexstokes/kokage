@@ -13,7 +13,7 @@ use std::{
 };
 
 use crate::{
-    CancellationToken, ChildLifecycleEvent, ChildLifecycleEventKind, ExitStatusView,
+    CancellationToken, ChildExitView, LifecycleEvent, LifecycleEventKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
@@ -28,6 +28,18 @@ pub enum CompletionOutcome {
     /// The watched supervisor identity became terminal before the awaited
     /// children completed, so the condition can never be satisfied.
     Closed,
+}
+
+/// Error returned when a static completion wait names no current child.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CompletionError {
+    /// The child id is not present in the scope's declared/current membership.
+    #[error("unknown child `{child_id}`")]
+    UnknownChild {
+        /// Child id supplied to the wait.
+        child_id: String,
+    },
 }
 
 /// Cancellation guard for a
@@ -71,7 +83,7 @@ impl SupervisorHandle {
     /// state.
     ///
     /// A child counts as completed once its current generation has exited with
-    /// [`ExitStatusView::Completed`] and no restart is pending for it. Any
+    /// [`ChildExitView::Completed`] and no restart is pending for it. Any
     /// later start un-completes it, so a child that is restarted — including by
     /// a sibling-driven group restart — must complete again. Failed exits never
     /// count, matching the rule that failures follow the restart policy rather
@@ -79,13 +91,15 @@ impl SupervisorHandle {
     /// out of the set: its work is not coming back.
     ///
     /// Awaiting an empty set returns [`CompletionOutcome::Completed`]
-    /// immediately. Awaiting an id that never becomes a child of this
-    /// supervisor never completes.
+    /// immediately. An id absent from the current (including projected
+    /// pre-spawn) membership returns [`CompletionError::UnknownChild`]. Use
+    /// [`wait_completed_dynamic`](Self::wait_completed_dynamic) when waiting
+    /// for membership that may be added later.
     ///
     /// The wait is gap-free from the moment it is called: it aligns a
     /// lifecycle watch against a snapshot, so children that completed earlier
     /// are still counted, and it realigns from a fresh snapshot if the watch
-    /// reports [`ChildLifecycleEventKind::Lagged`]. Calling it on a pre-spawn
+    /// reports [`LifecycleEventKind::Lagged`]. Calling it on a pre-spawn
     /// handle is well defined — statically configured children are projected
     /// before the scope starts.
     ///
@@ -98,7 +112,27 @@ impl SupervisorHandle {
     /// }
     /// # }
     /// ```
-    pub async fn wait_completed<I, S>(&self, ids: I) -> CompletionOutcome
+    pub async fn wait_completed<I, S>(&self, ids: I) -> Result<CompletionOutcome, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let set = CompletionSet::new(ids);
+        let snapshot = self.snapshot();
+        if let Some(child_id) = set.awaited.iter().find(|id| snapshot.child(id).is_none()) {
+            return Err(CompletionError::UnknownChild {
+                child_id: child_id.clone(),
+            });
+        }
+        Ok(wait_completed(self, set).await)
+    }
+
+    /// Waits for named children to appear and then complete.
+    ///
+    /// Unlike [`wait_completed`](Self::wait_completed), this variant treats
+    /// absent ids as future dynamic membership and may therefore wait
+    /// indefinitely while the supervisor remains running.
+    pub async fn wait_completed_dynamic<I, S>(&self, ids: I) -> CompletionOutcome
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -151,9 +185,9 @@ impl SupervisorHandle {
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
-                outcome = wait_completed(&handle, set) => outcome,
+                outcome = handle.wait_completed(set.awaited) => outcome,
             };
-            if outcome == CompletionOutcome::Completed {
+            if outcome == Ok(CompletionOutcome::Completed) {
                 handle.shutdown();
             }
         });
@@ -176,11 +210,12 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
         let Some(event) = watch.next().await else {
             return CompletionOutcome::Closed;
         };
-        if matches!(event.kind, ChildLifecycleEventKind::Lagged { .. }) {
+        if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
             // A dropped prefix may have contained transitions for awaited
             // children, so edge-derived state has to be rebuilt from state.
             baseline = set.realign(&handle.snapshot());
-        } else if event.seq > baseline {
+        } else if event.supervisor_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline)
+        {
             set.apply(&event);
         }
     }
@@ -229,20 +264,23 @@ impl CompletionSet {
         self.awaited.iter().any(|awaited| awaited == id)
     }
 
-    fn apply(&mut self, event: &ChildLifecycleEvent) {
-        let child_id = &event.child_id;
-        let lineage = event.lineage;
-        let transition = match &event.kind {
-            ChildLifecycleEventKind::Added | ChildLifecycleEventKind::Started { .. } => {
-                CompletionTransition::Running
+    fn apply(&mut self, event: &LifecycleEvent) {
+        let (child_id, lineage, transition) = match &event.kind {
+            LifecycleEventKind::ChildAdded {
+                child_id, lineage, ..
             }
-            ChildLifecycleEventKind::Exited {
-                reason, cancelled, ..
-            } => CompletionTransition::Exited {
-                reason,
-                cancelled: *cancelled,
-            },
-            ChildLifecycleEventKind::Removed => CompletionTransition::Removed,
+            | LifecycleEventKind::ChildStarted {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Running),
+            LifecycleEventKind::ChildExited {
+                child_id,
+                lineage,
+                exit,
+                ..
+            } => (child_id, *lineage, CompletionTransition::Exited(exit)),
+            LifecycleEventKind::ChildRemoved {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Removed),
             _ => return,
         };
         if !self.awaits(child_id) {
@@ -266,10 +304,8 @@ impl CompletionSet {
             }
             // A cancellation-driven `Ok(())` — shutdown, removal, or a
             // sibling-driven group restart — is not finished work.
-            CompletionTransition::Exited {
-                reason, cancelled, ..
-            } => {
-                if matches!(reason, ExitStatusView::Completed) && !cancelled {
+            CompletionTransition::Exited(exit) => {
+                if exit.is_completed() && !exit.cancelled() {
                     self.satisfied.insert(child_id.clone());
                 } else {
                     self.satisfied.remove(child_id);
@@ -313,10 +349,7 @@ impl CompletionSet {
 
 enum CompletionTransition<'a> {
     Running,
-    Exited {
-        reason: &'a ExitStatusView,
-        cancelled: bool,
-    },
+    Exited(&'a ChildExitView),
     Removed,
 }
 
@@ -332,14 +365,14 @@ fn is_completed(child: &ChildSnapshot) -> bool {
                 ..
             }
                 | ChildStateView::StartupAborted { exit }
-                if exit.status == ExitStatusView::Completed && !exit.cancelled
+                if exit.is_completed() && !exit.cancelled()
         )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChildExitView, Strategy, snapshot::SupervisorStateView};
+    use crate::{ChildExitView, Strategy, event::ExitKind, snapshot::SupervisorStateView};
 
     enum TestLifecycleKind {
         Added,
@@ -348,13 +381,13 @@ mod tests {
         },
         Exited {
             generation: u64,
-            reason: ExitStatusView,
+            reason: ExitKind,
             cancelled: bool,
         },
         Removed,
     }
 
-    fn event(seq: u64, child_id: &str, kind: TestLifecycleKind) -> ChildLifecycleEvent {
+    fn event(seq: u64, child_id: &str, kind: TestLifecycleKind) -> LifecycleEvent {
         event_with_lineage(seq, child_id, 0, kind)
     }
 
@@ -363,40 +396,54 @@ mod tests {
         child_id: &str,
         lineage: u64,
         kind: TestLifecycleKind,
-    ) -> ChildLifecycleEvent {
+    ) -> LifecycleEvent {
         let kind = match kind {
-            TestLifecycleKind::Added => ChildLifecycleEventKind::Added,
-            TestLifecycleKind::Started { generation } => {
-                ChildLifecycleEventKind::Started { generation }
-            }
+            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+            },
+            TestLifecycleKind::Started { generation } => LifecycleEventKind::ChildStarted {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+            },
             TestLifecycleKind::Exited {
                 generation,
                 reason,
                 cancelled,
-            } => ChildLifecycleEventKind::Exited {
+            } => LifecycleEventKind::ChildExited {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
                 generation,
-                reason,
-                cancelled,
+                exit: ChildExitView::new(reason, cancelled),
             },
-            TestLifecycleKind::Removed => ChildLifecycleEventKind::Removed,
+            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+            },
         };
-        ChildLifecycleEvent {
-            seq,
-            child_id: child_id.to_owned(),
-            lineage,
-            total_restarts: 0,
-            child_restart_count: 0,
-            kind,
-        }
+        LifecycleEvent::local(kind)
     }
 
-    fn completed(seq: u64, child_id: &str) -> ChildLifecycleEvent {
+    fn completed(seq: u64, child_id: &str) -> LifecycleEvent {
         event(
             seq,
             child_id,
             TestLifecycleKind::Exited {
                 generation: 0,
-                reason: ExitStatusView::Completed,
+                reason: ExitKind::Completed,
                 cancelled: false,
             },
         )
@@ -435,7 +482,7 @@ mod tests {
             "source",
             TestLifecycleKind::Exited {
                 generation: 0,
-                reason: ExitStatusView::Failed("boom".to_owned()),
+                reason: ExitKind::Failed("boom".to_owned()),
                 cancelled: false,
             },
         ));
@@ -476,7 +523,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitStatusView::Completed, false)),
+                exit: Some(ChildExitView::new(ExitKind::Completed, false)),
             },
         );
         let seq = set.realign(&snapshot(vec![source]));
@@ -492,7 +539,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitStatusView::Completed, false)),
+                exit: Some(ChildExitView::new(ExitKind::Completed, false)),
             },
         );
         source.next_restart_in = Some(std::time::Duration::from_millis(10));
@@ -508,7 +555,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitStatusView::Completed, true)),
+                exit: Some(ChildExitView::new(ExitKind::Completed, true)),
             },
         );
         set.realign(&snapshot(vec![source]));
@@ -522,7 +569,7 @@ mod tests {
             "source",
             0,
             ChildStateView::StartupAborted {
-                exit: ChildExitView::new(ExitStatusView::Completed, false),
+                exit: ChildExitView::new(ExitKind::Completed, false),
             },
         );
 
@@ -575,7 +622,7 @@ mod tests {
             2,
             TestLifecycleKind::Exited {
                 generation: 0,
-                reason: ExitStatusView::Completed,
+                reason: ExitKind::Completed,
                 cancelled: false,
             },
         ));
@@ -587,7 +634,7 @@ mod tests {
             1,
             TestLifecycleKind::Exited {
                 generation: 0,
-                reason: ExitStatusView::Completed,
+                reason: ExitKind::Completed,
                 cancelled: true,
             },
         ));

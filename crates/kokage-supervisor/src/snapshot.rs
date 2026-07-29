@@ -77,9 +77,29 @@ impl SupervisorSnapshotReceiver {
                 .map_err(|_| SnapshotRecvError::Closed)?;
         }
     }
+
+    /// Waits until `child_id` exists and its snapshot satisfies `predicate`.
+    ///
+    /// This is the concise path for readiness, restart-generation, exit, and
+    /// membership waits. It delegates to [`wait_for`](Self::wait_for), so the
+    /// same conflating delivery and closed-stream behavior applies. A child
+    /// that is not a current member may appear later in a dynamic scope.
+    pub async fn wait_for_child(
+        &mut self,
+        child_id: &str,
+        mut predicate: impl FnMut(&ChildSnapshot) -> bool,
+    ) -> Result<ChildSnapshot, SnapshotRecvError> {
+        let snapshot = self
+            .wait_for(|snapshot| snapshot.child(child_id).is_some_and(&mut predicate))
+            .await?;
+        Ok(snapshot
+            .child(child_id)
+            .expect("wait_for predicate established child membership")
+            .clone())
+    }
 }
 
-use crate::{event::ExitStatusView, scope::ScopeKind, strategy::Strategy};
+use crate::{event::ExitKind, scope::ScopeKind, strategy::Strategy};
 
 /// Point-in-time snapshot of a supervisor's state, including the state of every
 /// child.
@@ -247,21 +267,84 @@ pub enum SupervisorStateView {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub struct ChildExitView {
-    /// Public classification of the exit.
-    pub status: ExitStatusView,
-    /// Whether the supervisor stopped the generation instead of the child
-    /// reaching its own conclusion.
-    pub cancelled: bool,
+pub enum ChildExitView {
+    /// The child returned `Ok(())`.
+    Completed {
+        /// Whether the supervisor stopped this generation.
+        cancelled: bool,
+    },
+    /// The child returned an error.
+    Failed {
+        /// The error's `Display` output.
+        message: String,
+        /// Whether the supervisor stopped this generation.
+        cancelled: bool,
+    },
+    /// The child task panicked.
+    Panicked {
+        /// Whether the supervisor stopped this generation.
+        cancelled: bool,
+    },
+    /// The child task was aborted by the supervisor.
+    Aborted {
+        /// Whether cooperative shutdown exhausted its grace period first.
+        after_grace: bool,
+        /// Whether the supervisor stopped this generation.
+        cancelled: bool,
+    },
 }
 
 impl ChildExitView {
-    /// Creates public details for one child generation's exit.
-    ///
-    /// This is primarily useful for adapters and tests that construct
-    /// [`ChildSnapshot`] values outside this crate.
-    pub(crate) fn new(status: ExitStatusView, cancelled: bool) -> Self {
-        Self { status, cancelled }
+    pub(crate) fn new(status: ExitKind, cancelled: bool) -> Self {
+        match status {
+            ExitKind::Completed => Self::Completed { cancelled },
+            ExitKind::Failed(message) => Self::Failed { message, cancelled },
+            ExitKind::Panicked => Self::Panicked { cancelled },
+            ExitKind::Aborted { after_grace } => Self::Aborted {
+                after_grace,
+                cancelled,
+            },
+        }
+    }
+
+    /// Returns whether the child completed successfully.
+    pub fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed { .. })
+    }
+
+    /// Returns the failure message when the child returned an error.
+    pub fn failure_message(&self) -> Option<&str> {
+        match self {
+            Self::Failed { message, .. } => Some(message),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the child task panicked.
+    pub fn is_panicked(&self) -> bool {
+        matches!(self, Self::Panicked { .. })
+    }
+
+    /// Returns whether the supervisor aborted the child after its grace
+    /// period expired.
+    pub fn timed_out(&self) -> bool {
+        matches!(
+            self,
+            Self::Aborted {
+                after_grace: true,
+                ..
+            }
+        )
+    }
+
+    /// Returns whether the supervisor stopped this generation.
+    pub fn cancelled(&self) -> bool {
+        match self {
+            Self::Completed { cancelled }
+            | Self::Failed { cancelled, .. }
+            | Self::Panicked { cancelled }
+            | Self::Aborted { cancelled, .. } => *cancelled,
+        }
     }
 }
 
@@ -306,41 +389,15 @@ pub enum ChildStateView {
 }
 
 impl ChildStateView {
-    /// Returns whether the child is waiting to report readiness.
-    pub fn is_starting(&self) -> bool {
-        matches!(self, Self::Starting { .. })
-    }
-
     /// Returns whether the child is running.
     pub fn is_running(&self) -> bool {
         matches!(self, Self::Running { .. })
     }
 
-    /// Returns whether the child is stopping.
-    pub fn is_stopping(&self) -> bool {
-        matches!(self, Self::Stopping { .. })
-    }
-
-    /// Returns whether the child is stopped.
-    pub fn is_stopped(&self) -> bool {
+    /// Returns whether the child can no longer make progress in its current
+    /// generation.
+    pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Stopped { .. } | Self::StartupAborted { .. })
-    }
-
-    /// Returns whether the current generation reported readiness.
-    pub fn started(&self) -> bool {
-        match self {
-            Self::Starting { .. } => false,
-            Self::Running { .. } => true,
-            Self::Stopping { started, .. } => *started,
-            Self::Stopped { started, .. } => *started,
-            Self::StartupAborted { .. } => false,
-        }
-    }
-
-    /// Returns whether the current generation ended permanently before
-    /// reporting readiness.
-    pub fn startup_aborted(&self) -> bool {
-        matches!(self, Self::StartupAborted { .. })
     }
 
     /// Returns the newest observed exit, if any.

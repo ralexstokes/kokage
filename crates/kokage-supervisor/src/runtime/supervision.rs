@@ -17,7 +17,7 @@ use crate::{
     child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},
-    event::{ExitStatusView, RuntimeEvent},
+    event::{ExitKind, RuntimeEvent},
     handle::{
         AttachedChildState, AttachedChildrenState, NestedChannels, PendingSupervisorChild,
         StableSupervisorChannels, SupervisorCommand, SupervisorHandle,
@@ -25,7 +25,6 @@ use crate::{
     lifecycle::{
         ChildLifecycleEventKind as ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft,
         LifecycleEventKind, LifecycleHub, LifecyclePathSegment, LifecycleTreeSink,
-        SupervisorLifecycleEvent,
     },
     observability::{SupervisorObservability, format_child_path},
     restart::{RestartConfig, RestartPolicy},
@@ -164,7 +163,7 @@ pub(crate) struct ChildEntry {
     pub(crate) lineage: u64,
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) runtime: ChildRuntime,
-    last_exit: Option<ExitStatusView>,
+    last_exit: Option<ExitKind>,
     last_exit_cancelled: bool,
     pub(crate) nested_snapshot: Option<SupervisorSnapshot>,
     pub(crate) nested_snapshot_state: Option<NestedSnapshotState>,
@@ -1542,8 +1541,7 @@ impl SupervisorRuntime {
             key,
             ChildLifecycleEvent::Exited {
                 generation,
-                reason: status.view(),
-                cancelled,
+                exit: ChildExitView::new(status.view(), cancelled),
             },
         );
         self.send_event(RuntimeEvent::ChildExited {
@@ -1863,15 +1861,15 @@ impl SupervisorRuntime {
             .observability
             .emit_event(&event, self.running_child_count(), child_path);
         let lifecycle = match &event {
-            RuntimeEvent::SupervisorStarted => Some(LifecycleEvent::local(
-                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started),
-            )),
+            RuntimeEvent::SupervisorStarted => {
+                Some(LifecycleEvent::local(LifecycleEventKind::SupervisorStarted))
+            }
             RuntimeEvent::SupervisorStopping => Some(LifecycleEvent::local(
-                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopping),
+                LifecycleEventKind::SupervisorStopping,
             )),
-            RuntimeEvent::SupervisorStopped => Some(LifecycleEvent::local(
-                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped),
-            )),
+            RuntimeEvent::SupervisorStopped => {
+                Some(LifecycleEvent::local(LifecycleEventKind::SupervisorStopped))
+            }
             RuntimeEvent::RestartIntensityExceeded => Some(LifecycleEvent::local(
                 LifecycleEventKind::RestartIntensityExceeded {
                     total_restarts: self.total_restarts,
@@ -2484,7 +2482,7 @@ mod tests {
             .expect("lifecycle remains open");
         assert!(matches!(
             started.kind,
-            ChildLifecycleEvent::Started { generation: 2 }
+            LifecycleEventKind::ChildStarted { generation: 2, .. }
         ));
     }
 

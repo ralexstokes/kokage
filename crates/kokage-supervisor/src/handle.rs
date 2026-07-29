@@ -17,7 +17,7 @@ use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
-    lifecycle::{ChildLifecycleWatch, LifecycleHub, LifecycleWatch},
+    lifecycle::{LifecycleHub, LifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
@@ -1010,7 +1010,10 @@ mod tests {
             panic!("replacement binding must be observable");
         };
         assert_eq!(observed.children.len(), 1);
-        assert!(!observed.children[0].state.started());
+        assert!(matches!(
+            observed.children[0].state,
+            ChildStateView::Starting { .. }
+        ));
     }
 
     #[test]
@@ -1677,14 +1680,20 @@ impl SupervisorHandle {
                 .children
                 .iter()
                 .filter(|child| child.membership == ChildMembershipView::Active)
-                .all(|child| child.state.started())
+                .all(|child| {
+                    matches!(
+                        child.state,
+                        ChildStateView::Running { .. }
+                            | ChildStateView::Stopping { started: true, .. }
+                            | ChildStateView::Stopped { started: true, .. }
+                    )
+                })
             {
                 return Ok(());
             }
             if let Some(child) = snapshot.children.iter().find(|child| {
                 child.membership == ChildMembershipView::Active
-                    && !child.state.started()
-                    && child.state.startup_aborted()
+                    && matches!(child.state, ChildStateView::StartupAborted { .. })
             }) {
                 return Err(SupervisorError::StartupAborted(format!(
                     "child `{}` exited before reporting readiness",
@@ -1712,77 +1721,27 @@ impl SupervisorHandle {
         }
     }
 
-    /// Returns an ordered, reliable stream of lifecycle transitions among
-    /// this supervisor's direct children, including restart scheduling.
+    /// Returns the ordered lifecycle stream for this entire supervisor tree.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
     /// To obtain a gap-free state-plus-stream view, create the watch first,
     /// then read [`snapshot`](Self::snapshot), then discard watched child
-    /// transitions whose sequence is at most
+    /// transitions whose [`LifecycleEvent::seq`](crate::LifecycleEvent::seq)
+    /// is at most
     /// [`SupervisorSnapshot::lifecycle_seq`].
     /// Pre-spawn snapshots already project configured children as `Starting`,
     /// so apply a later `Added` for that membership as an idempotent upsert
     /// keyed by `(child_id, lineage)`. Lineage allocation continues across
     /// incarnations of this stable supervisor identity.
     ///
-    /// Each watch owns a bounded buffer. Sustained overflow is represented by
-    /// [`ChildLifecycleEventKind::Lagged`](crate::ChildLifecycleEventKind::Lagged), never
-    /// silent loss. Restart-intensity failure is a scope transition rather
-    /// than a direct-child transition: the direct watch drains already-staged
-    /// child events and closes without an in-band intensity marker. Use
-    /// [`watch_lifecycle_recursive`](Self::watch_lifecycle_recursive) when
-    /// that signal is required. This scope does not aggregate nested
-    /// supervisors; obtain a nested handle with [`supervisor`](Self::supervisor)
-    /// and watch it separately.
-    pub fn watch_lifecycle(&self) -> ChildLifecycleWatch {
-        self.lifecycle_hub().watch()
-    }
-
-    /// Arms a watch for the next restart of `child_id`.
-    ///
-    /// The lifecycle subscription and current generation are captured before
-    /// this method returns. The restart may therefore be triggered before the
-    /// returned future is first polled without losing its `Started` event.
-    /// A restart already reflected in the captured generation becomes the
-    /// baseline, even if its `Started` event is buffered, so only a later
-    /// generation can complete the future.
-    ///
-    /// Returns `None` if the child is not currently supervised, is removed
-    /// before restarting, the watch lags, or this supervisor identity becomes
-    /// terminal before the restart is observed.
-    pub fn restart_of(
-        &self,
-        child_id: &str,
-    ) -> impl std::future::Future<Output = Option<u64>> + Send + 'static {
-        // Subscribe before sampling the baseline so every transition after the
-        // snapshot is staged, including transitions that happen before the
-        // returned future is first polled.
-        let mut lifecycle = self.watch_lifecycle();
-        let baseline = self
-            .snapshot()
-            .child(child_id)
-            .map(|child| child.generation);
-        let child_id = child_id.to_owned();
-
-        async move { lifecycle.started_after(&child_id, baseline?).await }
-    }
-
-    /// Returns an ordered lifecycle stream for this entire supervisor tree.
-    ///
-    /// Each event carries a path relative to this handle. Direct-child
-    /// transitions retain the source scope's monotonic lifecycle sequence;
-    /// scheduled restarts use the same child-event vocabulary. Supervisor
-    /// start/stop transitions and restart-intensity failures are also
-    /// represented. A nested supervisor's stable identity remains attached
-    /// across its own restarts and ancestor-driven recreation.
-    ///
-    /// Each watch owns one bounded buffer for the whole tree. Sustained
-    /// overflow is represented by a tree-wide
+    /// Each event carries a path relative to this handle. Call
+    /// [`LifecycleWatch::direct_children`](crate::LifecycleWatch::direct_children)
+    /// to restrict the stream to this scope. Each watch owns one bounded
+    /// buffer for the whole tree; sustained overflow is a tree-wide
     /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged)
-    /// marker with an empty supervisor path. Consumers maintaining derived
-    /// state should then resynchronize from [`snapshot`](Self::snapshot).
-    pub fn watch_lifecycle_recursive(&self) -> LifecycleWatch {
-        self.lifecycle_hub().watch_recursive()
+    /// marker with an empty path.
+    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+        self.lifecycle_hub().watch()
     }
 
     /// Returns a clone of the latest [`SupervisorSnapshot`].

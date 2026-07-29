@@ -11,10 +11,9 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BoxError, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSnapshot, ChildSpec,
-    ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig,
-    RestartPolicy, SupervisorError, SupervisorHandle, SupervisorLifecycleEvent, SupervisorSnapshot,
-    SupervisorSnapshotReceiver,
+    BoxError, ChildExitView, ChildSnapshot, ChildSpec, LifecycleEvent, LifecycleEventKind,
+    LifecycleWatch, RestartConfig, RestartPolicy, SupervisorError, SupervisorHandle,
+    SupervisorSnapshot, SupervisorSnapshotReceiver,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -24,6 +23,25 @@ use tokio::{
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 pub const QUIET_TIMEOUT: Duration = Duration::from_millis(150);
 pub const SHORT_GRACE: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExitStatusView {
+    Completed,
+    Failed(String),
+    Panicked,
+    Aborted { after_grace: bool },
+}
+
+impl From<ChildExitView> for ExitStatusView {
+    fn from(exit: ChildExitView) -> Self {
+        match exit {
+            ChildExitView::Completed { .. } => Self::Completed,
+            ChildExitView::Failed { message, .. } => Self::Failed(message),
+            ChildExitView::Panicked { .. } => Self::Panicked,
+            ChildExitView::Aborted { after_grace, .. } => Self::Aborted { after_grace },
+        }
+    }
+}
 
 pub fn restart_config(
     max_restarts: usize,
@@ -198,7 +216,7 @@ pub struct EventWatch {
 
 pub fn event_watch(handle: &SupervisorHandle) -> EventWatch {
     EventWatch {
-        lifecycle: handle.watch_lifecycle_recursive(),
+        lifecycle: handle.watch_lifecycle(),
         pending: VecDeque::new(),
     }
 }
@@ -234,24 +252,15 @@ impl EventWatch {
         let path = event.supervisor_path;
         let mut pending = None;
         let leaf = match event.kind {
-            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started) => {
-                ObservedEvent::SupervisorStarted
-            }
-            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopping) => {
-                ObservedEvent::SupervisorStopping
-            }
-            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped) => {
-                ObservedEvent::SupervisorStopped
-            }
-            LifecycleEventKind::Child(ChildLifecycleEvent {
-                kind: ChildLifecycleEventKind::Added,
-                ..
-            }) => return Ok(None),
-            LifecycleEventKind::Child(ChildLifecycleEvent {
+            LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
+            LifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
+            LifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
+            LifecycleEventKind::ChildAdded { .. } => return Ok(None),
+            LifecycleEventKind::ChildStarted {
                 child_id,
-                kind: ChildLifecycleEventKind::Started { generation },
+                generation,
                 ..
-            }) => {
+            } => {
                 // This compatibility shim preserves the removed test-event
                 // shape. It deliberately assumes runtime generations are
                 // contiguous when synthesizing `ChildRestarted`. If that
@@ -269,31 +278,25 @@ impl EventWatch {
                     generation,
                 }
             }
-            LifecycleEventKind::Child(ChildLifecycleEvent {
+            LifecycleEventKind::ChildExited {
                 child_id,
-                kind:
-                    ChildLifecycleEventKind::Exited {
-                        generation, reason, ..
-                    },
+                generation,
+                exit,
                 ..
-            }) => ObservedEvent::ChildExited {
+            } => ObservedEvent::ChildExited {
                 id: child_id,
                 generation,
-                status: reason,
+                status: exit.into(),
             },
-            LifecycleEventKind::Child(ChildLifecycleEvent {
+            LifecycleEventKind::ChildRemoved { child_id, .. } => {
+                ObservedEvent::ChildRemoved { id: child_id }
+            }
+            LifecycleEventKind::ChildRestartScheduled {
                 child_id,
-                kind: ChildLifecycleEventKind::Removed,
+                generation,
+                delay,
                 ..
-            }) => ObservedEvent::ChildRemoved { id: child_id },
-            LifecycleEventKind::Child(ChildLifecycleEvent {
-                child_id,
-                kind:
-                    ChildLifecycleEventKind::RestartScheduled {
-                        generation, delay, ..
-                    },
-                ..
-            }) => ObservedEvent::ChildRestartScheduled {
+            } => ObservedEvent::ChildRestartScheduled {
                 id: child_id,
                 generation,
                 delay,
@@ -301,11 +304,7 @@ impl EventWatch {
             LifecycleEventKind::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded
             }
-            LifecycleEventKind::Lagged { dropped }
-            | LifecycleEventKind::Child(ChildLifecycleEvent {
-                kind: ChildLifecycleEventKind::Lagged { dropped },
-                ..
-            }) => {
+            LifecycleEventKind::Lagged { dropped } => {
                 return Err(EventRecvError::Lagged(dropped));
             }
             _ => return Ok(None),

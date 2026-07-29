@@ -1,7 +1,4 @@
-use kokage_supervisor::{
-    ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind,
-    SupervisorLifecycleEvent, prelude::*,
-};
+use kokage_supervisor::{LifecycleEvent, LifecycleEventKind, prelude::*};
 use tokio::time::{Duration, sleep};
 
 #[tokio::main]
@@ -15,14 +12,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .spawn()?;
     let handle = running.handle();
-    let mut events = handle.watch_lifecycle_recursive();
+    let mut events = handle.watch_lifecycle();
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
-            let stopped = matches!(
-                event.kind,
-                LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped)
-            );
+            let stopped = matches!(event.kind, LifecycleEventKind::SupervisorStopped);
             print_event(&event);
             if stopped {
                 break;
@@ -52,50 +46,42 @@ fn print_event(event: &LifecycleEvent) {
     let scope = if path.is_empty() { "root" } else { &path };
 
     match &event.kind {
-        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started) => {
+        LifecycleEventKind::SupervisorStarted => {
             println!("{scope}: supervisor started");
         }
-        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopping) => {
+        LifecycleEventKind::SupervisorStopping => {
             println!("{scope}: supervisor stopping");
         }
-        LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped) => {
+        LifecycleEventKind::SupervisorStopped => {
             println!("{scope}: supervisor stopped");
         }
-        LifecycleEventKind::Child(ChildLifecycleEvent {
-            child_id,
-            kind: ChildLifecycleEventKind::Added,
-            ..
-        }) => println!("{scope}: child added: {child_id}"),
-        LifecycleEventKind::Child(ChildLifecycleEvent {
-            child_id,
-            kind: ChildLifecycleEventKind::Started { generation },
-            ..
-        }) => println!("{scope}: child started: {child_id} generation={generation}"),
-        LifecycleEventKind::Child(ChildLifecycleEvent {
-            child_id,
-            kind:
-                ChildLifecycleEventKind::Exited {
-                    generation, reason, ..
-                },
-            ..
-        }) => {
-            println!("{scope}: child exited: {child_id} generation={generation} reason={reason:?}")
+        LifecycleEventKind::ChildAdded { child_id, .. } => {
+            println!("{scope}: child added: {child_id}")
         }
-        LifecycleEventKind::Child(ChildLifecycleEvent {
+        LifecycleEventKind::ChildStarted {
             child_id,
-            kind: ChildLifecycleEventKind::Removed,
+            generation,
             ..
-        }) => {
+        } => {
+            println!("{scope}: child started: {child_id} generation={generation}")
+        }
+        LifecycleEventKind::ChildExited {
+            child_id,
+            generation,
+            exit,
+            ..
+        } => {
+            println!("{scope}: child exited: {child_id} generation={generation} exit={exit:?}")
+        }
+        LifecycleEventKind::ChildRemoved { child_id, .. } => {
             println!("{scope}: child removed: {child_id}");
         }
-        LifecycleEventKind::Child(ChildLifecycleEvent {
+        LifecycleEventKind::ChildRestartScheduled {
             child_id,
-            kind:
-                ChildLifecycleEventKind::RestartScheduled {
-                    generation, delay, ..
-                },
+            generation,
+            delay,
             ..
-        }) => {
+        } => {
             println!(
                 "{scope}: child restart scheduled: {child_id} generation={generation} delay={delay:?}"
             );

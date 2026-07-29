@@ -1,6 +1,5 @@
 use kokage_supervisor::{
-    ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventKind,
-    LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent, prelude::*,
+    LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, prelude::*,
 };
 use tokio::time::{Duration, sleep, timeout};
 
@@ -8,7 +7,7 @@ use tokio::time::{Duration, sleep, timeout};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_owner = Supervisor::dynamic().spawn()?;
     let running = running_owner.handle();
-    let mut events = running.watch_lifecycle_recursive();
+    let mut events = running.watch_lifecycle();
 
     running
         .dynamic()
@@ -128,11 +127,8 @@ async fn wait_for_child_started(
     let event = wait_for_event(events, |event| {
         matches!(
             &event.kind,
-            LifecycleEventKind::Child(ChildLifecycleEvent {
-                child_id: id,
-                kind: ChildLifecycleEventKind::Started { .. },
-                ..
-            }) if event.supervisor_path.is_empty() && id == child_id
+            LifecycleEventKind::ChildStarted { child_id: id, .. }
+                if event.supervisor_path.is_empty() && id == child_id
         )
     })
     .await?;
@@ -147,11 +143,8 @@ async fn wait_for_child_removed(
     let event = wait_for_event(events, |event| {
         matches!(
             &event.kind,
-            LifecycleEventKind::Child(ChildLifecycleEvent {
-                child_id: id,
-                kind: ChildLifecycleEventKind::Removed,
-                ..
-            }) if event.supervisor_path.is_empty() && id == child_id
+            LifecycleEventKind::ChildRemoved { child_id: id, .. }
+                if event.supervisor_path.is_empty() && id == child_id
         )
     })
     .await?;
@@ -167,10 +160,7 @@ async fn wait_for_nested_supervisor_started(
         matches!(
             event.supervisor_path.as_slice(),
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
-        ) && matches!(
-            event.kind,
-            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started)
-        )
+        ) && matches!(event.kind, LifecycleEventKind::SupervisorStarted)
     })
     .await?;
     println!("event: {event:?}");
@@ -188,11 +178,8 @@ async fn wait_for_nested_child_started(
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
         ) && matches!(
             &event.kind,
-            LifecycleEventKind::Child(ChildLifecycleEvent {
-                child_id: id,
-                kind: ChildLifecycleEventKind::Started { generation: 0 },
-                ..
-            }) if id == child_id
+            LifecycleEventKind::ChildStarted { child_id: id, generation: 0, .. }
+                if id == child_id
         )
     })
     .await?;
@@ -211,11 +198,7 @@ async fn wait_for_nested_child_removed(
             [LifecyclePathSegment { id, generation: 0, .. }] if id == nested_id
         ) && matches!(
             &event.kind,
-            LifecycleEventKind::Child(ChildLifecycleEvent {
-                child_id: id,
-                kind: ChildLifecycleEventKind::Removed,
-                ..
-            }) if id == child_id
+            LifecycleEventKind::ChildRemoved { child_id: id, .. } if id == child_id
         )
     })
     .await?;

@@ -82,11 +82,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .spawn()?;
     let runtime = runtime_owner.handle();
 
-    let restarted = runtime.restart_of("worker");
+    let baseline = runtime.snapshot().child("worker").unwrap().generation;
+    let mut restarted = runtime.subscribe_snapshots();
     frontend.send("fail-worker".to_owned()).await?;
     restarted
+        .wait_for_child("worker", |child| {
+            child.generation > baseline && child.state.is_running()
+        })
         .await
-        .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
+        .map_err(|_| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;
     println!("observed {}", observed_rx.recv().await.expect("message"));
 

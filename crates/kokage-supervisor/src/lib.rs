@@ -291,15 +291,11 @@ pub mod __private {
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub use child::{BoxError, ChildResult, ChildSpec, TerminalMembership};
-pub use completion::{CompletionGuard, CompletionOutcome};
+pub use completion::{CompletionError, CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
-pub use event::ExitStatusView;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
-pub use lifecycle::{
-    ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, LifecycleEvent,
-    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent,
-};
+pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch};
 pub use restart::{BackoffPolicy, RestartConfig, RestartPolicy};
 pub use scope::ScopeKind;
 pub use shutdown::ShutdownPolicy;

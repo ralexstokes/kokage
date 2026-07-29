@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, ExitStatusView, RestartConfig, RestartPolicy, Strategy, Supervisor,
+    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, Strategy, Supervisor,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -12,7 +12,7 @@ use tokio::{
 };
 
 mod common;
-use common::ObservedEvent;
+use common::{ExitStatusView, ObservedEvent};
 
 #[tokio::test]
 async fn sibling_restart_dispatches_during_another_childs_backoff() {
@@ -243,20 +243,22 @@ async fn temporary_child_does_not_restart() {
         snapshots.wait_for(|snapshot| {
             snapshot
                 .child("temporary")
-                .is_some_and(|child| child.state.is_stopped())
+                .is_some_and(|child| child.state.is_terminal())
         }),
     )
     .await
     .expect("temporary child should stop")
     .expect("snapshot stream should remain open")
     .clone();
-    assert!(matches!(
+    assert!(
         stopped
             .child("temporary")
             .expect("temporary child remains visible")
-            .state.last_exit().map(|exit| &exit.status),
-        Some(ExitStatusView::Failed(message)) if message.contains("no restart")
-    ));
+            .state
+            .last_exit()
+            .and_then(|exit| exit.failure_message())
+            .is_some_and(|message| message.contains("no restart"))
+    );
 
     common::assert_no_event(&mut starts_rx).await;
     handle.shutdown();

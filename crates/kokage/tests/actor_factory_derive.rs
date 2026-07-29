@@ -9,22 +9,24 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorResult, GraphBuilder, MessageContext, OrderedTree, Reply,
-    RestartPolicy, RuntimeHandle, StartContext, observe::ChildLifecycleWatch,
+    RestartPolicy, RuntimeHandle, StartContext, observe::SupervisorSnapshotReceiver,
 };
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
-    let lifecycle = handle.watch_lifecycle();
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+    let snapshots = handle.subscribe_snapshots();
     let child = handle
         .snapshot()
         .child(id)
         .expect("child exists")
         .generation;
-    (lifecycle, child)
+    (snapshots, child)
 }
 
-async fn await_restart(mut lifecycle: ChildLifecycleWatch, id: &str, baseline: u64) {
-    lifecycle
-        .started_after(id, baseline)
+async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, baseline: u64) {
+    snapshots
+        .wait_for_child(id, |child| {
+            child.generation > baseline && child.state.is_running()
+        })
         .await
         .expect("runtime remains live");
 }

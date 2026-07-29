@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage_supervisor::{ChildLifecycleEventKind, prelude::*};
+use kokage_supervisor::{LifecycleEventKind, prelude::*};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -49,8 +49,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        if event.child_id == "flaky-worker"
-            && let ChildLifecycleEventKind::Started { generation: 1 } = event.kind
+        if let LifecycleEventKind::ChildStarted {
+            child_id,
+            generation: 1,
+            ..
+        } = event.kind
+            && child_id == "flaky-worker"
         {
             println!("child flaky-worker restarted into generation 1");
             break;

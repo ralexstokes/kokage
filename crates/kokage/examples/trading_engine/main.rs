@@ -132,7 +132,7 @@ use std::{
 
 use kokage::{
     CancellationToken, DownReason, MailboxMode, Supervision,
-    observe::{ChildLifecycleWatch, LifecycleWatchGuard},
+    observe::{LifecycleWatchGuard, SupervisorSnapshotReceiver},
     prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -365,7 +365,9 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree")
         .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
-            total: event.total_restarts,
+            total: event
+                .total_restarts()
+                .expect("the direct-child lifecycle pump filters scope events"),
         });
 
     Ok(App {
@@ -792,21 +794,23 @@ where
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
-    let lifecycle = handle.watch_lifecycle();
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+    let snapshots = handle.subscribe_snapshots();
     let generation = handle
         .snapshot()
         .child(id)
         .unwrap_or_else(|| panic!("{id} is supervised"))
         .generation;
-    (lifecycle, generation)
+    (snapshots, generation)
 }
 
-async fn await_restart(mut lifecycle: ChildLifecycleWatch, id: &str, baseline: u64) {
-    lifecycle
-        .started_after(id, baseline)
+async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, baseline: u64) {
+    snapshots
+        .wait_for_child(id, |child| {
+            child.generation > baseline && child.state.is_running()
+        })
         .await
-        .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
+        .unwrap_or_else(|_| panic!("snapshot stream closed before {id} restarted"));
 }
 
 async fn await_until<F, Fut>(mut predicate: F) -> Result<(), AnyError>

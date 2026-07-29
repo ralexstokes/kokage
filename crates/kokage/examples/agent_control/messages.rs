@@ -234,7 +234,7 @@ pub enum ToolHostMsg {
 #[derive(Debug)]
 pub enum RouterMsg {
     /// Ordered membership transition from the sessions mount alignment watch.
-    MountLifecycle(kokage::observe::ChildLifecycleEvent),
+    MountLifecycle(kokage::observe::LifecycleEvent),
     UserMessage {
         envelope: EnvelopeId,
         chat: ChatId,

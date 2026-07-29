@@ -12,7 +12,7 @@ use kokage::{
     Actor, ActorRef, ActorResult, ControlError, DynamicRuntimeHandle, DynamicTree, GraphBuilder,
     LiveContext, MessageContext, OrderedTree, StartContext, Strategy, SupervisorError,
     observe::{
-        ChildLifecycleEvent, ChildLifecycleEventKind, ChildMembershipView, LifecycleWatchGuard,
+        ChildMembershipView, LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard,
         SupervisorSnapshot,
     },
 };
@@ -86,14 +86,11 @@ enum MountEventDisposition {
     Ignore,
 }
 
-fn mount_event_disposition(
-    alignment_seq: u64,
-    event: &ChildLifecycleEvent,
-) -> MountEventDisposition {
+fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountEventDisposition {
     event_disposition(
         alignment_seq,
-        event.seq,
-        matches!(&event.kind, ChildLifecycleEventKind::Lagged { .. }),
+        event.seq().unwrap_or(0),
+        matches!(&event.kind, LifecycleEventKind::Lagged { .. }),
     )
 }
 
@@ -336,11 +333,11 @@ impl Actor for Router {
                         self.reconcile_mount_snapshot(ctx);
                     }
                     MountEventDisposition::Apply => {
-                        self.alignment_seq = event.seq;
-                        if matches!(event.kind, ChildLifecycleEventKind::Added)
-                            && !self.routes_subtree(&event.child_id)
+                        self.alignment_seq = event.seq().expect("child event has a sequence");
+                        if let LifecycleEventKind::ChildAdded { child_id, .. } = event.kind
+                            && !self.routes_subtree(&child_id)
                         {
-                            self.pipeline_sweep(event.child_id, ctx);
+                            self.pipeline_sweep(child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}

@@ -288,10 +288,9 @@ pub mod observe {
         supervision::{ChildOutline, SupervisionOutline},
     };
     pub use kokage_supervisor::{
-        ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch,
-        ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard, CompletionOutcome,
-        ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
-        SnapshotRecvError, SupervisorLifecycleEvent, SupervisorSnapshot,
+        ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
+        CompletionGuard, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
+        LifecyclePathSegment, LifecycleWatch, SnapshotRecvError, SupervisorSnapshot,
         SupervisorSnapshotReceiver, SupervisorStateView,
     };
 }
