@@ -227,6 +227,6 @@ startup ordering and dynamic-membership reconciliation.
 [`host::RunnableActor`]: https://stokes.io/kokage/api/kokage/host/struct.RunnableActor.html
 [`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
 [`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html
-[`ScopeKind`]: https://stokes.io/kokage/api/kokage_supervisor/enum.ScopeKind.html
+[`ScopeKind`]: https://stokes.io/kokage/api/kokage/enum.ScopeKind.html
 [`observe::SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html
 [Scope handles inside actors]: dynamic-actors.md#scope-handles-inside-actors

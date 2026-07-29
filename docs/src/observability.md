@@ -43,8 +43,7 @@ predecessor used the same local lineages; the parent path distinguishes the
 two. The `u64` counter saturates at its maximum rather than changing supervisor
 control semantics in the practically unreachable overflow case. For
 dynamically added task children, `DynamicRuntime::add_child` returns the same
-lineage that the supervisor assigned while inserting the child (as does
-`DynamicSupervisorHandle::add_child` in the lower-level `kokage-supervisor` crate).
+lineage that the runtime assigned while inserting the child.
 Consumers that need to associate their own state with that exact membership
 should retain the returned value rather than performing a later id-based
 snapshot lookup.

@@ -15,8 +15,8 @@ while host-facing execution types live under `kokage::host`, observation
 types live under `kokage::observe`, and advanced configuration remains at
 the crate root. Wire actors in a `Graph` and move it into an `OrderedTree`;
 `OrderedTree::graph(graph)` is the concise path when one graph occupies one
-ordered scope. Raw task supervision requires a direct `kokage-supervisor`
-dependency.
+ordered scope. Add plain async tasks to the same tree with
+`kokage::host::ChildSpec`.
 
 Spawning a tree returns an owning [`Runtime`]. Keep it alive for as long as
 the application should run; `RuntimeHandle` values cloned from it are

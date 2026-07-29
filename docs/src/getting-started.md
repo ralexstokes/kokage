@@ -14,9 +14,10 @@ kokage = { git = "https://github.com/ralexstokes/kokage" }
 
 `kokage::prelude` covers the day-one actor traits, contexts, graph builder, and
 ordered runtime. Advanced policies and dynamic membership remain explicit
-imports from the crate root. Applications that supervise plain async tasks
-without actors can instead depend directly on `kokage-supervisor`; the next
-chapter takes that optional one-level-deeper tour.
+imports from the crate root. Plain async tasks can live beside actors through
+`kokage::host::ChildSpec`; the next chapter uses task children to explain
+restart, shutdown, and strategy policies without changing the tree/runtime
+vocabulary.
 
 ## Your first actor
 
@@ -71,17 +72,14 @@ The example shuts down explicitly so it can await the result. A discarded
 `let _ = tree.spawn()?;` drops the owner at the end of the statement and asks
 the runtime to stop immediately.
 
-## The layer underneath
+## One tree for actors and tasks
 
 Every actor runs as a supervised task, but actor applications normally express
 topology with `OrderedTree` / `DynamicTree` and control it with `Runtime` /
-`RuntimeHandle`. The independent `kokage-supervisor` crate exposes the lower
-layer directly as `Supervisor` / `RunningSupervisor` / `SupervisorHandle` for
-programs whose children are plain futures rather than actors.
-
-The next chapter uses that lower layer to explain restart, shutdown, and
-strategy semantics once. The actor chapters then apply the same policies
-through the actor-facing tree and runtime vocabulary.
+`RuntimeHandle`. Those trees also accept plain futures as
+`kokage::host::ChildSpec` task children, so mixed applications retain the same
+topology, ownership, control, and observation model. The next chapter explains
+the policies on plain tasks before the later chapters apply them to actors.
 
 [`GraphBuilder`]: https://stokes.io/kokage/api/kokage/struct.GraphBuilder.html
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
