@@ -298,3 +298,4 @@ async fn wait_for_named_child_removed(events: &mut ChildLifecycleWatch, id: &str
 fn bench_error(message: &'static str) -> BoxError {
     Box::new(Error::other(message))
 }
+use kokage_tokio::TokioSupervisorExt as _;

@@ -25,7 +25,7 @@ pub type ActorResult = Result<(), BoxError>;
 /// `recv`, `try_recv`, and `mark_ready`. It does not implement
 /// [`LiveContext`](crate::LiveContext): loop-owned timers and continuations
 /// depend on the framework-owned handler loop. A raw actor expresses those
-/// branches directly with Tokio futures beside `recv`, while watches,
+/// branches directly with futures beside `recv`, while watches,
 /// offloads, blocking work, identity, and restricted scope access remain
 /// available on `ActorContext` itself.
 ///

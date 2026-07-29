@@ -264,7 +264,7 @@ impl<H: Actor> RawActor for H {
                     _ = shutdown.cancelled() => {
                         break;
                     }
-                    () = tokio::time::sleep_until(timer.deadline) => LoopEvent::Timer(timer),
+                    () = ctx.scheduler.sleep_until(timer.deadline) => LoopEvent::Timer(timer),
                     message = ctx.next_delivery() => LoopEvent::Message(message),
                 }
             } else {
@@ -329,7 +329,7 @@ impl<H: Actor> RawActor for H {
         ctx.close_external_intake();
         if self.drain_policy() == DrainPolicy::Drain {
             // Completions and the mailbox are independent loop-owned sources.
-            // Drain whichever is ready until the JoinSet is empty and the
+            // Drain whichever is ready until the task set is empty and the
             // closed external mailbox has no accepted message left.
             while let Some(message) = ctx.next_drain_delivery().await {
                 ctx.record_received();

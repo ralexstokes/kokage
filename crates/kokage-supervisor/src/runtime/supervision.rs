@@ -1,19 +1,16 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, PoisonError},
-    time::{Duration, Instant as StdInstant},
+    time::{Duration, Instant},
 };
 
 use slab::Slab;
-use tokio::{
-    sync::{mpsc, oneshot, watch},
-    task::{Id, JoinError, JoinSet},
-    time::Instant,
-};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, trace};
 
 use crate::{
-    CancellationToken,
+    __private::{TaskId, TaskJoin, TaskSet},
+    CancellationToken, Scheduler, TaskError,
     child::{ChildDefinition, ChildKind, ChildReadiness, OpaqueAttachment},
     context::ChildReady,
     error::{ControlError, SupervisorError},
@@ -48,13 +45,13 @@ use super::{
 /// child is removed from the slab.
 pub(crate) type ChildKey = usize;
 
-/// Message returned by a child task through the `JoinSet`. Task identity is
+/// Message returned by a child task through the task set. Task identity is
 /// correlated through `task_map`, including for successful joins.
 pub(crate) struct ChildEnvelope {
     pub(crate) result: crate::child::ChildResult,
 }
 
-/// Metadata stored alongside a Tokio task ID so every join result can be
+/// Metadata stored alongside a scheduler task ID so every join result can be
 /// mapped back to the originating child.
 #[derive(Clone, Copy)]
 pub(crate) struct TaskMeta {
@@ -115,7 +112,7 @@ impl From<ExitReason> for CommandFailure {
 }
 
 type CommandResult<T> = Result<T, CommandFailure>;
-type JoinedChild = Result<(Id, ChildEnvelope), JoinError>;
+type JoinedChild = TaskJoin<ChildEnvelope>;
 
 #[derive(Clone, Copy)]
 struct WakeOptions {
@@ -177,7 +174,7 @@ struct PendingRemoval {
     reply: oneshot::Sender<Result<(), ControlError>>,
     policy: ShutdownPolicy,
     grace_deadline: Instant,
-    initiated_at: StdInstant,
+    initiated_at: Instant,
     grace_expired: bool,
     hard_abort_deadline: Option<Instant>,
 }
@@ -321,13 +318,13 @@ pub(crate) struct RuntimeMeta {
 ///
 /// # Key invariants
 ///
-/// - `live_tasks` tracks children that have a live Tokio task (i.e. an
+/// - `live_tasks` tracks children that have a live scheduler task (i.e. an
 ///   `abort_handle` was stored). It is decremented in `consume_joined_child`
 ///   and `finalize_removed_child`. When it reaches zero during shutdown the
 ///   drain loop exits.
 /// - `child_order` preserves insertion order for deterministic snapshot output
 ///   and `OneForAll` restart sequencing.
-/// - `task_map` maps Tokio `Id` → `TaskMeta` so all join results are
+/// - `task_map` maps scheduler task IDs to `TaskMeta` so all join results are
 ///   attributed to the correct child generation in one place.
 pub(crate) struct SupervisorRuntime {
     pub(crate) meta: RuntimeMeta,
@@ -341,7 +338,7 @@ pub(crate) struct SupervisorRuntime {
     /// token cancels all children at once (used in shutdown and `OneForAll`
     /// restarts).
     pub(crate) group_token: CancellationToken,
-    pub(crate) join_set: JoinSet<ChildEnvelope>,
+    pub(crate) join_set: TaskSet<ChildEnvelope>,
     pub(crate) children: Slab<ChildEntry>,
     pub(crate) children_by_id: HashMap<String, ChildKey>,
     pub(crate) child_order: Vec<ChildKey>,
@@ -358,7 +355,8 @@ pub(crate) struct SupervisorRuntime {
     pub(crate) ready_tx: mpsc::UnboundedSender<ChildReady>,
     pub(crate) ready_rx: mpsc::UnboundedReceiver<ChildReady>,
     pub(crate) commands_open: bool,
-    pub(crate) task_map: HashMap<Id, TaskMeta>,
+    pub(crate) task_map: HashMap<TaskId, TaskMeta>,
+    pub(crate) scheduler: Arc<dyn Scheduler>,
     start_sequence: Option<StartSequence>,
     startup_gate: Option<StartupGate>,
     /// Cumulative restarts scheduled across all direct children (including
@@ -382,6 +380,7 @@ impl SupervisorRuntime {
         parent_link: Option<ParentLink>,
         revivable: bool,
         own_handle: SupervisorHandle,
+        scheduler: Arc<dyn Scheduler>,
     ) -> Self {
         let default_restart_intensity = config.restart_intensity;
         let kind = config.kind;
@@ -464,7 +463,7 @@ impl SupervisorRuntime {
             state: SupervisorState::Running,
             stopping_token: CancellationToken::new(),
             group_token: CancellationToken::new(),
-            join_set: JoinSet::new(),
+            join_set: TaskSet::new(Arc::clone(&scheduler)),
             children,
             children_by_id,
             child_order,
@@ -482,6 +481,7 @@ impl SupervisorRuntime {
             ready_rx,
             commands_open: true,
             task_map: HashMap::new(),
+            scheduler,
             start_sequence: None,
             startup_gate: None,
             total_restarts,
@@ -589,7 +589,16 @@ impl SupervisorRuntime {
                     // woken by `ChildRestartScheduled` enqueue control work,
                     // then give the whole queued batch priority over an
                     // already-due restart.
-                    tokio::task::yield_now().await;
+                    // A one-tick scheduler wait provides a portable fairness
+                    // boundary. A self-wake-only future can be placed in an
+                    // executor's LIFO slot and immediately repolled, starving
+                    // observers that were just woken by the restart event.
+                    let fairness_deadline = self
+                        .scheduler
+                        .now()
+                        .checked_add(Duration::from_nanos(1))
+                        .unwrap_or_else(|| self.scheduler.now());
+                    self.scheduler.sleep_until(fairness_deadline).await;
                     self.drain_deadline_command_batch()?;
                     self.handle_deadlines().await?;
                 }
@@ -627,12 +636,13 @@ impl SupervisorRuntime {
             }
             if options
                 .deadline
-                .is_some_and(|deadline| deadline <= Instant::now())
+                .is_some_and(|deadline| deadline <= self.scheduler.now())
             {
                 return Wake::Deadline;
             }
             let wait_for_join = options.joins && !self.join_set.is_empty();
-            let deadline = options.deadline.unwrap_or_else(Instant::now);
+            let deadline = options.deadline.unwrap_or_else(|| self.scheduler.now());
+            let sleep = self.scheduler.sleep_until(deadline);
             let wake = tokio::select! {
                 biased;
                 changed = self.shutdown_rx.changed() => {
@@ -647,10 +657,10 @@ impl SupervisorRuntime {
                 update = self.nested_snapshot_rx.recv(), if options.nested_snapshots => {
                     Some(Wake::NestedSnapshot(update))
                 }
-                _ = tokio::time::sleep_until(deadline), if options.deadline.is_some() => {
+                _ = sleep, if options.deadline.is_some() => {
                     Some(Wake::Deadline)
                 }
-                joined = self.join_set.join_next_with_id(), if wait_for_join => {
+                joined = self.join_set.join_next(), if wait_for_join => {
                     Some(Wake::Joined(joined))
                 }
             };
@@ -1136,12 +1146,12 @@ impl SupervisorRuntime {
                 entry.runtime.state = RuntimeChildState::Stopping;
             }
             let policy = entry.runtime.definition.shutdown_policy;
-            let grace_deadline = Instant::now() + policy.grace();
+            let grace_deadline = self.scheduler.now() + policy.grace();
             entry.pending_removal = Some(PendingRemoval {
                 reply,
                 policy,
                 grace_deadline,
-                initiated_at: StdInstant::now(),
+                initiated_at: self.scheduler.now(),
                 grace_expired: false,
                 hard_abort_deadline: None,
             });
@@ -1322,7 +1332,7 @@ impl SupervisorRuntime {
         let grace_expired = pending.grace_expired
             || (check_elapsed_grace
                 && !pending.policy.is_abort()
-                && Instant::now() >= pending.grace_deadline);
+                && self.scheduler.now() >= pending.grace_deadline);
         if grace_expired && !pending.grace_expired && failure.is_none() {
             self.meta
                 .observability
@@ -1330,7 +1340,9 @@ impl SupervisorRuntime {
         }
         self.meta.observability.record_shutdown_duration(
             "remove_child",
-            pending.initiated_at.elapsed(),
+            self.scheduler
+                .now()
+                .saturating_duration_since(pending.initiated_at),
             Some(id),
         );
         if failure.is_some() {
@@ -1344,10 +1356,7 @@ impl SupervisorRuntime {
         }
     }
 
-    fn handle_joined_child(
-        &mut self,
-        joined: Result<(Id, ChildEnvelope), JoinError>,
-    ) -> RuntimeResult<()> {
+    fn handle_joined_child(&mut self, joined: JoinedChild) -> RuntimeResult<()> {
         let Some(classified) = self.consume_joined_child(joined)? else {
             return Ok(());
         };
@@ -1473,12 +1482,13 @@ impl SupervisorRuntime {
         channels.terminal();
     }
 
-    fn classify_join(
-        &mut self,
-        joined: Result<(Id, ChildEnvelope), JoinError>,
-    ) -> Result<ClassifiedExit, SupervisorError> {
-        match joined {
-            Ok((task_id, envelope)) => {
+    fn classify_join(&mut self, joined: JoinedChild) -> Result<ClassifiedExit, SupervisorError> {
+        let TaskJoin {
+            id: task_id,
+            result,
+        } = joined;
+        match result {
+            Ok(envelope) => {
                 let Some(meta) = self.task_map.remove(&task_id) else {
                     return Err(SupervisorError::Internal(format!(
                         "missing task metadata for successful join: {task_id:?}"
@@ -1493,7 +1503,6 @@ impl SupervisorRuntime {
                 })
             }
             Err(err) => {
-                let task_id = err.id();
                 let Some(meta) = self.task_map.remove(&task_id) else {
                     return Err(SupervisorError::Internal(format!(
                         "missing task metadata for failed join: {err}"
@@ -1537,7 +1546,10 @@ impl SupervisorRuntime {
         let cancelled = self.children[key].runtime.completion.is_cancelled();
         let id = {
             let entry = &mut self.children[key];
-            entry.runtime.restart_tracker.record_exit(Instant::now());
+            entry
+                .runtime
+                .restart_tracker
+                .record_exit(self.scheduler.now());
             entry.runtime.state = RuntimeChildState::Stopped;
             entry.runtime.active_token = None;
             entry.runtime.active_abort_token = None;
@@ -1590,7 +1602,7 @@ impl SupervisorRuntime {
             return Err(ExitReason::Shutdown);
         }
 
-        let now = Instant::now();
+        let now = self.scheduler.now();
         let expired_removals: Vec<_> = self
             .child_order
             .iter()
@@ -1794,7 +1806,7 @@ impl SupervisorRuntime {
     fn schedule_restart(&mut self, key: ChildKey) -> Result<Duration, SupervisorError> {
         self.total_restarts = self.total_restarts.saturating_add(1);
         let delay = {
-            let now = Instant::now();
+            let now = self.scheduler.now();
             let child = &mut self.children[key].runtime;
             child.restart_tracker.record_restart(now);
             if child.restart_tracker.exceeded() {
@@ -1952,7 +1964,7 @@ impl SupervisorRuntime {
     }
 
     fn snapshot_view(&self) -> SupervisorSnapshot {
-        let now = Instant::now();
+        let now = self.scheduler.now();
         let mut children = Vec::with_capacity(self.children_by_id.len());
         for &key in &self.child_order {
             let Some(entry) = self.children.get(key) else {
@@ -2024,7 +2036,7 @@ impl SupervisorRuntime {
 
     pub(crate) fn consume_joined_child(
         &mut self,
-        joined: Result<(Id, ChildEnvelope), JoinError>,
+        joined: JoinedChild,
     ) -> Result<Option<ClassifiedExit>, SupervisorError> {
         let classified = self.classify_join(joined)?;
         if !self.current_child_matches(classified.key, classified.lineage, classified.generation) {
@@ -2061,9 +2073,7 @@ fn complete_command<T>(
     }
 }
 
-fn classify_join_error(err: JoinError) -> ExitStatus {
-    // Tokio reports aborts and cancellation through `is_cancelled`; any other
-    // join error is treated as a panic from the child task.
+fn classify_join_error(err: TaskError) -> ExitStatus {
     if err.is_cancelled() {
         ExitStatus::Aborted
     } else {
@@ -2136,9 +2146,14 @@ mod tests {
         ChildSpec, Supervisor,
         handle::{attached_children_state, empty_nested_channels},
         supervisor::initial_snapshot,
+        test_scheduler::TokioTestScheduler,
     };
     #[cfg(feature = "metrics")]
     use metrics_util::debugging::DebuggingRecorder;
+
+    fn test_scheduler() -> Arc<dyn Scheduler> {
+        Arc::new(TokioTestScheduler::current())
+    }
 
     fn empty_supervisor() -> Supervisor {
         Supervisor::ordered()
@@ -2171,6 +2186,7 @@ mod tests {
             None,
             false,
             own_handle,
+            test_scheduler(),
         )
     }
 
@@ -2215,6 +2231,7 @@ mod tests {
             None,
             false,
             own_handle,
+            test_scheduler(),
         );
 
         runtime
@@ -2263,6 +2280,7 @@ mod tests {
             None,
             false,
             own_handle,
+            test_scheduler(),
         );
         let (reply, _reply_rx) = oneshot::channel();
         command_tx
@@ -2292,7 +2310,7 @@ mod tests {
             reply,
             policy: ShutdownPolicy::cooperative(Duration::ZERO),
             grace_deadline: Instant::now(),
-            initiated_at: StdInstant::now(),
+            initiated_at: Instant::now(),
             grace_expired: true,
             hard_abort_deadline: None,
         });
@@ -2316,7 +2334,7 @@ mod tests {
             reply,
             policy: ShutdownPolicy::cooperative(Duration::ZERO),
             grace_deadline: Instant::now(),
-            initiated_at: StdInstant::now(),
+            initiated_at: Instant::now(),
             grace_expired: true,
             hard_abort_deadline: None,
         });
@@ -2340,7 +2358,7 @@ mod tests {
             reply,
             policy: ShutdownPolicy::cooperative(Duration::from_secs(60)),
             grace_deadline: Instant::now() + Duration::from_secs(60),
-            initiated_at: StdInstant::now(),
+            initiated_at: Instant::now(),
             grace_expired: false,
             hard_abort_deadline: None,
         });
@@ -2366,7 +2384,7 @@ mod tests {
             reply,
             policy: ShutdownPolicy::cooperative(Duration::ZERO),
             grace_deadline: Instant::now(),
-            initiated_at: StdInstant::now(),
+            initiated_at: Instant::now(),
             grace_expired: false,
             hard_abort_deadline: None,
         };
@@ -2425,6 +2443,7 @@ mod tests {
             None,
             false,
             own_handle,
+            test_scheduler(),
         );
         let key = runtime.child_order[0];
         let lineage = runtime.children[key].lineage;
@@ -2532,6 +2551,7 @@ mod tests {
             }),
             false,
             handle.clone(),
+            test_scheduler(),
         );
         assert!(
             old_runtime
@@ -2614,6 +2634,7 @@ mod tests {
             None,
             true,
             handle.clone(),
+            test_scheduler(),
         );
         let key = *old_runtime
             .children_by_id

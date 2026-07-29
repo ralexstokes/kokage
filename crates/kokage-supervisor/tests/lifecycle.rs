@@ -1402,3 +1402,4 @@ async fn started_after_reports_a_start_lost_to_overflow() {
 
     shutdown(handle).await;
 }
+use kokage_tokio::TokioSupervisorExt as _;

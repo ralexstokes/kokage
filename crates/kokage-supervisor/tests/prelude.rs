@@ -179,3 +179,4 @@ fn prelude_policy_types_cover_common_configuration() {
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50)))
     );
 }
+use kokage_tokio::TokioSupervisorExt as _;

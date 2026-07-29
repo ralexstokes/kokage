@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kokage_supervisor::{CancellationToken, RestartPolicy};
+use kokage_supervisor::{CancellationToken, RestartPolicy, Scheduler};
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::actor::{
@@ -877,6 +877,7 @@ pub(crate) struct BindingCore<M> {
     message_size: Option<Arc<MessageSizeObserver<M>>>,
     monitors: Arc<MonitorHub>,
     outbound_monitors: Arc<ActorMonitors>,
+    scheduler: watch::Sender<Option<Arc<dyn Scheduler>>>,
 }
 
 pub(crate) struct MessageSizeObserver<M> {
@@ -899,6 +900,7 @@ impl<M> BindingCore<M> {
         let (current, _receiver) = watch::channel(BindingState::Unbound);
         let monitors = Arc::new(MonitorHub::new(&actor_id));
         let outbound_monitors = Arc::new(ActorMonitors::new());
+        let (scheduler, _) = watch::channel(None);
         Self {
             identity: Arc::new(()),
             actor_id,
@@ -907,6 +909,7 @@ impl<M> BindingCore<M> {
             message_size: None,
             monitors,
             outbound_monitors,
+            scheduler,
         }
     }
 
@@ -914,6 +917,7 @@ impl<M> BindingCore<M> {
         let (current, _receiver) = watch::channel(BindingState::Unbound);
         let monitors = Arc::new(MonitorHub::new(&actor_id));
         let outbound_monitors = Arc::new(ActorMonitors::new());
+        let (scheduler, _) = watch::channel(None);
         let message_size = MessageSizeObserver {
             size_hint,
             metrics: MessageSizeMetrics::new(&actor_id),
@@ -926,6 +930,7 @@ impl<M> BindingCore<M> {
             message_size: Some(Arc::new(message_size)),
             monitors,
             outbound_monitors,
+            scheduler,
         }
     }
 
@@ -939,6 +944,14 @@ impl<M> BindingCore<M> {
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<BindingState<M>> {
         self.current.subscribe()
+    }
+
+    pub(crate) fn scheduler(&self) -> watch::Receiver<Option<Arc<dyn Scheduler>>> {
+        self.scheduler.subscribe()
+    }
+
+    pub(crate) fn install_scheduler(&self, scheduler: Arc<dyn Scheduler>) {
+        self.scheduler.send_replace(Some(scheduler));
     }
 
     pub(crate) fn stats_counters(&self) -> Arc<ActorStatsCounters> {

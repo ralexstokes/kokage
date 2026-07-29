@@ -895,3 +895,4 @@ async fn nested_supervisor_view_reaches_the_parent_without_diverging_from_its_ba
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
+use kokage_tokio::TokioSupervisorExt as _;

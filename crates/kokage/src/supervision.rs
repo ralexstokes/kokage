@@ -10,7 +10,8 @@ use std::{
 
 use kokage_supervisor::{
     __private, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartConfig,
-    RestartPolicy, ScopeKind, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError,
+    RestartPolicy, Scheduler, ScopeKind, ShutdownPolicy, Strategy, Supervisor,
+    SupervisorBuildError,
 };
 
 use crate::{
@@ -436,9 +437,18 @@ impl OrderedTree {
     /// settings, or duplicate sibling ids return their corresponding build
     /// error. A failed spawn consumes the tree and makes every handle issued
     /// from it terminal.
+    #[cfg(feature = "tokio")]
     pub fn spawn(self) -> Result<RuntimeHandle, SupervisorBuildError> {
+        self.spawn_with(Arc::new(kokage_tokio::TokioScheduler::current()))
+    }
+
+    /// Builds and spawns this tree with an explicit scheduler binding.
+    pub fn spawn_with(
+        self,
+        scheduler: Arc<dyn Scheduler>,
+    ) -> Result<RuntimeHandle, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RuntimeHandle::new(supervisor.spawn(), actors))
+        Ok(RuntimeHandle::new(supervisor.spawn_with(scheduler), actors))
     }
 }
 
@@ -468,9 +478,18 @@ impl DynamicTree {
     /// Returns the applicable [`SupervisorBuildError`] when the dynamic
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal.
+    #[cfg(feature = "tokio")]
     pub fn spawn(self) -> Result<RuntimeHandle, SupervisorBuildError> {
+        self.spawn_with(Arc::new(kokage_tokio::TokioScheduler::current()))
+    }
+
+    /// Builds and spawns this tree with an explicit scheduler binding.
+    pub fn spawn_with(
+        self,
+        scheduler: Arc<dyn Scheduler>,
+    ) -> Result<RuntimeHandle, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RuntimeHandle::new(supervisor.spawn(), actors))
+        Ok(RuntimeHandle::new(supervisor.spawn_with(scheduler), actors))
     }
 }
 

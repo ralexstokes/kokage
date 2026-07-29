@@ -242,3 +242,4 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
+use kokage_tokio::TokioSupervisorExt as _;

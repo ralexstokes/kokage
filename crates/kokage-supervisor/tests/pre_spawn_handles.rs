@@ -380,3 +380,4 @@ async fn recursive_lifecycle_watch_created_before_build_reaches_the_spawned_scop
         .await
         .expect("root stops cleanly");
 }
+use kokage_tokio::TokioSupervisorExt as _;

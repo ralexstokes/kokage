@@ -513,3 +513,4 @@ fn child_ids(snapshot: &SupervisorSnapshot) -> Vec<&str> {
         .map(|child| child.id.as_str())
         .collect()
 }
+use kokage_tokio::TokioSupervisorExt as _;

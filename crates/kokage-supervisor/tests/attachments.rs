@@ -107,3 +107,4 @@ async fn attachments_are_absent_from_serialized_snapshots() {
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
+use kokage_tokio::TokioSupervisorExt as _;

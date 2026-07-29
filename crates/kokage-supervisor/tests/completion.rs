@@ -623,3 +623,4 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         .expect("fatal restart observed during removal must stop supervisor");
     assert_eq!(result, Err(SupervisorError::RestartIntensityExceeded));
 }
+use kokage_tokio::TokioSupervisorExt as _;

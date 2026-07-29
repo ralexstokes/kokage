@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Indicates that Tokio cancelled queued blocking work during runtime
+/// Indicates that the scheduler cancelled queued blocking work during runtime
 /// shutdown before it could return a value.
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 #[error("blocking task was cancelled during runtime shutdown")]

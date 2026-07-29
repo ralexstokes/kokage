@@ -50,3 +50,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn main() {
     eprintln!("run this example with: cargo run --example metrics --features metrics");
 }
+use kokage_tokio::TokioSupervisorExt as _;

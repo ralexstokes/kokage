@@ -9,10 +9,11 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{CancellationToken, RestartPolicy};
+use kokage_supervisor::{
+    __private::TaskSet, CancellationToken, RestartPolicy, Scheduler, TaskError,
+};
 use thiserror::Error;
-use tokio::{sync::oneshot, time::sleep};
-use tokio_util::task::AbortOnDropHandle;
+use tokio::sync::oneshot;
 use tracing::Instrument;
 
 use crate::{
@@ -44,6 +45,7 @@ pub(crate) struct RunnerStart {
     pub(crate) ready: oneshot::Sender<()>,
     pub(crate) supervisor: RuntimeHandle,
     pub(crate) children: Option<RuntimeHandle>,
+    pub(crate) scheduler: Arc<dyn Scheduler>,
 }
 
 /// Type-erased actor runner.
@@ -71,6 +73,8 @@ where
         let mailbox_mode = self.mailbox_mode.clone();
 
         Box::pin(async move {
+            let scheduler = start.scheduler;
+            binding.install_scheduler(Arc::clone(&scheduler));
             let actor_shutdown = start.shutdown;
             let monitors = binding.outbound_monitors();
             let observability = start.observability;
@@ -91,15 +95,16 @@ where
                 myself,
                 shutdown: actor_shutdown,
                 observability,
-                timers: Default::default(),
-                lifetime: ActorLifetime::new(),
+                timers: crate::actor::context::TimerTable::new(Arc::clone(&scheduler)),
+                lifetime: ActorLifetime::new(Arc::clone(&scheduler)),
                 monitors,
                 ready: Some(start.ready),
                 continuations: Default::default(),
                 stop_requested: false,
-                offloads: Default::default(),
-                scope_waits: Default::default(),
+                offloads: TaskSet::new(Arc::clone(&scheduler)),
+                scope_waits: TaskSet::new(Arc::clone(&scheduler)),
                 scope_wait_gates: Default::default(),
+                scheduler,
                 supervisor: start.supervisor,
                 children: start.children,
             };
@@ -344,6 +349,7 @@ impl RunnableActor {
     /// control operations return `ControlError::Unavailable` and observation
     /// streams are closed. Their [`ActorContext::children`](crate::ActorContext::children)
     /// value is `None`.
+    #[cfg(feature = "tokio")]
     pub async fn run_until<F>(
         &self,
         shutdown: F,
@@ -353,15 +359,34 @@ impl RunnableActor {
     where
         F: Future<Output = ()>,
     {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(kokage_tokio::TokioScheduler::current());
+        self.run_until_with(scheduler, shutdown, restart, shutdown_bound)
+            .await
+    }
+
+    /// Runs this actor using an explicit scheduler binding.
+    pub async fn run_until_with<F>(
+        &self,
+        scheduler: Arc<dyn Scheduler>,
+        shutdown: F,
+        restart: RestartPolicy,
+        shutdown_bound: Duration,
+    ) -> Result<(), ActorRunError>
+    where
+        F: Future<Output = ()>,
+    {
         let shutdown_observed = CancellationToken::new();
         let deadline_start = shutdown_observed.clone();
+        let deadline_scheduler = Arc::clone(&scheduler);
         let bounded_shutdown = async move {
             shutdown.await;
             shutdown_observed.cancel();
         };
         let abort = async move {
             deadline_start.cancelled().await;
-            sleep(shutdown_bound).await;
+            let now = deadline_scheduler.now();
+            let deadline = now.checked_add(shutdown_bound).unwrap_or(now);
+            deadline_scheduler.sleep_until(deadline).await;
         };
         self.run_until_ready(
             bounded_shutdown,
@@ -370,10 +395,12 @@ impl RunnableActor {
             RuntimeHandle::unavailable(),
             None,
             || {},
+            scheduler,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_until_ready<F, A, R>(
         &self,
         shutdown: F,
@@ -382,6 +409,7 @@ impl RunnableActor {
         supervisor: RuntimeHandle,
         children: Option<RuntimeHandle>,
         ready: R,
+        scheduler: Arc<dyn Scheduler>,
     ) -> Result<(), ActorRunError>
     where
         F: Future<Output = ()>,
@@ -395,20 +423,30 @@ impl RunnableActor {
         let mut abort = std::pin::pin!(abort);
         let actor_span = self.inner.observability.actor_span(&actor_id);
         let (ready_tx, mut ready_rx) = oneshot::channel();
-        let mut actor_task = AbortOnDropHandle::new(tokio::spawn(
-            self.inner
-                .runner
-                .start(RunnerStart {
-                    shutdown: actor_shutdown.clone(),
-                    mailbox_capacity: self.inner.mailbox_capacity,
-                    observability: self.inner.observability.clone(),
-                    restart_policy: restart,
-                    ready: ready_tx,
-                    supervisor,
-                    children,
-                })
-                .instrument(actor_span),
-        ));
+        let (actor_result_tx, actor_result_rx) = oneshot::channel();
+        let task_scheduler = Arc::clone(&scheduler);
+        let task_shutdown = actor_shutdown.clone();
+        let actor_future = self
+            .inner
+            .runner
+            .start(RunnerStart {
+                shutdown: task_shutdown,
+                mailbox_capacity: self.inner.mailbox_capacity,
+                observability: self.inner.observability.clone(),
+                restart_policy: restart,
+                ready: ready_tx,
+                supervisor,
+                children,
+                scheduler: task_scheduler,
+            })
+            .instrument(actor_span);
+        let actor_task = scheduler.spawn(Box::pin(async move {
+            let result = actor_future.await;
+            let _ = actor_result_tx.send(result);
+        }));
+        let actor_abort = actor_task.abort_handle();
+        let actor_task = actor_task.join();
+        tokio::pin!(actor_task);
         let _cancel_actor_on_drop = CancelOnDrop::new(actor_shutdown.clone());
 
         self.inner.observability.emit_actor_started(&actor_id);
@@ -429,7 +467,7 @@ impl RunnableActor {
                     shutdown_requested = true;
                     shutdown_timed_out = true;
                     actor_shutdown.cancel();
-                    actor_task.abort();
+                    actor_abort.abort();
                 }
                 joined = &mut actor_task => break joined,
                 _ = shutdown.as_mut(), if !shutdown_requested => {
@@ -437,6 +475,11 @@ impl RunnableActor {
                     actor_shutdown.cancel();
                 }
             }
+        };
+
+        let result = match result {
+            Ok(()) => actor_result_rx.await.map_err(|_| TaskError::cancelled()),
+            Err(error) => Err(error),
         };
 
         match result {
@@ -480,7 +523,7 @@ impl RunnableActor {
                     ActorExitStatus::Panicked,
                     None,
                 );
-                std::panic::resume_unwind(err.into_panic());
+                std::panic::resume_unwind(err.into_panic().expect("panic checked"));
             }
             Err(_err) if shutdown_timed_out => {
                 let error = ActorRunError::ShutdownTimedOut {

@@ -78,3 +78,4 @@ async fn raw_child_can_await_a_supported_operation_on_its_own_scope() {
         .await
         .expect("root stops cleanly");
 }
+use kokage_tokio::TokioSupervisorExt as _;

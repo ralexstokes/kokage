@@ -489,3 +489,4 @@ fn failing_once_child(
     .restart(RestartPolicy::OnFailure)
     .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(200)))
 }
+use kokage_tokio::TokioSupervisorExt as _;

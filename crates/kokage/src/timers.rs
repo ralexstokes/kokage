@@ -11,8 +11,6 @@
 
 use std::time::Duration;
 
-use tokio::time::MissedTickBehavior;
-
 use crate::{ActorRef, CancellationHandle, Lifetime, actor::deadline_after};
 
 /// Sends `message` to `target` after `delay` has elapsed.
@@ -32,24 +30,29 @@ pub fn send_after_to<T: Send + 'static>(
 ) -> CancellationHandle {
     let timer = CancellationHandle::new();
     let task_timer = timer.clone();
+    let scheduler = lifetime.scheduler();
     let lifetime = lifetime.token();
     let target = target.clone();
 
-    tokio::spawn(async move {
-        tokio::select! {
-            biased;
-            () = task_timer.cancelled() => {}
-            () = lifetime.cancelled() => task_timer.cancel(),
-            () = tokio::time::sleep(delay) => {
-                tokio::select! {
-                    biased;
-                    () = task_timer.cancelled() => {}
-                    () = lifetime.cancelled() => task_timer.cancel(),
-                    _ = target.send(message) => {}
+    let task_scheduler = scheduler.clone();
+    scheduler
+        .spawn(Box::pin(async move {
+            let deadline = deadline_after(task_scheduler.as_ref(), delay);
+            tokio::select! {
+                biased;
+                () = task_timer.cancelled() => {}
+                () = lifetime.cancelled() => task_timer.cancel(),
+                () = task_scheduler.sleep_until(deadline) => {
+                    tokio::select! {
+                        biased;
+                        () = task_timer.cancelled() => {}
+                        () = lifetime.cancelled() => task_timer.cancel(),
+                        _ = target.send(message) => {}
+                    }
                 }
             }
-        }
-    });
+        }))
+        .detach();
 
     timer
 }
@@ -77,39 +80,66 @@ pub fn interval_to<T: Clone + Send + 'static>(
     }
 
     let task_timer = timer.clone();
+    let scheduler = lifetime.scheduler();
     let lifetime = lifetime.token();
     let target = target.clone();
-    tokio::spawn(async move {
-        let start = deadline_after(period);
-        let mut interval = tokio::time::interval_at(start, period);
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let task_scheduler = scheduler.clone();
+    scheduler
+        .spawn(Box::pin(async move {
+            let mut deadline = deadline_after(task_scheduler.as_ref(), period);
 
-        loop {
-            tokio::select! {
-                biased;
-                () = task_timer.cancelled() => break,
-                () = lifetime.cancelled() => {
-                    task_timer.cancel();
-                    break;
-                }
-                _ = interval.tick() => {
-                    let sent = tokio::select! {
-                        biased;
-                        () = task_timer.cancelled() => break,
-                        () = lifetime.cancelled() => {
-                            task_timer.cancel();
-                            break;
-                        }
-                        sent = target.send(message.clone()) => sent,
-                    };
-                    if sent.is_err() {
+            loop {
+                tokio::select! {
+                    biased;
+                    () = task_timer.cancelled() => break,
+                    () = lifetime.cancelled() => {
                         task_timer.cancel();
                         break;
                     }
+                    _ = task_scheduler.sleep_until(deadline) => {
+                        let sent = tokio::select! {
+                            biased;
+                            () = task_timer.cancelled() => break,
+                            () = lifetime.cancelled() => {
+                                task_timer.cancel();
+                                break;
+                            }
+                            sent = target.send(message.clone()) => sent,
+                        };
+                        if sent.is_err() {
+                            task_timer.cancel();
+                            break;
+                        }
+                        deadline = next_interval_deadline(
+                            deadline,
+                            period,
+                            task_scheduler.now(),
+                        );
+                    }
                 }
             }
-        }
-    });
+        }))
+        .detach();
 
     timer
+}
+
+fn next_interval_deadline(
+    previous: std::time::Instant,
+    period: Duration,
+    now: std::time::Instant,
+) -> std::time::Instant {
+    let missed = now.saturating_duration_since(previous).as_nanos() / period.as_nanos();
+    let ticks = missed.saturating_add(1);
+    let Ok(ticks) = u32::try_from(ticks) else {
+        return deadline_from(now, period);
+    };
+    previous
+        .checked_add(period.checked_mul(ticks).unwrap_or(period))
+        .unwrap_or_else(|| deadline_from(now, period))
+}
+
+fn deadline_from(now: std::time::Instant, delay: Duration) -> std::time::Instant {
+    now.checked_add(delay)
+        .unwrap_or_else(|| now + Duration::from_secs(86400 * 365 * 30))
 }

@@ -13,20 +13,23 @@ metrics = ["dep:metrics"]
 serde = ["dep:serde"]
 
 [dependencies]
+futures-util.workspace = true
 metrics = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 slab.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+kokage-tokio.workspace = true
 metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
 serde_json.workspace = true
 tracing-subscriber.workspace = true
 trybuild.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util", "time"] }
 
 [[bench]]
 name = "common_flows"

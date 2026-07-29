@@ -1,12 +1,14 @@
 [workspace]
 default-members = [
     "crates/kokage-supervisor",
+    "crates/kokage-tokio",
     "crates/kokage-derive",
     "crates/kokage",
     "crates/kokage-console",
 ]
 members = [
     "crates/kokage-supervisor",
+    "crates/kokage-tokio",
     "crates/kokage-derive",
     "crates/kokage",
     "crates/kokage-console",
@@ -23,6 +25,7 @@ getrandom = "0.3"
 kokage = { path = "crates/kokage" }
 kokage-derive = { path = "crates/kokage-derive" }
 kokage-supervisor = { path = "crates/kokage-supervisor" }
+kokage-tokio = { path = "crates/kokage-tokio" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 metrics-util = { version = "0.20", features = ["debugging"] }
@@ -33,7 +36,7 @@ serde_json = "1.0"
 slab = "0.4"
 syn = "2.0"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.50.0", default-features = false }
 tokio-tungstenite = "0.29"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 tracing = "0.1.44"

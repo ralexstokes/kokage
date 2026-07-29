@@ -43,3 +43,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     trigger.await?;
     Ok(())
 }
+use kokage_tokio::TokioSupervisorExt as _;

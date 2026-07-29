@@ -609,6 +609,7 @@ dependencies = [
  "futures-util",
  "kokage-derive",
  "kokage-supervisor",
+ "kokage-tokio",
  "metrics",
  "metrics-util",
  "serde",
@@ -630,6 +631,7 @@ dependencies = [
  "getrandom 0.3.4",
  "kokage",
  "kokage-supervisor",
+ "kokage-tokio",
  "serde",
  "serde_json",
  "thiserror",
@@ -652,6 +654,8 @@ dependencies = [
 name = "kokage-supervisor"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
+ "kokage-tokio",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
@@ -664,6 +668,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trybuild",
+]
+
+[[package]]
+name = "kokage-tokio"
+version = "0.1.0"
+dependencies = [
+ "kokage-supervisor",
+ "tokio",
 ]
 
 [[package]]

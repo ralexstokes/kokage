@@ -6,15 +6,14 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use kokage_supervisor::CancellationToken;
-use tokio::{
-    sync::{oneshot, watch},
-    task::{AbortHandle, Id as TaskId, JoinError, JoinSet},
-    time::{Instant, timeout},
+use kokage_supervisor::{
+    __private::{TaskAbortHandle, TaskId, TaskJoin, TaskSet},
+    CancellationToken, Scheduler,
 };
+use tokio::sync::{oneshot, watch};
 
 use crate::RuntimeHandle;
 
@@ -55,7 +54,7 @@ macro_rules! ambient_context_method {
         $item
     };
     (run_blocking, $item:item) => {
-        /// Runs blocking work on Tokio's blocking pool.
+        /// Runs blocking work on the configured scheduler's blocking pool.
         ///
         /// See [`ActorContext::run_blocking`].
         $item
@@ -166,6 +165,7 @@ pub struct ActorRef<M> {
     message_size: Option<Arc<MessageSizeObserver<M>>>,
     source_actor_id: Option<Arc<str>>,
     monitors: Arc<MonitorHub>,
+    scheduler: watch::Receiver<Option<Arc<dyn Scheduler>>>,
 }
 
 impl<M> Clone for ActorRef<M> {
@@ -178,6 +178,7 @@ impl<M> Clone for ActorRef<M> {
             message_size: self.message_size.clone(),
             source_actor_id: self.source_actor_id.clone(),
             monitors: Arc::clone(&self.monitors),
+            scheduler: self.scheduler.clone(),
         }
     }
 }
@@ -192,34 +193,15 @@ impl<M> fmt::Debug for ActorRef<M> {
 
 impl<M> ActorRef<M> {
     pub(crate) fn from_core(core: &Arc<BindingCore<M>>, source_actor_id: Option<Arc<str>>) -> Self {
-        Self::from_parts(
-            Arc::clone(core.identity()),
-            core.actor_id().clone(),
-            core.subscribe(),
-            core.stats_counters(),
-            core.message_size(),
-            source_actor_id,
-            core.monitor_hub(),
-        )
-    }
-
-    pub(crate) fn from_parts(
-        identity: Arc<()>,
-        actor_id: Arc<str>,
-        binding: watch::Receiver<BindingState<M>>,
-        stats: Arc<ActorStatsCounters>,
-        message_size: Option<Arc<MessageSizeObserver<M>>>,
-        source_actor_id: Option<Arc<str>>,
-        monitors: Arc<MonitorHub>,
-    ) -> Self {
         Self {
-            identity,
-            actor_id,
-            binding,
-            stats,
-            message_size,
+            identity: Arc::clone(core.identity()),
+            actor_id: core.actor_id().clone(),
+            binding: core.subscribe(),
+            stats: core.stats_counters(),
+            message_size: core.message_size(),
             source_actor_id,
-            monitors,
+            monitors: core.monitor_hub(),
+            scheduler: core.scheduler(),
         }
     }
 
@@ -449,17 +431,47 @@ impl<M> ActorRef<M> {
         timeout: Duration,
         message: impl FnOnce(Reply<T>) -> M,
     ) -> Result<T, CallError> {
-        tokio::time::timeout(timeout, async {
-            let (sender, receiver) = oneshot::channel();
-            self.send(message(Reply { sender })).await?;
-            receiver.await.map_err(|_| CallError::ReplyDropped {
+        let scheduler = self.wait_for_scheduler().await?;
+        let now = scheduler.now();
+        let deadline = now.checked_add(timeout).unwrap_or_else(|| now + FAR_FUTURE);
+        tokio::select! {
+            biased;
+            () = scheduler.sleep_until(deadline) => Err(CallError::Timeout {
                 actor_id: self.actor_id.to_string(),
-            })
-        })
-        .await
-        .map_err(|_| CallError::Timeout {
-            actor_id: self.actor_id.to_string(),
-        })?
+            }),
+            result = async {
+                let (sender, receiver) = oneshot::channel();
+                self.send(message(Reply { sender })).await?;
+                receiver.await.map_err(|_| CallError::ReplyDropped {
+                    actor_id: self.actor_id.to_string(),
+                })
+            } => result,
+        }
+    }
+
+    async fn wait_for_scheduler(&self) -> Result<Arc<dyn Scheduler>, CallError> {
+        #[cfg(feature = "tokio")]
+        {
+            return Ok(self
+                .scheduler
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| Arc::new(kokage_tokio::TokioScheduler::current())));
+        }
+        #[cfg(not(feature = "tokio"))]
+        let mut scheduler = self.scheduler.clone();
+        #[cfg(not(feature = "tokio"))]
+        loop {
+            if let Some(current) = scheduler.borrow().clone() {
+                return Ok(current);
+            }
+            scheduler
+                .changed()
+                .await
+                .map_err(|_| CallError::ReplyDropped {
+                    actor_id: self.actor_id.to_string(),
+                })?;
+        }
     }
 
     async fn wait_for_next_mailbox(
@@ -577,7 +589,7 @@ pub struct Reply<T> {
 /// work that another actor or external service already accepted.
 #[derive(Clone, Debug)]
 pub struct OffloadHandle {
-    abort: AbortHandle,
+    abort: TaskAbortHandle,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -590,7 +602,7 @@ pub struct OffloadHandle {
 /// incarnation ends.
 #[derive(Clone, Debug)]
 pub struct ScopeWaitHandle {
-    abort: AbortHandle,
+    abort: TaskAbortHandle,
     gate: Arc<SendGate>,
 }
 
@@ -678,8 +690,8 @@ enum TimerSlot {
 
 enum Delivery<M> {
     Mailbox(Option<M>),
-    Offload(Result<OffloadCompletion<M>, JoinError>),
-    ScopeWait(Result<(TaskId, ()), JoinError>),
+    Offload(TaskJoin<OffloadCompletion<M>>),
+    ScopeWait(TaskJoin<()>),
 }
 
 pub(crate) struct OffloadCompletion<M> {
@@ -704,26 +716,25 @@ const FAR_FUTURE: Duration = Duration::from_secs(86400 * 365 * 30);
 
 /// Deadline `delay` from now, saturating instead of panicking: `Instant + Duration`
 /// panics on overflow, and `Duration::MAX` is a plausible "never" sentinel.
-pub(crate) fn deadline_after(delay: Duration) -> Instant {
-    let now = Instant::now();
+pub(crate) fn deadline_after(scheduler: &dyn Scheduler, delay: Duration) -> Instant {
+    let now = scheduler.now();
     now.checked_add(delay).unwrap_or_else(|| now + FAR_FUTURE)
 }
 
 pub(crate) struct TimerTable<M> {
     entries: Vec<TimerEntry<M>>,
     next_id: u64,
-}
-
-impl<M> Default for TimerTable<M> {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            next_id: 1,
-        }
-    }
+    scheduler: Arc<dyn Scheduler>,
 }
 
 impl<M> TimerTable<M> {
+    pub(crate) fn new(scheduler: Arc<dyn Scheduler>) -> Self {
+        Self {
+            entries: Vec::new(),
+            next_id: 1,
+            scheduler,
+        }
+    }
     fn next_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
@@ -747,7 +758,7 @@ impl<M> TimerTable<M> {
         self.entries.push(TimerEntry {
             id,
             slot,
-            deadline: deadline_after(delay),
+            deadline: deadline_after(self.scheduler.as_ref(), delay),
             message,
             cancellation,
             repeat,
@@ -785,7 +796,7 @@ impl<M> TimerTable<M> {
             .entries
             .iter()
             .position(|entry| entry.id == wake.id && entry.deadline == wake.deadline)?;
-        if self.entries[index].deadline > Instant::now() {
+        if self.entries[index].deadline > self.scheduler.now() {
             return None;
         }
         if self.entries[index]
@@ -798,7 +809,7 @@ impl<M> TimerTable<M> {
         }
         if let Some((period, clone_message)) = self.entries[index].repeat {
             let message = clone_message(&self.entries[index].message);
-            self.entries[index].deadline = deadline_after(period);
+            self.entries[index].deadline = deadline_after(self.scheduler.as_ref(), period);
             Some(message)
         } else {
             Some(self.entries.swap_remove(index).message)
@@ -810,15 +821,15 @@ fn clone_message<M: Clone>(message: &M) -> M {
     message.clone()
 }
 
-pub(crate) struct ActorLifetime(CancellationToken);
+pub(crate) struct ActorLifetime(CancellationToken, Arc<dyn Scheduler>);
 
 impl ActorLifetime {
-    pub(crate) fn new() -> Self {
-        Self(CancellationToken::new())
+    pub(crate) fn new(scheduler: Arc<dyn Scheduler>) -> Self {
+        Self(CancellationToken::new(), scheduler)
     }
 
     fn observe(&self) -> Lifetime {
-        Lifetime::from_token(self.0.clone())
+        Lifetime::from_token(self.0.clone(), Arc::clone(&self.1))
     }
 }
 
@@ -856,9 +867,10 @@ pub struct ActorContext<M> {
     pub(crate) ready: Option<oneshot::Sender<()>>,
     pub(crate) continuations: VecDeque<M>,
     pub(crate) stop_requested: bool,
-    pub(crate) offloads: JoinSet<OffloadCompletion<M>>,
-    pub(crate) scope_waits: JoinSet<()>,
+    pub(crate) offloads: TaskSet<OffloadCompletion<M>>,
+    pub(crate) scope_waits: TaskSet<()>,
     pub(crate) scope_wait_gates: HashMap<TaskId, Arc<SendGate>>,
+    pub(crate) scheduler: Arc<dyn Scheduler>,
     pub(crate) supervisor: RuntimeHandle,
     pub(crate) children: Option<RuntimeHandle>,
 }
@@ -918,28 +930,28 @@ impl<M: Send + 'static> ActorContext<M> {
             .set_outstanding_scope_waits(self.scope_waits.len());
     }
 
-    fn joined_offload(&mut self, joined: Result<OffloadCompletion<M>, JoinError>) -> Option<M> {
+    fn joined_offload(&mut self, joined: TaskJoin<OffloadCompletion<M>>) -> Option<M> {
         self.sync_offload_gauge();
-        match joined {
+        match joined.result {
             Ok(completion) if !completion.cancelled.load(Ordering::Acquire) => {
                 Some(completion.message)
             }
             Ok(_) => None,
-            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            Err(error) if error.is_panic() => {
+                std::panic::resume_unwind(error.into_panic().expect("panic checked"))
+            }
             Err(_) => None,
         }
     }
 
-    fn joined_scope_wait(&mut self, joined: Result<(TaskId, ()), JoinError>) {
-        let task_id = match &joined {
-            Ok((task_id, ())) => *task_id,
-            Err(error) => error.id(),
-        };
-        self.scope_wait_gates.remove(&task_id);
+    fn joined_scope_wait(&mut self, joined: TaskJoin<()>) {
+        self.scope_wait_gates.remove(&joined.id);
         self.sync_scope_wait_gauge();
-        match joined {
-            Ok((_task_id, ())) => {}
-            Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        match joined.result {
+            Ok(()) => {}
+            Err(error) if error.is_panic() => {
+                std::panic::resume_unwind(error.into_panic().expect("panic checked"))
+            }
             Err(_) => {}
         }
     }
@@ -953,7 +965,7 @@ impl<M: Send + 'static> ActorContext<M> {
                 joined = self.offloads.join_next(), if has_offloads => {
                     Delivery::Offload(joined.expect("non-empty offload set returned no task"))
                 }
-                joined = self.scope_waits.join_next_with_id(), if has_scope_waits => {
+                joined = self.scope_waits.join_next(), if has_scope_waits => {
                     Delivery::ScopeWait(joined.expect("non-empty scope-wait set returned no task"))
                 }
             };
@@ -970,7 +982,7 @@ impl<M: Send + 'static> ActorContext<M> {
     }
 
     pub(crate) fn try_delivery(&mut self) -> Result<M, tokio::sync::mpsc::error::TryRecvError> {
-        while let Some(joined) = self.scope_waits.try_join_next_with_id() {
+        while let Some(joined) = self.scope_waits.try_join_next() {
             self.joined_scope_wait(joined);
         }
         while let Some(joined) = self.offloads.try_join_next() {
@@ -1111,9 +1123,14 @@ impl<M: Send + 'static> ActorContext<M> {
     {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = Arc::clone(&cancelled);
+        let deadline = deadline_after(self.scheduler.as_ref(), deadline);
+        let scheduler = Arc::clone(&self.scheduler);
         let abort = self.offloads.spawn(async move {
             OffloadCompletion {
-                message: continuation(timeout(deadline, future).await.map_err(|_| OffloadDeadline)),
+                message: continuation(tokio::select! {
+                    value = future => Ok(value),
+                    () = scheduler.sleep_until(deadline) => Err(OffloadDeadline),
+                }),
                 cancelled: task_cancelled,
             }
         });
@@ -1135,7 +1152,7 @@ impl<M: Send + 'static> ActorContext<M> {
         }
         self.scope_wait_gates.clear();
         self.scope_waits.abort_all();
-        self.scope_waits = JoinSet::new();
+        self.scope_waits = TaskSet::new(Arc::clone(&self.scheduler));
         self.sync_scope_wait_gauge();
     }
 
@@ -1211,40 +1228,38 @@ impl<M: Send + 'static> ActorContext<M> {
         if !install {
             return monitor;
         }
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            cancellation.cancel();
-            return monitor;
-        };
         // The guard closes the queue on drop, so the hub stops staging events
         // whether this task exits normally or unwinds through a panicking
         // `map` closure.
         let guard = target.monitors.register_watch(cancellation.clone());
         let myself = self.myself();
-        runtime.spawn(async move {
-            loop {
-                // Arm the wake-up before observing the queue so a push that
-                // races an empty drain is not lost.
-                let waiter = guard.queue().waiter();
-                if let Some(event) = guard.queue().pop() {
-                    let terminal = matches!(event, MonitorEvent::Terminated { .. });
-                    let message = map(event);
+        self.scheduler
+            .spawn(Box::pin(async move {
+                loop {
+                    // Arm the wake-up before observing the queue so a push that
+                    // races an empty drain is not lost.
+                    let waiter = guard.queue().waiter();
+                    if let Some(event) = guard.queue().pop() {
+                        let terminal = matches!(event, MonitorEvent::Terminated { .. });
+                        let message = map(event);
+                        tokio::select! {
+                            biased;
+                            () = cancellation.cancelled() => break,
+                            _ = myself.send(message) => {}
+                        }
+                        if terminal {
+                            break;
+                        }
+                        continue;
+                    }
                     tokio::select! {
                         biased;
                         () = cancellation.cancelled() => break,
-                        _ = myself.send(message) => {}
+                        _ = waiter => {}
                     }
-                    if terminal {
-                        break;
-                    }
-                    continue;
                 }
-                tokio::select! {
-                    biased;
-                    () = cancellation.cancelled() => break,
-                    _ = waiter => {}
-                }
-            }
-        });
+            }))
+            .detach();
 
         monitor
     }
@@ -1304,7 +1319,7 @@ impl<M: Send + 'static> ActorContext<M> {
         message
     }
 
-    /// Runs blocking work on Tokio's blocking pool and waits for its result.
+    /// Runs blocking work on the configured scheduler's blocking pool and waits for its result.
     ///
     /// The closure receives a child of this actor's shutdown token. The token
     /// is also cancelled if the `run_blocking` future is dropped. Cancellation
@@ -1313,7 +1328,7 @@ impl<M: Send + 'static> ActorContext<M> {
     ///
     /// A panic in the closure resumes on the actor task, so supervision treats
     /// it as an ordinary actor panic. Otherwise, the closure's return value is
-    /// wrapped in `Ok`; [`BlockingCancelled`] is returned if Tokio shuts down
+    /// wrapped in `Ok`; [`BlockingCancelled`] is returned if the scheduler shuts down
     /// before queued blocking work can complete.
     ///
     /// The surrounding host's shutdown bound is the backstop for closures that
@@ -1321,10 +1336,10 @@ impl<M: Send + 'static> ActorContext<M> {
     /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until), or the
     /// supervised child's [`ShutdownPolicy`](crate::ShutdownPolicy) grace.
     /// Once that bound aborts the actor task, the blocking thread continues
-    /// detached because Tokio blocking tasks cannot be aborted after they start.
+    /// detached when the scheduler cannot abort blocking tasks after they start.
     ///
     /// For detached or concurrent work, clone [`myself`](Self::myself), call
-    /// [`tokio::task::spawn_blocking`] directly, and send the outcome back as a
+    /// a host blocking pool directly, and send the outcome back as a
     /// message. The mailbox then acts as the completion mechanism; see the
     /// [`blocking_lifecycle` example](https://github.com/ralexstokes/kokage/blob/main/crates/kokage/examples/blocking_lifecycle.rs).
     pub fn run_blocking<F, R>(
@@ -1336,13 +1351,19 @@ impl<M: Send + 'static> ActorContext<M> {
         R: Send + 'static,
     {
         let cancellation = self.shutdown.child_token();
+        let scheduler = Arc::clone(&self.scheduler);
         async move {
             let _cancel_on_drop = CancelOnDrop::new(cancellation.clone());
-            let joined = tokio::task::spawn_blocking(move || f(&cancellation)).await;
+            let (result_tx, result_rx) = oneshot::channel();
+            let joined = scheduler.spawn_blocking(Box::new(move || {
+                let _ = result_tx.send(f(&cancellation));
+            }));
 
-            match joined {
-                Ok(result) => Ok(result),
-                Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+            match joined.join().await {
+                Ok(()) => result_rx.await.map_err(|_| BlockingCancelled),
+                Err(error) if error.is_panic() => {
+                    std::panic::resume_unwind(error.into_panic().expect("panic checked"))
+                }
                 Err(_) => Err(BlockingCancelled),
             }
         }

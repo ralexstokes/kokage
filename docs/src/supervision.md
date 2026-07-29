@@ -12,6 +12,7 @@ use kokage_supervisor::{
     BackoffPolicy, ChildSpec, RestartPolicy, RestartConfig, ShutdownPolicy, Strategy,
     Supervisor,
 };
+use kokage_tokio::TokioSupervisorExt as _;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

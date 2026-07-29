@@ -112,3 +112,4 @@ fn print_event(event: &LifecycleEvent) {
         _ => println!("{scope}: unknown lifecycle event"),
     }
 }
+use kokage_tokio::TokioSupervisorExt as _;

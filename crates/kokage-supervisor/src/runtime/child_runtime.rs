@@ -1,12 +1,13 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    time::Instant,
 };
 
-use tokio::{task::AbortHandle, time::Instant};
-
 use crate::{
-    CancellationToken, child::ChildDefinition, restart::RestartConfig,
+    __private::TaskAbortHandle, CancellationToken, child::ChildDefinition, restart::RestartConfig,
     runtime::intensity::RestartTracker,
 };
 
@@ -60,7 +61,7 @@ impl CompletionFlag {
 /// Mutable per-child state managed by the supervisor runtime.
 ///
 /// Tracks the child's current lifecycle state, its restart history, and the
-/// handles needed to cancel or abort the running Tokio task.
+/// handles needed to cancel or abort the running scheduler task.
 pub(crate) struct ChildRuntime {
     pub(crate) definition: Arc<ChildDefinition>,
     pub(crate) restart_tracker: RestartTracker,
@@ -68,7 +69,7 @@ pub(crate) struct ChildRuntime {
     pub(crate) state: RuntimeChildState,
     pub(crate) active_token: Option<CancellationToken>,
     pub(crate) active_abort_token: Option<CancellationToken>,
-    pub(crate) abort_handle: Option<AbortHandle>,
+    pub(crate) abort_handle: Option<TaskAbortHandle>,
     pub(crate) nested_abort_cascades: Arc<AtomicBool>,
     pub(crate) has_started: bool,
     pub(crate) has_reported_ready: bool,

@@ -297,6 +297,7 @@ impl Drop for LifecycleWatchGuard {
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
+    scheduler_handle: &SupervisorHandle,
     mut lifecycle: ChildLifecycleWatch,
     target: ActorRef<M>,
     mut map: F,
@@ -308,30 +309,33 @@ where
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
 
-    tokio::spawn(async move {
-        let _cancel_on_exit = CancelOnDrop::new(task_cancellation.clone());
-        loop {
-            let Some(event) = (tokio::select! {
-                biased;
-                () = task_cancellation.cancelled() => None,
-                () = target.wait_terminated() => None,
-                event = lifecycle.next() => event,
-            }) else {
-                return;
-            };
+    __private::spawn_detached(
+        scheduler_handle,
+        Box::pin(async move {
+            let _cancel_on_exit = CancelOnDrop::new(task_cancellation.clone());
+            loop {
+                let Some(event) = (tokio::select! {
+                    biased;
+                    () = task_cancellation.cancelled() => None,
+                    () = target.wait_terminated() => None,
+                    event = lifecycle.next() => event,
+                }) else {
+                    return;
+                };
 
-            tokio::select! {
-                biased;
-                () = task_cancellation.cancelled() => return,
-                () = target.wait_terminated() => return,
-                sent = target.send_to_incarnation(map(event)) => {
-                    if sent.is_err() {
-                        return;
+                tokio::select! {
+                    biased;
+                    () = task_cancellation.cancelled() => return,
+                    () = target.wait_terminated() => return,
+                    sent = target.send_to_incarnation(map(event)) => {
+                        if sent.is_err() {
+                            return;
+                        }
                     }
                 }
             }
-        }
-    });
+        }),
+    );
 
     LifecycleWatchGuard { cancellation }
 }
@@ -601,9 +605,6 @@ impl RuntimeHandle {
     /// immediately. The returned guard must be retained; dropping it cancels
     /// the completion watch and leaves the runtime running.
     ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
     pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
     where
         I: IntoIterator<Item = S>,
@@ -652,7 +653,12 @@ impl RuntimeHandle {
         M: Send + 'static,
         F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
     {
-        spawn_lifecycle_watch_to(self.watch_lifecycle(), target.clone(), map)
+        spawn_lifecycle_watch_to(
+            &self.supervisor,
+            self.watch_lifecycle(),
+            target.clone(),
+            map,
+        )
     }
 
     /// Returns a clone of the latest supervisor snapshot.
@@ -823,6 +829,7 @@ pub(crate) fn actor_child_spec(
                         supervisor,
                         children,
                         || ctx.mark_ready(),
+                        ctx.scheduler(),
                     )
                     .await
                     .map_err(Into::into)

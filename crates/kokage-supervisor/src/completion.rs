@@ -133,9 +133,6 @@ impl SupervisorHandle {
     /// leaves the supervisor running. The spawned task holds no lifecycle
     /// lease, so it never keeps a root supervisor alive on its own.
     ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
     pub fn shutdown_on_completion<I, S>(&self, ids: I) -> CompletionGuard
     where
         I: IntoIterator<Item = S>,
@@ -146,7 +143,7 @@ impl SupervisorHandle {
         let cancellation = CancellationToken::new();
         let task_cancellation = cancellation.clone();
 
-        tokio::spawn(async move {
+        self.spawn_detached(Box::pin(async move {
             let _cancel_on_exit = task_cancellation.clone().drop_guard();
             let outcome = tokio::select! {
                 biased;
@@ -156,7 +153,7 @@ impl SupervisorHandle {
             if outcome == CompletionOutcome::Completed {
                 handle.shutdown();
             }
-        });
+        }));
 
         CompletionGuard { cancellation }
     }

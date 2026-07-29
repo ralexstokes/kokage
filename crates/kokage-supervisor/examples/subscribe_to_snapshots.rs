@@ -102,3 +102,4 @@ fn child_membership(membership: ChildMembershipView) -> &'static str {
         _ => "unknown",
     }
 }
+use kokage_tokio::TokioSupervisorExt as _;

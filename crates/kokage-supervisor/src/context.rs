@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::mpsc;
 
-use crate::{CancellationToken, SupervisorHandle};
+use crate::{CancellationToken, Scheduler, SupervisorHandle};
 
 #[derive(Debug)]
 pub(crate) struct ChildReady {
@@ -39,7 +39,7 @@ impl ReadySignal {
 ///
 /// The child should select on [`shutdown_token`](Self::shutdown_token) to
 /// detect when the supervisor asks it to stop.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ChildContext {
     id: String,
     generation: u64,
@@ -47,6 +47,7 @@ pub struct ChildContext {
     abort_token: CancellationToken,
     scope: SupervisorHandle,
     ready: Option<ReadySignal>,
+    scheduler: Arc<dyn Scheduler>,
 }
 
 impl ChildContext {
@@ -57,6 +58,7 @@ impl ChildContext {
         abort_token: CancellationToken,
         scope: SupervisorHandle,
         ready: Option<ReadySignal>,
+        scheduler: Arc<dyn Scheduler>,
     ) -> Self {
         Self {
             id,
@@ -65,6 +67,7 @@ impl ChildContext {
             abort_token,
             scope,
             ready,
+            scheduler,
         }
     }
 
@@ -120,6 +123,11 @@ impl ChildContext {
         self.scope.clone()
     }
 
+    /// Returns the scheduler driving this child incarnation.
+    pub fn scheduler(&self) -> Arc<dyn Scheduler> {
+        Arc::clone(&self.scheduler)
+    }
+
     /// Reports that this child has completed initialization.
     ///
     /// The first call for an explicitly readiness-gated child transitions it
@@ -130,5 +138,15 @@ impl ChildContext {
         if let Some(ready) = &self.ready {
             ready.send();
         }
+    }
+}
+
+impl std::fmt::Debug for ChildContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ChildContext")
+            .field("id", &self.id)
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
     }
 }

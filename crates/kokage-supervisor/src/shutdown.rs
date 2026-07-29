@@ -35,17 +35,17 @@ pub enum ShutdownPolicy {
     /// error. On expiry the supervisor first signals
     /// [`ChildContext::abort_token`](crate::ChildContext::abort_token), then
     /// hard-aborts the task after a short accounting beat proportional to
-    /// `grace`. Abort remains cooperative at Tokio poll boundaries, so a
+    /// `grace`. Abort remains cooperative at scheduler cancellation boundaries, so a
     /// non-yielding future can outlive the shutdown call briefly. For
     /// hard-stop guarantees, isolate blocking work outside the supervised
-    /// Tokio task.
+    /// scheduler task.
     Cooperative {
         /// Maximum time to wait before escalating to abort.
         grace: Duration,
     },
-    /// Issue a Tokio abort and return promptly.
+    /// Issue a scheduler abort and return promptly.
     ///
-    /// Abort remains cooperative at Tokio poll boundaries, so this mode does not
+    /// Abort remains cooperative at scheduler cancellation boundaries, so this mode does not
     /// forcibly preempt a non-yielding future. For a nested supervisor child,
     /// the abort cascades recursively through the nested subtree instead of
     /// leaving that subtree to drain without a supervisor above it.
@@ -58,7 +58,7 @@ impl ShutdownPolicy {
         Self::Cooperative { grace }
     }
 
-    /// Abort the Tokio task immediately with no grace period.
+    /// Abort the scheduler task immediately with no grace period.
     pub const fn abort() -> Self {
         Self::Abort
     }

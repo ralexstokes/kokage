@@ -1,7 +1,8 @@
 #![warn(missing_docs)]
 
 //! Structured task supervision over an async scheduler, inspired by
-//! Erlang/OTP. Tokio is the supported scheduler today.
+//! Erlang/OTP. Runtime services enter through [`Scheduler`]; the
+//! `kokage-tokio` crate provides the standard Tokio binding.
 //!
 //! `kokage-supervisor` manages the lifecycle of a group of async tasks
 //! (*children*), automatically restarting them according to configurable
@@ -58,7 +59,7 @@
 //!   report a timeout for shutdown or removal if it does not exit. During a
 //!   group restart, the old generation is escalated to abort and the restart
 //!   proceeds once that task exits.
-//! - **[`Abort`](ShutdownPolicy::Abort)** — abort the Tokio task immediately.
+//! - **[`Abort`](ShutdownPolicy::Abort)** — abort the scheduler task immediately.
 //!
 //! Ordered scopes drain in reverse declaration order, giving each cooperative
 //! child its own grace period before moving to the previous child. Once an
@@ -68,7 +69,7 @@
 //! grace. Ordered group and full-shutdown drains are atomic critical sections,
 //! so observation never sees a later generation overlap an earlier one.
 //!
-//! Tokio aborts take effect at poll boundaries. A non-yielding
+//! Task aborts take effect at scheduler cancellation boundaries. A non-yielding
 //! future is never forcibly preempted. If you need hard-stop guarantees for
 //! blocking work, isolate it in a dedicated blocking pool or external process
 //! and supervise the boundary.
@@ -163,6 +164,7 @@
 //!
 //! ```no_run
 //! use kokage_supervisor::{ChildSpec, Supervisor};
+//! use kokage_tokio::TokioSupervisorExt as _;
 //! use tracing_subscriber::FmtSubscriber;
 //!
 //! # #[tokio::main]
@@ -223,11 +225,84 @@ mod observability;
 pub mod prelude;
 mod restart;
 mod runtime;
+mod scheduler;
 mod scope;
 mod shutdown;
 mod snapshot;
 mod strategy;
 mod supervisor;
+
+#[cfg(test)]
+mod test_scheduler {
+    use std::{sync::Arc, time::Instant};
+
+    use crate::{BoxFuture, Scheduler, TaskError, TaskHandle};
+
+    #[derive(Clone)]
+    pub(crate) struct TokioTestScheduler(Option<tokio::runtime::Handle>);
+
+    impl TokioTestScheduler {
+        pub(crate) fn current() -> Self {
+            Self(tokio::runtime::Handle::try_current().ok())
+        }
+    }
+
+    impl Scheduler for TokioTestScheduler {
+        fn spawn(&self, future: BoxFuture<()>) -> TaskHandle {
+            task_handle(
+                self.0
+                    .as_ref()
+                    .expect("test attempted to spawn outside a Tokio runtime")
+                    .spawn(future),
+            )
+        }
+
+        fn spawn_blocking(&self, function: Box<dyn FnOnce() + Send>) -> TaskHandle {
+            task_handle(
+                self.0
+                    .as_ref()
+                    .expect("test attempted to spawn blocking work outside a Tokio runtime")
+                    .spawn_blocking(function),
+            )
+        }
+
+        fn sleep_until(&self, deadline: Instant) -> BoxFuture<()> {
+            if self.0.is_some() {
+                Box::pin(tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    deadline,
+                )))
+            } else {
+                Box::pin(std::future::pending())
+            }
+        }
+
+        fn now(&self) -> Instant {
+            if self.0.is_some() {
+                tokio::time::Instant::now().into_std()
+            } else {
+                Instant::now()
+            }
+        }
+    }
+
+    fn task_handle(handle: tokio::task::JoinHandle<()>) -> TaskHandle {
+        let abort = handle.abort_handle();
+        let finished = Arc::new(abort.clone());
+        TaskHandle::new(
+            Box::pin(async move {
+                handle.await.map_err(|error| {
+                    if error.is_panic() {
+                        TaskError::panicked(error.into_panic())
+                    } else {
+                        TaskError::cancelled()
+                    }
+                })
+            }),
+            move || abort.abort(),
+            move || finished.is_finished(),
+        )
+    }
+}
 
 /// Implementation bridge for crates layered on top of `kokage-supervisor`.
 ///
@@ -238,8 +313,11 @@ mod supervisor;
 pub mod __private {
     use std::any::Any;
 
-    pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
     use crate::{ChildSpec, SupervisorHandle};
+    pub use crate::{
+        attachment::{AttachedChild, AttachedChildIdentity},
+        scheduler::{TaskAbortHandle, TaskId, TaskJoin, TaskSet, yield_now},
+    };
 
     /// Adds process-local metadata to a child specification.
     pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
@@ -256,6 +334,12 @@ pub mod __private {
     {
         handle.attached_children()
     }
+
+    /// Spawns lifecycle-bound background work once the supervisor's scheduler
+    /// is installed.
+    pub fn spawn_detached(handle: &SupervisorHandle, future: crate::BoxFuture<()>) {
+        handle.spawn_detached(future);
+    }
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
@@ -271,6 +355,7 @@ pub use lifecycle::{
     LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent,
 };
 pub use restart::{BackoffPolicy, RestartConfig, RestartPolicy};
+pub use scheduler::{BoxFuture, Scheduler, TaskError, TaskHandle};
 pub use scope::ScopeKind;
 pub use shutdown::ShutdownPolicy;
 pub use snapshot::{

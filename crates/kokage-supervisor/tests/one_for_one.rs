@@ -399,3 +399,4 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
         .await
         .expect("shutdown should succeed");
 }
+use kokage_tokio::TokioSupervisorExt as _;

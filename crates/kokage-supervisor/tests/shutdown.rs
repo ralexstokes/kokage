@@ -1013,3 +1013,4 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
         .expect("dynamic shutdown task joins")
         .expect("dynamic shutdown succeeds");
 }
+use kokage_tokio::TokioSupervisorExt as _;

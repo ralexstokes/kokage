@@ -461,3 +461,4 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
+use kokage_tokio::TokioSupervisorExt as _;

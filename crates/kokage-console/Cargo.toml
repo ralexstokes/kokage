@@ -14,13 +14,14 @@ axum = { workspace = true, features = ["ws"] }
 getrandom.workspace = true
 kokage = { path = "../kokage", default-features = false }
 kokage-supervisor = { workspace = true, features = ["serde"] }
+kokage-tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
-tokio = { workspace = true, features = ["io-util", "signal"] }
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "signal", "test-util"] }
 tokio-tungstenite.workspace = true

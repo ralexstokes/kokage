@@ -224,3 +224,4 @@ async fn wait_for_event(
     })
     .await??)
 }
+use kokage_tokio::TokioSupervisorExt as _;

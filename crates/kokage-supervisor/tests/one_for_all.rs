@@ -821,3 +821,4 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     handle.shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
+use kokage_tokio::TokioSupervisorExt as _;

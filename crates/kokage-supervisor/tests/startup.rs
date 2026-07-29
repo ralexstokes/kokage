@@ -683,3 +683,4 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
         .await
         .unwrap();
 }
+use kokage_tokio::TokioSupervisorExt as _;

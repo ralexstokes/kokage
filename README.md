@@ -3,7 +3,8 @@
 > actors in the shade of a supervision tree
 
 OTP-style supervision trees and typed actors — a thin layer over an async
-scheduler (Tokio today).
+scheduler. Tokio is the default binding, while the supervision and actor
+cores also accept third-party schedulers.
 
 The core idea is the one that has kept telecom switches running for decades:
 **let it crash**. Instead of defensively handling every failure in place, you
@@ -81,6 +82,7 @@ supervising plain async tasks.
 |-------|------|
 | [`kokage`](crates/kokage) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under single-use ordered or dynamic trees with actor-aware runtime handles. |
 | [`kokage-supervisor`](crates/kokage-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
+| [`kokage-tokio`](crates/kokage-tokio) | Tokio's implementation of the scheduler contract, including the convenience adapter for spawning raw supervisors on the current runtime. |
 | [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic actor graphs and their supervision scopes; re-exported by `kokage` under the default `derive` feature. |
 | [`kokage-console`](crates/kokage-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `kokage` feature and dependency surface. |
 

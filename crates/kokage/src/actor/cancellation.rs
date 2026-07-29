@@ -1,4 +1,6 @@
-use kokage_supervisor::CancellationToken;
+use std::sync::Arc;
+
+use kokage_supervisor::{CancellationToken, Scheduler};
 
 /// Opaque token identifying one actor incarnation's lifetime.
 ///
@@ -7,18 +9,35 @@ use kokage_supervisor::CancellationToken;
 /// to [`timers::send_after_to`](crate::timers::send_after_to) or
 /// [`timers::interval_to`](crate::timers::interval_to) to bind cross-actor
 /// timer work to the actor that scheduled it.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Lifetime {
     cancellation: CancellationToken,
+    scheduler: Arc<dyn Scheduler>,
 }
 
 impl Lifetime {
-    pub(crate) fn from_token(cancellation: CancellationToken) -> Self {
-        Self { cancellation }
+    pub(crate) fn from_token(
+        cancellation: CancellationToken,
+        scheduler: Arc<dyn Scheduler>,
+    ) -> Self {
+        Self {
+            cancellation,
+            scheduler,
+        }
     }
 
     pub(crate) fn token(&self) -> CancellationToken {
         self.cancellation.clone()
+    }
+
+    pub(crate) fn scheduler(&self) -> Arc<dyn Scheduler> {
+        Arc::clone(&self.scheduler)
+    }
+}
+
+impl std::fmt::Debug for Lifetime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Lifetime").finish_non_exhaustive()
     }
 }
 

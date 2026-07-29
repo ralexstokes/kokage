@@ -3,7 +3,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use tokio::time::Instant;
+use std::time::Instant;
 
 use crate::restart::{BackoffPolicy, RestartConfig};
 

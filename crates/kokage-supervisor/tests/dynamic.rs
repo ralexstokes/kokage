@@ -1322,3 +1322,4 @@ async fn removed_child_does_not_restart_recycled_slot_after_backoff() {
         .await
         .expect("shutdown should succeed");
 }
+use kokage_tokio::TokioSupervisorExt as _;

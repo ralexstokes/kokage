@@ -62,9 +62,7 @@ impl SupervisorRuntime {
             }
 
             let generation = child.generation;
-            child
-                .restart_tracker
-                .record_spawn(tokio::time::Instant::now());
+            child.restart_tracker.record_spawn(self.scheduler.now());
             let child_token = self.group_token.child_token();
             let abort_token = CancellationToken::new();
             child.active_token = Some(child_token.clone());
@@ -105,6 +103,7 @@ impl SupervisorRuntime {
                         },
                     )
                 }),
+                Arc::clone(&self.scheduler),
             );
             let kind = child.definition.kind.clone();
             let nested_channels = entry.nested_channels.clone();

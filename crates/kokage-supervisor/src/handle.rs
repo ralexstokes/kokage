@@ -7,12 +7,10 @@ use std::{
     },
 };
 
-use tokio::{
-    sync::{mpsc, oneshot, watch},
-    task::JoinHandle,
-};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::{
+    BoxFuture, Scheduler,
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
@@ -23,7 +21,6 @@ use crate::{
     },
 };
 
-type SupervisorJoinHandle = JoinHandle<Result<(), SupervisorError>>;
 type DoneSender = watch::Sender<Option<Result<(), SupervisorError>>>;
 type DoneReceiver = watch::Receiver<Option<Result<(), SupervisorError>>>;
 
@@ -200,6 +197,12 @@ enum RootExtraSlot {
     Ready(Arc<RootExtra>),
 }
 
+struct SchedulerState {
+    scheduler: Option<Arc<dyn Scheduler>>,
+    pending: Vec<BoxFuture<()>>,
+    terminal: bool,
+}
+
 pub(crate) struct StableSupervisorChannels {
     binding: Mutex<StableBindingState>,
     binding_revision: watch::Sender<u64>,
@@ -218,6 +221,7 @@ pub(crate) struct StableSupervisorChannels {
     /// orphaned or colliding one.
     edge_kind: AtomicU8,
     root_extra: Mutex<RootExtraSlot>,
+    scheduler: Mutex<SchedulerState>,
     handle_lease: Mutex<Weak<HandleLease>>,
 }
 
@@ -265,6 +269,11 @@ impl StableSupervisorChannels {
             nested_channels,
             edge_kind: AtomicU8::new(EDGE_UNCLAIMED),
             root_extra: Mutex::new(RootExtraSlot::NotRoot),
+            scheduler: Mutex::new(SchedulerState {
+                scheduler: None,
+                pending: Vec::new(),
+                terminal: false,
+            }),
             handle_lease: Mutex::new(Weak::new()),
         })
     }
@@ -419,6 +428,46 @@ impl StableSupervisorChannels {
             channels: Arc::clone(self),
             _lease: None,
         }
+    }
+
+    pub(crate) fn install_scheduler(&self, scheduler: Arc<dyn Scheduler>) {
+        let pending = {
+            let mut state = self
+                .scheduler
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.terminal {
+                return;
+            }
+            state.scheduler = Some(Arc::clone(&scheduler));
+            std::mem::take(&mut state.pending)
+        };
+        for future in pending {
+            scheduler.spawn(future).detach();
+        }
+    }
+
+    pub(crate) fn spawn_detached(&self, future: BoxFuture<()>) {
+        let scheduler = {
+            let mut state = self
+                .scheduler
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.terminal {
+                return;
+            }
+            match &state.scheduler {
+                Some(scheduler) => Some(Arc::clone(scheduler)),
+                None => {
+                    state.pending.push(future);
+                    return;
+                }
+            }
+        };
+        scheduler
+            .expect("scheduler was cloned")
+            .spawn(future)
+            .detach();
     }
 
     pub(crate) fn install_root_extra(&self, root_extra: RootExtra) {
@@ -744,6 +793,14 @@ impl StableSupervisorChannels {
     /// recreation mints a fresh one), or an orphaned dynamic child that no
     /// incarnation will spawn again.
     pub(crate) fn terminal(&self) {
+        {
+            let mut scheduler = self
+                .scheduler
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            scheduler.terminal = true;
+            scheduler.pending.clear();
+        }
         let active = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             binding.terminal = true;
@@ -1188,8 +1245,8 @@ mod tests {
             "wait must not fall through to the nested path while root extra is pending"
         );
 
-        let join = tokio::spawn(async { Ok(()) });
-        channels.install_root_extra(RootExtra::new(root_done_rx, join, root_done_tx));
+        channels.install_root_extra(RootExtra::new(root_done_rx));
+        let _ = root_done_tx.send(Some(Ok(())));
         tokio::time::timeout(Duration::from_secs(1), waiting)
             .await
             .expect("wait observes root-extra publication")
@@ -1351,19 +1408,11 @@ impl Drop for StableBindingGuard {
 
 pub(crate) struct RootExtra {
     done_rx: DoneReceiver,
-    join_state: Arc<Mutex<Option<(SupervisorJoinHandle, DoneSender)>>>,
 }
 
 impl RootExtra {
-    pub(crate) fn new(
-        done_rx: DoneReceiver,
-        join_handle: SupervisorJoinHandle,
-        done_tx: DoneSender,
-    ) -> Self {
-        Self {
-            done_rx,
-            join_state: Arc::new(Mutex::new(Some((join_handle, done_tx)))),
-        }
+    pub(crate) fn new(done_rx: DoneReceiver) -> Self {
+        Self { done_rx }
     }
 }
 
@@ -1386,7 +1435,8 @@ pub(crate) enum SupervisorCommand {
     },
 }
 
-/// Handle to a running supervisor, returned by [`Supervisor::spawn`](crate::Supervisor::spawn).
+/// Handle to a running supervisor, returned by
+/// [`Supervisor::spawn_with`](crate::Supervisor::spawn_with).
 ///
 /// The handle is cheaply cloneable and can be shared across tasks. It provides:
 ///
@@ -1456,6 +1506,10 @@ impl std::fmt::Debug for SupervisorHandle {
 }
 
 impl SupervisorHandle {
+    pub(crate) fn spawn_detached(&self, future: BoxFuture<()>) {
+        self.channels.spawn_detached(future);
+    }
+
     pub(crate) fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
         self.channels.publish_snapshot(binding_epoch, snapshot);
     }
@@ -1606,24 +1660,18 @@ impl SupervisorHandle {
 
     /// Waits for the supervisor to stop.
     ///
-    /// The first caller to `wait` joins the underlying Tokio task. Subsequent
-    /// callers (including concurrent ones from cloned handles) receive the
+    /// Callers, including concurrent callers from cloned handles, receive the
     /// same result via a shared watch channel. A successful return means the
     /// runtime has finished draining and joining supervised child tasks.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         let mut binding_revision = self.channels.binding_revision_rx();
-        let (mut done_rx, join) = loop {
+        let mut done_rx = loop {
             match self.channels.root_extra() {
                 RootExtraSlot::Ready(root) => {
                     if let Some(result) = root.done_rx.borrow().clone() {
                         return result;
                     }
-                    let join = root
-                        .join_state
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .take();
-                    break (root.done_rx.clone(), join);
+                    break root.done_rx.clone();
                 }
                 RootExtraSlot::Pending => {
                     binding_revision.changed().await.map_err(|_| {
@@ -1633,7 +1681,7 @@ impl SupervisorHandle {
                     })?;
                 }
                 RootExtraSlot::NotRoot => match self.channels.wait_target() {
-                    WaitTarget::Bound(done_rx) => break (done_rx, None),
+                    WaitTarget::Bound(done_rx) => break done_rx,
                     // A reserved identity that has never bound has not
                     // started, so waiting for it to stop means waiting for it
                     // to run first. This mirrors `wait_started`, which also
@@ -1658,17 +1706,6 @@ impl SupervisorHandle {
                 },
             }
         };
-
-        if let Some((join_handle, done_tx)) = join {
-            let result = match join_handle.await {
-                Ok(result) => result,
-                Err(err) => Err(SupervisorError::Internal(format!(
-                    "supervisor task failed to join: {err}"
-                ))),
-            };
-            let _ = done_tx.send(Some(result.clone()));
-            return result;
-        }
 
         if let Some(result) = done_rx.borrow().clone() {
             return result;
@@ -1816,6 +1853,7 @@ impl SupervisorHandle {
     ///
     /// ```no_run
     /// use kokage_supervisor::{ChildSpec, ChildStateView, Supervisor};
+    /// use kokage_tokio::TokioSupervisorExt as _;
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {

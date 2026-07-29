@@ -10,6 +10,8 @@ use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
+    __private::TaskAbortHandle,
+    Scheduler,
     builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder},
     child::{ChildDefinition, ChildKind, ChildResult},
     context::ChildContext,
@@ -43,6 +45,7 @@ use crate::{
 ///
 /// ```no_run
 /// # use kokage_supervisor::Supervisor;
+/// # use kokage_tokio::TokioSupervisorExt as _;
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let supervisor = Supervisor::ordered().build()?;
 /// let handle = supervisor.handle();
@@ -86,7 +89,7 @@ pub(crate) struct ParentLink {
 }
 
 struct NestedTaskOnDrop {
-    abort_handle: tokio::task::AbortHandle,
+    abort_handle: TaskAbortHandle,
     shutdown_tx: watch::Sender<bool>,
     cascade: Arc<AtomicBool>,
     armed: bool,
@@ -149,17 +152,18 @@ impl Supervisor {
 
     /// Returns this supervisor's stable control and observation handle.
     ///
-    /// Before [`spawn`](Self::spawn), control operations return
+    /// Before [`spawn_with`](Self::spawn_with), control operations return
     /// [`ControlError::Unavailable`](crate::ControlError), while the declared
     /// snapshot and lifecycle watches are already available.
     pub fn handle(&self) -> SupervisorHandle {
         self.channels.handle()
     }
 
-    /// Spawns the supervisor as a background Tokio task and returns a handle
+    /// Spawns the supervisor with an explicit scheduler and returns a handle
     /// for control and observation.
-    pub fn spawn(self) -> SupervisorHandle {
+    pub fn spawn_with(self, scheduler: Arc<dyn Scheduler>) -> SupervisorHandle {
         let channels = Arc::clone(&self.channels);
+        channels.install_scheduler(Arc::clone(&scheduler));
         channels.claim_edge(false);
         channels.mark_root();
         let nested_channels = channels.nested_channels();
@@ -191,7 +195,8 @@ impl Supervisor {
         let task_channels = Arc::clone(&channels);
         let task_attached_children = Arc::clone(&attached_children);
 
-        let join_handle = tokio::spawn(async move {
+        let task_scheduler = Arc::clone(&scheduler);
+        let join_handle = scheduler.spawn(Box::pin(async move {
             let _binding = binding;
             let result = self
                 .run_with_channels(
@@ -207,14 +212,29 @@ impl Supervisor {
                     None,
                     false,
                     task_channels.internal_handle(),
+                    task_scheduler,
                 )
                 .await;
-            let _ = task_done_tx.send(Some(result.clone()));
             task_channels.terminal();
-            result
-        });
+            let _ = task_done_tx.send(Some(result));
+        }));
 
-        channels.install_root_extra(RootExtra::new(done_rx, join_handle, done_tx));
+        let monitor_done_tx = done_tx.clone();
+        scheduler
+            .spawn(Box::pin(async move {
+                if let Err(error) = join_handle.join().await {
+                    let _ = monitor_done_tx.send(Some(Err(SupervisorError::Internal(format!(
+                        "supervisor task failed to join: {error}"
+                    )))));
+                } else if monitor_done_tx.borrow().is_none() {
+                    let _ = monitor_done_tx.send(Some(Err(SupervisorError::Internal(
+                        "supervisor task completed without publishing its result".to_owned(),
+                    ))));
+                }
+            }))
+            .detach();
+
+        channels.install_root_extra(RootExtra::new(done_rx));
         channels.handle()
     }
 
@@ -228,6 +248,8 @@ impl Supervisor {
         abort_cascades: Arc<AtomicBool>,
     ) -> ChildResult {
         let generation = ctx.generation();
+        let scheduler = ctx.scheduler();
+        channels.install_scheduler(Arc::clone(&scheduler));
         let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) =
             channels.take_initial_incarnation(generation).map_or_else(
                 || {
@@ -259,6 +281,7 @@ impl Supervisor {
         let attached_children = channels.attached_children();
         let startup_ctx = ctx.clone();
         let task_done_tx = done_tx.clone();
+        let task_done_rx = done_tx.subscribe();
         let initial_snapshot = initial_snapshot(&self.config);
 
         // Reconcile and rebind as one ownership transaction. This prevents a
@@ -289,7 +312,8 @@ impl Supervisor {
             return Ok(());
         };
 
-        let join_handle = tokio::spawn(async move {
+        let task_scheduler = Arc::clone(&scheduler);
+        let join_handle = scheduler.spawn(Box::pin(async move {
             let result = self
                 .run_with_channels(
                     shutdown_rx,
@@ -304,13 +328,13 @@ impl Supervisor {
                     Some(startup_ctx),
                     revivable,
                     channels.internal_handle(),
+                    task_scheduler,
                 )
                 .await;
             let _ = task_done_tx.send(Some(result.clone()));
-            result
-        });
+        }));
         // Hard cascade is armed by default: aborting an ancestor runtime drops
-        // its JoinSet, each nested wrapper aborts its owned runtime, and the
+        // its task set, each nested wrapper aborts its owned runtime, and the
         // cascade continues recursively. Cooperative shutdown disarms this
         // guard after the nested runtime joins normally.
         let mut nested_task_on_drop = NestedTaskOnDrop {
@@ -319,6 +343,11 @@ impl Supervisor {
             cascade: abort_cascades,
             armed: true,
         };
+        let abort_handle = join_handle.abort_handle();
+        // `NestedTaskOnDrop` owns the cooperative-versus-abort decision if
+        // this wrapper is cancelled by its parent. Cancelling this join must
+        // therefore detach the nested runtime rather than abort it eagerly.
+        let join_handle = join_handle.join_detached();
         tokio::pin!(join_handle);
         let mut shutdown_requested = false;
         let mut abort_requested = false;
@@ -327,7 +356,11 @@ impl Supervisor {
             tokio::select! {
                 result = &mut join_handle => {
                     break match result {
-                        Ok(result) => result,
+                        Ok(()) => task_done_rx.borrow().clone().unwrap_or_else(|| {
+                            Err(SupervisorError::Internal(
+                                "nested supervisor task completed without a result".to_owned(),
+                            ))
+                        }),
                         Err(_error) if abort_requested => {
                             Err(SupervisorError::ShutdownTimedOut(ctx.id().to_owned()))
                         }
@@ -342,7 +375,7 @@ impl Supervisor {
                 }
                 _ = ctx.abort_token().cancelled(), if !abort_requested => {
                     abort_requested = true;
-                    join_handle.abort();
+                    abort_handle.abort();
                 }
             }
         };
@@ -367,6 +400,7 @@ impl Supervisor {
         startup_ready: Option<ChildContext>,
         revivable: bool,
         own_handle: SupervisorHandle,
+        scheduler: Arc<dyn Scheduler>,
     ) -> Result<(), SupervisorError> {
         let supervisor_name = supervisor_name_for_path(&path).to_owned();
         let supervisor_path = format_path(&path);
@@ -384,6 +418,7 @@ impl Supervisor {
             parent_link,
             revivable,
             own_handle,
+            scheduler,
         );
         let result = runtime
             .run(startup_ready)

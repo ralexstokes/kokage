@@ -12,6 +12,7 @@ construct raw task supervisors, so they name `kokage-supervisor` directly:
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 kokage = { git = "https://github.com/ralexstokes/kokage" }
 kokage-supervisor = { git = "https://github.com/ralexstokes/kokage" }
+kokage-tokio = { git = "https://github.com/ralexstokes/kokage" }
 ```
 
 `kokage::prelude` covers the day-one actor product surface and core policies.
@@ -30,6 +31,7 @@ shutdown policies.
 use std::time::Duration;
 
 use kokage_supervisor::{ChildSpec, Supervisor};
+use kokage_tokio::TokioSupervisorExt as _;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -120,3 +120,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+use kokage_tokio::TokioSupervisorExt as _;

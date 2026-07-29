@@ -1,10 +1,10 @@
-use std::{collections::HashSet, time::Instant as StdInstant};
+use std::{collections::HashSet, time::Instant};
 
 use slab::Slab;
-use tokio::time::{Instant, sleep_until};
 use tracing::{Instrument, info_span};
 
 use crate::{
+    __private::{TaskJoin, yield_now},
     error::SupervisorError,
     event::RuntimeEvent,
     runtime::{
@@ -21,7 +21,7 @@ use super::supervision::SupervisorRuntime;
 
 /// How long the ordered drain holds its cursor after issuing an abort.
 ///
-/// A normal Tokio abort lands at the aborted task's next poll boundary, so a
+/// A normal scheduler abort lands at the aborted task's next cancellation boundary, so a
 /// short window keeps the common case exit-ordered. It is deliberately not a
 /// teardown budget: a future that has not reached a poll boundary must not
 /// retain the cursor, and whether the drain actually freed the child is
@@ -158,7 +158,7 @@ impl SupervisorRuntime {
         if matches!(reason, DrainReason::Shutdown) {
             self.command_rx.close();
         }
-        let started_at = StdInstant::now();
+        let started_at = self.scheduler.now();
         let keys: Vec<_> = self
             .child_order
             .iter()
@@ -196,7 +196,7 @@ impl SupervisorRuntime {
             } else {
                 self.wait_for_ordered_child(
                     key,
-                    Some(Instant::now() + policy.grace()),
+                    Some(self.scheduler.now() + policy.grace()),
                     scope,
                     &mut deferred,
                 )
@@ -214,7 +214,7 @@ impl SupervisorRuntime {
                 let hard_abort_needed = self
                     .wait_for_ordered_child(
                         key,
-                        Some(Instant::now() + tidy_abort_beat(policy.grace())),
+                        Some(self.scheduler.now() + tidy_abort_beat(policy.grace())),
                         scope,
                         &mut deferred,
                     )
@@ -225,14 +225,14 @@ impl SupervisorRuntime {
             }
 
             if aborted_immediately || expired {
-                // Give a normal Tokio abort one scheduling turn to complete so
+                // Give a normal scheduler abort one scheduling turn to complete so
                 // its exit remains ordered. A future that does not reach a
                 // poll boundary must not retain the cursor indefinitely.
-                tokio::task::yield_now().await;
+                yield_now().await;
                 let still_active = self
                     .wait_for_ordered_child(
                         key,
-                        Some(Instant::now() + ORDERED_ABORT_CURSOR_WINDOW),
+                        Some(self.scheduler.now() + ORDERED_ABORT_CURSOR_WINDOW),
                         scope,
                         &mut deferred,
                     )
@@ -280,10 +280,11 @@ impl SupervisorRuntime {
         deferred: &mut Vec<ClassifiedExit>,
     ) -> Result<String, SupervisorError> {
         if let Some(backstop) = backstop {
-            let deadline = Instant::now() + backstop;
+            let deadline = self.scheduler.now() + backstop;
             while stragglers.iter().any(|&key| self.is_child_active(key)) {
+                let sleep = self.scheduler.sleep_until(deadline);
                 tokio::select! {
-                    joined = self.join_set.join_next_with_id() => {
+                    joined = self.join_set.join_next() => {
                         let Some(joined) = joined else { break; };
                         // Every straggler was the cursor when it was aborted, so
                         // its exit belongs to the drain rather than to a
@@ -291,7 +292,7 @@ impl SupervisorRuntime {
                         // out-of-scope and clean-completion rules apply.
                         self.handle_join_for_scope(joined, scope, None, deferred)?;
                     }
-                    _ = sleep_until(deadline) => break,
+                    _ = sleep => break,
                 }
             }
         }
@@ -337,16 +338,17 @@ impl SupervisorRuntime {
             }
 
             if let Some(deadline) = deadline {
+                let sleep = self.scheduler.sleep_until(deadline);
                 tokio::select! {
                     biased;
-                    _ = sleep_until(deadline) => return Ok(true),
-                    joined = self.join_set.join_next_with_id() => {
+                    _ = sleep => return Ok(true),
+                    joined = self.join_set.join_next() => {
                         let Some(joined) = joined else { return Ok(false); };
                         self.handle_join_for_scope(joined, scope, Some(key), deferred)?;
                     }
                 }
             } else {
-                let Some(joined) = self.join_set.join_next_with_id().await else {
+                let Some(joined) = self.join_set.join_next().await else {
                     return Ok(false);
                 };
                 self.handle_join_for_scope(joined, scope, Some(key), deferred)?;
@@ -362,8 +364,8 @@ impl SupervisorRuntime {
         if matches!(reason, DrainReason::Shutdown) {
             self.command_rx.close();
         }
-        let started_at = StdInstant::now();
-        let cancelled_at = Instant::now();
+        let started_at = self.scheduler.now();
+        let cancelled_at = self.scheduler.now();
         let mut deferred = Vec::new();
         let mut timed_out = Vec::new();
         let mut deadlines: Vec<_> = self
@@ -385,7 +387,7 @@ impl SupervisorRuntime {
         abort_matching_children(&self.children, |key, child| {
             scope.contains(key) && child.runtime.definition.shutdown_policy.is_abort()
         });
-        tokio::task::yield_now().await;
+        yield_now().await;
         self.drain_ready_joins_for_scope(scope, &mut deferred)
             .await?;
         if scope.is_drained(self) {
@@ -403,10 +405,11 @@ impl SupervisorRuntime {
                 break;
             };
 
+            let sleep = self.scheduler.sleep_until(next_deadline);
             tokio::select! {
                 biased;
-                _ = sleep_until(next_deadline) => {
-                    let now = Instant::now();
+                _ = sleep => {
+                    let now = self.scheduler.now();
                     let grace_expired: Vec<_> = deadlines
                         .iter()
                         .filter(|deadline| {
@@ -452,7 +455,7 @@ impl SupervisorRuntime {
                         deadline.phase != DrainDeadlinePhase::HardAbort || deadline.at > now
                     });
                 }
-                maybe = self.join_set.join_next_with_id() => {
+                maybe = self.join_set.join_next() => {
                     let Some(joined) = maybe else { break; };
                     self.handle_join_for_scope(joined, scope, None, &mut deferred)?;
                 }
@@ -462,7 +465,7 @@ impl SupervisorRuntime {
         let remaining = active_task_names(&self.children, scope);
         if !remaining.is_empty() {
             abort_matching_children(&self.children, |key, _| scope.contains(key));
-            tokio::task::yield_now().await;
+            yield_now().await;
             self.drain_ready_joins_for_scope(scope, &mut deferred)
                 .await?;
         }
@@ -484,21 +487,16 @@ impl SupervisorRuntime {
         deferred: &mut Vec<ClassifiedExit>,
     ) -> Result<(), SupervisorError> {
         loop {
-            match tokio::time::timeout(std::time::Duration::ZERO, self.join_set.join_next_with_id())
-                .await
-            {
-                Ok(Some(joined)) => self.handle_join_for_scope(joined, scope, None, deferred)?,
-                Ok(None) | Err(_) => return Ok(()),
+            match self.join_set.try_join_next() {
+                Some(joined) => self.handle_join_for_scope(joined, scope, None, deferred)?,
+                None => return Ok(()),
             }
         }
     }
 
     fn handle_join_for_scope(
         &mut self,
-        joined: Result<
-            (tokio::task::Id, super::supervision::ChildEnvelope),
-            tokio::task::JoinError,
-        >,
+        joined: TaskJoin<super::supervision::ChildEnvelope>,
         scope: DrainScope<'_>,
         ordered_cursor: Option<ChildKey>,
         deferred: &mut Vec<ClassifiedExit>,
@@ -523,10 +521,10 @@ impl SupervisorRuntime {
         Ok(())
     }
 
-    fn record_drain_duration(&self, reason: DrainReason, started_at: StdInstant) {
+    fn record_drain_duration(&self, reason: DrainReason, started_at: Instant) {
         self.meta.observability.record_shutdown_duration(
             shutdown_operation(reason),
-            started_at.elapsed(),
+            self.scheduler.now().saturating_duration_since(started_at),
             None,
         );
     }

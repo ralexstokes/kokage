@@ -1,7 +1,8 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style supervision trees and typed actors over an
-//! async scheduler (Tokio today), with one integrated [`RuntimeHandle`].
+//! async scheduler, with one integrated [`RuntimeHandle`]. The default
+//! feature uses Tokio; [`OrderedTree::spawn_with`] accepts a custom scheduler.
 //!
 //! For the common setup — every actor of a graph running as its own
 //! supervised child — build a graph, move it into an [`OrderedTree`], and
@@ -276,7 +277,11 @@ pub mod timers;
 /// [`OrderedTree::subtree`] or [`RuntimeHandle::add_subtree`] instead.
 pub mod host {
     pub use crate::actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor};
-    pub use kokage_supervisor::{BoxError, ChildContext, ChildResult, ChildSpec};
+    pub use kokage_supervisor::{
+        BoxError, BoxFuture, ChildContext, ChildResult, ChildSpec, Scheduler, TaskError, TaskHandle,
+    };
+    #[cfg(feature = "tokio")]
+    pub use kokage_tokio::TokioScheduler;
 }
 
 /// Runtime observation, lifecycle, topology, and completion types.

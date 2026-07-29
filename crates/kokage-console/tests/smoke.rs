@@ -564,3 +564,4 @@ async fn shutdown_stops_server() {
     .await
     .expect("console still accepted TCP connections after shutdown");
 }
+use kokage_tokio::TokioSupervisorExt as _;

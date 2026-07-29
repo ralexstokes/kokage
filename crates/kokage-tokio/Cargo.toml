@@ -1,0 +1,16 @@
+[package]
+name = "kokage-tokio"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Tokio scheduler binding for Kokage"
+readme = "../../README.md"
+keywords = ["actor", "supervisor", "tokio", "scheduler"]
+categories = ["asynchronous", "concurrency"]
+
+[dependencies]
+kokage-supervisor.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

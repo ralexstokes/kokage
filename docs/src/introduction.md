@@ -1,8 +1,8 @@
 # Introduction
 
 Kokage is a small family of crates for OTP-style supervision trees and typed
-actors — a thin layer over an async scheduler, with Tokio as the supported
-scheduler today. The core idea is the same one that has kept telecom switches
+actors — a thin layer over an async scheduler. Tokio is the default binding,
+and the core accepts third-party schedulers. The core idea is the same one that has kept telecom switches
 running for decades: **let it crash**. Instead of writing defensive code that
 tries to recover from every possible failure in place, you organize your
 program into small, isolated tasks and let a *supervisor* restart the ones that
@@ -31,6 +31,7 @@ supervises it, built on that deliberately independent crate:
 |-------|------|
 | [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under an ordered or dynamic tree. |
 | [`kokage-supervisor`](https://stokes.io/kokage/api/kokage_supervisor/index.html) | Structured supervision of async tasks: restart policies, restart intensity limits, graceful shutdown, and supervision trees. |
+| `kokage-tokio` | Tokio's implementation of the runtime-independent scheduler contract. |
 | [`kokage-console`](https://stokes.io/kokage/api/kokage_console/index.html) | An experimental, git-only web console for watching a running supervision tree. It is separate from the published product crate. |
 
 `kokage-supervisor` knows nothing about actors — it supervises any async task,
