@@ -1735,6 +1735,9 @@ impl SupervisorHandle {
     /// The lifecycle subscription and current generation are captured before
     /// this method returns. The restart may therefore be triggered before the
     /// returned future is first polled without losing its `Started` event.
+    /// A restart already reflected in the captured generation becomes the
+    /// baseline, even if its `Started` event is buffered, so only a later
+    /// generation can complete the future.
     ///
     /// Returns `None` if the child is not currently supervised, is removed
     /// before restarting, the watch lags, or this supervisor identity becomes
