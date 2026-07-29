@@ -260,7 +260,7 @@ async fn build_app() -> Result<App, AnyError> {
         },
         tool_host: ToolHost::default,
         router: RouterFactory {
-            mount: sessions_mount.clone(),
+            mount: sessions_mount.clone().into(),
             journal: journal.clone(),
             budget: refs.budget.clone(),
             tool_host: refs.tool_host.clone(),
