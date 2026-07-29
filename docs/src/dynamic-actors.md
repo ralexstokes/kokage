@@ -34,7 +34,7 @@ let worker = dynamic
     .await?;
 worker.send("ready".to_owned()).await?;
 
-dynamic.remove("worker").await?;
+dynamic.remove_child("worker").await?;
 runtime.shutdown_and_wait().await?;
 # Ok(())
 # }
@@ -45,7 +45,7 @@ returns the typed ref. Success means startup was scheduled; use
 `wait_child_started`, a readiness protocol, or snapshots when subsequent work
 requires the actor to be ready.
 
-Terminal dynamic actors are removed automatically. Explicit `remove` is
+Terminal dynamic actors are removed automatically. Explicit `remove_child` is
 idempotent with that cleanup.
 
 ## Mailbox and restart policy
@@ -59,8 +59,8 @@ message-size settings:
 # impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(32)
-    .mailbox(MailboxMode::fifo())
-    .restart(RestartPolicy::Transient);
+    .mailbox(MailboxMode::queue())
+    .restart(RestartPolicy::OnFailure);
 # let _ = worker;
 ```
 
@@ -80,6 +80,7 @@ id:
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let tree = OrderedTree::new().subtree("sessions", DynamicTree::new());
 let runtime = tree.spawn()?;
+runtime.handle().wait_started().await?;
 let sessions = runtime
     .handle()
     .subtree("sessions")
