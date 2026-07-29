@@ -66,6 +66,23 @@ let handle = app.handle();
 Moving a tree into `subtree` transfers ownership, while previously issued
 handles continue to address the same identity.
 
+Use `TreeNode` when the nested scope's edge needs policies distinct from its
+siblings. `restart` and `shutdown` configure how the parent restarts or stops
+the whole subtree; the tree's `default_restart` and `default_shutdown` still
+apply inside it:
+
+```rust
+# use kokage::{OrderedTree, Restart, Shutdown, TreeNode};
+let workers = OrderedTree::new();
+let app = OrderedTree::new().subtree(
+    "workers",
+    TreeNode::from(workers)
+        .restart(Restart::never())
+        .shutdown(Shutdown::abort()),
+);
+# let _ = app;
+```
+
 Trees deliberately do not implement `Clone`: one identity binds to one
 runtime. Before binding, control operations return `ControlError::Unavailable`,
 while projected snapshots and subscriptions are already usable. `spawn()`

@@ -93,7 +93,11 @@ restart delay.
 
 Call `OrderedTree::default_restart` or `DynamicTree::default_restart` to set a
 scope-wide declaration, and `ChildSpec::restart` when one task needs its own
-mode, budget, backoff, or terminal-removal behavior.
+mode, budget, backoff, or terminal-removal behavior. To configure the parent
+edge of a nested scope, wrap it with
+`TreeNode::from(subtree).restart(policy).shutdown(policy)` before passing it to
+`OrderedTree::subtree` or `DynamicRuntimeHandle::add_subtree`. The nested
+tree's own defaults still configure its children independently.
 
 ## Ordered startup and readiness
 

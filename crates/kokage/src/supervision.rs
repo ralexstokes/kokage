@@ -50,7 +50,12 @@ enum ScopeNode {
 enum SupervisionChild {
     Actor(ActorNode),
     Task(ChildSpec),
-    Scope { id: String, node: ScopeNode },
+    Scope {
+        id: String,
+        node: ScopeNode,
+        restart: Option<Restart>,
+        shutdown: Option<Shutdown>,
+    },
 }
 
 enum ReservedScopeBuilder {
@@ -151,31 +156,85 @@ pub struct DynamicTree {
 /// [`OrderedTree`] or [`DynamicTree`] directly. `TreeNode` has no public
 /// constructor or variants; this keeps the set of supported tree kinds
 /// extensible without exposing the runtime's internal representation.
-pub struct TreeNode(TreeNodeKind);
+pub struct TreeNode {
+    kind: TreeNodeKind,
+    restart: Option<Restart>,
+    shutdown: Option<Shutdown>,
+}
 
 enum TreeNodeKind {
     Ordered(OrderedTree),
     Dynamic(DynamicTree),
 }
 
+pub(crate) struct LoweredTreeNode {
+    pub(crate) supervisor: Supervisor,
+    pub(crate) actors: Arc<ActorRuntimeState>,
+    pub(crate) restart: Option<Restart>,
+    pub(crate) shutdown: Option<Shutdown>,
+}
+
 impl From<OrderedTree> for TreeNode {
     fn from(tree: OrderedTree) -> Self {
-        Self(TreeNodeKind::Ordered(tree))
+        Self {
+            kind: TreeNodeKind::Ordered(tree),
+            restart: None,
+            shutdown: None,
+        }
     }
 }
 
 impl From<DynamicTree> for TreeNode {
     fn from(tree: DynamicTree) -> Self {
-        Self(TreeNodeKind::Dynamic(tree))
+        Self {
+            kind: TreeNodeKind::Dynamic(tree),
+            restart: None,
+            shutdown: None,
+        }
     }
 }
 
 impl TreeNode {
-    pub(crate) fn into_parts(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), BuildError> {
-        match self.0 {
+    /// Sets the policy used by the enclosing scope to restart this subtree.
+    ///
+    /// This configures the nested scope's edge in its parent. It is distinct
+    /// from [`OrderedTree::default_restart`] and
+    /// [`DynamicTree::default_restart`], which configure children inside the
+    /// nested scope.
+    #[must_use]
+    pub fn restart(mut self, restart: Restart) -> Self {
+        self.restart = Some(restart);
+        self
+    }
+
+    /// Sets the policy used by the enclosing scope to stop this subtree.
+    ///
+    /// This configures the nested scope's edge in its parent. It is distinct
+    /// from [`OrderedTree::default_shutdown`] and
+    /// [`DynamicTree::default_shutdown`], which configure children inside the
+    /// nested scope.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+
+    pub(crate) fn into_parts(self) -> Result<LoweredTreeNode, BuildError> {
+        let Self {
+            kind,
+            restart,
+            shutdown,
+        } = self;
+        let (supervisor, actors) = match kind {
             TreeNodeKind::Ordered(tree) => tree.into_parts(),
             TreeNodeKind::Dynamic(tree) => tree.into_parts(),
-        }
+        }?;
+        Ok(LoweredTreeNode {
+            supervisor,
+            actors,
+            restart,
+            shutdown,
+        })
     }
 }
 
@@ -272,12 +331,24 @@ impl OrderedTree {
     }
 
     /// Appends a named ordered or dynamic nested scope.
+    ///
+    /// Pass `TreeNode::from(tree)` to override the restart or shutdown policy
+    /// of the subtree's edge in this parent.
     #[must_use]
     pub fn subtree(mut self, id: impl Into<String>, tree: impl Into<TreeNode>) -> Self {
         let id = id.into();
-        self.inner = match tree.into().0 {
-            TreeNodeKind::Ordered(tree) => self.inner.attach_subtree(id, tree.inner),
-            TreeNodeKind::Dynamic(tree) => self.inner.attach_subtree(id, tree.inner),
+        let TreeNode {
+            kind,
+            restart,
+            shutdown,
+        } = tree.into();
+        self.inner = match kind {
+            TreeNodeKind::Ordered(tree) => {
+                self.inner.attach_subtree(id, tree.inner, restart, shutdown)
+            }
+            TreeNodeKind::Dynamic(tree) => {
+                self.inner.attach_subtree(id, tree.inner, restart, shutdown)
+            }
         };
         self
     }
@@ -403,10 +474,14 @@ impl TreeData<false> {
         mut self,
         id: impl Into<String>,
         tree: TreeData<CHILD_DYNAMIC>,
+        restart: Option<Restart>,
+        shutdown: Option<Shutdown>,
     ) -> Self {
         self.children_mut().push(SupervisionChild::Scope {
             id: id.into(),
             node: tree.node,
+            restart,
+            shutdown,
         });
         self
     }
@@ -604,8 +679,15 @@ impl SupervisionChild {
                     shutdown,
                 }
             }
-            Self::Scope { id, node } => ChildOutline::Scope {
+            Self::Scope {
+                id,
+                node,
+                restart,
+                shutdown,
+            } => ChildOutline::Scope {
                 id: id.clone(),
+                restart: restart.unwrap_or(default_restart),
+                shutdown: shutdown.unwrap_or(default_shutdown),
                 outline: node.outline(),
             },
         }
@@ -640,10 +722,22 @@ impl SupervisionChild {
                 ))
             }
             Self::Task(child) => builder.child(child),
-            Self::Scope { id, node } => {
+            Self::Scope {
+                id,
+                node,
+                restart,
+                shutdown,
+            } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
+                let mut child = ChildSpec::supervisor(id, nested);
+                if let Some(restart) = restart {
+                    child = child.restart(restart);
+                }
+                if let Some(shutdown) = shutdown {
+                    child = child.shutdown(shutdown);
+                }
                 builder.child(__private::attach(
-                    ChildSpec::supervisor(id, nested),
+                    child,
                     RuntimeAttachment::subtree(actors, nested_actors),
                 ))
             }
@@ -711,7 +805,9 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
                             )
                             .0
                         }
-                        SupervisionChild::Scope { .. } => config.default_restart,
+                        SupervisionChild::Scope { restart, .. } => {
+                            restart.unwrap_or(config.default_restart)
+                        }
                     };
                     (child.declared_id().to_owned(), restart)
                 })
@@ -821,9 +917,11 @@ impl IdentityTree<false> {
         mut self,
         id: impl Into<String>,
         tree: IdentityTree<CHILD_DYNAMIC>,
+        restart: Option<Restart>,
+        shutdown: Option<Shutdown>,
     ) -> Self {
         self.reservations.extend(tree.reservations);
-        self.tree = self.tree.subtree(id, tree.tree);
+        self.tree = self.tree.subtree(id, tree.tree, restart, shutdown);
         self.refresh_root();
         self
     }
@@ -887,6 +985,12 @@ pub enum ChildOutline {
     Scope {
         /// Scope child id.
         id: String,
+        /// Resolved policy used by the parent to restart this scope.
+        #[cfg_attr(feature = "serde", serde(default))]
+        restart: Restart,
+        /// Resolved policy used by the parent to stop this scope.
+        #[cfg_attr(feature = "serde", serde(default))]
+        shutdown: Shutdown,
         /// Nested declaration.
         outline: SupervisionOutline,
     },

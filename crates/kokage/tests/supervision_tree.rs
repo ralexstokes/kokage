@@ -8,10 +8,13 @@ use support::TreeBuilder;
 
 use std::{sync::Arc, time::Duration};
 
-use tokio::{sync::Notify, time::sleep};
+use tokio::{
+    sync::Notify,
+    time::{sleep, timeout},
+};
 
 use kokage::{
-    ActorSpec, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy,
+    ActorSpec, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy, TreeNode,
     host::{ChildSpec, RawActor, RawContext},
     observe::{ChildOutline, ScopeKind},
     prelude::*,
@@ -145,6 +148,92 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
             ..
         }) if *restart == Restart::never() && *shutdown == explicit_shutdown
     ));
+}
+
+#[tokio::test]
+async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_membership() {
+    let declared_shutdown = Shutdown::abort();
+    let declared = OrderedTree::new()
+        .default_restart(Restart::always())
+        .subtree(
+            "declared",
+            TreeNode::from(
+                OrderedTree::new().task(ChildSpec::task("stubborn", |_| async {
+                    std::future::pending::<()>().await;
+                    Ok(())
+                })),
+            )
+            .restart(Restart::never())
+            .shutdown(declared_shutdown),
+        );
+
+    assert!(matches!(
+        declared.outline().child("declared"),
+        Some(ChildOutline::Scope {
+            restart,
+            shutdown,
+            ..
+        }) if *restart == Restart::never() && *shutdown == declared_shutdown
+    ));
+
+    let declared = declared.spawn().expect("declared tree builds");
+    declared
+        .handle()
+        .wait_started()
+        .await
+        .expect("declared subtree starts");
+    let declared_snapshot = declared.handle().snapshot();
+    let declared_child = declared_snapshot
+        .child("declared")
+        .expect("declared subtree is present");
+    assert_eq!(declared_child.restart_policy, Restart::never());
+    timeout(Duration::from_millis(250), declared.shutdown_and_wait())
+        .await
+        .expect("subtree abort policy bounds declared shutdown")
+        .expect("declared tree shuts down");
+
+    let dynamic = DynamicTree::new().spawn().expect("dynamic tree builds");
+    let inserted = dynamic
+        .handle()
+        .dynamic()
+        .expect("root is dynamic")
+        .add_subtree(
+            "inserted",
+            TreeNode::from(
+                OrderedTree::new().task(ChildSpec::task("stubborn", |_| async {
+                    std::future::pending::<()>().await;
+                    Ok(())
+                })),
+            )
+            .restart(Restart::never())
+            .shutdown(Shutdown::abort()),
+        )
+        .await
+        .expect("policy-bearing subtree inserts");
+    inserted
+        .wait_started()
+        .await
+        .expect("inserted subtree starts");
+    let dynamic_snapshot = dynamic.handle().snapshot();
+    let inserted = dynamic_snapshot
+        .child("inserted")
+        .expect("inserted subtree is present");
+    assert_eq!(inserted.restart_policy, Restart::never());
+    timeout(
+        Duration::from_millis(250),
+        dynamic
+            .handle()
+            .dynamic()
+            .expect("root is dynamic")
+            .remove_child("inserted"),
+    )
+    .await
+    .expect("subtree abort policy bounds dynamic removal")
+    .expect("policy-bearing subtree is removed");
+    dynamic
+        .shutdown_and_wait()
+        .await
+        .expect("dynamic tree shuts down");
 }
 
 #[tokio::test]

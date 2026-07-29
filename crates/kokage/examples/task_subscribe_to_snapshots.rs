@@ -1,5 +1,5 @@
 use kokage::{
-    OrderedTree,
+    OrderedTree, Restart, TreeNode,
     host::ChildSpec,
     observe::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError, SupervisorSnapshot,
@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("worker stopping");
             Ok(())
         }))
-        .subtree("nested", nested)
+        .subtree("nested", TreeNode::from(nested).restart(Restart::never()))
         .spawn()?;
     let handle = running.handle();
     let mut snapshots = handle.subscribe_snapshots();
