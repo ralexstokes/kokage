@@ -12,10 +12,10 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSpec, Context, ControlError, DynamicRuntimeHandle, DynamicTree,
-    OrderedTree, Restart, RestrictedScope, RuntimeHandle, ScopeKind, StopContext, Strategy,
+    OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext, Strategy,
     SupervisorBuildError,
     host::{BoxError, ChildSpec},
-    observe::{ChildStateView, SupervisorSnapshotReceiver},
+    observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -278,11 +278,83 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
 
     runtime.shutdown_and_wait().await.expect("runtime stops");
 
-    let dynamic_root = DynamicTree::new().spawn().expect("dynamic root builds");
-    let _: DynamicRuntimeHandle = dynamic_root.handle();
+    let dynamic_tree = DynamicTree::new();
+    let pre_spawn = dynamic_tree.handle();
+    let dynamic_root = dynamic_tree.spawn().expect("dynamic root builds");
+    let post_spawn = dynamic_root
+        .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability");
+
+    pre_spawn
+        .add_child(ChildSpec::task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("pre-spawn capability mutates spawned root");
+    assert_eq!(pre_spawn.snapshot(), post_spawn.snapshot());
+    post_spawn
+        .remove_child("worker")
+        .await
+        .expect("post-spawn capability reaches the same membership");
+    assert_eq!(pre_spawn.snapshot(), post_spawn.snapshot());
+
     dynamic_root
         .shutdown_and_wait()
         .await
+        .expect("dynamic root stops");
+}
+
+#[tokio::test]
+async fn dynamic_completion_names_wait_for_future_members() {
+    let tree = DynamicTree::new();
+    let dynamic = tree.handle();
+    let mut waiter = tokio::spawn({
+        let dynamic = dynamic.clone();
+        async move { dynamic.wait_completed(["future"]).await }
+    });
+    let runtime = tree.spawn().expect("dynamic root builds");
+
+    assert!(
+        timeout(Duration::from_millis(50), &mut waiter)
+            .await
+            .is_err(),
+        "an absent dynamic member remains pending"
+    );
+
+    dynamic
+        .add_child(ChildSpec::task("future", |_| async { Ok(()) }))
+        .await
+        .expect("future member added");
+    assert_eq!(
+        timeout(WAIT, waiter)
+            .await
+            .expect("completion wait resolves")
+            .expect("completion task joins"),
+        CompletionOutcome::Completed
+    );
+
+    runtime
+        .shutdown_and_wait()
+        .await
+        .expect("dynamic root stops");
+}
+
+#[tokio::test]
+async fn dynamic_shutdown_on_completion_waits_for_future_members() {
+    let tree = DynamicTree::new();
+    let dynamic = tree.handle();
+    let _completion = dynamic.shutdown_on_completion(["future"]);
+    let runtime = tree.spawn().expect("dynamic root builds");
+
+    dynamic
+        .add_child(ChildSpec::task("future", |_| async { Ok(()) }))
+        .await
+        .expect("future member added");
+    timeout(WAIT, runtime.wait())
+        .await
+        .expect("completion requests shutdown")
         .expect("dynamic root stops");
 }
 
@@ -491,7 +563,12 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = invalid.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.handle().add_subtree("invalid", invalid).await,
+        parent
+            .handle()
+            .dynamic()
+            .expect("dynamic root exposes membership capability")
+            .add_subtree("invalid", invalid)
+            .await,
         Err(ControlError::Rejected(
             SupervisorBuildError::DuplicateChildId(label)
         )) if label == "duplicate-binding"
@@ -500,6 +577,8 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
 
     parent
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_subtree("occupied", DynamicTree::new())
         .await
         .expect("first subtree inserts");
@@ -507,7 +586,12 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let rejected = duplicate.handle();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
-        parent.handle().add_subtree("occupied", duplicate).await,
+        parent
+            .handle()
+            .dynamic()
+            .expect("dynamic root exposes membership capability")
+            .add_subtree("occupied", duplicate)
+            .await,
         Err(ControlError::Rejected(SupervisorBuildError::DuplicateChildId(id)))
             if id == "occupied"
     ));
@@ -530,6 +614,8 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
     let (awaited_tx, mut awaited_rx) = mpsc::unbounded_channel();
     let awaited = outer
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_subtree("awaited", single_use_mount(awaited_tx))
         .await
         .expect("awaited subtree inserts");
@@ -540,7 +626,10 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
     assert_eq!(next_report(&mut awaited_rx).await, "mounted");
 
     let (pipelined_tx, mut pipelined_rx) = mpsc::unbounded_channel();
-    let pipelined_outer = outer.handle();
+    let pipelined_outer = outer
+        .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability");
     let pipelined = tokio::spawn(async move {
         pipelined_outer
             .add_subtree("pipelined", single_use_mount(pipelined_tx))

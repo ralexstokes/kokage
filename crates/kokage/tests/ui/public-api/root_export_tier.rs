@@ -37,6 +37,7 @@ use kokage::LifecycleWatch;
 use kokage::LifecycleWatchGuard;
 use kokage::RawActor;
 use kokage::RunnableActor;
+use kokage::ScopeKind;
 use kokage::SnapshotRecvError;
 use kokage::SupervisionOutline;
 use kokage::SupervisorPathSegment;

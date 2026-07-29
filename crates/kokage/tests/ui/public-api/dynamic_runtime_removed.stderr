@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `kokage::DynamicRuntime`
+ --> tests/ui/public-api/dynamic_runtime_removed.rs:1:5
+  |
+1 | use kokage::DynamicRuntime;
+  |     ^^^^^^^^^^^^^^^^^^^^^^ no `DynamicRuntime` in the root

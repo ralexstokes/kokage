@@ -1584,6 +1584,8 @@ mod runnable_actor {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         runtime
             .handle()
+            .dynamic()
+            .expect("dynamic root exposes membership capability")
             .add_actor(
                 ActorSpec::new("worker", || NeverStops)
                     .shutdown(Shutdown::drain_for(Duration::from_millis(100))),
@@ -1596,7 +1598,12 @@ mod runnable_actor {
             .await
             .expect("dynamic actor started");
         assert!(matches!(
-            runtime.handle().remove_child("worker").await,
+            runtime
+                .handle()
+                .dynamic()
+                .expect("dynamic root exposes membership capability")
+                .remove_child("worker")
+                .await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"
         ));

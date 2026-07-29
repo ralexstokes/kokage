@@ -11,7 +11,7 @@ use kokage_supervisor::{
 };
 
 use crate::{
-    DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle,
+    DynamicRuntimeHandle, Runtime, RuntimeHandle,
     actor::{ActorNode, RunnableActorBuilder, SealedActorSpec},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -139,8 +139,7 @@ pub struct OrderedTree {
 ///
 /// Dynamic trees begin empty and accept runtime membership through the
 /// [`DynamicRuntimeHandle`] returned by [`handle`](Self::handle) before spawn
-/// or by calling [`DynamicRuntime::handle`] on the owner returned by
-/// [`spawn`](Self::spawn).
+/// or by calling [`RuntimeHandle::dynamic`] on the spawned runtime's handle.
 pub struct DynamicTree {
     inner: IdentityTree<true>,
 }
@@ -330,9 +329,10 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`DynamicRuntime`] for as long as the runtime should
-    /// remain alive. Dropping it requests graceful shutdown; its handles are
-    /// non-owning.
+    /// Retain the returned [`Runtime`] for as long as the runtime should remain
+    /// alive. Dropping it requests graceful shutdown; its handles are
+    /// non-owning. Recover the root's dynamic capability after spawn with
+    /// [`RuntimeHandle::dynamic`].
     ///
     /// # Errors
     ///
@@ -340,9 +340,9 @@ impl DynamicTree {
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal. An empty dynamic
     /// scope is valid and stays available for later insertion.
-    pub fn spawn(self) -> Result<DynamicRuntime, SupervisorBuildError> {
+    pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(DynamicRuntime::new(supervisor.spawn(), actors))
+        Ok(Runtime::new(supervisor.spawn(), actors))
     }
 }
 

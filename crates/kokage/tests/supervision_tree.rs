@@ -11,10 +11,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Notify, time::sleep};
 
 use kokage::{
-    ActorSpec, DynamicTree, MailboxMode, Restart, ScopeKind, Shutdown, Strategy,
-    SupervisorBuildError,
+    ActorSpec, DynamicTree, MailboxMode, Restart, Shutdown, Strategy, SupervisorBuildError,
     host::{ChildSpec, RawActor, RawContext},
-    observe::ChildOutline,
+    observe::{ChildOutline, ScopeKind},
     prelude::*,
 };
 

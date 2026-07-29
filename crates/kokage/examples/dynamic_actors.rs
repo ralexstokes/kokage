@@ -53,10 +53,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let orders = runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(ActorSpec::new("front-desk", || Frontend { rush: None }))
         .await?;
     let rush = runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(ActorSpec::new("rush-press", move || RushPress {
             observed: observed_tx.clone(),
         }))
@@ -75,8 +79,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert_eq!(observed, "vip banners x2");
     println!("rush job {observed}");
 
-    runtime.handle().remove_child("front-desk").await?;
-    runtime.handle().remove_child("rush-press").await?;
+    runtime
+        .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
+        .remove_child("front-desk")
+        .await?;
+    runtime
+        .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
+        .remove_child("rush-press")
+        .await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }

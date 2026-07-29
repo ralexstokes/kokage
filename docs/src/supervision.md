@@ -243,9 +243,10 @@ the runtime.
 
 Nested scopes need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
-in its own completion set. For dynamic scopes whose ids are not members yet,
-use `wait_completed_dynamic` or `shutdown_on_dynamic_completion`; those names
-make the future-membership behavior explicit.
+in its own completion set. A `DynamicRuntimeHandle` uses `wait_completed` and
+`shutdown_on_completion` with future-member semantics: absent ids remain
+pending until those memberships are added. The same names on `RuntimeHandle`
+validate ids against current or declared membership instead.
 
 ## Supervision trees
 
@@ -272,12 +273,13 @@ that shape.
 
 ## Dynamic task children
 
-`DynamicTree` starts empty. Obtain its membership capability from the runtime
-handle, then add and remove `ChildSpec` tasks:
+`DynamicTree` starts empty. Obtain its membership capability before spawn or
+recover it from the runtime handle afterward, then add and remove `ChildSpec`
+tasks:
 
 ```rust,ignore
 let runtime = DynamicTree::new().spawn()?;
-let dynamic = runtime.handle();
+let dynamic = runtime.handle().dynamic().expect("dynamic root");
 
 let lineage = dynamic
     .add_child(ChildSpec::task("night-shift-press", factory))

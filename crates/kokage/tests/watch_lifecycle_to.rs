@@ -101,6 +101,8 @@ async fn runtime_with_watched_subtree() -> (
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(
             ActorSpec::new("sink", move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
@@ -119,6 +121,8 @@ async fn runtime_with_watched_subtree() -> (
     graph.define(crasher_slot, || Crasher);
     let watched = runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_subtree(
             "watched",
             graph
@@ -131,7 +135,7 @@ async fn runtime_with_watched_subtree() -> (
         .await
         .expect("runtime startup timed out")
         .expect("runtime starts");
-    (runtime.into_runtime(), watched, sink, crasher, observed_rx)
+    (runtime, watched, sink, crasher, observed_rx)
 }
 
 async fn recv_event(
@@ -361,6 +365,8 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(ActorSpec::new("sink", move || RestrictedSink {
             observed: observed_tx.clone(),
             watch: None,
@@ -369,6 +375,8 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         .expect("restricted sink added");
     let crasher = runtime
         .handle()
+        .dynamic()
+        .expect("dynamic root exposes membership capability")
         .add_actor(ActorSpec::new("crasher", || Crasher).restart(Restart::on_failure()))
         .await
         .expect("crasher added");
