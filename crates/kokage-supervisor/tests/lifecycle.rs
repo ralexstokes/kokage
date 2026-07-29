@@ -605,7 +605,8 @@ async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
         .build()
         .expect("valid supervisor")
         .spawn();
-    handle
+    let dynamic = handle.dynamic().expect("dynamic supervisor");
+    dynamic
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -615,7 +616,7 @@ async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
     handle.wait_started().await.expect("startup succeeds");
 
     let restarted = handle.restart_of("worker");
-    handle
+    dynamic
         .remove_child("worker")
         .await
         .expect("worker removal succeeds");
