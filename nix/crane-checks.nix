@@ -19,7 +19,9 @@ let
       type == "directory"
       || craneLib.filterCargoSources path type
       || pkgs.lib.hasSuffix ".stderr" (toString path)
-      || pkgs.lib.hasSuffix "/assets/index.html" (toString path);
+      || pkgs.lib.hasSuffix "/assets/index.html" (toString path)
+      || pkgs.lib.hasSuffix "/scripts/check-public-api.sh" (toString path)
+      || pkgs.lib.hasSuffix "/scripts/public-api-paths.jq" (toString path);
   };
   commonArgs = {
     CARGO_PROFILE = "";
@@ -68,6 +70,17 @@ in
         cargo run --locked -p kokage --example agent_control --features metrics
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
       '';
+      doInstallCargoArtifacts = false;
+    }
+  );
+
+  public-api = craneLibNightly.mkCargoDerivation (
+    commonArgs
+    // {
+      cargoArtifacts = cargoArtifactsNightly;
+      nativeBuildInputs = [ pkgs.jq ];
+      KOKAGE_RUSTDOC_TOOLCHAIN = "";
+      buildPhaseCargoCommand = "bash scripts/check-public-api.sh";
       doInstallCargoArtifacts = false;
     }
   );
