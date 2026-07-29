@@ -14,9 +14,6 @@ use crate::supervisor::{
     strategy::Strategy,
 };
 
-#[cfg(test)]
-use crate::supervisor::RunningSupervisor;
-
 /// Builder for constructing a [`Supervisor`] with validated configuration.
 ///
 /// An ordered supervisor may be built with zero declared children, but its
@@ -109,11 +106,6 @@ impl OrderedSupervisorBuilder {
         self
     }
 
-    #[cfg(test)]
-    pub fn restart(self, restart: Restart) -> Self {
-        self.default_restart(restart)
-    }
-
     /// Sets the shutdown policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
@@ -164,11 +156,6 @@ impl OrderedSupervisorBuilder {
         reset_channels_for_config(&config, &channels);
         Ok(Supervisor::with_channels(config, channels))
     }
-
-    #[cfg(test)]
-    pub fn spawn(self) -> Result<RunningSupervisor, BuildError> {
-        Ok(self.build()?.spawn())
-    }
 }
 
 impl DynamicSupervisorBuilder {
@@ -214,11 +201,6 @@ impl DynamicSupervisorBuilder {
         self
     }
 
-    #[cfg(test)]
-    pub fn restart(self, restart: Restart) -> Self {
-        self.default_restart(restart)
-    }
-
     /// Sets the shutdown policy inherited by dynamically added task and
     /// supervisor specs that do not carry an explicit override.
     #[must_use]
@@ -237,11 +219,6 @@ impl DynamicSupervisorBuilder {
             .expect("valid dynamic supervisor builder owns channels");
         reset_channels_for_config(&config, &channels);
         Ok(Supervisor::with_channels(config, channels))
-    }
-
-    #[cfg(test)]
-    pub fn spawn(self) -> Result<RunningSupervisor, BuildError> {
-        Ok(self.build()?.spawn())
     }
 }
 

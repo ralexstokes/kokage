@@ -22,7 +22,7 @@ use tokio::{
     time::timeout,
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 use common::{ExitStatusView, ObservedEvent};
 
 struct NotifyOnDrop(Arc<Notify>);
@@ -238,7 +238,10 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
 
 #[tokio::test]
 async fn dynamic_completion_realigns_after_real_lifecycle_overflow() {
-    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let running = Supervisor::dynamic()
+        .build()
+        .expect("supervisor builds")
+        .spawn();
     let handle = running.handle();
     let dynamic = handle.dynamic().expect("dynamic capability is present");
     let mut wait = Box::pin(handle.wait_completed_dynamic(["target"]));

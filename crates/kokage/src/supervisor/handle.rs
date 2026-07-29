@@ -1446,6 +1446,8 @@ impl SupervisorHandle {
         })
     }
 
+    // The private runtime suite uses this to inspect restart-stable nested
+    // identities without restoring nested-handle lookup to the public API.
     #[cfg(test)]
     pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
         self.nested_channels()
@@ -1772,6 +1774,8 @@ impl SupervisorHandle {
         self.channels.lifecycle()
     }
 
+    // Test-only plumbing for `supervisor`; production code accesses nested
+    // channels through the stable channel owner directly.
     #[cfg(test)]
     fn nested_channels(&self) -> NestedChannels {
         self.channels.nested_channels()

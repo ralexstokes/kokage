@@ -9,7 +9,7 @@ use std::{
 use crate::supervisor::{ChildSpec, Restart, Shutdown, Strategy, Supervisor};
 use tokio::sync::{Notify, mpsc};
 
-use super::supervisor_test_common as common;
+use super::common;
 
 #[tokio::test]
 async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {

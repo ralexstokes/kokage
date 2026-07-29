@@ -15,7 +15,7 @@ use tokio::{
     time::timeout,
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 
 use common::{ObservedEvent, wait_for_snapshot};
 

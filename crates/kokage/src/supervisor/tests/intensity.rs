@@ -12,7 +12,7 @@ use tokio::{
     time::sleep,
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 use common::ObservedEvent;
 
 #[tokio::test]

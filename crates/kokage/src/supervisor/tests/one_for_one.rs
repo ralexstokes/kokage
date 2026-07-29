@@ -9,7 +9,7 @@ use tokio::{
     time::{Duration, sleep, timeout},
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 use common::ObservedEvent;
 
 #[tokio::test]

@@ -18,7 +18,7 @@ example. Run any of them with:
 cargo run -p <crate> --example <name>
 ```
 
-### Task supervision with `kokage`
+### `kokage`
 
 | Example | Shows |
 |---------|-------|
@@ -32,11 +32,6 @@ cargo run -p <crate> --example <name>
 | `task_subscribe_to_snapshots` | Polling supervisor state. |
 | `task_tracing` | Structured logging output. |
 | `task_metrics` | Prometheus metrics (needs `--features metrics`). |
-
-### `kokage`
-
-| Example | Shows |
-|---------|-------|
 | `supervised_actors` | Per-actor supervision with default policies. |
 | `supervision` | A typed cycle wired explicitly with `ActorSlot`. |
 | `individual_actor_policies` | Per-actor restart/shutdown overrides. |

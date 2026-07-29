@@ -1,7 +1,20 @@
 error[E0432]: unresolved imports `kokage::AttachedChild`, `kokage::AttachedChildIdentity`
- --> tests/ui/public-api/private_attachments.rs:1:14
+ --> tests/ui/public-api/private_attachments.rs:2:5
   |
-1 | use kokage::{AttachedChild, AttachedChildIdentity};
-  |              ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^ no `AttachedChildIdentity` in the root
-  |              |
-  |              no `AttachedChild` in the root
+2 |     AttachedChild, AttachedChildIdentity,
+  |     ^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^ no `AttachedChildIdentity` in the root
+  |     |
+  |     no `AttachedChild` in the root
+
+error[E0624]: method `attachment` is private
+ --> tests/ui/public-api/private_attachments.rs:7:24
+  |
+7 |       let _ = ChildSpec::attachment::<()>;
+  |                          ^^^^^^^^^^ private method
+  |
+ ::: src/supervisor/child.rs
+  |
+  | /     pub(crate) fn attachment<T>(self, attachment: T) -> Self
+  | |     where
+  | |         T: Any + Send + Sync,
+  | |_____________________________- private method defined here

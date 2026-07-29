@@ -205,6 +205,12 @@
 //! - `examples/actor_metrics.rs` and `examples/actor_tracing.rs` —
 //!   observability patterns.
 //! - `examples/json_edge.rs` — decoding byte-oriented JSON into typed messages.
+//! - `examples/task_one_for_one_restart.rs` and
+//!   `examples/task_one_for_all_pipeline.rs` — task-supervision strategies.
+//! - `examples/task_dynamic_children.rs` and
+//!   `examples/task_nested_supervisor.rs` — dynamic and nested task scopes.
+//! - `examples/task_metrics.rs` and `examples/task_tracing.rs` —
+//!   task-supervisor observability.
 //!
 //! # Cargo features
 //!
@@ -276,10 +282,6 @@ pub mod prelude {
 #[cfg(feature = "derive")]
 pub use kokage_derive::ActorFactory;
 
-pub use crate::supervisor::{
-    Backoff, BackoffParts, BuildError, CancellationToken, ControlError, Guard, Restart, RestartMode,
-    Shutdown, ShutdownMode, Strategy, SupervisorError,
-};
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, Context, DownReason, DynamicRestrictedScope, MailboxMode,
@@ -288,3 +290,7 @@ pub use actor::{
 };
 pub use runtime::{DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
+pub use supervisor::{
+    Backoff, BackoffParts, BuildError, CancellationToken, ControlError, Guard, Restart, RestartMode,
+    Shutdown, ShutdownMode, Strategy, SupervisorError,
+};

@@ -9,7 +9,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 use common::{ExitStatusView, ObservedEvent};
 
 async fn spawn_dynamic(

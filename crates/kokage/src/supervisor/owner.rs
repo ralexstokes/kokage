@@ -175,6 +175,9 @@ impl Supervisor {
         }
     }
 
+    // Test-only access preserves the pre-spawn contract: control operations
+    // are unavailable before `spawn`, while declared snapshots and lifecycle
+    // watches can already be observed.
     #[cfg(test)]
     pub fn handle(&self) -> SupervisorHandle {
         self.channels.handle()

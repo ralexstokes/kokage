@@ -15,7 +15,7 @@ use tokio::{
     time::timeout,
 };
 
-use super::supervisor_test_common as common;
+use super::common;
 use common::{ExitStatusView, ObservedEvent, ObservedPathSegment};
 
 #[tokio::test]
