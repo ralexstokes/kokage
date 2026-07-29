@@ -226,6 +226,45 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
 }
 
 #[tokio::test]
+async fn dynamic_completion_realigns_after_real_lifecycle_overflow() {
+    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let handle = running.handle();
+    let dynamic = handle.dynamic().expect("dynamic capability is present");
+    let mut wait = Box::pin(handle.wait_completed_dynamic(["target"]));
+    assert!(
+        timeout(common::QUIET_TIMEOUT, &mut wait).await.is_err(),
+        "the wait is armed before future membership appears"
+    );
+
+    dynamic
+        .add_child(ChildSpec::task("target", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .await
+        .expect("target is added");
+    for index in 0..70 {
+        let id = format!("churn-{index}");
+        dynamic
+            .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }))
+            .await
+            .expect("churn child is added");
+        dynamic
+            .remove_child(id)
+            .await
+            .expect("churn child is removed");
+    }
+
+    assert_eq!(
+        timeout(common::EVENT_TIMEOUT, wait)
+            .await
+            .expect("overflow realignment completes"),
+        CompletionOutcome::Completed
+    );
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
 async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
     let inner_builder = Supervisor::ordered().child(ChildSpec::task("done", |_| async { Ok(()) }));
     let _finished = inner_builder.handle().shutdown_on_completion(["done"]);

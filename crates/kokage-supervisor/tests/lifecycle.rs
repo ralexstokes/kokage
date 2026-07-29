@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildSpec, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig,
-    RestartPolicy, Supervisor, SupervisorError,
+    BackoffPolicy, ChildSpec, CompletionGuard, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
+    RestartConfig, RestartPolicy, ShutdownPolicy, Strategy, Supervisor, SupervisorError,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -33,6 +33,23 @@ async fn next_matching(
     })
     .await
     .expect("matching lifecycle event arrives")
+}
+
+async fn wait_closed(watch: &mut LifecycleWatch, phase: &str) {
+    timeout(WAIT, async { while watch.next().await.is_some() {} })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {phase}"));
+}
+
+async fn assert_stays_open(watch: &mut LifecycleWatch, phase: &str) {
+    assert!(
+        timeout(Duration::from_millis(100), async {
+            while watch.next().await.is_some() {}
+        })
+        .await
+        .is_err(),
+        "{phase}"
+    );
 }
 
 #[tokio::test]
@@ -81,7 +98,7 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     let restart = RestartConfig::new(3, Duration::from_secs(1))
-        .backoff(BackoffPolicy::Fixed(Duration::from_millis(1)));
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(50)));
     let builder = Supervisor::ordered().child(
         ChildSpec::task("flaky", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
@@ -126,6 +143,11 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
                     child_restart_count,
                     ..
                 } if child_id == "flaky" => {
+                    let snapshot = handle.snapshot();
+                    let child = snapshot.child("flaky").expect("flaky remains declared");
+                    assert_eq!(snapshot.lifecycle_seq, seq);
+                    assert_eq!(child.restart_count, child_restart_count);
+                    assert!(child.next_restart_in.is_some());
                     transitions.push(("scheduled", seq, total_restarts, child_restart_count));
                 }
                 LifecycleEventKind::ChildStarted {
@@ -208,6 +230,122 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
         first.supervisor_path[0].lineage, replacement.supervisor_path[0].lineage,
         "restarts retain the parent membership lineage"
     );
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
+    let crash_worker = Arc::new(Notify::new());
+    let crash_fatal = Arc::new(Notify::new());
+    let worker_crash = Arc::clone(&crash_worker);
+    let fatal_crash = Arc::clone(&crash_fatal);
+    let middle = Supervisor::ordered()
+        .child(
+            ChildSpec::task("worker", move |ctx| {
+                let crash = Arc::clone(&worker_crash);
+                async move {
+                    if ctx.generation() == 0 {
+                        crash.notified().await;
+                        return Err(failure("worker boom"));
+                    }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .shutdown(ShutdownPolicy::Abort),
+        )
+        .child(
+            ChildSpec::task("fatal", move |_| {
+                let crash = Arc::clone(&fatal_crash);
+                async move {
+                    crash.notified().await;
+                    Err(failure("fatal boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::Abort),
+        )
+        .build()
+        .expect("middle supervisor builds");
+    let running = Supervisor::ordered()
+        .child(
+            ChildSpec::supervisor("middle", middle)
+                .restart(RestartPolicy::OnFailure)
+                .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
+        )
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+    let middle = root.supervisor("middle").expect("middle handle exists");
+    let initial_lineage = middle
+        .snapshot()
+        .child("worker")
+        .expect("worker is declared")
+        .lineage;
+    let mut watch = middle.watch_lifecycle();
+
+    crash_worker.notify_one();
+    let restarted = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted {
+                ref child_id,
+                generation: 1,
+                ..
+            } if child_id == "worker"
+        )
+    })
+    .await;
+    assert_eq!(restarted.total_restarts(), Some(1));
+
+    crash_fatal.notify_one();
+    let fatal_exit = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited {
+                ref child_id,
+                generation: 0,
+                ..
+            } if child_id == "fatal"
+        )
+    })
+    .await;
+    let added = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    let started = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted {
+                ref child_id,
+                generation: 0,
+                ..
+            } if child_id == "worker"
+        )
+    })
+    .await;
+    assert_eq!(added.seq(), fatal_exit.seq().map(|seq| seq + 1));
+    assert!(started.seq() > added.seq());
+    let added_lineage = match &added.kind {
+        LifecycleEventKind::ChildAdded { lineage, .. } => *lineage,
+        _ => unreachable!(),
+    };
+    let started_lineage = match &started.kind {
+        LifecycleEventKind::ChildStarted { lineage, .. } => *lineage,
+        _ => unreachable!(),
+    };
+    assert!(added_lineage > initial_lineage);
+    assert_eq!(started_lineage, added_lineage);
+    assert_eq!(added.total_restarts(), Some(2));
+    assert_eq!(started.total_restarts(), Some(2));
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -673,6 +811,400 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
     assert!(second.supervisor_path[0].lineage > first_lineage);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn group_revivable_nested_watch_stays_open_and_resumes() {
+    let complete_leaf = Arc::new(Notify::new());
+    let crash_sibling = Arc::new(Notify::new());
+    let leaf_complete = Arc::clone(&complete_leaf);
+    let leaf_builder = Supervisor::ordered().child(
+        ChildSpec::task("worker", move |_| {
+            let complete = Arc::clone(&leaf_complete);
+            async move {
+                complete.notified().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::OnFailure)
+        .shutdown(ShutdownPolicy::Abort),
+    );
+    let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
+    let leaf = leaf_builder.build().expect("leaf supervisor builds");
+    let sibling_crash = Arc::clone(&crash_sibling);
+    let running = Supervisor::ordered()
+        .strategy(Strategy::OneForAll)
+        .child(ChildSpec::supervisor("leaf", leaf).restart(RestartPolicy::OnFailure))
+        .child(
+            ChildSpec::task("sibling", move |_| {
+                let crash = Arc::clone(&sibling_crash);
+                async move {
+                    crash.notified().await;
+                    Err(failure("sibling boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .shutdown(ShutdownPolicy::Abort),
+        )
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+    let leaf = root.supervisor("leaf").expect("leaf handle exists");
+    let mut watch = leaf.watch_lifecycle();
+
+    complete_leaf.notify_one();
+    next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    assert_stays_open(
+        &mut watch,
+        "a group-revivable nested identity must remain open",
+    )
+    .await;
+
+    crash_sibling.notify_one();
+    let added = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    let started = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted {
+                ref child_id,
+                generation: 0,
+                ..
+            } if child_id == "worker"
+        )
+    })
+    .await;
+    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+    wait_closed(&mut watch, "root shutdown to close revived nested watch").await;
+}
+
+#[tokio::test]
+async fn never_policy_nested_stop_closes_its_watch() {
+    let crash = Arc::new(Notify::new());
+    let child_crash = Arc::clone(&crash);
+    let nested = Supervisor::ordered()
+        .child(
+            ChildSpec::task("worker", move |_| {
+                let crash = Arc::clone(&child_crash);
+                async move {
+                    crash.notified().await;
+                    Err(failure("worker boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
+        )
+        .build()
+        .expect("nested supervisor builds");
+    let running = Supervisor::ordered()
+        .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+    let nested = root.supervisor("nested").expect("nested handle exists");
+    let mut watch = nested.watch_lifecycle();
+
+    crash.notify_one();
+    next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    wait_closed(&mut watch, "Never-policy nested identity to close").await;
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn parent_stop_closes_nested_watch_while_handle_is_retained() {
+    let running = Supervisor::ordered()
+        .child(ChildSpec::supervisor("nested", idle_supervisor()))
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+    let nested = root.supervisor("nested").expect("nested handle exists");
+    let mut watch = nested.watch_lifecycle();
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+    wait_closed(&mut watch, "root terminality to close descendant watch").await;
+    assert_eq!(nested.snapshot().total_restarts, 0);
+}
+
+#[tokio::test]
+async fn nested_watch_survives_restartable_ancestor_reincarnation() {
+    let crash_leaf = Arc::new(Notify::new());
+    let crash_middle = Arc::new(Notify::new());
+    let running = Supervisor::ordered()
+        .child(
+            ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
+                .restart(RestartPolicy::OnFailure)
+                .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
+        )
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+    let middle = root.supervisor("middle").expect("middle handle exists");
+    let leaf = middle.supervisor("leaf").expect("leaf handle exists");
+    let mut watch = leaf.watch_lifecycle();
+
+    crash_leaf.notify_one();
+    let first_exit = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    assert_stays_open(
+        &mut watch,
+        "a restartable ancestor keeps the provisional identity open",
+    )
+    .await;
+
+    crash_middle.notify_one();
+    let added = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    let started = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted {
+                ref child_id,
+                generation: 0,
+                ..
+            } if child_id == "worker"
+        )
+    })
+    .await;
+    assert!(added.seq() > first_exit.seq());
+    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
+
+    crash_leaf.notify_one();
+    let second_exit = next_matching(&mut watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    assert!(second_exit.seq() > started.seq());
+    assert_eq!(second_exit.total_restarts(), Some(1));
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+    wait_closed(
+        &mut watch,
+        "root shutdown to close revived descendant watch",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
+    let crash_middle = Arc::new(Notify::new());
+    let middle = Supervisor::dynamic()
+        .build()
+        .expect("dynamic middle supervisor builds");
+    let running = Supervisor::ordered()
+        .child(
+            ChildSpec::supervisor("middle", middle)
+                .restart(RestartPolicy::OnFailure)
+                .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
+        )
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+
+    let middle = root.supervisor("middle").expect("middle handle exists");
+    let bomb_crash = Arc::clone(&crash_middle);
+    let dynamic = middle.dynamic().expect("middle is dynamic");
+    dynamic
+        .add_child(
+            ChildSpec::task("bomb", move |_| {
+                let crash = Arc::clone(&bomb_crash);
+                async move {
+                    crash.notified().await;
+                    Err(failure("middle boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
+        )
+        .await
+        .expect("bomb is added");
+    dynamic
+        .add_child(ChildSpec::supervisor("orphan", idle_supervisor()))
+        .await
+        .expect("orphan is added");
+    let orphan = middle.supervisor("orphan").expect("orphan handle exists");
+    let mut watch = orphan.watch_lifecycle();
+    let mut middle_snapshots = middle.subscribe_snapshots();
+
+    crash_middle.notify_one();
+    wait_closed(
+        &mut watch,
+        "orphaned watch to close after ancestor reincarnation",
+    )
+    .await;
+    timeout(
+        WAIT,
+        middle_snapshots.wait_for(|snapshot| {
+            snapshot.total_restarts == 1 && snapshot.child("orphan").is_none()
+        }),
+    )
+    .await
+    .expect("replacement snapshot arrives")
+    .expect("snapshot stream remains open");
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn rest_for_one_closes_head_but_defers_tail_terminality() {
+    let complete_head = Arc::new(Notify::new());
+    let complete_tail = Arc::new(Notify::new());
+    let (head_supervisor, _head_finished) = completing_supervisor(&complete_head);
+    let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
+    let running = Supervisor::ordered()
+        .strategy(Strategy::RestForOne)
+        .child(ChildSpec::supervisor("head", head_supervisor).restart(RestartPolicy::OnFailure))
+        .child(ChildSpec::supervisor("tail", tail_supervisor).restart(RestartPolicy::OnFailure))
+        .spawn()
+        .expect("root supervisor spawns");
+    let root = running.handle();
+    root.wait_started().await.expect("root starts");
+    let head = root.supervisor("head").expect("head handle exists");
+    let tail = root.supervisor("tail").expect("tail handle exists");
+    let mut head_watch = head.watch_lifecycle();
+    let mut tail_watch = tail.watch_lifecycle();
+
+    complete_head.notify_one();
+    next_matching(&mut head_watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    wait_closed(&mut head_watch, "RestForOne head watch to close").await;
+    assert_eq!(
+        root.snapshot().state,
+        kokage_supervisor::SupervisorStateView::Running
+    );
+
+    complete_tail.notify_one();
+    next_matching(&mut tail_watch, |event| {
+        matches!(
+            event.kind,
+            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
+        )
+    })
+    .await;
+    assert_stays_open(
+        &mut tail_watch,
+        "the RestForOne tail identity remains provisionally revivable",
+    )
+    .await;
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+    wait_closed(
+        &mut tail_watch,
+        "root shutdown to close deferred tail watch",
+    )
+    .await;
+}
+
+fn idle_supervisor() -> kokage_supervisor::Supervisor {
+    Supervisor::ordered()
+        .child(ChildSpec::task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .build()
+        .expect("idle supervisor builds")
+}
+
+fn middle_supervisor(
+    crash_leaf: &Arc<Notify>,
+    crash_middle: &Arc<Notify>,
+) -> kokage_supervisor::Supervisor {
+    let leaf_crash = Arc::clone(crash_leaf);
+    let leaf = Supervisor::ordered()
+        .child(
+            ChildSpec::task("worker", move |_| {
+                let crash = Arc::clone(&leaf_crash);
+                async move {
+                    crash.notified().await;
+                    Err(failure("leaf boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::Abort),
+        )
+        .build()
+        .expect("leaf supervisor builds");
+    let middle_crash = Arc::clone(crash_middle);
+    Supervisor::ordered()
+        .child(ChildSpec::supervisor("leaf", leaf).restart(RestartPolicy::Never))
+        .child(
+            ChildSpec::task("bomb", move |_| {
+                let crash = Arc::clone(&middle_crash);
+                async move {
+                    crash.notified().await;
+                    Err(failure("middle boom"))
+                }
+            })
+            .restart(RestartPolicy::OnFailure)
+            .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
+            .shutdown(ShutdownPolicy::Abort),
+        )
+        .build()
+        .expect("middle supervisor builds")
+}
+
+fn completing_supervisor(
+    complete: &Arc<Notify>,
+) -> (kokage_supervisor::Supervisor, CompletionGuard) {
+    let complete = Arc::clone(complete);
+    let builder = Supervisor::ordered().child(
+        ChildSpec::task("worker", move |_| {
+            let complete = Arc::clone(&complete);
+            async move {
+                complete.notified().await;
+                Ok(())
+            }
+        })
+        .restart(RestartPolicy::OnFailure),
+    );
+    let finished = builder.handle().shutdown_on_completion(["worker"]);
+    (
+        builder.build().expect("completing supervisor builds"),
+        finished,
+    )
 }
 
 #[tokio::test]

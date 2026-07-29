@@ -3,15 +3,49 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-cargo build --locked -p kokage --all-features
+docs_build_messages=$(mktemp)
+docs_wrapper_dir=
+cleanup() {
+  rm -f "$docs_build_messages"
+  if [[ -n "$docs_wrapper_dir" ]]; then
+    rm -rf "$docs_wrapper_dir"
+  fi
+}
+trap cleanup EXIT
+if ! cargo build --locked -p kokage --all-features --message-format=json-render-diagnostics \
+  > "$docs_build_messages"; then
+  jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' \
+    "$docs_build_messages" >&2
+  exit 1
+fi
 
-kokage_docs_rlib=$(pwd)/$(ls -t target/debug/deps/libkokage-*.rlib | sed -n '1p')
-tokio_docs_rlib=$(pwd)/$(ls -t target/debug/deps/libtokio-*.rlib | sed -n '1p')
-docs_deps_dir=$(pwd)/target/debug/deps
+artifact_rlib() {
+  jq -rs --arg crate "$1" '
+    [
+      .[]
+      | select(
+          .reason == "compiler-artifact"
+          and .target.name == $crate
+          and (.target.kind | index("lib"))
+        )
+      | .filenames[]
+      | select(endswith(".rlib"))
+    ]
+    | last // empty
+  ' "$docs_build_messages"
+}
+
+kokage_docs_rlib=$(artifact_rlib kokage)
+tokio_docs_rlib=$(artifact_rlib tokio)
+if [[ -z "$kokage_docs_rlib" || -z "$tokio_docs_rlib" ]]; then
+  echo "cargo did not report the kokage and tokio rlibs required for docs" >&2
+  exit 1
+fi
+
+docs_deps_dir=$(dirname "$tokio_docs_rlib")
 docs_wrapper_dir=$(mktemp -d "$docs_deps_dir/docs-test-bin.XXXXXX")
 docs_real_rustdoc=$(command -v rustdoc)
 docs_bash=$(command -v bash)
-trap 'rm -rf "$docs_wrapper_dir"' EXIT
 
 export KOKAGE_DOCS_RLIB="$kokage_docs_rlib"
 export KOKAGE_DOCS_TOKIO_RLIB="$tokio_docs_rlib"

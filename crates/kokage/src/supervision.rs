@@ -789,7 +789,7 @@ impl SupervisionChild {
                 strategy,
             } => {
                 let owned_actors = Arc::new(ActorRuntimeState::new(
-                    RunnableActorBuilder::new(),
+                    actors.actor_builder(),
                     default_restart,
                     default_shutdown,
                 ));
@@ -887,10 +887,27 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         let id = config
             .reservation
             .expect("reserved tree root has a reservation");
-        let child_ids = match &self.tree.node {
+        let declared_children = match &self.tree.node {
             ScopeNode::Ordered { children, .. } => children
                 .iter()
-                .map(|child| child.declared_id().to_owned())
+                .map(|child| {
+                    let restart = match child {
+                        SupervisionChild::Actor(actor) => {
+                            actor.restart.unwrap_or(config.default_restart)
+                        }
+                        SupervisionChild::Task(child) => {
+                            __private::child_policies(
+                                child,
+                                config.default_restart,
+                                config.default_shutdown,
+                            )
+                            .0
+                        }
+                        SupervisionChild::Scope { .. }
+                        | SupervisionChild::ActorWithScope { .. } => config.default_restart,
+                    };
+                    (child.declared_id().to_owned(), restart)
+                })
                 .collect(),
             ScopeNode::Dynamic { .. } => Vec::new(),
         };
@@ -909,7 +926,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
                 .take()
                 .expect("live reservation owns its ordered builder")
                 .strategy(config.strategy);
-            configured.project_declared_children(child_ids);
+            configured.project_declared_children(declared_children);
             *builder = Some(configured);
         }
     }

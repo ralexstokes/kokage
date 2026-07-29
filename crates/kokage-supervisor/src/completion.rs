@@ -87,8 +87,11 @@ impl SupervisorHandle {
     /// later start un-completes it, so a child that is restarted — including by
     /// a sibling-driven group restart — must complete again. Failed exits never
     /// count, matching the rule that failures follow the restart policy rather
-    /// than signalling finished work. A child whose membership is removed drops
-    /// out of the set: its work is not coming back.
+    /// than signalling finished work. A child configured with
+    /// [`RestartPolicy::Always`](crate::RestartPolicy::Always) never counts as
+    /// completed while it remains a member, even between its clean exit and
+    /// replacement. A child whose membership is removed drops out of the set:
+    /// its work is not coming back.
     ///
     /// Awaiting an empty set returns [`CompletionOutcome::Completed`]
     /// immediately. An id absent from the current (including projected
@@ -258,7 +261,18 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
             baseline = set.realign(&handle.snapshot());
         } else if event.supervisor_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline)
         {
+            let needs_realign = matches!(
+                &event.kind,
+                LifecycleEventKind::ChildAdded { .. } | LifecycleEventKind::ChildExited { .. }
+            );
             set.apply(&event);
+            if needs_realign {
+                // The snapshot is published before this exit event and knows
+                // the restart policy and whether a replacement is pending.
+                // Realigning here avoids treating an Always-policy clean exit
+                // as complete even transiently.
+                baseline = set.realign(&handle.snapshot());
+            }
         }
     }
 }
@@ -282,6 +296,8 @@ struct CompletionSet {
     /// still delivered, but their older lineage must not alter the replacement
     /// membership's completion state.
     latest_lineages: HashMap<String, u64>,
+    /// Restart policy of the newest snapshot-aligned membership for each id.
+    restart_policies: HashMap<String, crate::RestartPolicy>,
 }
 
 impl CompletionSet {
@@ -295,6 +311,7 @@ impl CompletionSet {
             satisfied: HashSet::new(),
             seen: HashSet::new(),
             latest_lineages: HashMap::new(),
+            restart_policies: HashMap::new(),
         }
     }
 
@@ -335,6 +352,9 @@ impl CompletionSet {
         if lineage < *latest_lineage {
             return;
         }
+        if lineage > *latest_lineage {
+            self.restart_policies.remove(child_id);
+        }
         *latest_lineage = lineage;
         self.seen.insert(child_id.clone());
 
@@ -344,10 +364,15 @@ impl CompletionSet {
             CompletionTransition::Running => {
                 self.satisfied.remove(child_id);
             }
-            // A cancellation-driven `Ok(())` — shutdown, removal, or a
-            // sibling-driven group restart — is not finished work.
+            // The event loop aligns every installed membership from its
+            // already-published snapshot, so Always-policy work is never
+            // marked complete even between clean exit and restart scheduling.
+            // A final snapshot realignment also checks pending restart state.
             CompletionTransition::Exited(exit) => {
-                if exit.is_completed() && !exit.cancelled() {
+                if exit.is_completed()
+                    && !exit.cancelled()
+                    && self.restart_policies.get(child_id) != Some(&crate::RestartPolicy::Always)
+                {
                     self.satisfied.insert(child_id.clone());
                 } else {
                     self.satisfied.remove(child_id);
@@ -373,6 +398,8 @@ impl CompletionSet {
                         continue;
                     }
                     self.latest_lineages.insert(id.clone(), child.lineage);
+                    self.restart_policies
+                        .insert(id.clone(), child.restart_policy);
                     self.seen.insert(id.clone());
                     is_completed(child)
                 }

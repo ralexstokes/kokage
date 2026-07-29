@@ -242,6 +242,50 @@ async fn tree_placed_specs_inherit_the_hosting_graph_mailbox_default() {
 }
 
 #[tokio::test]
+async fn actor_with_scope_leader_inherits_the_hosting_graph_mailbox_default() {
+    let mut graph = GraphBuilder::new();
+    graph.name("shared-owned-scope").mailbox_capacity(9);
+    let peer = graph.actor(ActorSpec::new("peer", || Worker));
+    let graph = graph.build().expect("graph builds");
+
+    let leader = ActorSpec::new("leader", || Worker);
+    let leader_ref = leader.actor_ref();
+    let runtime = OrderedTree::graph(graph)
+        .actor_with_scope("owned", leader, DynamicTree::new(), Strategy::OneForAll)
+        .spawn()
+        .expect("tree builds");
+    runtime.handle().wait_started().await.expect("actors start");
+
+    assert_eq!(peer.stats().mailbox_capacity, 9);
+    assert_eq!(leader_ref.stats().mailbox_capacity, 9);
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[test]
+fn pre_spawn_projection_preserves_declared_restart_policies() {
+    let tree = OrderedTree::new()
+        .default_restart(RestartPolicy::Always)
+        .actor(ActorSpec::new("explicit", || Worker).restart(RestartPolicy::Never))
+        .actor(ActorSpec::new("inherited", || Worker));
+    let snapshot = tree.handle().snapshot();
+
+    assert_eq!(
+        snapshot
+            .child("explicit")
+            .expect("explicit actor is projected")
+            .restart_policy,
+        RestartPolicy::Never
+    );
+    assert_eq!(
+        snapshot
+            .child("inherited")
+            .expect("inherited actor is projected")
+            .restart_policy,
+        RestartPolicy::Always
+    );
+}
+
+#[tokio::test]
 async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() {
     let spec = ActorSpec::new("buffered", || Parked)
         .mailbox(MailboxMode::conflate())

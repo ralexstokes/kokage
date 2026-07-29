@@ -601,7 +601,10 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .await
         .expect("outer supervisor remains live")
         .generation;
-    assert_eq!(restarted_generation, baseline + 1);
+    assert!(
+        restarted_generation > baseline,
+        "the conflating snapshot wait reports monotonic progress"
+    );
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
 
     loop {

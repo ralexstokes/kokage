@@ -354,7 +354,7 @@ impl StableSupervisorChannels {
         });
     }
 
-    pub(crate) fn project_declared_children(&self, ids: Vec<String>) {
+    pub(crate) fn project_declared_children(&self, children: Vec<(String, crate::RestartPolicy)>) {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what
         // makes the documented `(child_id, lineage)` upsert on
@@ -368,10 +368,10 @@ impl StableSupervisorChannels {
         );
         let snapshots = self.snapshots();
         snapshots.send_if_modified(|snapshot| {
-            let children = ids
+            let children = children
                 .into_iter()
                 .enumerate()
-                .map(|(lineage, id)| ChildSnapshot {
+                .map(|(lineage, (id, restart_policy))| ChildSnapshot {
                     id,
                     lineage: lineage as u64,
                     generation: 0,
@@ -380,7 +380,7 @@ impl StableSupervisorChannels {
                     },
                     membership: ChildMembershipView::Active,
                     restart_count: 0,
-                    restart_policy: crate::RestartPolicy::default(),
+                    restart_policy,
                     next_restart_in: None,
                     supervisor: None,
                 })
@@ -560,10 +560,10 @@ impl StableSupervisorChannels {
     ) {
         let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal
-            || !binding
+            || binding
                 .current
                 .as_ref()
-                .is_some_and(|binding| binding.binding_epoch == binding_epoch)
+                .is_none_or(|binding| binding.binding_epoch != binding_epoch)
         {
             return;
         }
@@ -599,10 +599,10 @@ impl StableSupervisorChannels {
     fn publish_snapshot(&self, binding_epoch: u64, snapshot: &SupervisorSnapshot) {
         let binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
         if binding.terminal
-            || !binding
+            || binding
                 .current
                 .as_ref()
-                .is_some_and(|binding| binding.binding_epoch == binding_epoch)
+                .is_none_or(|binding| binding.binding_epoch != binding_epoch)
         {
             return;
         }

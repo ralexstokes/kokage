@@ -18,13 +18,13 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorSlot, ActorSpec, BackoffPolicy, BlockingCancelled,
+            ActorFactory, ActorNode, ActorSlot, ActorSpec, BackoffPolicy, BlockingCancelled,
             CancellationHandle, CancellationToken, ControlError, DownReason, DrainPolicy,
             DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, DynamicTree, Graph,
-            GraphBuildError, GraphSpawnError, MailboxMode, MonitorEvent, OffloadDeadline,
-            RestartConfig, RestartPolicy, RestrictedScope, Runtime, RuntimeHandle, ScopeKind,
-            ShutdownPolicy, Strategy, Supervision, SupervisorBuildError, SupervisorError,
-            TaskHandle, TerminalMembership, TimerKey, TreeNode,
+            GraphBuildError, GraphSpawnError, IntoActorNode, MailboxMode, MonitorEvent,
+            OffloadDeadline, RestartConfig, RestartPolicy, RestrictedScope, Runtime, RuntimeHandle,
+            ScopeKind, ShutdownPolicy, Strategy, Supervision, SupervisorBuildError,
+            SupervisorError, TaskHandle, TerminalMembership, TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }

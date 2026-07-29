@@ -1,0 +1,5 @@
+error: expected `label = "..."`; graph configuration and supervision topology are explicit outside the derive
+  --> tests/ui/supervision/label_unsupported_option.rs:15:19
+   |
+15 |     #[supervision(path = "worker")]
+   |                   ^^^^

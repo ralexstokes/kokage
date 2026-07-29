@@ -196,10 +196,11 @@ custom synchronous construction rather than `Default`.
 
 `#[derive(Supervision)]` supports named-field structs whose fields implement
 `host::RawActor`. Field names become actor labels; rename one with
-`#[supervision(label = "...")]`. The generated `wire` method mutates a
-caller-owned `GraphBuilder` and returns cloneable typed refs. Build the graph,
-then select its supervision topology explicitly with `OrderedTree` or
-`DynamicTree`.
+`#[supervision(label = "...")]`. A custom label must be non-empty and cannot
+contain `.`, which separates supervisor path components. The generated `wire`
+method mutates a caller-owned `GraphBuilder` and returns cloneable typed refs.
+Build the graph, then select its supervision topology explicitly with
+`OrderedTree` or `DynamicTree`.
 
 The derive keeps that shape in the type system:
 

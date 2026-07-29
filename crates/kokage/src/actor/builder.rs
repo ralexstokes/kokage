@@ -396,6 +396,12 @@ impl ActorNode {
     }
 
     /// Converts this placement token into the advanced custom-host actor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a deferred [`ActorSpec`] configured a zero mailbox capacity.
+    /// Supervision-tree placement reports the same invalid declaration as a
+    /// [`SupervisorBuildError`](crate::SupervisorBuildError) instead.
     pub fn into_runnable(self) -> RunnableActor {
         self.materialize(&RunnableActorBuilder::new())
             .expect("ActorSpec mailbox capacity must be non-zero")
