@@ -101,8 +101,8 @@ Configure an individual declaration before placement:
 # impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(128)
-    .mailbox(MailboxMode::fifo())
-    .restart(RestartPolicy::Permanent)
+    .mailbox(MailboxMode::queue())
+    .restart(RestartPolicy::Always)
     .message_size(|message: &String| message.len());
 # let _ = worker;
 ```

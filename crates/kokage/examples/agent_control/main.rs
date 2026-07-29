@@ -532,7 +532,7 @@ async fn phase_5(app: &App) -> Result<(), AnyError> {
         .gateway
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "gateway.progress")
+        .find(|stats| stats.actor_id == "progress")
         .expect("progress actor stats");
     assert!(progress_stats.messages_received < progress_stats.messages_accepted);
     assert!(progress_stats.messages_conflated > 0);
@@ -738,7 +738,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
         .core
         .actor_stats()
         .into_iter()
-        .find(|stats| stats.actor_id == "core.journal")
+        .find(|stats| stats.actor_id == "journal")
         .expect("journal stats");
     assert!(
         journal_stats

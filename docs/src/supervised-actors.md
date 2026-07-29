@@ -8,16 +8,20 @@ lifecycle events, and statistics.
 # use kokage::{ActorSpec, OrderedTree, RestartPolicy, ShutdownPolicy};
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let worker = ActorSpec::new("worker", || Worker)
-    .restart(RestartPolicy::Permanent)
+    .restart(RestartPolicy::Always)
     .shutdown(ShutdownPolicy::default());
 let worker_ref = worker.actor_ref();
 
 let runtime = OrderedTree::new()
     .actor(worker)
     .spawn()?;
-# let _ = (worker_ref, runtime);
-# Ok::<(), kokage::SupervisorBuildError>(())
+# let _ = worker_ref;
+runtime.shutdown_and_wait().await?;
+# Ok(())
+# }
 ```
 
 A restart invokes the retained factory, binds a fresh incarnation mailbox, and
