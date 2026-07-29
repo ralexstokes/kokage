@@ -1,0 +1,11 @@
+error: `restart_intensity` has been renamed to `restart_config`
+ --> tests/ui/supervision/restart_intensity_renamed.rs:6:15
+  |
+6 | #[supervision(restart_intensity = ())]
+  |               ^^^^^^^^^^^^^^^^^
+
+error: `restart_intensity` has been renamed to `restart_config`
+  --> tests/ui/supervision/restart_intensity_renamed.rs:13:19
+   |
+13 |     #[supervision(restart_intensity = ())]
+   |                   ^^^^^^^^^^^^^^^^^

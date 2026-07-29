@@ -8,19 +8,19 @@ signatures do not expose a scope-kind generic.
 For the common flat shape, `OrderedTree::graph(graph)` consumes a graph and
 places every actor in one ordered scope. `DynamicTree::new()` creates one empty
 dynamic scope. Both use the same `default_restart`, `default_shutdown`, and
-`restart_intensity` vocabulary.
+`restart_config` vocabulary.
 
 ```rust,ignore
 let tree = OrderedTree::graph(graph)
-    .strategy(Strategy::RestForOne)
-    .default_restart(RestartPolicy::OnFailure);
+    .strategy(Strategy::RestForOne);
 
 println!("{:#?}", tree.outline());
-let handle = tree.spawn()?;
+let runtime = tree.spawn()?;
 ```
 
-The actor refs minted by `GraphBuilder::slot` continue to follow those actors
-across their respective restarts. `RuntimeHandle::actor_stats()` also recurses
+The actor refs returned by `GraphBuilder::actor` (or minted by `slot` for a
+cycle) continue to follow those actors across their respective restarts.
+`RuntimeHandle::actor_stats()` also recurses
 through the tree, and the same local child id may be reused in a different
 scope.
 
@@ -51,8 +51,8 @@ leader carries an explicit override.
 
 A `Graph` establishes typed mailbox wiring. It is not cloneable: moving it into
 `OrderedTree::graph` establishes one runtime owner for every runnable binding.
-Typed refs minted by `GraphBuilder::slot` remain valid because they own the
-stable mailbox identities independently.
+Typed refs returned by `GraphBuilder::actor` or `slot` remain valid because
+they own the stable mailbox identities independently.
 
 For a custom shape, clone individual [`host::RunnableActor`] values out of the graph
 and place them at different levels:
@@ -72,14 +72,11 @@ impl Actor for Worker {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let (ingest_slot, ingest) = graph.slot("ingest");
-    let (parse_slot, parse) = graph.slot("parse");
-    graph.define(ingest_slot, || Worker);
-    graph.define(parse_slot, || Worker);
+    let ingest = graph.actor("ingest", || Worker);
+    let parse = graph.actor("parse", || Worker);
     let graph = graph.build()?;
 
     let tree = OrderedTree::new()
-        .default_restart(RestartPolicy::OnFailure)
         .actor(
             ActorSpec::new(graph.actor_for(&ingest)?)
                 .restart(RestartPolicy::Never),
@@ -91,8 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .actor(graph.actor_for(&parse)?),
         );
 
-    let handle = tree.spawn()?;
-    drop(handle);
+    let runtime = tree.spawn()?;
+    drop(runtime);
     Ok(())
 }
 ```
@@ -115,13 +112,13 @@ identity: if both trees run concurrently, the second actor exits with
 `host::ActorRunError::AlreadyRunning`. Prefer one composed tree; retain a runnable
 clone only for custom placement or hand-driving where ownership is coordinated.
 
-The actor refs minted by `GraphBuilder::slot` continue to follow those actors
-across their respective restarts. `RuntimeHandle::actor_stats()` also recurses
+The actor refs returned during graph registration continue to follow those
+actors across their respective restarts. `RuntimeHandle::actor_stats()` also recurses
 through the tree, and the same local child id may be reused in a different
 scope.
 
 An [`ActorSpec`] is a complete actor child declaration. Its runnable payload
-provides the id, while optional `restart`, `shutdown`, and `restart_intensity`
+provides the id, while optional `restart`, `shutdown`, and `restart_config`
 values override the enclosing scope's defaults. `child_id` overrides the local
 supervisor id when an actor label is already qualified by its scope path. Bare
 runnable actors convert to `ActorSpec`, so `.actor(runnable)` is the concise
@@ -134,13 +131,11 @@ Every tree owns its one stable runtime identity from construction. Call
 tree is spawned:
 
 ```rust,ignore
-let sessions_tree = DynamicTree::new()
-    .default_restart(RestartPolicy::OnFailure);
+let sessions_tree = DynamicTree::new();
 let sessions = sessions_tree.handle();
 
 let mut graph = GraphBuilder::new();
-let (router_slot, router) = graph.slot("router");
-graph.define(router_slot, move || Router::new(sessions.clone()));
+let router = graph.actor("router", move || Router::new(sessions.clone()));
 let graph = graph.build()?;
 
 let app_tree = OrderedTree::new()
@@ -148,20 +143,24 @@ let app_tree = OrderedTree::new()
     .subtree("sessions", sessions_tree)
     .actor(graph.actor_for(&router)?);
 let app_handle = app_tree.handle();
-let handle = app_tree.spawn()?;
-# drop((app_handle, handle));
+let runtime = app_tree.spawn()?;
+let handle = runtime.handle();
+# drop((app_handle, handle, runtime));
 ```
 
 Trees deliberately do not implement `Clone`: one identity can bind to one
 runtime. Before binding, control operations report
 `ControlError::Unavailable`, while projected snapshots and subscriptions are
-already usable. `spawn()` consumes the tree and returns its `RuntimeHandle`.
+already usable. `spawn()` consumes the tree and returns its owning `Runtime`;
+`Runtime::handle()` clones a non-owning `RuntimeHandle`.
 Moving a tree into `subtree` or `actor_with_scope` transfers its identity into
 the parent.
 
 Dropping an unspawned tree, failing to lower or spawn it, or having a dynamic
-insertion rejected makes all handles issued from that tree terminal. There is
-no intermediate `Runtime` object and no `into_supervisor` escape hatch.
+insertion rejected makes all handles issued from that tree terminal. Dropping
+any handles leaves a spawned runtime alive; dropping its `Runtime` owner is the
+one implicit graceful-shutdown path. `let _ = tree.spawn()?;` therefore starts
+shutdown at the end of that statement.
 
 ## Inspect the declaration
 
@@ -172,7 +171,7 @@ no intermediate `Runtime` object and no `into_supervisor` escape hatch.
 An outline retains:
 
 - each scope's immutable [`ScopeKind`], strategy, inherited actor policies,
-  and restart-intensity default;
+  and restart configuration;
 - children in semantic order;
 - resolved actor policies;
 - nested scopes and actor-owned scopes recursively.

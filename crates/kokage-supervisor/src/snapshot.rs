@@ -97,7 +97,8 @@ impl SupervisorSnapshot {
     ///
     /// This is primarily useful for adapters and tests that produce snapshot
     /// streams without running a supervisor.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         state: SupervisorStateView,
         strategy: Strategy,
         children: Vec<ChildSnapshot>,
@@ -143,7 +144,8 @@ impl ChildSnapshot {
     ///
     /// Additional details can be assigned through the snapshot's public
     /// fields.
-    pub fn new(id: impl Into<String>, generation: u64, state: ChildStateView) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(id: impl Into<String>, generation: u64, state: ChildStateView) -> Self {
         Self {
             id: id.into(),
             lineage: 0,
@@ -154,21 +156,6 @@ impl ChildSnapshot {
             next_restart_in: None,
             supervisor: None,
         }
-    }
-    /// Returns whether the current generation reported readiness.
-    pub fn started(&self) -> bool {
-        self.state.started()
-    }
-
-    /// Returns the newest observed exit status, if any.
-    pub fn last_exit(&self) -> Option<&ExitStatusView> {
-        self.state.last_exit().map(|exit| &exit.status)
-    }
-
-    /// Returns whether the newest observed exit was initiated by the
-    /// supervisor.
-    pub fn last_exit_cancelled(&self) -> Option<bool> {
-        self.state.last_exit().map(|exit| exit.cancelled)
     }
 }
 
@@ -202,7 +189,7 @@ impl ChildExitView {
     ///
     /// This is primarily useful for adapters and tests that construct
     /// [`ChildSnapshot`] values outside this crate.
-    pub fn new(status: ExitStatusView, cancelled: bool) -> Self {
+    pub(crate) fn new(status: ExitStatusView, cancelled: bool) -> Self {
         Self { status, cancelled }
     }
 }

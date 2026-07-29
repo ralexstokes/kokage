@@ -14,7 +14,7 @@ use kokage_supervisor::{
 };
 
 use crate::{
-    Graph, RuntimeHandle,
+    Graph, Runtime, RuntimeHandle,
     actor::{RunnableActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -54,11 +54,7 @@ enum ScopeNode {
 
 enum SupervisionChild {
     Actor(ActorSpec),
-    Task {
-        child: ChildSpec,
-        restart: RestartPolicy,
-        shutdown: ShutdownPolicy,
-    },
+    Task(ChildSpec),
     Scope {
         id: String,
         node: ScopeNode,
@@ -213,7 +209,7 @@ pub struct ActorSpec {
     child_id: Option<String>,
     restart: Option<RestartPolicy>,
     shutdown: Option<ShutdownPolicy>,
-    restart_intensity: Option<RestartConfig>,
+    restart_config: Option<RestartConfig>,
 }
 
 impl ActorSpec {
@@ -224,7 +220,7 @@ impl ActorSpec {
             child_id: None,
             restart: None,
             shutdown: None,
-            restart_intensity: None,
+            restart_config: None,
         }
     }
 
@@ -254,8 +250,8 @@ impl ActorSpec {
 
     /// Gives this actor its own restart-intensity window.
     #[must_use]
-    pub fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
-        self.restart_intensity = Some(intensity);
+    pub fn restart_config(mut self, config: RestartConfig) -> Self {
+        self.restart_config = Some(config);
         self
     }
 
@@ -283,7 +279,7 @@ impl std::fmt::Debug for ActorSpec {
             .field("label", &self.actor_label())
             .field("restart", &self.restart)
             .field("shutdown", &self.shutdown)
-            .field("restart_intensity", &self.restart_intensity)
+            .field("restart_config", &self.restart_config)
             .finish()
     }
 }
@@ -297,8 +293,8 @@ macro_rules! tree_common_methods {
 
         /// Sets this scope's default restart intensity.
         #[must_use]
-        pub fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
-            self.inner = self.inner.restart_intensity(intensity);
+        pub fn restart_config(mut self, config: RestartConfig) -> Self {
+            self.inner = self.inner.restart_config(config);
             self
         }
 
@@ -380,13 +376,8 @@ impl OrderedTree {
 
     /// Appends an arbitrary task node with its resolved policies.
     #[must_use]
-    pub fn task(
-        mut self,
-        child: ChildSpec,
-        restart: RestartPolicy,
-        shutdown: ShutdownPolicy,
-    ) -> Self {
-        self.inner = self.inner.task(child, restart, shutdown);
+    pub fn task(mut self, child: ChildSpec) -> Self {
+        self.inner = self.inner.task(child);
         self
     }
 
@@ -425,8 +416,8 @@ impl OrderedTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`RuntimeHandle`] for as long as the runtime should
-    /// remain alive. Dropping the last handle requests graceful shutdown.
+    /// Retain the returned [`Runtime`] for as long as the runtime should remain
+    /// alive. Dropping it requests graceful shutdown; its handles are non-owning.
     ///
     /// # Errors
     ///
@@ -436,9 +427,9 @@ impl OrderedTree {
     /// settings, or duplicate sibling ids return their corresponding build
     /// error. A failed spawn consumes the tree and makes every handle issued
     /// from it terminal.
-    pub fn spawn(self) -> Result<RuntimeHandle, SupervisorBuildError> {
+    pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RuntimeHandle::new(supervisor.spawn(), actors))
+        Ok(Runtime::new(supervisor.spawn(), actors))
     }
 }
 
@@ -460,17 +451,17 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`RuntimeHandle`] for as long as the runtime should
-    /// remain alive. Dropping the last handle requests graceful shutdown.
+    /// Retain the returned [`Runtime`] for as long as the runtime should remain
+    /// alive. Dropping it requests graceful shutdown; its handles are non-owning.
     ///
     /// # Errors
     ///
     /// Returns the applicable [`SupervisorBuildError`] when the dynamic
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal.
-    pub fn spawn(self) -> Result<RuntimeHandle, SupervisorBuildError> {
+    pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RuntimeHandle::new(supervisor.spawn(), actors))
+        Ok(Runtime::new(supervisor.spawn(), actors))
     }
 }
 
@@ -527,21 +518,13 @@ impl TreeData<false> {
         self
     }
 
-    /// Appends an arbitrary task node with its resolved policies.
+    /// Appends an arbitrary task node.
     ///
-    /// `restart` and `shutdown` are the single source of truth for both the
-    /// tree outline and the lowered runtime child. They deliberately replace
-    /// values previously set through `ChildSpec::restart` or
-    /// `ChildSpec::shutdown`; configure those two policies here instead.
-    /// Other `ChildSpec` settings, including readiness and restart intensity,
-    /// are preserved.
+    /// Explicit policies already set on `child` are preserved. Unset restart
+    /// and shutdown policies inherit this scope's defaults during lowering.
     #[must_use]
-    fn task(mut self, child: ChildSpec, restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
-        self.children_mut().push(SupervisionChild::Task {
-            child,
-            restart,
-            shutdown,
-        });
+    fn task(mut self, child: ChildSpec) -> Self {
+        self.children_mut().push(SupervisionChild::Task(child));
         self
     }
 
@@ -620,8 +603,8 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
 
     /// Sets this scope's default restart intensity.
     #[must_use]
-    fn restart_intensity(mut self, intensity: RestartConfig) -> Self {
-        self.config_mut().restart_intensity = Some(intensity);
+    fn restart_config(mut self, config: RestartConfig) -> Self {
+        self.config_mut().restart_intensity = Some(config);
         self
     }
 
@@ -707,7 +690,7 @@ impl ScopeNode {
                         ));
                     }
                 }
-                SupervisionChild::Task { .. } => {}
+                SupervisionChild::Task(_) => {}
                 SupervisionChild::Scope { node, .. } => {
                     node.validate_unique_actor_bindings(identities)?;
                 }
@@ -764,10 +747,10 @@ impl ScopeNode {
                     None => Supervisor::dynamic(),
                 };
                 builder = builder
-                    .restart(config.default_restart)
-                    .shutdown(config.default_shutdown);
+                    .default_restart(config.default_restart)
+                    .default_shutdown(config.default_shutdown);
                 if let Some(intensity) = config.restart_intensity {
-                    builder = builder.restart_intensity(intensity);
+                    builder = builder.restart_config(intensity);
                 }
                 Ok((builder.build()?, actors))
             }
@@ -781,10 +764,10 @@ impl ScopeNode {
                 };
                 let mut builder = builder
                     .strategy(config.strategy)
-                    .restart(config.default_restart)
-                    .shutdown(config.default_shutdown);
+                    .default_restart(config.default_restart)
+                    .default_shutdown(config.default_shutdown);
                 if let Some(intensity) = config.restart_intensity {
-                    builder = builder.restart_intensity(intensity);
+                    builder = builder.restart_config(intensity);
                 }
                 for child in children {
                     builder = child.lower(
@@ -805,7 +788,7 @@ impl SupervisionChild {
     fn declared_id(&self) -> &str {
         match self {
             Self::Actor(actor) => actor.resolved_id(),
-            Self::Task { child, .. } => child.id(),
+            Self::Task(child) => child.id(),
             Self::Scope { id, .. } | Self::ActorWithScope { id, .. } => id,
         }
     }
@@ -820,17 +803,17 @@ impl SupervisionChild {
                 id: actor.resolved_id().to_owned(),
                 restart: actor.restart.unwrap_or(default_restart),
                 shutdown: actor.shutdown.unwrap_or(default_shutdown),
-                restart_intensity: actor.restart_intensity,
+                restart_intensity: actor.restart_config,
             },
-            Self::Task {
-                child,
-                restart,
-                shutdown,
-            } => ChildOutline::Task {
-                id: child.id().to_owned(),
-                restart: *restart,
-                shutdown: *shutdown,
-            },
+            Self::Task(child) => {
+                let (restart, shutdown) =
+                    __private::child_policies(child, default_restart, default_shutdown);
+                ChildOutline::Task {
+                    id: child.id().to_owned(),
+                    restart,
+                    shutdown,
+                }
+            }
             Self::Scope { id, node } => ChildOutline::Scope {
                 id: id.clone(),
                 outline: node.outline(),
@@ -846,7 +829,7 @@ impl SupervisionChild {
                     id: actor.resolved_id().to_owned(),
                     restart: actor.restart.unwrap_or(default_restart),
                     shutdown: actor.shutdown.unwrap_or(default_shutdown),
-                    restart_intensity: actor.restart_intensity,
+                    restart_intensity: actor.restart_config,
                 }),
                 children: Box::new(children.outline()),
                 strategy: *strategy,
@@ -868,7 +851,7 @@ impl SupervisionChild {
                 child_id,
                 restart,
                 shutdown,
-                restart_intensity,
+                restart_config,
             }) => builder.child(actor_child_spec(
                 actor,
                 actors,
@@ -876,14 +859,10 @@ impl SupervisionChild {
                     restart.unwrap_or(default_restart),
                     shutdown.unwrap_or(default_shutdown),
                 )
-                .restart_intensity(restart_intensity)
+                .restart_config(restart_config)
                 .child_id(child_id),
             )),
-            Self::Task {
-                child,
-                restart,
-                shutdown,
-            } => builder.child(child.restart(restart).shutdown(shutdown)),
+            Self::Task(child) => builder.child(child),
             Self::Scope { id, node } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
                 builder.child(__private::attach(
@@ -899,7 +878,7 @@ impl SupervisionChild {
                         child_id,
                         restart,
                         shutdown,
-                        restart_intensity,
+                        restart_config,
                     },
                 children,
                 strategy,
@@ -921,14 +900,14 @@ impl SupervisionChild {
                         restart.unwrap_or(default_restart),
                         shutdown.unwrap_or(default_shutdown),
                     )
-                    .restart_intensity(restart_intensity)
+                    .restart_config(restart_config)
                     .child_id(child_id)
                     .children(children_handle),
                 );
                 let owned = Supervisor::ordered()
                     .strategy(strategy)
-                    .restart(default_restart)
-                    .shutdown(default_shutdown)
+                    .default_restart(default_restart)
+                    .default_shutdown(default_shutdown)
                     .child(leader)
                     .child(__private::attach(
                         ChildSpec::supervisor("children", children_supervisor),
@@ -1036,8 +1015,8 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
 
     /// Sets this scope's default restart intensity.
     #[must_use]
-    fn restart_intensity(self, intensity: RestartConfig) -> Self {
-        self.map_tree(|tree| tree.restart_intensity(intensity))
+    fn restart_config(self, config: RestartConfig) -> Self {
+        self.map_tree(|tree| tree.restart_config(config))
     }
 
     /// Sets the restart policy inherited by actor nodes.
@@ -1097,11 +1076,11 @@ impl IdentityTree<false> {
 
     /// Appends an arbitrary task node with its resolved policies.
     ///
-    /// The supplied policies are applied to `child` during lowering. See
-    /// [`OrderedTree::task`].
+    /// Explicit policies on `child` survive lowering; unset policies inherit
+    /// the enclosing scope defaults. See [`OrderedTree::task`].
     #[must_use]
-    fn task(self, child: ChildSpec, restart: RestartPolicy, shutdown: ShutdownPolicy) -> Self {
-        self.map_tree(|tree| tree.task(child, restart, shutdown))
+    fn task(self, child: ChildSpec) -> Self {
+        self.map_tree(|tree| tree.task(child))
     }
 
     /// Appends a named nested scope that already owns a reservation.

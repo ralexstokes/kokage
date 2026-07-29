@@ -33,7 +33,7 @@ use kokage_supervisor::{ChildSpec, Supervisor};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("heartbeat", |ctx| async move {
             let mut ticker = tokio::time::interval(Duration::from_millis(500));
             loop {
@@ -48,13 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }))
-        .build()?;
-
-    let handle = supervisor.spawn();
+        .spawn()?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    handle.shutdown_and_wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
     Ok(())
 }
@@ -69,12 +67,11 @@ A few things worth noticing:
 - **The child returns `Result<(), BoxError>`.** Returning `Ok(())` is a clean
   exit; returning an `Err`, panicking, or being aborted counts as a failure.
   The restart policy decides what happens next.
-- **`spawn()` returns a [`SupervisorHandle`].** This is your control surface:
-  shut the tree down, add or remove children, subscribe to lifecycle events,
-  or grab a state snapshot. To drive the supervisor in the foreground, follow
-  `spawn()` with `handle.wait().await` — and note that dropping the last
-  handle clone requests graceful shutdown, so fire-and-forget operation means
-  keeping a handle alive.
+- **`spawn()` returns a [`RunningSupervisor`].** This value owns the root
+  runtime, provides its control surface, and requests graceful shutdown when
+  dropped. Call `running.handle()` to clone a non-owning [`SupervisorHandle`]
+  for control or observation elsewhere. Dropping those handles never changes
+  the runtime lifetime.
 
 Run it and you'll see the heartbeat tick until the shutdown request cancels
 its token:
@@ -93,4 +90,5 @@ Let's fix that.
 
 [`ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
 [`ChildContext`]: https://stokes.io/kokage/api/kokage_supervisor/struct.ChildContext.html
+[`RunningSupervisor`]: https://stokes.io/kokage/api/kokage_supervisor/struct.RunningSupervisor.html
 [`SupervisorHandle`]: https://stokes.io/kokage/api/kokage_supervisor/struct.SupervisorHandle.html

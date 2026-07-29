@@ -1,4 +1,4 @@
-use kokage::{ActorContext, ActorResult, DynamicScope, Supervision, host::RawActor};
+use kokage::{host::ActorContext, ActorResult, DynamicScope, Supervision, host::RawActor};
 
 struct Worker;
 
@@ -13,7 +13,7 @@ impl RawActor for Worker {
 #[derive(Supervision)]
 struct App {
     manager: Worker,
-    #[supervision(dynamic, restart = kokage::RestartPolicy::Never)]
+    #[supervision(restart = kokage::RestartPolicy::Never)]
     sessions: DynamicScope,
 }
 

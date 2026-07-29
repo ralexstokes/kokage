@@ -26,17 +26,14 @@ async fn wait_for_lifecycle_end(watch: &mut ChildLifecycleWatch, message: &str) 
 }
 
 #[tokio::test]
-async fn retained_builder_handle_is_unavailable_then_binds_to_the_spawned_root() {
+async fn retained_builder_handle_preserves_kind_then_binds_to_the_spawned_root() {
     let builder = Supervisor::ordered().child(waiting_child("worker"));
     let handle = builder.handle();
-    assert!(matches!(
-        handle.add_child(waiting_child("early")).await,
-        Err(ControlError::Unavailable)
-    ));
+    assert!(handle.dynamic().is_none());
     let declared = handle.snapshot();
     let worker = declared.child("worker").expect("worker is declared");
     assert!(worker.state.is_starting());
-    assert!(!worker.started());
+    assert!(!worker.state.started());
 
     let supervisor = builder.build().expect("builder is valid");
     let spawned = supervisor.spawn();
@@ -125,7 +122,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             "builder" => drop(builder),
             "failed-build" => {
                 let error = builder
-                    .restart_intensity(RestartConfig::new(1, Duration::ZERO))
+                    .restart_config(RestartConfig::new(1, Duration::ZERO))
                     .build()
                     .expect_err("invalid build fails");
                 assert!(error.to_string().contains("window"));
@@ -137,10 +134,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             _ => unreachable!(),
         }
 
-        assert!(matches!(
-            handle.add_child(waiting_child("late")).await,
-            Err(ControlError::Unavailable)
-        ));
+        assert!(handle.dynamic().is_none());
         assert!(matches!(
             timeout(EVENT_TIMEOUT, handle.wait_started())
                 .await
@@ -155,10 +149,16 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
 
 #[tokio::test]
 async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
-    let parent = Supervisor::ordered()
+    let parent = Supervisor::dynamic()
         .build()
-        .expect("ordered parent builds")
+        .expect("dynamic parent builds")
         .spawn();
+    parent
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(waiting_child("nested"))
+        .await
+        .expect("occupy nested id");
     let nested_builder = Supervisor::ordered().child(waiting_child("worker"));
     let nested_handle = nested_builder.handle();
     let mut snapshots = nested_handle.subscribe_snapshots();
@@ -167,16 +167,17 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
 
     assert!(matches!(
         parent
+            .dynamic()
+            .expect("dynamic supervisor")
             .add_child(ChildSpec::supervisor("nested", nested))
             .await,
-        Err(ControlError::UnsupportedByScopeKind { .. })
+        Err(ControlError::Rejected(
+            kokage_supervisor::SupervisorBuildError::DuplicateChildId(id)
+        )) if id == "nested"
     ));
     assert!(snapshots.changed().await.is_err());
     wait_for_lifecycle_end(&mut lifecycle, "rejected nested scope closes").await;
-    assert!(matches!(
-        nested_handle.add_child(waiting_child("late")).await,
-        Err(ControlError::Unavailable)
-    ));
+    assert!(nested_handle.dynamic().is_none());
 
     parent
         .shutdown_and_wait()
@@ -203,6 +204,8 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
     let retained = nested_builder.handle();
     let nested = nested_builder.build().expect("nested scope builds");
     parent
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested scope inserts");
@@ -213,7 +216,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
         timeout(Duration::from_millis(50), stopped_rx.recv())
             .await
             .is_err(),
-        "a nested stable handle is not a lifecycle ownership lease"
+        "a nested stable handle does not own the supervisor lifecycle"
     );
     assert!(
         parent
@@ -221,7 +224,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
             .expect("nested scope remains attached")
             .snapshot()
             .child("worker")
-            .is_some_and(|worker| worker.started())
+            .is_some_and(|worker| worker.state.started())
     );
 
     parent
@@ -293,6 +296,8 @@ async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
         .expect("cloned leaf identity binds separately");
 
     original_leaf
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(waiting_child("original-only"))
         .await
         .expect("original leaf identity accepts its own child");
@@ -305,6 +310,8 @@ async fn supervisor_clone_mints_an_independent_pre_spawn_identity() {
         kokage_supervisor::SupervisorStateView::Running
     );
     cloned_leaf
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(waiting_child("clone-only"))
         .await
         .expect("original shutdown does not terminalize cloned descendants");

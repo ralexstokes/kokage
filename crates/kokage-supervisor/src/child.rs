@@ -203,8 +203,8 @@ impl ChildSpec {
     /// When set, this child tracks its own sliding restart window instead of
     /// sharing the supervisor's default.
     #[must_use]
-    pub fn restart_intensity(self, intensity: RestartConfig) -> Self {
-        self.map_inner(|inner| inner.restart_intensity = Some(intensity))
+    pub fn restart_config(self, config: RestartConfig) -> Self {
+        self.map_inner(|inner| inner.restart_intensity = Some(config))
     }
 
     /// Attaches process-local metadata to this supervised child.
@@ -244,6 +244,24 @@ impl ChildSpec {
 
     pub(crate) fn restart_intensity_override(&self) -> Option<RestartConfig> {
         self.inner.restart_intensity
+    }
+
+    pub(crate) fn resolved_policies(
+        &self,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) -> (RestartPolicy, ShutdownPolicy) {
+        let restart = if self.inner.restart_is_default {
+            default_restart
+        } else {
+            self.inner.restart
+        };
+        let shutdown = if self.inner.shutdown_is_default {
+            default_shutdown
+        } else {
+            self.inner.shutdown_policy
+        };
+        (restart, shutdown)
     }
 }
 

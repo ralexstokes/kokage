@@ -7,8 +7,8 @@ use std::{
 };
 
 use kokage::{
-    ActorContext, ActorResult, CallError, Graph, GraphBuilder, Reply, RestartPolicy,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    ActorResult, CallError, Graph, GraphBuilder, Reply, RestartPolicy,
+    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
     sync::{Notify, mpsc},

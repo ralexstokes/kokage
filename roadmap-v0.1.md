@@ -45,7 +45,7 @@ hidden in example scaffolding, per the Milestone 2 rule:
   correlated-failure detection.
 - **Recursive runtime subtrees.** `OrderedTree::subtree` composes nested
   actor scopes with reconciled recursive actor stats. Static subtrees and
-  runtime-added `RuntimeHandle::add_subtree` memberships now share the same
+  runtime-added `DynamicRuntime::add_subtree` memberships now share the same
   actor-registry mechanism.
 - **Lifecycle-bound cross-actor timers.** `send_after_to` and `interval_to`
   schedule messages to other actors with timers bound to the scheduling
@@ -79,7 +79,7 @@ and post-restart reconciliation are application protocol responsibilities.
 
 ### Restart intensity remains per child
 
-`Supervisor::ordered().restart_intensity(...)` supplies the default policy for each
+`Supervisor::ordered().restart_config(...)` supplies the default policy for each
 child's independent restart tracker; a child override replaces that default.
 This differs from Erlang/OTP's aggregate supervisor restart budget.
 
@@ -213,7 +213,7 @@ example owns the direct `serde_json` pattern.
 
 ### 1.5 Contain dependency coupling
 
-**Status: complete.** `ActorContext::try_recv` now returns `Option<M>`; the
+**Status: complete.** `host::ActorContext::try_recv` now returns `Option<M>`; the
 cancellation-token coupling and nested actor/supervisor shutdown deadlines are
 documented; and the deadline interaction is covered by runtime tests.
 

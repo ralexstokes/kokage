@@ -47,7 +47,7 @@ pub trait RawActor: Send + 'static {
     type Msg: Send + 'static;
 
     /// Returns whether this actor reports readiness explicitly from
-    /// [`ActorContext::mark_ready`](crate::ActorContext::mark_ready).
+    /// [`ActorContext::mark_ready`](crate::host::ActorContext::mark_ready).
     ///
     /// Handler-style [`Actor`](crate::Actor) implementations do this
     /// automatically after `on_start`; custom raw actors are ready immediately

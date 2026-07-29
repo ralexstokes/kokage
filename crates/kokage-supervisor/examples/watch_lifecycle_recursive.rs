@@ -6,17 +6,15 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
             println!("worker shutting down");
             Ok(())
         }))
-        .build()?;
-
-    let handle = supervisor.spawn();
-    let mut events = handle.watch_lifecycle_recursive();
+        .spawn()?;
+    let mut events = running.watch_lifecycle_recursive();
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
@@ -32,9 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    handle.shutdown();
-
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     observer.await?;
 
     Ok(())

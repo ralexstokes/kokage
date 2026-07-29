@@ -12,7 +12,7 @@ use kokage::{
     Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
     StartContext, host::BoxError,
 };
-use kokage_supervisor::{RestartConfig, Strategy};
+use kokage_supervisor::RestartConfig;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -67,34 +67,31 @@ impl Actor for Worker {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (processed_tx, mut processed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
-    let (frontend_slot, frontend) = builder.slot("frontend");
-    builder.define(frontend_slot, {
-        let worker_ref = worker_ref.clone();
-        move || Frontend {
-            worker: worker_ref.clone(),
-        }
-    });
     let worker_runs = Arc::new(AtomicUsize::new(0));
-    builder.define(worker_slot, move || Worker {
+    let worker = builder.actor("worker", move || Worker {
         runs: worker_runs.clone(),
         run: 0,
         processed: processed_tx.clone(),
     });
+    let frontend = builder.actor("frontend", {
+        let worker = worker.clone();
+        move || Frontend {
+            worker: worker.clone(),
+        }
+    });
     let graph = builder.build()?;
     let frontend_actor = graph.actor_for(&frontend)?;
-    let worker_actor = graph.actor_for(&worker_ref)?;
+    let worker_actor = graph.actor_for(&worker)?;
 
-    let handle = OrderedTree::new()
-        .strategy(Strategy::OneForOne)
+    let runtime = OrderedTree::new()
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor)
-                .restart_intensity(RestartConfig::new(2, Duration::from_secs(1))),
+                .restart_config(RestartConfig::new(2, Duration::from_secs(1))),
         )
         .spawn()?;
-    let mut events = handle.watch_lifecycle_recursive();
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut events = runtime.watch_lifecycle_recursive();
+    let mut snapshots = runtime.subscribe_snapshots();
 
     let event_task = tokio::spawn(async move {
         while let Some(event) = events.next().await {
@@ -103,8 +100,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     frontend.send("hello".to_owned()).await?;
-    let mut lifecycle = handle.watch_lifecycle();
-    let baseline = handle
+    let mut lifecycle = runtime.watch_lifecycle();
+    let baseline = runtime
         .snapshot()
         .child("worker")
         .expect("worker is supervised")
@@ -128,7 +125,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     snapshots.changed().await?;
     println!("snapshot: {:?}", snapshots.borrow().state);
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     event_task.abort();
     Ok(())
 }

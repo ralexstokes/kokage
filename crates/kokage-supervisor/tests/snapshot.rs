@@ -7,9 +7,8 @@ use std::{
 };
 
 use kokage_supervisor::{
-    BackoffPolicy, ChildExitView, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
-    ExitStatusView, RestartConfig, RestartPolicy, ScopeKind, Supervisor, SupervisorSnapshot,
-    SupervisorStateView,
+    BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildSpec, ExitStatusView, RestartPolicy,
+    ScopeKind, Supervisor, SupervisorSnapshot, SupervisorStateView,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -19,21 +18,6 @@ use tokio::{
 mod common;
 
 use common::{ObservedEvent, wait_for_snapshot};
-
-#[test]
-fn public_exit_constructor_builds_an_external_stopped_snapshot() {
-    let child = ChildSnapshot::new(
-        "worker",
-        4,
-        ChildStateView::Stopped {
-            started: true,
-            exit: Some(ChildExitView::new(ExitStatusView::Completed, false)),
-        },
-    );
-
-    assert_eq!(child.last_exit(), Some(&ExitStatusView::Completed));
-    assert_eq!(child.last_exit_cancelled(), Some(false));
-}
 
 #[tokio::test]
 async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
@@ -59,7 +43,7 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
     assert_eq!(snapshot.children[1].lineage, 1);
     for entry in &snapshot.children {
         assert_eq!(entry.membership, ChildMembershipView::Active);
-        assert_eq!(entry.last_exit(), None);
+        assert_eq!(entry.state.last_exit().map(|exit| &exit.status), None);
         assert_eq!(entry.restart_count, 0);
         assert_eq!(entry.next_restart_in, None);
     }
@@ -79,6 +63,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
     let handle = outer.spawn();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -86,6 +72,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
         .await
         .expect("anchor added");
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested supervisor added");
@@ -93,6 +81,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
         .supervisor("nested")
         .expect("nested handle available");
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -100,6 +90,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
         .await
         .expect("nested seed added");
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("late", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -156,10 +148,11 @@ async fn snapshot_shows_restart_state_and_last_exit() {
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(
-        RestartConfig::new(5, Duration::from_secs(1))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(200))),
-    );
+    .restart_config(common::restart_config(
+        5,
+        Duration::from_secs(1),
+        BackoffPolicy::Fixed(Duration::from_millis(200)),
+    ));
 
     let supervisor = Supervisor::ordered()
         .child(flaky_child)
@@ -176,7 +169,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
             child.state.is_stopped()
                 && child.restart_count == 1
                 && matches!(
-                    child.last_exit(),
+                    child.state.last_exit().map(|exit| &exit.status),
                     Some(ExitStatusView::Failed(message)) if message.contains("boom")
                 )
                 && child.next_restart_in.is_some()
@@ -205,7 +198,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     assert!(matches!(
         child(&running_again, "flaky")
             .expect("flaky child should exist")
-            .last_exit(),
+            .state.last_exit().map(|exit| &exit.status),
         Some(ExitStatusView::Failed(message)) if message.contains("boom")
     ));
     assert_eq!(
@@ -245,10 +238,14 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
     let handle = supervisor.spawn();
     let mut snapshots = handle.subscribe_snapshots();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(removable)
         .await
         .expect("removable child should be accepted");
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("keeper", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -259,7 +256,13 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
     common::recv_event(&mut started_rx).await;
 
     let remove_handle = handle.clone();
-    let remove_task = tokio::spawn(async move { remove_handle.remove_child("removable").await });
+    let remove_task = tokio::spawn(async move {
+        remove_handle
+            .dynamic()
+            .expect("dynamic supervisor")
+            .remove_child("removable")
+            .await
+    });
 
     common::recv_event(&mut cancelled_rx).await;
 
@@ -436,7 +439,9 @@ async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
     assert!(matches!(
         child(&snapshot, "temporary")
             .expect("temporary child should remain visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(ExitStatusView::Completed)
     ));
 

@@ -10,7 +10,8 @@ use std::{
 };
 
 use kokage::{
-    DrainPolicy, LiveContext, MailboxMode, OffloadDeadline, OffloadHandle, host::RawActor,
+    DrainPolicy, MailboxMode, OffloadDeadline, TaskHandle,
+    host::{ActorContext, RawActor},
     prelude::*,
 };
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -67,18 +68,12 @@ impl Actor for Outcomes {
             pending::<()>(),
             OutcomeMsg::Timeout,
         );
-        ctx.offload_or(
-            Duration::from_secs(1),
-            async { 42 },
-            0,
-            OutcomeMsg::OrSuccess,
-        );
-        ctx.offload_or(
-            Duration::from_millis(10),
-            pending::<u32>(),
-            7,
-            OutcomeMsg::OrFallback,
-        );
+        ctx.offload(Duration::from_secs(1), async { 42 }, |result| {
+            OutcomeMsg::OrSuccess(result.unwrap_or(0))
+        });
+        ctx.offload(Duration::from_millis(10), pending::<u32>(), |result| {
+            OutcomeMsg::OrFallback(result.unwrap_or(7))
+        });
         Ok(())
     }
 
@@ -93,7 +88,7 @@ impl Actor for Outcomes {
 }
 
 #[tokio::test]
-async fn offload_and_offload_or_deliver_total_and_fallback_outcomes() {
+async fn offload_continuations_deliver_total_and_fallback_outcomes() {
     let (observed, mut outcomes) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
     let (actor_slot, _) = graph.slot("Outcomes");
@@ -281,7 +276,7 @@ enum AbortMsg {
 
 #[derive(Clone)]
 struct AbortActor {
-    handle: Arc<Mutex<Option<OffloadHandle>>>,
+    handle: Arc<Mutex<Option<TaskHandle>>>,
     done: Arc<AtomicUsize>,
 }
 
@@ -351,7 +346,7 @@ enum ReadyAbortMsg {
 }
 
 struct ReadyAbortActor {
-    handle: mpsc::UnboundedSender<OffloadHandle>,
+    handle: mpsc::UnboundedSender<TaskHandle>,
     release: Arc<Notify>,
     observed: mpsc::UnboundedSender<()>,
 }
@@ -418,7 +413,7 @@ enum DrainAbortMsg {
 }
 
 struct DrainAbortActor {
-    handle: mpsc::UnboundedSender<OffloadHandle>,
+    handle: mpsc::UnboundedSender<TaskHandle>,
     shutdown_seen: Arc<Notify>,
 }
 

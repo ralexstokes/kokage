@@ -9,7 +9,7 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, DynamicActorOptions, DynamicTree, GraphBuilder, MessageContext,
-    OrderedTree, RestartConfig, RestartPolicy, RuntimeHandle, StartContext,
+    OrderedTree, RestartConfig, RestartPolicy, Runtime, RuntimeHandle, StartContext,
     observe::{ChildLifecycleEvent, ChildLifecycleEventKind, LifecycleWatchGuard},
 };
 use tokio::{
@@ -94,7 +94,7 @@ impl Actor for RestrictedSink {
 }
 
 async fn runtime_with_watched_subtree() -> (
-    RuntimeHandle,
+    Runtime,
     RuntimeHandle,
     kokage::ActorRef<SinkMsg>,
     kokage::ActorRef<()>,
@@ -104,6 +104,8 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor_with(
             "sink",
             move || {
@@ -121,11 +123,13 @@ async fn runtime_with_watched_subtree() -> (
     let (crasher_slot, crasher) = graph.slot("crasher");
     graph.define(crasher_slot, || Crasher);
     let watched = handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_subtree(
             "watched",
             OrderedTree::graph(graph.build().expect("nested graph builds"))
                 .default_restart(RestartPolicy::OnFailure)
-                .restart_intensity(RestartConfig::new(8, Duration::from_secs(1))),
+                .restart_config(RestartConfig::new(8, Duration::from_secs(1))),
         )
         .await
         .expect("watched subtree added");
@@ -152,7 +156,7 @@ async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) 
             if snapshots
                 .borrow()
                 .child(id)
-                .is_some_and(|child| child.generation == generation && child.started())
+                .is_some_and(|child| child.generation == generation && child.state.started())
             {
                 break;
             }
@@ -251,7 +255,10 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     assert_eq!(second[0].1.seq, first[2].1.seq + 1);
     assert_eq!(second[1].1.seq, second[0].1.seq + 1);
     assert_eq!(second[2].1.seq, second[1].1.seq + 1);
-    assert!(!guard.is_cancelled());
+    assert_eq!(
+        format!("{guard:?}"),
+        "LifecycleWatchGuard { cancelled: false }"
+    );
     assert_no_buffered_lifecycle(
         &sink,
         &mut observed,
@@ -267,7 +274,10 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     guard.cancel();
-    assert!(guard.is_cancelled());
+    assert_eq!(
+        format!("{guard:?}"),
+        "LifecycleWatchGuard { cancelled: true }"
+    );
 
     crasher.send(()).await.expect("crash request delivered");
     wait_for_generation(&watched, "crasher", 1).await;
@@ -306,6 +316,8 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle
+        .dynamic()
+        .expect("dynamic scope")
         .remove_child("watched")
         .await
         .expect("watched subtree removed");
@@ -315,7 +327,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         ChildLifecycleEventKind::Exited { generation: 0, .. }
     ));
     timeout(Duration::from_secs(2), async {
-        while !guard.is_cancelled() {
+        while format!("{guard:?}") != "LifecycleWatchGuard { cancelled: true }" {
             tokio::task::yield_now().await;
         }
     })
@@ -323,13 +335,20 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     .expect("pump stops with watched identity");
 
     let replacement = handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_subtree("replacement", OrderedTree::new())
         .await
         .expect("replacement subtree added");
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
-    handle.remove_child("sink").await.expect("target removed");
+    handle
+        .dynamic()
+        .expect("dynamic scope")
+        .remove_child("sink")
+        .await
+        .expect("target removed");
     timeout(Duration::from_secs(2), async {
-        while !guard.is_cancelled() {
+        while format!("{guard:?}") != "LifecycleWatchGuard { cancelled: true }" {
             tokio::task::yield_now().await;
         }
     })
@@ -344,6 +363,8 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
     let handle = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor("sink", move || RestrictedSink {
             observed: observed_tx.clone(),
             watch: None,
@@ -351,6 +372,8 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         .await
         .expect("restricted sink added");
     let crasher = handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor_with(
             "crasher",
             || Crasher,

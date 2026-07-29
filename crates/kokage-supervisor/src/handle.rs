@@ -2,7 +2,7 @@ use std::{
     any::Any,
     collections::HashMap,
     sync::{
-        Arc, Mutex, PoisonError, Weak,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicU8, Ordering},
     },
 };
@@ -13,6 +13,7 @@ use tokio::{
 };
 
 use crate::{
+    ScopeKind,
     attachment::{AttachedChild, AttachedChildIdentity},
     child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
@@ -217,7 +218,6 @@ pub(crate) struct StableSupervisorChannels {
     /// orphaned or colliding one.
     edge_kind: AtomicU8,
     root_extra: Mutex<RootExtraSlot>,
-    handle_lease: Mutex<Weak<HandleLease>>,
 }
 
 /// No parent edge has claimed this identity yet.
@@ -264,7 +264,6 @@ impl StableSupervisorChannels {
             nested_channels,
             edge_kind: AtomicU8::new(EDGE_UNCLAIMED),
             root_extra: Mutex::new(RootExtraSlot::NotRoot),
-            handle_lease: Mutex::new(Weak::new()),
         })
     }
 
@@ -394,29 +393,8 @@ impl StableSupervisorChannels {
     }
 
     pub(crate) fn handle(self: &Arc<Self>) -> SupervisorHandle {
-        let lease = {
-            let mut slot = self
-                .handle_lease
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            slot.upgrade().unwrap_or_else(|| {
-                let lease = Arc::new(HandleLease {
-                    channels: Arc::downgrade(self),
-                });
-                *slot = Arc::downgrade(&lease);
-                lease
-            })
-        };
         SupervisorHandle {
             channels: Arc::clone(self),
-            _lease: Some(lease),
-        }
-    }
-
-    pub(crate) fn internal_handle(self: &Arc<Self>) -> SupervisorHandle {
-        SupervisorHandle {
-            channels: Arc::clone(self),
-            _lease: None,
         }
     }
 
@@ -1031,7 +1009,7 @@ mod tests {
             panic!("replacement binding must be observable");
         };
         assert_eq!(observed.children.len(), 1);
-        assert!(!observed.children[0].started());
+        assert!(!observed.children[0].state.started());
     }
 
     #[test]
@@ -1090,7 +1068,7 @@ mod tests {
                         generation: 0,
                     },
                     attachment: None,
-                    supervisor: Some(descendant.internal_handle()),
+                    supervisor: Some(descendant.handle()),
                 }],
             )
             .expect("replacement ancestor binds");
@@ -1220,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn a_superseded_handle_lease_does_not_shut_the_root_down() {
+    fn dropping_all_handles_does_not_shut_the_root_down() {
         let snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
@@ -1245,28 +1223,11 @@ mod tests {
             )
             .expect("root incarnation binds");
 
-        // Stand in for the replacement lease that `handle()` installs once the
-        // released lease's strong count reaches zero but before its `Drop`
-        // body runs.
-        let replacement = Arc::new(HandleLease {
-            channels: Arc::downgrade(&channels),
-        });
-        *channels
-            .handle_lease
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(&replacement);
-
         drop(released);
 
         assert!(
             !*shutdown_rx.borrow_and_update(),
-            "a lease superseded by a live replacement must not signal shutdown"
-        );
-
-        drop(replacement);
-        assert!(
-            *shutdown_rx.borrow_and_update(),
-            "releasing the live replacement still shuts the root down"
+            "handles are non-owning and must not signal shutdown when dropped"
         );
     }
 
@@ -1391,9 +1352,9 @@ pub(crate) enum SupervisorCommand {
 ///
 /// - **Shutdown**: [`shutdown`](Self::shutdown) /
 ///   [`shutdown_and_wait`](Self::shutdown_and_wait).
-/// - **Dynamic children**: [`add_child`](Self::add_child) /
-///   [`remove_child`](Self::remove_child). Use [`supervisor`](Self::supervisor)
-///   to obtain a scoped handle before changing a nested supervisor.
+/// - **Dynamic children**: [`dynamic`](Self::dynamic) returns the capability
+///   used to add and remove children. Use [`supervisor`](Self::supervisor) to
+///   obtain a scoped handle before changing a nested supervisor.
 /// - **Observability**: [`snapshot`](Self::snapshot) /
 ///   [`subscribe_snapshots`](Self::subscribe_snapshots) for state,
 ///   [`watch_lifecycle`](Self::watch_lifecycle) for direct-child transitions,
@@ -1401,50 +1362,31 @@ pub(crate) enum SupervisorCommand {
 ///   the whole tree.
 /// - **Completion**: [`wait`](Self::wait) to await the supervisor's exit.
 ///
-/// For a spawned root, dropping the last public handle clone requests graceful
-/// shutdown, equivalent to calling [`shutdown`](Self::shutdown). Other root
-/// clones keep the supervision tree alive, so fire-and-forget operation
-/// requires retaining one. A scoped stable handle for a nested supervisor does
-/// not own that supervisor's lifecycle; dropping it leaves the parent-owned
-/// child running.
+/// Handles never own a supervisor's lifecycle. Dropping a root or nested
+/// handle leaves the supervisor running. A spawned root is owned by
+/// [`RunningSupervisor`](crate::RunningSupervisor); dropping that owner is the
+/// one implicit graceful-shutdown path.
 /// [`wait`](Self::wait) does not resolve until the supervisor has drained and
 /// joined its child tasks.
 #[derive(Clone)]
 pub struct SupervisorHandle {
     channels: Arc<StableSupervisorChannels>,
-    _lease: Option<Arc<HandleLease>>,
 }
 
-struct HandleLease {
-    channels: Weak<StableSupervisorChannels>,
+/// Runtime-membership capability for a dynamic supervisor.
+///
+/// Obtain this value with [`SupervisorHandle::dynamic`]. Ordered supervisors
+/// return `None`, so adding and removing children cannot be attempted through
+/// their universal observation and lifecycle handle.
+#[derive(Clone)]
+pub struct DynamicSupervisorHandle {
+    handle: SupervisorHandle,
 }
 
-impl Drop for HandleLease {
-    fn drop(&mut self) {
-        let Some(channels) = self.channels.upgrade() else {
-            return;
-        };
-        {
-            // `handle()` mints a replacement lease as soon as this one's
-            // strong count reaches zero, which happens before this `drop`
-            // body runs. Without re-checking the slot under its own lock, a
-            // handle taken concurrently with the last drop — a pre-spawn
-            // handle released while `spawn` acquires its own — would be
-            // followed by this shutdown signal against the live binding.
-            let slot = channels
-                .handle_lease
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if !std::ptr::eq(slot.as_ptr(), self) {
-                return;
-            }
-        }
-        if matches!(channels.root_extra(), RootExtraSlot::NotRoot) {
-            return;
-        }
-        if let Some(binding) = channels.current_binding() {
-            let _ = binding.shutdown_tx.send(true);
-        }
+impl std::fmt::Debug for DynamicSupervisorHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicSupervisorHandle")
+            .finish_non_exhaustive()
     }
 }
 
@@ -1489,17 +1431,31 @@ impl SupervisorHandle {
         self.wait().await
     }
 
-    /// Returns a clone that observes and controls this supervisor without
-    /// holding its lifecycle lease.
+    /// Returns this handle's dynamic-membership capability.
     ///
-    /// Background tasks owned by the supervision machinery use this so that
-    /// retaining one does not, by itself, keep a spawned root alive: dropping
-    /// the last *public* handle clone must still request shutdown.
-    pub(crate) fn observer(&self) -> Self {
-        Self {
-            channels: Arc::clone(&self.channels),
-            _lease: None,
-        }
+    /// Ordered supervisors have immutable membership and return `None`.
+    pub fn dynamic(&self) -> Option<DynamicSupervisorHandle> {
+        (self.snapshots_rx().borrow().kind == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
+            handle: self.clone(),
+        })
+    }
+
+    /// Returns the restart-stable handle for a direct nested supervisor.
+    pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
+        self.nested_channels()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(StableSupervisorChannels::handle)
+    }
+}
+
+impl DynamicSupervisorHandle {
+    pub(crate) fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        self.handle.attached_children()
     }
 
     /// Adds a new child to the supervisor at runtime.
@@ -1512,10 +1468,10 @@ impl SupervisorHandle {
     /// scheduled. This operation is supported only by dynamic supervisors,
     /// which spawn it immediately. A [`ChildSpec::supervisor`] registers the
     /// nested supervisor's restart-stable handle and attachment at insertion,
-    /// before it is spawned. Use [`wait_started`](Self::wait_started) when
-    /// readiness is required.
+    /// before it is spawned. [`SupervisorHandle::wait_started`] is available
+    /// when readiness is required.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        let endpoint = self.control_endpoint()?;
+        let endpoint = self.handle.control_endpoint()?;
         if matches!(&child.inner.kind, ChildKind::Supervisor(_)) {
             endpoint
                 .add_nested(PendingSupervisorChild::new(child))
@@ -1531,18 +1487,14 @@ impl SupervisorHandle {
     /// before being removed. Removing the last child is valid; the supervisor
     /// continues idling until shutdown or until another child is added.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        self.control_endpoint()?.remove_child(id.into()).await
+        self.handle
+            .control_endpoint()?
+            .remove_child(id.into())
+            .await
     }
+}
 
-    /// Returns the restart-stable handle for a direct nested supervisor.
-    pub fn supervisor(&self, id: &str) -> Option<SupervisorHandle> {
-        self.nested_channels()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(id)
-            .map(StableSupervisorChannels::handle)
-    }
-
+impl SupervisorHandle {
     /// Returns typed process-local attachments from this supervision tree.
     ///
     /// Direct children are returned before descendants. Every result includes
@@ -1785,6 +1737,35 @@ impl SupervisorHandle {
         self.lifecycle_hub().watch()
     }
 
+    /// Arms a watch for the next restart of `child_id`.
+    ///
+    /// The lifecycle subscription and current generation are captured before
+    /// this method returns. The restart may therefore be triggered before the
+    /// returned future is first polled without losing its `Started` event.
+    /// A restart already reflected in the captured generation becomes the
+    /// baseline, even if its `Started` event is buffered, so only a later
+    /// generation can complete the future.
+    ///
+    /// Returns `None` if the child is not currently supervised, is removed
+    /// before restarting, the watch lags, or this supervisor identity becomes
+    /// terminal before the restart is observed.
+    pub fn restart_of(
+        &self,
+        child_id: &str,
+    ) -> impl std::future::Future<Output = Option<u64>> + Send + 'static {
+        // Subscribe before sampling the baseline so every transition after the
+        // snapshot is staged, including transitions that happen before the
+        // returned future is first polled.
+        let mut lifecycle = self.watch_lifecycle();
+        let baseline = self
+            .snapshot()
+            .child(child_id)
+            .map(|child| child.generation);
+        let child_id = child_id.to_owned();
+
+        async move { lifecycle.started_after(&child_id, baseline?).await }
+    }
+
     /// Returns an ordered lifecycle stream for this entire supervisor tree.
     ///
     /// Each event carries a path relative to this handle. Direct-child
@@ -1825,8 +1806,8 @@ impl SupervisorHandle {
     ///     }))
     ///     .build()?;
     ///
-    /// let handle = supervisor.spawn();
-    /// handle
+    /// let running = supervisor.spawn();
+    /// running
     ///     .subscribe_snapshots()
     ///     .wait_for(|snapshot| {
     ///         snapshot
@@ -1835,8 +1816,8 @@ impl SupervisorHandle {
     ///             .all(|child| child.state.is_running())
     ///     })
     ///     .await?;
-    /// # handle.shutdown();
-    /// # handle.wait().await?;
+    /// # running.shutdown();
+    /// # running.wait().await?;
     /// # Ok(())
     /// # }
     /// ```

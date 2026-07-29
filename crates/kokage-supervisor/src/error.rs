@@ -42,20 +42,11 @@ pub enum SupervisorError {
 }
 
 /// Errors returned by control-plane operations on a
-/// [`SupervisorHandle`](crate::SupervisorHandle) (e.g. adding or removing
-/// children at runtime).
+/// [`DynamicSupervisorHandle`](crate::DynamicSupervisorHandle) (e.g. adding
+/// or removing children at runtime).
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ControlError {
-    /// The operation is incompatible with the supervisor's immutable scope
-    /// kind.
-    #[error("control operation `{operation}` is unsupported by {kind} scopes")]
-    UnsupportedByScopeKind {
-        /// Name of the attempted operation.
-        operation: &'static str,
-        /// The immutable kind of the target scope.
-        kind: crate::ScopeKind,
-    },
     /// No child with this id is known to the supervisor.
     #[error("unknown child id: {0}")]
     UnknownChildId(String),

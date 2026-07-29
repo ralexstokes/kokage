@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `kokage::GraphConfig`
+ --> tests/ui/public-api/removed_graph_config.rs:1:5
+  |
+1 | use kokage::GraphConfig;
+  |     ^^^^^^^^^^^^^^^^^^^ no `GraphConfig` in the root

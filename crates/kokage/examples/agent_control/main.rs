@@ -3,7 +3,7 @@
 //! The example is an assertion-driven acceptance script for dynamic actor
 //! lifecycles and the runtime surfaces not covered by `trading_engine`:
 //! per-conversation subtrees added and removed at runtime via
-//! `RuntimeHandle::add_subtree`, never-restarted transient children observed
+//! `DynamicRuntime::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
 //! a readiness-gated `RawActor` bridge, and a `#[derive(Supervision)]` supervision
 //! tree with a real budget ↔ guard cycle.
@@ -46,8 +46,8 @@
 //! │             (budget ─BudgetExceeded→ guard, guard ─UnderCap?→ budget
 //! │              is the cycle that justifies the derive)
 //! └── sessions  empty subtree mount; per-conversation subtrees at runtime
-//!               (a `#[supervision(dynamic)]` field, so the router can capture its
-//!                mount handle at wiring time)
+//!               (a `DynamicScope` field, so the router can capture its mount
+//!                handle at wiring time)
 //!     └── session:<chat>#<epoch>   add_subtree, OneForAll; the epoch makes
 //!         │                        every incarnation's id unique, so respawn
 //!         │                        never races a predecessor's removal
@@ -178,7 +178,6 @@ struct Gateway {
 /// The budget↔guard cycle is what justifies deriving rather than ordering
 /// registrations by hand.
 #[derive(Supervision)]
-#[supervision(strategy = Strategy::OneForOne)]
 struct Core {
     #[supervision(options = ActorOptions::new().message_size(messages::journal_message_size))]
     journal: Journal,
@@ -192,18 +191,16 @@ struct Core {
 /// like any other field, which is what lets the router capture its mount handle
 /// before any actor is constructed.
 #[derive(Supervision)]
-#[supervision(strategy = Strategy::OneForOne)]
 struct AgentControl {
     #[supervision(scope)]
     gateway: Gateway,
     #[supervision(scope)]
     core: Core,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 
 struct App {
-    handle: RuntimeHandle,
+    runtime: kokage::Runtime,
     gateway: RuntimeHandle,
     core: RuntimeHandle,
     sessions: RuntimeHandle,
@@ -257,8 +254,9 @@ async fn build_app() -> Result<App, AnyError> {
     // refs together: the bridge captures `core.router` and the router captures
     // `gateway.outbound` in the same literal, with no slot/define split and no
     // ordering between the two scopes.
-    let config = kokage::GraphConfig::new().name("agent-control");
-    let (tree, refs) = AgentControl::tree_with(config, |refs| AgentControlFactories {
+    let mut builder = kokage::GraphBuilder::new();
+    builder.name("agent-control");
+    let (tree, refs) = AgentControl::tree_with(builder, |refs| AgentControlFactories {
         gateway: GatewayFactories {
             outbound: {
                 let chat = chat.clone();
@@ -319,11 +317,11 @@ async fn build_app() -> Result<App, AnyError> {
         router,
     } = refs.core;
 
-    let handle = tree.spawn()?;
-    let gateway = handle.subtree("gateway").expect("gateway runtime subtree");
-    let core = handle.subtree("core").expect("core runtime subtree");
+    let runtime = tree.spawn()?;
+    let gateway = runtime.subtree("gateway").expect("gateway runtime subtree");
+    let core = runtime.subtree("core").expect("core runtime subtree");
     // `sessions_mount` was issued before the root existed and addresses the
-    // same identity the post-spawn `handle.subtree("sessions")` lookup would
+    // same identity the post-spawn `runtime.subtree("sessions")` lookup would
     // return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, |event| GuardMsg::BridgeRestarts {
@@ -331,7 +329,7 @@ async fn build_app() -> Result<App, AnyError> {
     });
 
     Ok(App {
-        handle,
+        runtime,
         gateway,
         core,
         sessions,
@@ -349,7 +347,7 @@ async fn build_app() -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.handle.wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.wait_started()).await??;
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
@@ -395,7 +393,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
     println!(
-        "PHASE 1 OK — RuntimeHandle::add_subtree per conversation; continue_with; interval_to"
+        "PHASE 1 OK — DynamicRuntime::add_subtree per conversation; continue_with; interval_to"
     );
     Ok(())
 }
@@ -426,13 +424,19 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         .values()
         .find(|events| {
             events.iter().any(|event| {
-                matches!(event, MonitorEvent::Down(down) if down.reason == DownReason::Failure)
+                matches!(
+                    event,
+                    MonitorEvent::Down {
+                        reason: DownReason::Failure,
+                        ..
+                    }
+                )
             })
         })
         .expect("panic run monitor events");
     let down = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Down(_)))
+        .position(|event| matches!(event, MonitorEvent::Down { .. }))
         .expect("Down event");
     let terminated = panic_events
         .iter()
@@ -763,11 +767,11 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
             .message_bytes_accepted
             .is_some_and(|bytes| bytes > 0)
     );
-    let recursive_stats = app.handle.actor_stats();
+    let recursive_stats = app.runtime.actor_stats();
     let session_stats = app.sessions.actor_stats();
-    let final_snapshot = app.handle.snapshot();
+    let final_snapshot = app.runtime.snapshot();
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.handle.shutdown_and_wait()).await??;
+    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
     let latency = latency.snapshot();
     assert!(
         latency

@@ -68,7 +68,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .restart(RestartPolicy::OnFailure)
     };
 
     let sink = {
@@ -92,14 +91,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(RestartPolicy::Always)
     };
 
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(fetch)
         .child(decode)
         .child(sink)
-        .build()?;
-
-    let handle = supervisor.spawn();
+        .spawn()?;
     let mut restarted_stage_names = BTreeSet::new();
 
     while restarted_stage_names.len() < 3 {
@@ -114,8 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("all pipeline stages restarted together: {restarted_stage_names:?}");
-    handle.shutdown();
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

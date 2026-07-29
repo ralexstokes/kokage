@@ -950,14 +950,14 @@ impl SupervisorRuntime {
         }
     }
 
-    fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
-        if self.meta.kind == ScopeKind::Ordered {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: "add_child",
-                kind: self.meta.kind,
-            }
-            .into());
+    fn assert_dynamic_membership(&self) {
+        if self.meta.kind != ScopeKind::Dynamic {
+            unreachable!("dynamic membership command reached an ordered supervisor");
         }
+    }
+
+    fn add_child(&mut self, mut child: crate::child::ChildSpec) -> CommandResult<u64> {
+        self.assert_dynamic_membership();
 
         ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
             .apply_defaults(self.meta.default_restart, self.meta.default_shutdown);
@@ -1007,13 +1007,7 @@ impl SupervisorRuntime {
     }
 
     fn add_nested(&mut self, mut pending: PendingSupervisorChild) -> CommandResult<u64> {
-        if self.meta.kind == ScopeKind::Ordered {
-            return Err(ControlError::UnsupportedByScopeKind {
-                operation: "add_child",
-                kind: self.meta.kind,
-            }
-            .into());
-        }
+        self.assert_dynamic_membership();
         // Every early return from here on drops `pending`, which terminalizes
         // the identity its caller reserved.
         let spec = pending.spec_mut();
@@ -1110,13 +1104,7 @@ impl SupervisorRuntime {
         id: String,
         reply: oneshot::Sender<Result<(), ControlError>>,
     ) -> RuntimeResult<()> {
-        if self.meta.kind == ScopeKind::Ordered {
-            let _ = reply.send(Err(ControlError::UnsupportedByScopeKind {
-                operation: "remove_child",
-                kind: self.meta.kind,
-            }));
-            return Ok(());
-        }
+        self.assert_dynamic_membership();
 
         let Some(&key) = self.children_by_id.get(&id) else {
             let _ = reply.send(Err(ControlError::UnknownChildId(id)));
@@ -1946,7 +1934,7 @@ impl SupervisorRuntime {
                 supervisor: entry
                     .nested_channels
                     .as_ref()
-                    .map(|channels| channels.internal_handle()),
+                    .map(|channels| channels.handle()),
             })
             .collect()
     }
@@ -2192,6 +2180,14 @@ mod tests {
         }
     }
 
+    #[test]
+    #[should_panic(expected = "dynamic membership command reached an ordered supervisor")]
+    fn ordered_runtime_rejects_internal_dynamic_membership_commands() {
+        let mut runtime = runtime_with_child("static");
+
+        let _ = runtime.add_child(ChildSpec::task("dynamic", |_| async { Ok(()) }));
+    }
+
     #[tokio::test]
     async fn readiness_wake_prioritizes_ready_over_nested_snapshot_traffic() {
         let supervisor = empty_supervisor();
@@ -2290,7 +2286,9 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::ZERO),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::ZERO,
+            },
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2314,7 +2312,9 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::ZERO),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::ZERO,
+            },
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2338,7 +2338,9 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::from_secs(60)),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::from_secs(60),
+            },
             grace_deadline: Instant::now() + Duration::from_secs(60),
             initiated_at: StdInstant::now(),
             grace_expired: false,
@@ -2364,7 +2366,9 @@ mod tests {
         let (reply, _reply_rx) = oneshot::channel();
         let pending = PendingRemoval {
             reply,
-            policy: ShutdownPolicy::cooperative(Duration::ZERO),
+            policy: ShutdownPolicy::Cooperative {
+                grace: Duration::ZERO,
+            },
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: false,
@@ -2490,7 +2494,7 @@ mod tests {
             .build()
             .expect("dynamic supervisor builds");
         let channels = supervisor.stable_channels(false);
-        let handle = channels.internal_handle();
+        let handle = channels.handle();
         let config = supervisor.config.clone();
         let control_capacity = config.control_channel_capacity;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -2584,7 +2588,7 @@ mod tests {
             .build()
             .expect("supervisor builds");
         let channels = supervisor.stable_channels(false);
-        let handle = channels.internal_handle();
+        let handle = channels.handle();
         let config = supervisor.config.clone();
         let control_capacity = config.control_channel_capacity;
         let nested_channels = channels.nested_channels();

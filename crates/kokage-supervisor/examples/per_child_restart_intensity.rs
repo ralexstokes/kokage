@@ -14,6 +14,8 @@ fn example_error(message: &'static str) -> BoxError {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut warm_cache_restart = RestartConfig::new(1, Duration::from_secs(1));
+    warm_cache_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
     let warm_cache_attempts = Arc::new(AtomicUsize::new(0));
 
     // Intensity uses a sliding timestamp window. Backoff attempts are tracked
@@ -40,11 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     })
-    .restart(RestartPolicy::OnFailure)
-    .restart_intensity(
-        RestartConfig::new(1, Duration::from_secs(1))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-    );
+    .restart_config(warm_cache_restart);
 
     let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -54,14 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let supervisor = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+    let running = Supervisor::ordered()
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
-        .build()?;
-
-    let handle = supervisor.spawn();
-    let mut events = handle.watch_lifecycle_recursive();
+        .spawn()?;
+    let mut events = running.watch_lifecycle_recursive();
 
     loop {
         let event = timeout(Duration::from_secs(2), events.next())
@@ -100,8 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    handle.shutdown();
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
     println!("supervisor stopped");
 
     Ok(())

@@ -12,15 +12,15 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let handle = OrderedTree::new().spawn()?;
-//! let console = Console::for_runtime(&handle)
+//! # let runtime = OrderedTree::new().spawn()?;
+//! let console = Console::for_runtime(&runtime)
 //!     .build()?
 //!     .spawn()
 //!     .await
 //!     .expect("failed to start console");
 //!
 //! println!("Console at http://{}", console.local_addr());
-//! # handle.shutdown_and_wait().await?;
+//! # runtime.shutdown_and_wait().await?;
 //! # Ok(())
 //! # }
 //! ```

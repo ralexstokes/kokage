@@ -182,8 +182,7 @@ fn feed_options() -> ActorOptions<FeedMsg> {
 /// pinned so the qualified ids stay `venues.venue-a-feed` and friends.
 #[derive(Supervision)]
 #[supervision(
-    strategy = Strategy::OneForOne,
-    restart_intensity = RestartConfig::new(5, Duration::from_secs(10)),
+    restart_config = RestartConfig::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
     #[supervision(label = "venue-a-feed", options = feed_options())]
@@ -200,7 +199,6 @@ struct Venues {
 /// the core actors, matching the subtree-before-actors order the runtime
 /// builder used before.
 #[derive(Supervision)]
-#[supervision(strategy = Strategy::OneForOne)]
 struct TradingEngine {
     #[supervision(scope)]
     venues: Venues,
@@ -213,7 +211,7 @@ struct TradingEngine {
 }
 
 struct App {
-    handle: RuntimeHandle,
+    runtime: kokage::Runtime,
     venue_a_feed: ActorRef<FeedMsg>,
     venue_b_feed: ActorRef<FeedMsg>,
     router: ActorRef<RouterMsg>,
@@ -260,10 +258,9 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // Core and venue actors share one graph, so the cycle between them — feeds
     // hold the reconciler's ref, the reconciler holds every feed's — is wired in
     // a single closure with no slots to open and fill by hand.
-    let config = kokage::GraphConfig::new()
-        .name("trading-engine")
-        .mailbox_capacity(32);
-    let (tree, refs) = TradingEngine::tree_with(config, |refs| {
+    let mut builder = kokage::GraphBuilder::new();
+    builder.name("trading-engine").mailbox_capacity(32);
+    let (tree, refs) = TradingEngine::tree_with(builder, |refs| {
         let venues = &refs.venues;
         let feed_refs = HashMap::from([
             (VENUE_A, venues.venue_a_feed.clone()),
@@ -353,17 +350,17 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         ..
     } = venues;
 
-    let handle = tree.spawn()?;
+    let runtime = tree.spawn()?;
 
     let background_stop = CancellationToken::new();
-    let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));
+    let sampler = tokio::spawn(telemetry::sample(runtime.handle(), background_stop.clone()));
     // The aggregate restart breaker is fed from the lifecycle stream's
     // cumulative counters rather than inferring restarts from event pairs.
     // Every event carries the venues supervisor's cumulative restart counter;
     // even a `Lagged` gap loses transition detail but not the next count. The
     // scope is direct children, so nested per-venue supervisors would each
     // need their own lifecycle pump.
-    let lifecycle_watch = handle
+    let lifecycle_watch = runtime
         .subtree("venues")
         .expect("venues runtime subtree")
         .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
@@ -371,7 +368,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         });
 
     Ok(App {
-        handle,
+        runtime,
         venue_a_feed,
         venue_b_feed,
         router,
@@ -389,7 +386,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.handle.wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.wait_started()).await??;
     assert_eq!(app.venue_a.feed_sessions(VENUE_A), 1);
     assert_eq!(app.venue_b.feed_sessions(VENUE_B), 1);
     assert_eq!(app.venue_a.gateway_sessions(VENUE_A), 1);
@@ -467,7 +464,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     });
     let before_b = generation(app, "venue-b-feed");
     let venues = app
-        .handle
+        .runtime
         .subtree("venues")
         .expect("venues runtime subtree");
     let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
@@ -639,7 +636,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     });
     await_until(|| async {
         let stats = app
-            .handle
+            .runtime
             .subtree("venues")
             .expect("venue runtime subtree")
             .actor_stats();
@@ -664,7 +661,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     flood_stop.cancel();
     flood.await?;
     let feed_stats = app
-        .handle
+        .runtime
         .subtree("venues")
         .expect("venue runtime subtree")
         .actor_stats();
@@ -684,7 +681,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
 async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
     let venues = app
-        .handle
+        .runtime
         .subtree("venues")
         .expect("venues runtime subtree");
     for (id, feed) in [
@@ -736,7 +733,7 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
     app.background_stop.cancel();
     app.sampler.await?;
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.handle.shutdown_and_wait()).await??;
+    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
 
     let latency = latency.snapshot();
     for series in [
@@ -767,8 +764,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
             >= 2
     );
     println!("selected metrics: {selected_metrics:#?}");
-    println!("final supervisor snapshot: {:#?}", app.handle.snapshot());
-    println!("final actor stats: {:#?}", app.handle.actor_stats());
+    println!("final supervisor snapshot: {:#?}", app.runtime.snapshot());
+    println!("final actor stats: {:#?}", app.runtime.actor_stats());
     println!("PHASE 8 OK — staged shutdown and observability");
     Ok(())
 }
@@ -882,7 +879,7 @@ fn both_health(status: &ReconcilerStatus, health: VenueHealth) -> bool {
 }
 
 fn generation(app: &App, child: &str) -> u64 {
-    app.handle
+    app.runtime
         .snapshot()
         .descendant(["venues", child])
         .expect("nested child snapshot")

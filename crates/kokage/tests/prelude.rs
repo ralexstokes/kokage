@@ -10,20 +10,20 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorSpec, CallError,
+            Actor, ActorOptions, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError,
             DynamicTree, GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply,
-            RestartConfig, RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
-            StopContext, Strategy, TrySendError,
+            RestartConfig, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
+            StartContext, StopContext, Strategy, TrySendError,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, BackoffPolicy, BlockingCancelled, CancellationHandle,
-            CancellationToken, ControlError, Down, DownReason, DrainPolicy, DynamicActorOptions,
-            DynamicScope, Graph, GraphBuildError, GraphConfig, GraphLookupError, Lifetime,
-            MailboxMode, MonitorEvent, OffloadDeadline, OffloadHandle, RestrictedScope, ScopeKind,
-            ScopeWaitHandle, Supervision, SupervisorBuildError, SupervisorError, TimerKey,
+            CancellationToken, ControlError, DownReason, DrainPolicy, DynamicActorOptions,
+            DynamicRestrictedScope, DynamicRuntime, DynamicScope, Graph, GraphBuildError,
+            GraphLookupError, MailboxMode, MonitorEvent, OffloadDeadline, RestrictedScope,
+            ScopeKind, Supervision, SupervisorBuildError, SupervisorError, TaskHandle, TimerKey,
             TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
@@ -31,8 +31,8 @@ mod coverage_probe {
 
     mod host {
         use kokage::host::{
-            ActorRunError, BoxError, ChildContext, ChildResult, ChildSpec, DEFAULT_SHUTDOWN_BOUND,
-            RawActor, RunnableActor,
+            ActorContext, ActorRunError, BoxError, ChildContext, ChildResult, ChildSpec,
+            DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
         };
     }
 
@@ -48,7 +48,7 @@ mod coverage_probe {
     }
 
     mod derive_private {
-        use kokage::__private::{SupervisionFactories, qualified_label};
+        use kokage::__private::{Supervision, SupervisionFactories, qualified_label};
     }
 }
 
@@ -99,6 +99,14 @@ fn closed_policy_sets_can_be_matched_exhaustively() {
         }
     }
 
+    fn actor_status_name(status: ActorStatus) -> &'static str {
+        match status {
+            ActorStatus::Running => "running",
+            ActorStatus::Draining => "draining",
+            ActorStatus::Stopping => "stopping",
+        }
+    }
+
     fn scope_name(kind: kokage::ScopeKind) -> &'static str {
         match kind {
             kokage::ScopeKind::Ordered => "ordered",
@@ -109,6 +117,7 @@ fn closed_policy_sets_can_be_matched_exhaustively() {
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
     assert_eq!(restart_name(RestartPolicy::default()), "on-failure");
     assert_eq!(drain_name(kokage::DrainPolicy::default()), "drain");
+    assert_eq!(actor_status_name(ActorStatus::Running), "running");
     assert_eq!(scope_name(kokage::ScopeKind::default()), "ordered");
 }
 

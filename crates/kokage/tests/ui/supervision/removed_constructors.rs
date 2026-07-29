@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, GraphConfig, MessageContext, Supervision};
+use kokage::{Actor, ActorResult, GraphBuilder, MessageContext, Supervision};
 
 struct Worker;
 
@@ -17,11 +17,11 @@ struct Application {
 
 fn main() {
     Application::graph(|_| ApplicationFactories { worker: || Worker });
-    Application::graph_with(GraphConfig::new(), |_| ApplicationFactories {
+    Application::graph_with(GraphBuilder::new(), |_| ApplicationFactories {
         worker: || Worker,
     });
     Application::runtime(|_| ApplicationFactories { worker: || Worker });
-    Application::runtime_with(GraphConfig::new(), |_| ApplicationFactories {
+    Application::runtime_with(GraphBuilder::new(), |_| ApplicationFactories {
         worker: || Worker,
     });
 }

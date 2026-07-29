@@ -53,12 +53,16 @@ impl Actor for RushPress {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let handle = DynamicTree::new().spawn()?;
+    let runtime = DynamicTree::new().spawn()?;
 
-    let orders = handle
+    let orders = runtime
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor("front-desk", || Frontend { rush: None })
         .await?;
-    let rush = handle
+    let rush = runtime
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor("rush-press", move || RushPress {
             observed: observed_tx.clone(),
         })
@@ -77,8 +81,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert_eq!(observed, "vip banners x2");
     println!("rush job {observed}");
 
-    handle.remove_child("front-desk").await?;
-    handle.remove_child("rush-press").await?;
-    handle.shutdown_and_wait().await?;
+    runtime
+        .dynamic()
+        .expect("dynamic scope")
+        .remove_child("front-desk")
+        .await?;
+    runtime
+        .dynamic()
+        .expect("dynamic scope")
+        .remove_child("rush-press")
+        .await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }

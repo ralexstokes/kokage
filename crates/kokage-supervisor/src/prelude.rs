@@ -6,6 +6,7 @@
 
 pub use crate::{
     BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-    OrderedSupervisorBuilder, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
-    SupervisorBuildError, SupervisorError, SupervisorHandle,
+    DynamicSupervisorHandle, OrderedSupervisorBuilder, RestartConfig, RestartPolicy,
+    RunningSupervisor, ShutdownPolicy, Strategy, Supervisor, SupervisorBuildError, SupervisorError,
+    SupervisorHandle,
 };

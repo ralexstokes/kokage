@@ -9,6 +9,8 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut nested_restart = RestartConfig::new(5, Duration::from_secs(5));
+    nested_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
@@ -30,28 +32,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(())
                 }
             })
-            .restart(RestartPolicy::OnFailure)
-            .restart_intensity(
-                RestartConfig::new(5, Duration::from_secs(5))
-                    .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-            ),
+            .restart_config(nested_restart),
         )
         .build()?;
 
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
         .child(ChildSpec::supervisor("nested", nested))
-        .build()?;
-
-    let handle = supervisor.spawn();
+        .spawn()?;
 
     sleep(Duration::from_millis(300)).await;
-    handle.shutdown();
-
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
 
     Ok(())
 }

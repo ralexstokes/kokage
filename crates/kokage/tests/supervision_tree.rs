@@ -47,9 +47,8 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartPolicy::Always),
-            RestartPolicy::Never,
-            ShutdownPolicy::abort(),
+            .restart(RestartPolicy::Always)
+            .shutdown(ShutdownPolicy::Abort),
         )
         .actor(ActorSpec::new(graph.actors()[0].clone()).restart(RestartPolicy::Never))
         .actor(graph.actors()[1].clone())
@@ -76,8 +75,8 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     else {
         panic!("expected a task");
     };
-    assert_eq!(*restart, RestartPolicy::Never);
-    assert_eq!(*shutdown, ShutdownPolicy::abort());
+    assert_eq!(*restart, RestartPolicy::Always);
+    assert_eq!(*shutdown, ShutdownPolicy::Abort);
 
     let ChildOutline::Actor { restart, .. } = outline.child("ingest").expect("ingest is present")
     else {
@@ -92,6 +91,40 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     assert!(matches!(
         outline.child("clock"),
         Some(ChildOutline::Task { .. })
+    ));
+}
+
+#[test]
+fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
+    let explicit_shutdown = ShutdownPolicy::Cooperative {
+        grace: Duration::from_millis(17),
+    };
+    let outline = OrderedTree::new()
+        .default_restart(RestartPolicy::Always)
+        .default_shutdown(ShutdownPolicy::Abort)
+        .task(ChildSpec::task("inherited", |_| async { Ok(()) }))
+        .task(
+            ChildSpec::task("explicit", |_| async { Ok(()) })
+                .restart(RestartPolicy::Never)
+                .shutdown(explicit_shutdown),
+        )
+        .outline();
+
+    assert!(matches!(
+        outline.child("inherited"),
+        Some(ChildOutline::Task {
+            restart: RestartPolicy::Always,
+            shutdown: ShutdownPolicy::Abort,
+            ..
+        })
+    ));
+    assert!(matches!(
+        outline.child("explicit"),
+        Some(ChildOutline::Task {
+            restart: RestartPolicy::Never,
+            shutdown,
+            ..
+        }) if *shutdown == explicit_shutdown
     ));
 }
 
@@ -156,12 +189,12 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
     let standard = DynamicTree::new().outline();
     let customized = DynamicTree::new()
         .default_restart(RestartPolicy::Never)
-        .default_shutdown(ShutdownPolicy::abort())
+        .default_shutdown(ShutdownPolicy::Abort)
         .outline();
 
     assert_ne!(standard, customized);
     assert_eq!(customized.default_restart, RestartPolicy::Never);
-    assert_eq!(customized.default_shutdown, ShutdownPolicy::abort());
+    assert_eq!(customized.default_shutdown, ShutdownPolicy::Abort);
 }
 
 #[tokio::test]
@@ -214,7 +247,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
     let children = OrderedTree::new()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(60)))
         .task(
             ChildSpec::task("fatal", move |_| {
                 let fail = Arc::clone(&fail_child);
@@ -222,9 +255,9 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
                     fail.notified().await;
                     Err(std::io::Error::other("fatal child failure").into())
                 }
-            }),
-            RestartPolicy::Always,
-            ShutdownPolicy::abort(),
+            })
+            .restart(RestartPolicy::Always)
+            .shutdown(ShutdownPolicy::Abort),
         );
     let handle = OrderedTree::new()
         .default_restart(RestartPolicy::Never)
@@ -248,7 +281,10 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
                 .and_then(|owned| owned.child("children"))
                 .is_some_and(|children| {
                     children.state.is_stopped()
-                        && matches!(children.last_exit(), Some(ExitStatusView::Failed(_)))
+                        && matches!(
+                            children.state.last_exit().map(|exit| &exit.status),
+                            Some(ExitStatusView::Failed(_))
+                        )
                 })
         })
         .await
@@ -283,13 +319,9 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
             "workers",
             DynamicTree::new()
                 .default_restart(RestartPolicy::Never)
-                .default_shutdown(ShutdownPolicy::abort()),
+                .default_shutdown(ShutdownPolicy::Abort),
         )
-        .task(
-            ChildSpec::task("clock", |_ctx| async { Ok(()) }),
-            RestartPolicy::default(),
-            ShutdownPolicy::default(),
-        )
+        .task(ChildSpec::task("clock", |_ctx| async { Ok(()) }))
         .outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     assert!(
@@ -306,7 +338,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         panic!("expected dynamic scope");
     };
     assert_eq!(workers.default_restart, RestartPolicy::Never);
-    assert_eq!(workers.default_shutdown, ShutdownPolicy::abort());
+    assert_eq!(workers.default_shutdown, ShutdownPolicy::Abort);
     assert!(matches!(
         decoded.child("clock"),
         Some(ChildOutline::Task { .. })

@@ -11,7 +11,6 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
     DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
-    timers,
 };
 use tokio::time::Instant;
 
@@ -91,8 +90,7 @@ impl Session {
     ) -> ActorResult {
         ctx.clear_timeout(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
-            self.heartbeat = Some(timers::interval_to(
-                &ctx.lifetime(),
+            self.heartbeat = Some(ctx.interval_to(
                 &self.progress,
                 ProgressMsg::Typing { chat: self.chat },
                 TYPING_PERIOD,
@@ -109,6 +107,8 @@ impl Session {
             .children()
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
+            .dynamic()
+            .expect("dynamic scope")
             .add_actor_with(
                 id.clone(),
                 AgentRunFactory {
@@ -336,8 +336,8 @@ impl Actor for Session {
                     .entry(task)
                     .or_default()
                     .push(event.clone());
-                if let kokage::MonitorEvent::Down(down) = &event
-                    && down.reason == kokage::DownReason::Failure
+                if let kokage::MonitorEvent::Down { reason, .. } = &event
+                    && *reason == kokage::DownReason::Failure
                 {
                     if let Some(active) = self.active.as_mut()
                         && active.task == task

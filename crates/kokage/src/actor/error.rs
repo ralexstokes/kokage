@@ -6,7 +6,7 @@ use thiserror::Error;
 #[error("blocking task was cancelled during runtime shutdown")]
 pub struct BlockingCancelled;
 
-/// Indicates that an [`ActorContext::offload`](crate::ActorContext::offload)
+/// Indicates that an [`ActorContext::offload`](crate::host::ActorContext::offload)
 /// future did not complete before its required deadline.
 #[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
 #[error("actor offload deadline elapsed")]
@@ -24,6 +24,9 @@ pub enum GraphBuildError {
     /// The graph was built without any actors.
     #[error("graph must contain at least one actor")]
     EmptyGraph,
+    /// A builder passed to a generated supervision constructor already had actors registered.
+    #[error("graph builder passed to generated supervision must not contain registered actors")]
+    NonEmptyGraphBuilder,
     /// Two actor implementations shared the same id.
     #[error("duplicate actor id `{actor_id}`")]
     #[non_exhaustive]

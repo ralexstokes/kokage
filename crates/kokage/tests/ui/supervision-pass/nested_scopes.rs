@@ -2,7 +2,7 @@
 //! marker scope all wire from one factories literal.
 
 use kokage::{
-    ActorContext, ActorResult, DynamicScope, DynamicTree, GraphBuildError, RestartPolicy, Strategy,
+    host::ActorContext, ActorResult, DynamicScope, DynamicTree, GraphBuildError, RestartPolicy, Strategy,
     Supervision,
 };
 
@@ -27,7 +27,6 @@ struct Workers {
 #[supervision(strategy = Strategy::RestForOne)]
 struct Pool {
     manager: Worker,
-    #[supervision(dynamic)]
     sessions: DynamicScope,
 }
 

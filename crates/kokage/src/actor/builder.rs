@@ -134,10 +134,12 @@ static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Unfilled position for one actor in a graph builder.
 ///
-/// Slots are created by [`GraphBuilder::slot`] or
-/// [`GraphBuilder::slot_with`] and consumed by
+/// Slots are the cyclic-wiring escape hatch: they are created by
+/// [`GraphBuilder::slot`] or [`GraphBuilder::slot_with`] and consumed by
 /// [`GraphBuilder::define`]. The token is intentionally neither [`Clone`] nor
-/// [`Copy`], so a slot can only be filled once in ordinary Rust code.
+/// [`Copy`], so a slot can only be filled once in ordinary Rust code. Use
+/// [`GraphBuilder::actor`] or [`GraphBuilder::actor_with`] when the factory can
+/// be defined as soon as its ref is created.
 pub struct ActorSlot<M> {
     builder_id: u64,
     index: Option<usize>,
@@ -163,10 +165,14 @@ impl<M> ActorSlot<M> {
 
 /// Builder for constructing a validated actor graph.
 ///
-/// Registration mints restart-stable, typed [`ActorRef`]s with
-/// [`slot`](Self::slot), then fills each slot with [`define`](Self::define).
-/// Reserving refs before defining factories allows refs to be captured by
-/// other actors' state, including when wiring cyclic graphs.
+/// Register actors in dependency order with [`actor`](Self::actor) or
+/// [`actor_with`](Self::actor_with). Each call installs the incarnation factory
+/// and returns a restart-stable, typed [`ActorRef`].
+///
+/// Cyclic graphs need refs before every factory can be constructed. For those,
+/// open the cycle's refs with [`slot`](Self::slot) or
+/// [`slot_with`](Self::slot_with), then fill the slots with
+/// [`define`](Self::define).
 ///
 /// # Mailboxes and cycles
 ///
@@ -196,55 +202,6 @@ struct Slot {
 }
 
 pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
-
-/// Value configuration used when generated code constructs an actor graph.
-///
-/// Unlike [`GraphBuilder`], this contains no actor slots or other mutable
-/// construction state, so it is safe to pass into generated composition APIs.
-#[derive(Clone, Debug)]
-pub struct GraphConfig {
-    name: Option<String>,
-    mailbox_capacity: usize,
-}
-
-impl GraphConfig {
-    /// Creates configuration with an anonymous name and capacity 64.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the graph name used in tracing fields.
-    #[must_use]
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
-    }
-
-    /// Sets the default bounded mailbox capacity.
-    #[must_use]
-    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.mailbox_capacity = capacity;
-        self
-    }
-}
-
-impl Default for GraphConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            mailbox_capacity: DEFAULT_MAILBOX_CAPACITY,
-        }
-    }
-}
-
-impl From<GraphConfig> for GraphBuilder {
-    fn from(config: GraphConfig) -> Self {
-        let mut builder = Self::new();
-        builder.name = config.name;
-        builder.mailbox_capacity = config.mailbox_capacity;
-        builder
-    }
-}
 
 impl Default for GraphBuilder {
     fn default() -> Self {
@@ -286,8 +243,46 @@ impl GraphBuilder {
         self
     }
 
-    /// Opens a named slot with default [`ActorOptions`] and returns its fill
-    /// token plus a restart-stable ref.
+    pub(crate) fn has_registered_actors(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
+    /// Registers an actor with default [`ActorOptions`] and returns its
+    /// restart-stable ref.
+    ///
+    /// Register actors in dependency order so each factory can capture refs
+    /// returned by earlier calls. Use [`slot`](Self::slot) and
+    /// [`define`](Self::define) instead when cyclic wiring requires a ref before
+    /// its factory can be constructed.
+    pub fn actor<F>(&mut self, actor_id: &str, factory: F) -> ActorRef<<F::Actor as RawActor>::Msg>
+    where
+        F: ActorFactory,
+    {
+        self.actor_with(actor_id, ActorOptions::new(), factory)
+    }
+
+    /// Registers an actor with explicit options and returns its restart-stable
+    /// ref.
+    ///
+    /// `options` configures this actor's mailbox and message-size observation.
+    /// Use [`slot_with`](Self::slot_with) and [`define`](Self::define) instead
+    /// when cyclic wiring requires a ref before its factory can be constructed.
+    pub fn actor_with<F>(
+        &mut self,
+        actor_id: &str,
+        options: ActorOptions<<F::Actor as RawActor>::Msg>,
+        factory: F,
+    ) -> ActorRef<<F::Actor as RawActor>::Msg>
+    where
+        F: ActorFactory,
+    {
+        let (slot, actor_ref) = self.slot_with(actor_id, options);
+        self.define(slot, factory);
+        actor_ref
+    }
+
+    /// Opens a named slot for cyclic wiring with default [`ActorOptions`] and
+    /// returns its fill token plus a restart-stable ref.
     ///
     /// See [`slot_with`](Self::slot_with) for cyclic-wiring order and explicit
     /// mailbox or message-size options.
@@ -295,8 +290,8 @@ impl GraphBuilder {
         self.slot_with(actor_id, ActorOptions::new())
     }
 
-    /// Opens a named slot with explicit options and returns its fill token plus
-    /// a restart-stable ref.
+    /// Opens a named slot for cyclic wiring with explicit options and returns
+    /// its fill token plus a restart-stable ref.
     ///
     /// This enables cyclic wiring: create all refs first, hand them to actor
     /// constructors, then consume each [`ActorSlot`] with [`define`](Self::define).
@@ -340,7 +335,7 @@ impl GraphBuilder {
         )
     }
 
-    /// Fills a previously opened actor slot from a reusable incarnation factory.
+    /// Fills a cyclic-wiring slot from a reusable incarnation factory.
     ///
     /// The slot token's message type must match the actor's message type, so a
     /// mismatched actor is rejected by the compiler. Consuming the token makes
@@ -462,8 +457,8 @@ impl GraphBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActorOptions, GraphBuilder, GraphConfig, MailboxMode};
-    use crate::{Actor, ActorResult, GraphBuildError, MessageContext};
+    use super::{ActorOptions, GraphBuilder, MailboxMode};
+    use crate::{Actor, ActorResult, MessageContext};
 
     struct OpaqueMessage;
 
@@ -512,8 +507,7 @@ mod tests {
     #[test]
     fn graph_actor_for_uses_binding_identity() {
         let mut first = GraphBuilder::new();
-        let (slot, actor_ref) = first.slot::<OpaqueMessage>("worker");
-        first.define(slot, || OpaqueActor);
+        let actor_ref = first.actor("worker", || OpaqueActor);
         let graph = first.build().expect("first graph builds");
 
         assert_eq!(
@@ -526,8 +520,7 @@ mod tests {
         assert!(graph.actor_for(&actor_ref.clone()).is_ok());
 
         let mut second = GraphBuilder::new();
-        let (slot, foreign_ref) = second.slot::<OpaqueMessage>("worker");
-        second.define(slot, || OpaqueActor);
+        let foreign_ref = second.actor("worker", || OpaqueActor);
         second.build().expect("second graph builds");
         assert!(matches!(
             graph.actor_for(&foreign_ref),
@@ -542,22 +535,16 @@ mod tests {
     }
 
     #[test]
-    fn graph_config_only_configures_new_builder_state() {
-        let mut builder: GraphBuilder = GraphConfig::new()
-            .name("configured")
-            .mailbox_capacity(8)
-            .into();
-        let (slot, _) = builder.slot::<OpaqueMessage>("worker");
-        builder.define(slot, || OpaqueActor);
-        let graph = builder.build().expect("configured graph builds");
-        assert_eq!(graph.name(), "configured");
+    fn actor_with_applies_options_and_returns_the_registered_ref() {
+        let mut builder = GraphBuilder::new();
+        let actor_ref = builder.actor_with(
+            "worker",
+            ActorOptions::new().mailbox(MailboxMode::conflate()),
+            || OpaqueActor,
+        );
+        let graph = builder.build().expect("graph builds");
 
-        let mut invalid: GraphBuilder = GraphConfig::new().mailbox_capacity(0).into();
-        let (slot, _) = invalid.slot::<OpaqueMessage>("worker");
-        invalid.define(slot, || OpaqueActor);
-        assert!(matches!(
-            invalid.build(),
-            Err(GraphBuildError::ZeroMailboxCapacity)
-        ));
+        assert_eq!(actor_ref.id(), "worker");
+        assert!(graph.actor_for(&actor_ref).is_ok());
     }
 }

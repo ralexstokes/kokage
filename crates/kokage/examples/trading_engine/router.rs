@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use kokage::{LiveContext, prelude::*};
+use kokage::prelude::*;
 
 use crate::messages::{
     CALL_DEADLINE, CancelOutcome, GatewayMsg, LedgerMsg, OrderKey, PlaceOutcome, QueryOutcome,
@@ -105,7 +105,7 @@ impl Actor for OrderRouter {
                 );
                 let gateway = self.gateways.get(venue).expect("known venue").clone();
                 let message_key = key.clone();
-                ctx.offload_or(
+                ctx.offload(
                     CALL_DEADLINE,
                     async move {
                         let result = gateway
@@ -129,15 +129,19 @@ impl Actor for OrderRouter {
                         };
                         (disposition, submitted)
                     },
-                    (
-                        SubmitDisposition::Unknown,
-                        SubmitResult::Unknown(message_key.clone()),
-                    ),
-                    move |(disposition, submitted)| RouterMsg::SubmitResolved {
-                        key: message_key,
-                        disposition,
-                        submitted,
-                        reply,
+                    move |result| {
+                        let (disposition, submitted) = result.unwrap_or_else(|_| {
+                            (
+                                SubmitDisposition::Unknown,
+                                SubmitResult::Unknown(message_key.clone()),
+                            )
+                        });
+                        RouterMsg::SubmitResolved {
+                            key: message_key,
+                            disposition,
+                            submitted,
+                            reply,
+                        }
                     },
                 );
             }
@@ -178,7 +182,7 @@ impl Actor for OrderRouter {
                     .get(intent.venue)
                     .expect("known venue")
                     .clone();
-                ctx.offload_or(
+                ctx.offload(
                     CALL_DEADLINE,
                     async move {
                         match gateway
@@ -189,8 +193,10 @@ impl Actor for OrderRouter {
                             Err(_) => CancelOutcome::Unknown,
                         }
                     },
-                    CancelOutcome::Unknown,
-                    move |outcome| RouterMsg::CancelResolved { outcome, reply },
+                    move |result| RouterMsg::CancelResolved {
+                        outcome: result.unwrap_or(CancelOutcome::Unknown),
+                        reply,
+                    },
                 );
             }
             RouterMsg::CancelResolved { outcome, reply } => reply.send(outcome),

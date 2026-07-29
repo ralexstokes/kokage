@@ -1,9 +1,9 @@
 use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, Down, DownReason,
-    DynamicActorOptions, DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    ActorFactory, ActorRef, ActorResult, CancellationHandle, DownReason, DynamicActorOptions,
+    DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
+    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use kokage_supervisor::ShutdownPolicy;
 use tokio::{
@@ -188,9 +188,23 @@ fn up(actor_id: &str, generation: u64) -> MonitorEvent {
     }
 }
 
-fn expect_down(event: MonitorEvent) -> Down {
+struct TestDown {
+    actor_id: String,
+    generation: u64,
+    reason: DownReason,
+}
+
+fn expect_down(event: MonitorEvent) -> TestDown {
     match event {
-        MonitorEvent::Down(down) => down,
+        MonitorEvent::Down {
+            actor_id,
+            generation,
+            reason,
+        } => TestDown {
+            actor_id,
+            generation,
+            reason,
+        },
         other => panic!("expected Down, got {other:?}"),
     }
 }
@@ -1202,7 +1216,7 @@ impl RawActor for GatedObserver {
         self.watch.send(watch).expect("watch receiver alive");
         self.gate.notified().await;
         while let Some(event) = ctx.recv().await {
-            let done = matches!(event, MonitorEvent::Down(_));
+            let done = matches!(event, MonitorEvent::Down { .. });
             self.observed.send(event).expect("observer receiver alive");
             if done {
                 break;
@@ -1322,18 +1336,22 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor_with(
             "peer",
             move || StubbornPeer {
                 started: peer_started_tx.clone(),
             },
-            DynamicActorOptions::new().shutdown(ShutdownPolicy::abort()),
+            DynamicActorOptions::new().shutdown(ShutdownPolicy::Abort),
         )
         .await
         .expect("peer added");
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     handle
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor_with(
             "observer",
             {
@@ -1353,6 +1371,8 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     assert_eq!(next_event(&mut observed).await, up("peer", 0));
 
     handle
+        .dynamic()
+        .expect("dynamic scope")
         .remove_child("peer")
         .await
         .expect("peer removed by abort");

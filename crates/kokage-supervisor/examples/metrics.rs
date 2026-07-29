@@ -16,29 +16,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recorder = PrometheusBuilder::new().install_recorder()?;
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let supervisor = Supervisor::ordered()
-        .child(
-            ChildSpec::task("flaky", move |ctx| {
-                let attempts = Arc::clone(&attempts);
-                async move {
-                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                        return Err(std::io::Error::other("boom").into());
-                    }
-
-                    ctx.shutdown_token().cancelled().await;
-                    Ok(())
+    let running = Supervisor::ordered()
+        .child(ChildSpec::task("flaky", move |ctx| {
+            let attempts = Arc::clone(&attempts);
+            async move {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(std::io::Error::other("boom").into());
                 }
-            })
-            .restart(RestartPolicy::OnFailure),
-        )
-        .build()?;
 
-    let handle = supervisor.spawn();
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }))
+        .spawn()?;
 
     sleep(Duration::from_millis(100)).await;
-    handle.shutdown();
-
-    handle.wait().await?;
+    running.shutdown_and_wait().await?;
 
     println!("# Prometheus snapshot");
     println!("{}", recorder.render());

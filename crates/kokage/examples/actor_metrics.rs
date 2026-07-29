@@ -45,20 +45,23 @@ async fn sample(worker: ActorRef<&'static str>, runtime: RuntimeHandle, stop: Ca
 async fn main() -> Result<(), Box<dyn Error>> {
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (worker_slot, worker) = graph.slot("Worker");
-    graph.define(worker_slot, move || Worker {
+    let worker = graph.actor("Worker", move || Worker {
         completed: completed_tx.clone(),
     });
-    let handle = OrderedTree::graph(graph.build()?).spawn()?;
+    let runtime = OrderedTree::graph(graph.build()?).spawn()?;
 
     let sampler_stop = CancellationToken::new();
-    let sampler = tokio::spawn(sample(worker.clone(), handle.clone(), sampler_stop.clone()));
+    let sampler = tokio::spawn(sample(
+        worker.clone(),
+        runtime.handle(),
+        sampler_stop.clone(),
+    ));
     worker.send("hello stats").await?;
     completed_rx.recv().await.expect("message processed");
     tokio::time::sleep(Duration::from_millis(1100)).await;
 
     sampler_stop.cancel();
     sampler.await?;
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }

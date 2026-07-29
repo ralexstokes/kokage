@@ -20,14 +20,14 @@ watches and supervision. `RestartPolicy::Always` restarts it; `OnFailure` and
 `Never` do not.
 
 The usual static graph is a struct whose fields are the actors. Deriving
-`Supervision` gives that struct a `graph` method; its wiring closure receives a
+`Supervision` gives that struct a `tree` method; its wiring closure receives a
 cloneable refs struct with one typed `ActorRef` per field, so cycles and
 forward references do not require string lookup. The method returns that same
-refs bundle alongside the graph, for use as application entry points:
+refs bundle alongside the single-use tree, for use as application entry points:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
+use kokage::{ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
 
 struct Order(String);
 struct Parcel(String);
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
-    let handle = tree.spawn()?;
+    let runtime = tree.spawn()?;
 
     refs.front_desk
         .send(Order("business cards x100".into()))
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("shipped {shipped} jobs");
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
@@ -139,7 +139,7 @@ For lower-level hosting, construct a `GraphBuilder` manually, iterate
 
 ## Incarnation-local state
 
-Every call to `GraphBuilder::define` takes an `ActorFactory`. Its `build`
+Every `GraphBuilder::actor` registration takes an `ActorFactory`. Its `build`
 method runs exactly once for the initial start and once for every supervised
 restart, so ordinary actor fields are fresh incarnation-local state. The actor
 type does not need `Clone`, and a synchronously constructible non-`Clone` guard
@@ -150,8 +150,7 @@ as a startup or run panic.
 Constructor functions are the common case:
 
 ```rust,ignore
-let (actor_slot, _) = builder.slot("worker");
-builder.define(actor_slot, Worker::new);
+let worker = builder.actor("worker", Worker::new);
 ```
 
 Closures automatically implement `ActorFactory`. For a small wired actor,
@@ -160,8 +159,7 @@ constructing each incarnation:
 
 ```rust,ignore
 let ledger = ledger_ref.clone();
-let (actor_slot, _) = builder.slot("gateway");
-builder.define(actor_slot, move || Gateway::new(ledger.clone()));
+let gateway = builder.actor("gateway", move || Gateway::new(ledger.clone()));
 ```
 
 Larger wiring can derive a named factory directly from the actor. Unmarked
@@ -178,8 +176,7 @@ struct Gateway {
     pending: Vec<Order>,
 }
 
-let (actor_slot, _) = builder.slot("gateway");
-builder.define(actor_slot, GatewayFactory { ledger, exchange });
+let gateway = builder.actor("gateway", GatewayFactory { ledger, exchange });
 ```
 
 Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
@@ -199,8 +196,8 @@ enclosing scopes, so supervisor child ids, tracing fields, and stats stay
 human-readable without participating in type checking or message routing.
 Rename a node with `#[supervision(label = "...")]`. The generated `tree`
 returns a single-use `OrderedTree` and its cloneable typed refs. `tree_with`
-does the same from an immutable `GraphConfig` carrying the graph name and
-mailbox capacity.
+does the same from an otherwise empty `GraphBuilder` carrying graph-wide name
+and mailbox-capacity settings.
 
 The same derive can declare the supervision tree that runs those actors — see
 [Supervised actors](supervised-actors.md#declaring-a-tree-with-the-derive).
@@ -217,9 +214,8 @@ The derive keeps that shape in the type system:
   compile error
 
 Configure an individual actor's mailbox or message-size observation with a
-normal Rust expression in `#[supervision(options = ...)]`. Annotated fields use
-generated `GraphBuilder::slot_with`; plain fields use `GraphBuilder::slot` and
-retain the default FIFO mailbox without message-size observation:
+normal Rust expression in `#[supervision(options = ...)]`. Fields without the
+attribute retain the default FIFO mailbox without message-size observation:
 
 ```rust,ignore
 use kokage::{ActorOptions, MailboxMode, Supervision};
@@ -244,12 +240,15 @@ message types as well as application-owned ones.
 
 ## Dynamic and Advanced Builder Wiring
 
-Use `GraphBuilder` directly when actors are dynamic, generated in a loop, or
-require hand-written wiring. `builder.slot::<M>(id)` reserves a typed ref with
-default actor options; use `builder.slot_with::<M>(id, options)` when the actor
-needs a different mailbox or message-size observation. In both cases,
-`builder.define(slot, factory)` fills the token-protected slot. Reserve all
-slots before defining actors when wiring cycles.
+Use `GraphBuilder` directly when actors are generated in a loop or require
+hand-written wiring. Register the ordinary acyclic case in dependency order
+with `builder.actor(id, factory)`; use `builder.actor_with(id, options,
+factory)` when an actor needs a different mailbox or message-size observation.
+
+Slots are the cyclic-wiring escape hatch. `builder.slot::<M>(id)` or
+`slot_with::<M>(id, options)` creates a typed ref before its factory exists;
+reserve every ref in the cycle, then fill each token with
+`builder.define(slot, factory)`.
 
 The direct builder still validates runtime configuration facts:
 
@@ -272,19 +271,19 @@ the producer fall behind. Configure those actors explicitly:
 ```rust,ignore
 use kokage::{ActorOptions, MailboxMode};
 
-let (latest_slot, latest) = builder.slot_with(
+let latest = builder.actor_with(
     "latest-market",
     ActorOptions::new().mailbox(MailboxMode::conflate()),
+    MarketActor::new,
 );
-builder.define(latest_slot, MarketActor::new);
 
-let (per_symbol_slot, per_symbol) = builder.slot_with(
+let per_symbol = builder.actor_with(
     "market-by-symbol",
     ActorOptions::new().mailbox(MailboxMode::conflate_by_key(
         |tick: &Tick| tick.symbol_id,
     )),
+    KeyedMarketActor::new,
 );
-builder.define(per_symbol_slot, KeyedMarketActor::new);
 ```
 
 `MailboxMode::conflate()` stores at most one unread message.
@@ -347,12 +346,12 @@ awaited. That is the right choice when queued work is replaceable — recomputed
 next run, conflated into a later snapshot, or retried by the sender.
 
 A drained message reaches the same `handle` as any other, so a handler that
-behaves differently on the way out has to ask: `ctx.is_draining()` is `true`
-for exactly the calls the drain makes. Reach for it when the handler would
+behaves differently on the way out checks whether `ctx.status()` is
+`ActorStatus::Draining`. Reach for it when the handler would
 otherwise queue work that nothing will run — a `continue_with`, a fresh timer,
-a follow-up offload. It is not `ctx.is_shutting_down()`: a drain also follows
-the actor's own `ctx.stop()` request, where the graph is not shutting down and
-`is_shutting_down()` stays `false` the whole time.
+a follow-up offload. Graph shutdown remains a separate signal available as
+`ctx.shutdown_token().is_cancelled()`: a drain can also follow the actor's own
+`ctx.stop()` request while that token remains live.
 
 Hand-written `host::RawActor::run` loops are
 still available as the escape hatch for custom loop control; after
@@ -360,15 +359,15 @@ still available as the escape hatch for custom loop control; after
 can use `ctx.try_recv()` to drain immediately queued messages.
 
 The two actor styles intentionally receive non-nested capability sets.
-`host::RawActor` owns `ActorContext`, so it can call `recv`, `try_recv`, and
+`host::RawActor` owns `host::ActorContext`, so it can call `recv`, `try_recv`, and
 `mark_ready`, but it must express timers and other loop branches directly.
 The framework owns those operations for `Actor`; its stage contexts therefore
 withhold direct mailbox reads and readiness, while the live stages implement
 `LiveContext` for loop-owned timers and continuations. Watches and offloads are
-available directly from `ActorContext` to both actor styles.
+available directly from each style's context.
 Identity, shutdown-observation, blocking-work, and scope-access methods are
 inherent on every stage context, including `StopContext`; no context trait
-import is needed to call them. `LiveContext` remains the generic bound for
+import is needed to call any concrete stage operation. `LiveContext` remains the generic bound for
 helpers shared by the startup and message stages.
 
 `ctx.try_recv()` returns `Option<M>`: `Some(message)` for an immediately

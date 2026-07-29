@@ -33,7 +33,7 @@ enum LoopEvent<M> {
 /// is a snapshot, ticks and polls, or anything the sender retries. Discard also
 /// keeps shutdown bounded by the handler currently in flight rather than by the
 /// depth of the queue behind it, and it aborts outstanding
-/// [offloads](crate::ActorContext::offload) instead of waiting for them — so it
+/// [offloads](crate::LiveContext::offload) instead of waiting for them — so it
 /// is the right answer for an actor holding long-running work that shutdown
 /// should cut short rather than see through.
 /// Actor-owned [scope waits](crate::LiveContext::spawn_scope_wait) are always
@@ -61,7 +61,7 @@ pub enum DrainPolicy {
     ///
     /// Queued messages are dropped and queued [`call`](crate::ActorRef::call)s
     /// observe [`ReplyDropped`](crate::CallError::ReplyDropped). Outstanding
-    /// [offloads](crate::ActorContext::offload) are aborted rather than awaited.
+    /// [offloads](crate::LiveContext::offload) are aborted rather than awaited.
     /// Actor-owned [scope waits](crate::LiveContext::spawn_scope_wait) are
     /// aborted under both policies. This matches the behavior of a hand-written
     /// `while let Some(message) = ctx.recv().await` loop.
@@ -76,8 +76,8 @@ pub enum DrainPolicy {
     /// lifecycle state. There is no separate sender-visible `Draining` state.
     ///
     /// The handler itself can see the phase:
-    /// [`MessageContext::is_draining`](crate::MessageContext::is_draining) is
-    /// `true` for exactly the calls made here. Use it to skip work whose only
+    /// [`MessageContext::status`](crate::MessageContext::status) is
+    /// [`ActorStatus::Draining`](crate::ActorStatus::Draining) for exactly the calls made here. Use it to skip work whose only
     /// effect would be to queue something the drain will drop.
     ///
     /// # Shutdown budget
@@ -100,7 +100,7 @@ pub enum DrainPolicy {
     /// under supervision). A `Drain` actor under a too-short grace period
     /// therefore behaves like a slower `Discard`, which is the failure mode to
     /// watch for. The enclosing shutdown also reports the timeout. In particular,
-    /// [`ShutdownPolicy::abort`](crate::ShutdownPolicy::abort) has a zero grace
+    /// [`ShutdownPolicy::Abort`](crate::ShutdownPolicy::Abort) has a zero grace
     /// period and leaves effectively no drain window at all.
     ///
     /// Size the budget for the whole queued prefix, not one message: roughly
@@ -186,7 +186,7 @@ pub trait Actor: Send + 'static {
     /// This hook also runs after a drain and cannot change the stop decision.
     /// During cooperative supervisor removal, the supervisor waits for the
     /// hook before detaching the child and completing
-    /// [`RuntimeHandle::remove_child`](crate::RuntimeHandle::remove_child).
+    /// [`DynamicRuntime::remove_child`](crate::DynamicRuntime::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
     /// can abort this hook and detach the child without waiting for it. The
     /// hook's scope handles are
@@ -207,7 +207,7 @@ pub trait Actor: Send + 'static {
     /// Defaults to [`DrainPolicy::Drain`], so a handler that says nothing
     /// finishes its queued mailbox before stopping. Override with
     /// [`DrainPolicy::Discard`] for an actor whose queued work is replaceable,
-    /// or one holding long-running [offloads](crate::ActorContext::offload) that
+    /// or one holding long-running [offloads](crate::LiveContext::offload) that
     /// shutdown should cut short rather than await.
     ///
     /// # Evaluation point
@@ -336,7 +336,7 @@ impl<H: Actor> RawActor for H {
                 // Once stopping begins, later stop requests do not change the
                 // drain decision. Continuations queued by drain handlers are
                 // left for the context to drop with the incarnation, and
-                // reported below. A handler that cares can ask `is_draining`.
+                // reported below. A handler that cares can inspect `status`.
                 self.handle(message, &mut MessageContext::draining(&mut ctx))
                     .await?;
             }

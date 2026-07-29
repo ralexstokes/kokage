@@ -46,11 +46,13 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         completed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(ExitStatusView::Completed)
     ));
 
-    common::shutdown(handle).await;
+    common::shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -101,7 +103,7 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         failed
             .descendant(["nested", "leaf"])
             .expect("leaf remains visible")
-            .last_exit(),
+            .state.last_exit().map(|exit| &exit.status),
         Some(ExitStatusView::Failed(message)) if message.contains("nested failure")
     ));
 
@@ -171,6 +173,8 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
     let mut events = common::event_watch(&handle);
 
     let lineage = handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("dynamic nested child should be accepted");
@@ -185,6 +189,8 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
     common::recv_event(&mut started_rx).await;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("nested")
         .await
         .expect("dynamic nested child should be removable");
@@ -256,6 +262,8 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
     let mut events = common::event_watch(&handle);
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("dynamic nested child should be accepted");
@@ -283,11 +291,15 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(seed)
         .await
         .expect("seed child inside nested supervisor should be accepted");
     common::recv_event(&mut seed_rx).await;
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("dynamic", move |ctx| {
             let dynamic_tx = dynamic_tx.clone();
             let dynamic_cancellations = dynamic_cancellations_for_child.clone();
@@ -304,6 +316,8 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
     common::recv_event(&mut dynamic_rx).await;
 
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("dynamic")
         .await
         .expect("dynamic child inside nested supervisor should be removable");
@@ -459,15 +473,7 @@ async fn nested_events_preserve_the_full_tree_path() {
 async fn removing_nested_supervisor_unregisters_its_control_endpoint() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
-    let nested = Supervisor::ordered()
-        .child(ChildSpec::task("leaf", move |ctx| {
-            let started_tx = started_tx.clone();
-            async move {
-                started_tx.send(()).expect("test receiver dropped");
-                ctx.shutdown_token().cancelled().await;
-                Ok(())
-            }
-        }))
+    let nested = Supervisor::dynamic()
         .build()
         .expect("valid nested supervisor");
 
@@ -477,27 +483,47 @@ async fn removing_nested_supervisor_unregisters_its_control_endpoint() {
         .spawn();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested child should be accepted");
-    common::recv_event(&mut started_rx).await;
-
     let nested_handle = handle
         .supervisor("nested")
         .expect("nested supervisor handle should be available");
+    nested_handle
+        .dynamic()
+        .expect("dynamic nested supervisor")
+        .add_child(ChildSpec::task("leaf", move |ctx| {
+            let started_tx = started_tx.clone();
+            async move {
+                started_tx.send(()).expect("test receiver dropped");
+                ctx.shutdown_token().cancelled().await;
+                Ok(())
+            }
+        }))
+        .await
+        .expect("nested child accepts leaf");
+    common::recv_event(&mut started_rx).await;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("nested")
         .await
         .expect("nested child should be removable");
 
     let add_err = nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("late", |_ctx| async move { Ok(()) }))
         .await
         .expect_err("removed nested supervisor should no longer accept child commands");
     assert_eq!(add_err, ControlError::Unavailable);
 
     let remove_err = nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("late")
         .await
         .expect_err("removed nested supervisor should no longer accept remove commands");
@@ -514,7 +540,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(ChildSpec::task("leaf", {
             let attempts = attempts.clone();
             let fail_first = fail_first.clone();
@@ -551,17 +577,14 @@ async fn nested_handle_subscription_survives_parent_restart() {
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
     let mut nested_events = common::event_watch(&nested_handle);
 
-    let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child("nested")
         .expect("nested child exists")
         .generation;
+    let restarted = handle.restart_of("nested");
     fail_first.notify_one();
-    let restarted_generation = lifecycle
-        .started_after("nested", baseline)
-        .await
-        .expect("outer supervisor remains live");
+    let restarted_generation = restarted.await.expect("outer supervisor remains live");
     assert_eq!(restarted_generation, baseline + 1);
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
 
@@ -577,15 +600,9 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let replacement = nested_handle.snapshot();
     assert_eq!(replacement.state, SupervisorStateView::Running);
     assert_eq!(replacement.kind, initial_kind);
-    assert_eq!(
-        nested_handle
-            .add_child(ChildSpec::task("rebound", |_| async { Ok(()) }))
-            .await,
-        Err(ControlError::UnsupportedByScopeKind {
-            operation: "add_child",
-            kind: ScopeKind::Ordered,
-        }),
-        "the stable control channel should bind to the replacement incarnation"
+    assert!(
+        nested_handle.dynamic().is_none(),
+        "the stable handle should retain the replacement's ordered kind"
     );
 
     handle.shutdown();
@@ -615,12 +632,16 @@ async fn abort_mode_hard_cascades_through_a_nested_supervisor() {
         .expect("valid outer supervisor")
         .spawn();
     handle
-        .add_child(ChildSpec::supervisor("nested", nested).shutdown(ShutdownPolicy::abort()))
+        .dynamic()
+        .expect("dynamic supervisor")
+        .add_child(ChildSpec::supervisor("nested", nested).shutdown(ShutdownPolicy::Abort))
         .await
         .expect("nested child should be accepted");
     common::recv_event(&mut started_rx).await;
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .remove_child("nested")
         .await
         .expect("aborting the wrapper should remove the nested subtree");
@@ -643,7 +664,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(ChildSpec::task("leaf", {
             let fail = fail.clone();
             let attempts = attempts.clone();
@@ -669,10 +690,11 @@ async fn control_is_unavailable_between_nested_incarnations() {
 
     let handle = Supervisor::ordered()
         .child(
-            ChildSpec::supervisor("nested", nested).restart_intensity(
-                RestartConfig::new(5, Duration::from_secs(30))
-                    .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(500))),
-            ),
+            ChildSpec::supervisor("nested", nested).restart_config(common::restart_config(
+                5,
+                Duration::from_secs(30),
+                BackoffPolicy::Fixed(Duration::from_millis(500)),
+            )),
         )
         .build()
         .expect("valid outer supervisor")
@@ -700,24 +722,14 @@ async fn control_is_unavailable_between_nested_incarnations() {
 
     // The old incarnation has unbound its control slot and the 500ms restart
     // backoff has not elapsed: control must fail fast instead of queueing.
-    let err = nested_handle
-        .add_child(ChildSpec::task("late", |_ctx| async move { Ok(()) }))
-        .await
-        .expect_err("control between incarnations should be unavailable");
-    assert_eq!(err, ControlError::Unavailable);
+    assert!(nested_handle.dynamic().is_none());
 
     // Once the new incarnation binds, the same stable handle works again.
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
     assert_eq!(nested_handle.snapshot().state, SupervisorStateView::Running);
-    assert_eq!(
-        nested_handle
-            .add_child(ChildSpec::task("rebound", |_| async { Ok(()) }))
-            .await,
-        Err(ControlError::UnsupportedByScopeKind {
-            operation: "add_child",
-            kind: ScopeKind::Ordered,
-        }),
-        "the stable control channel should bind to the replacement incarnation"
+    assert!(
+        nested_handle.dynamic().is_none(),
+        "the stable handle should retain the replacement's ordered kind"
     );
 
     handle.shutdown();
@@ -742,7 +754,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .expect("valid grandchild supervisor");
 
     let mid = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
+        .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(
             ChildSpec::task("fuse", {
                 let fail = fail.clone();
@@ -754,7 +766,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::abort()),
+            .shutdown(ShutdownPolicy::Abort),
         )
         .child(ChildSpec::supervisor("leafsup", leafsup))
         .build()
@@ -803,21 +815,15 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
             && snapshot.lifecycle_seq > baseline_seq
             && snapshot
                 .child("worker")
-                .is_some_and(|worker| worker.started())
+                .is_some_and(|worker| worker.state.started())
     })
     .await;
-    assert_eq!(
-        grand_handle
-            .add_child(ChildSpec::task("rebound", |_| async { Ok(()) }))
-            .await,
-        Err(ControlError::UnsupportedByScopeKind {
-            operation: "add_child",
-            kind: ScopeKind::Ordered,
-        }),
-        "the grandchild control channel should bind to the replacement incarnation"
+    assert!(
+        grand_handle.dynamic().is_none(),
+        "the stable grandchild handle should retain the ordered kind"
     );
 
-    common::shutdown(handle).await;
+    common::shutdown(&handle).await;
 }
 
 #[tokio::test]
@@ -841,7 +847,7 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .child(ChildSpec::supervisor("nested", nested))
         .child(
             ChildSpec::task("fatal", |_| async { Err(common::test_error("fatal")) })
-                .restart_intensity(RestartConfig::new(0, Duration::from_secs(60))),
+                .restart_config(RestartConfig::new(0, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor");
