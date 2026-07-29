@@ -341,8 +341,8 @@ pub use kokage_derive::{ActorFactory, Supervision};
 
 pub use actor::{
     Actor, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSlot, ActorStatus,
-    BlockingCancelled, CallError, CancellationHandle, DownReason, DrainPolicy, Graph,
-    DynamicRestrictedScope, GraphBuildError, GraphBuilder, GraphConfig, GraphLookupError,
+    BlockingCancelled, CallError, CancellationHandle, DownReason, DrainPolicy,
+    DynamicRestrictedScope, Graph, GraphBuildError, GraphBuilder, GraphConfig, GraphLookupError,
     LiveContext, MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, Reply,
     RestrictedScope, SendError, StartContext, StopContext, TaskHandle, TimerKey, TrySendError,
 };

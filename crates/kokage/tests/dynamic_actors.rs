@@ -13,8 +13,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorResult, CancellationHandle, ControlError, DownReason, DrainPolicy,
     DynamicActorOptions, DynamicTree, GraphBuilder, MailboxMode, MessageContext, MonitorEvent,
-    OrderedTree, RestartPolicy, RuntimeHandle, SendError,
-    ShutdownPolicy, StartContext, StopContext, SupervisorBuildError, SupervisorError, TrySendError,
+    OrderedTree, RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
+    StopContext, SupervisorBuildError, SupervisorError, TrySendError,
     host::{ActorContext, BoxError, ChildSpec, RawActor},
     observe::ChildMembershipView,
 };
