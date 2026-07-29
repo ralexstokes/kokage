@@ -22,10 +22,9 @@ use crate::{
             ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
             mailbox,
         },
-        builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
+        builder::{ActorNode, DEFAULT_MAILBOX_CAPACITY},
         cancellation::CancelOnDrop,
         context::{ActorContext, ActorLifetime, ActorRef},
-        error::GraphLookupError,
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
         observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
@@ -53,6 +52,34 @@ pub(crate) struct RunnerStart {
 /// typed mailbox without any downcast.
 pub(crate) trait ErasedRunner: Send + Sync {
     fn start(&self, start: RunnerStart) -> BoxedActorFuture;
+}
+
+/// Consuming type-erasure boundary used by [`crate::ActorSpec`].
+pub(crate) trait ErasedActorFactory<M>: Send {
+    fn into_runner(
+        self: Box<Self>,
+        binding: Arc<BindingCore<M>>,
+        mailbox_mode: MailboxMode<M>,
+    ) -> Arc<dyn ErasedRunner>;
+}
+
+impl<M, F> ErasedActorFactory<M> for F
+where
+    M: Send + 'static,
+    F: ActorFactory,
+    F::Actor: RawActor<Msg = M>,
+{
+    fn into_runner(
+        self: Box<Self>,
+        binding: Arc<BindingCore<M>>,
+        mailbox_mode: MailboxMode<M>,
+    ) -> Arc<dyn ErasedRunner> {
+        Arc::new(TypedRunner {
+            factory: Arc::new(*self),
+            binding,
+            mailbox_mode,
+        })
+    }
 }
 
 pub(crate) struct TypedRunner<F: ActorFactory> {
@@ -167,15 +194,15 @@ pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 /// An actor graph containing wiring and independently runnable actors.
 ///
 /// Stable typed refs remain functional across independent actor restarts.
-/// Execution is performed by driving the actors returned by [`actors`](Self::actors),
-/// normally as separate supervisor children.
+/// Execution is performed by consuming its linear [`ActorNode`] values,
+/// normally into an [`crate::OrderedTree`].
 pub struct Graph {
     inner: Arc<GraphInner>,
 }
 
 struct GraphInner {
     name: Arc<str>,
-    actors: Vec<RunnableActor>,
+    actors: Vec<ActorNode>,
     observability: GraphObservability,
     mailbox_capacity: usize,
 }
@@ -183,7 +210,7 @@ struct GraphInner {
 impl Graph {
     pub(crate) fn new(
         name: Arc<str>,
-        actors: Vec<RunnableActor>,
+        actors: Vec<ActorNode>,
         observability: GraphObservability,
         mailbox_capacity: usize,
     ) -> Self {
@@ -202,29 +229,15 @@ impl Graph {
         &self.inner.name
     }
 
-    /// Returns all runnable actors in graph declaration order.
-    pub fn actors(&self) -> &[RunnableActor] {
-        &self.inner.actors
-    }
-
-    /// Resolves a typed actor ref to the runnable actor with the same binding.
+    /// Consumes the graph and returns its actor nodes in declaration order.
     ///
-    /// Identity, rather than the actor label, is compared. A ref from another
-    /// graph is rejected even when both graphs use the same label.
-    pub fn actor_for<M>(&self, actor_ref: &ActorRef<M>) -> Result<RunnableActor, GraphLookupError> {
-        self.inner
+    /// Each [`ActorNode`] is a non-cloneable placement token. Move it into an
+    /// [`crate::OrderedTree`], or explicitly convert it to a
+    /// [`RunnableActor`] for a custom host with [`ActorNode::into_runnable`].
+    pub fn into_nodes(self) -> Vec<ActorNode> {
+        Arc::try_unwrap(self.inner)
+            .unwrap_or_else(|_| unreachable!("Graph has no public cloning operation"))
             .actors
-            .iter()
-            .find(|actor| {
-                Arc::ptr_eq(
-                    actor.inner.binding_lifecycle.identity(),
-                    actor_ref.binding_identity(),
-                )
-            })
-            .cloned()
-            .ok_or_else(|| GraphLookupError::ForeignActorRef {
-                actor_id: actor_ref.id().to_owned(),
-            })
     }
 
     pub(crate) fn dynamic_builder(&self) -> RunnableActorBuilder {
@@ -287,10 +300,6 @@ impl RunnableActor {
     /// Returns the actor label.
     pub fn label(&self) -> &str {
         &self.inner.actor_id
-    }
-
-    pub(crate) fn binding_identity(&self) -> usize {
-        Arc::as_ptr(self.inner.binding_lifecycle.identity()) as usize
     }
 
     pub(crate) fn stats(&self) -> ActorStats {
@@ -632,61 +641,22 @@ impl RunnableActorBuilder {
         }
     }
 
-    pub(crate) fn actor_with_options<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-        options: ActorOptions<<F::Actor as RawActor>::Msg>,
-    ) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
-    where
-        F: ActorFactory,
-    {
-        debug_assert!(
-            options.validate().is_ok(),
-            "actor options must be validated before actor construction"
-        );
-        let actor_id: Arc<str> = label.into().into();
-        let mailbox_capacity = options.mailbox_capacity.unwrap_or(self.mailbox_capacity);
-        let binding = Arc::new(match options.size_hint {
-            Some(size_hint) => BindingCore::<<F::Actor as RawActor>::Msg>::with_message_size(
-                actor_id.clone(),
-                size_hint,
-            ),
-            None => BindingCore::<<F::Actor as RawActor>::Msg>::new(actor_id.clone()),
-        });
-        self.actor_with_binding(
-            actor_id,
-            factory,
-            binding,
-            options.mailbox_mode,
-            mailbox_capacity,
-        )
-    }
-
-    fn actor_with_binding<F>(
+    pub(crate) fn actor_from_parts<M: Send + 'static>(
         &self,
         actor_id: Arc<str>,
-        factory: F,
-        binding: Arc<BindingCore<<F::Actor as RawActor>::Msg>>,
-        mailbox_mode: MailboxMode<<F::Actor as RawActor>::Msg>,
-        mailbox_capacity: usize,
-    ) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
-    where
-        F: ActorFactory,
-    {
-        let actor_ref = ActorRef::from_core(&binding, None);
-        let runnable = RunnableActor::new(RunnableActorParts {
+        binding: Arc<BindingCore<M>>,
+        factory: Box<dyn ErasedActorFactory<M>>,
+        mailbox_mode: MailboxMode<M>,
+        mailbox_capacity: Option<usize>,
+    ) -> RunnableActor {
+        let runner = factory.into_runner(Arc::clone(&binding), mailbox_mode);
+        RunnableActor::new(RunnableActorParts {
             actor_id,
-            binding_lifecycle: binding.clone(),
-            runner: Arc::new(TypedRunner {
-                factory: Arc::new(factory),
-                binding,
-                mailbox_mode,
-            }),
-            mailbox_capacity,
+            binding_lifecycle: binding,
+            runner,
+            mailbox_capacity: mailbox_capacity.unwrap_or(self.mailbox_capacity),
             observability: self.observability.clone(),
-        });
-        (runnable, actor_ref)
+        })
     }
 }
 

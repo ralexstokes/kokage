@@ -9,10 +9,6 @@ pub enum SupervisorBuildError {
     /// Two or more children share the same id string.
     #[error("duplicate child id: {0}")]
     DuplicateChildId(String),
-    /// One runtime actor binding was placed in more than one node of a
-    /// composed supervision tree.
-    #[error("duplicate actor binding: {0}")]
-    DuplicateActorBinding(String),
     /// A configuration value (channel capacity, restart intensity, etc.) is
     /// invalid.
     #[error("invalid configuration: {0}")]

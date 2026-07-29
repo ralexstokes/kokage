@@ -216,20 +216,6 @@ impl<M> ActorRef<M> {
         }
     }
 
-    pub(crate) fn detached(actor_id: Arc<str>) -> Self {
-        let core = Arc::new(BindingCore::<M>::new(actor_id));
-        Self::from_core(&core, None)
-    }
-
-    pub(crate) fn detached_with_size_hint(actor_id: Arc<str>, size_hint: fn(&M) -> usize) -> Self {
-        let core = Arc::new(BindingCore::<M>::with_message_size(actor_id, size_hint));
-        Self::from_core(&core, None)
-    }
-
-    pub(crate) fn binding_identity(&self) -> &Arc<()> {
-        &self.identity
-    }
-
     /// Returns the target actor id.
     pub fn id(&self) -> &str {
         &self.actor_id
@@ -2185,32 +2171,15 @@ impl RestrictedScope {
 }
 
 impl DynamicRestrictedScope {
-    /// Inserts an actor with default options into this scope.
+    /// Inserts one actor declaration into this scope.
     ///
     /// Success means insertion completed and startup was scheduled, not that
     /// the actor reported ready.
-    pub async fn add_actor<F>(
+    pub async fn add_actor<M: Send + 'static>(
         &self,
-        label: impl Into<String>,
-        factory: F,
-    ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
-    where
-        F: crate::ActorFactory,
-    {
-        self.dynamic.add_actor(label, factory).await
-    }
-
-    /// Inserts an actor with explicit child and mailbox options.
-    pub async fn add_actor_with<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-        options: crate::DynamicActorOptions<<F::Actor as crate::host::RawActor>::Msg>,
-    ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
-    where
-        F: crate::ActorFactory,
-    {
-        self.dynamic.add_actor_with(label, factory, options).await
+        spec: crate::ActorSpec<M>,
+    ) -> Result<ActorRef<M>, crate::ControlError> {
+        self.dynamic.add_actor(spec).await
     }
 
     /// Inserts an arbitrary supervised task child into this scope.

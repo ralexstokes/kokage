@@ -30,9 +30,7 @@ pub fn restart_config(
     within: Duration,
     backoff: kokage_supervisor::BackoffPolicy,
 ) -> RestartConfig {
-    let mut config = RestartConfig::new(max_restarts, within);
-    config.backoff = backoff;
-    config
+    RestartConfig::new(max_restarts, within).backoff(backoff)
 }
 
 pub fn test_error(message: &'static str) -> BoxError {

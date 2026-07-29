@@ -5,9 +5,7 @@ use kokage_supervisor::{
 };
 
 fn restart_config(backoff: BackoffPolicy) -> RestartConfig {
-    let mut config = RestartConfig::new(1, Duration::from_secs(1));
-    config.backoff = backoff;
-    config
+    RestartConfig::new(1, Duration::from_secs(1)).backoff(backoff)
 }
 
 #[test]

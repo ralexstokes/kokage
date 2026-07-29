@@ -1,18 +1,20 @@
 use std::{
     collections::HashMap,
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, OnceLock},
 };
+
+use kokage_supervisor::{RestartConfig, RestartPolicy, ShutdownPolicy, TerminalMembership};
 
 use crate::actor::{
     binding::{BindingCore, BindingLifecycle, MailboxMode},
     context::ActorRef,
     error::GraphBuildError,
     factory::ActorFactory,
-    graph::{ErasedRunner, Graph, RunnableActor, RunnableActorParts, TypedRunner},
+    graph::{
+        ErasedActorFactory, ErasedRunner, Graph, RunnableActor, RunnableActorBuilder,
+        RunnableActorParts,
+    },
     observability::{GraphObservability, anonymous_graph_name},
     raw::RawActor,
 };
@@ -35,7 +37,7 @@ use crate::actor::{
 ///     .mailbox(MailboxMode::conflate())
 ///     .message_size(snapshot_size);
 /// ```
-pub struct ActorOptions<M> {
+pub(crate) struct ActorOptions<M> {
     pub(crate) mailbox_mode: MailboxMode<M>,
     pub(crate) size_hint: Option<fn(&M) -> usize>,
     pub(crate) mailbox_capacity: Option<usize>,
@@ -130,49 +132,346 @@ impl<M> Default for ActorOptions<M> {
     }
 }
 
-static NEXT_BUILDER_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Unfilled position for one actor in a graph builder.
+/// One actor declaration, shared by graphs, supervision trees, and dynamic
+/// insertion.
 ///
-/// Slots are the cyclic-wiring escape hatch: they are created by
-/// [`GraphBuilder::slot`] or [`GraphBuilder::slot_with`] and consumed by
-/// [`GraphBuilder::define`]. The token is intentionally neither [`Clone`] nor
-/// [`Copy`], so a slot can only be filled once in ordinary Rust code. Use
-/// [`GraphBuilder::actor`] or [`GraphBuilder::actor_with`] when the factory can
-/// be defined as soon as its ref is created.
-pub struct ActorSlot<M> {
-    builder_id: u64,
-    index: Option<usize>,
-    core: Arc<BindingCore<M>>,
-    mailbox_mode: MailboxMode<M>,
+/// The declaration owns its incarnation factory, stable mailbox binding, and
+/// all per-actor configuration. It is intentionally not [`Clone`]. Obtain a
+/// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
+/// the declaration through [`GraphBuilder::actor`],
+/// [`crate::OrderedTree::actor`], or [`crate::DynamicRuntime::add_actor`].
+pub struct ActorSpec<M: Send + 'static> {
+    pub(crate) actor_id: Arc<str>,
+    pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,
+    pub(crate) factory: Box<dyn ErasedActorFactory<M>>,
+    pub(crate) actor_options: ActorOptions<M>,
+    pub(crate) child_id: Option<String>,
+    pub(crate) restart: Option<RestartPolicy>,
+    pub(crate) shutdown: Option<ShutdownPolicy>,
+    pub(crate) restart_config: Option<RestartConfig>,
+    pub(crate) terminal_membership: Option<TerminalMembership>,
 }
 
-impl<M> ActorSlot<M> {
-    fn new(
-        builder_id: u64,
-        index: Option<usize>,
-        core: Arc<BindingCore<M>>,
-        mailbox_mode: MailboxMode<M>,
-    ) -> Self {
+impl<M: Send + 'static> ActorSpec<M> {
+    /// Creates a declaration for `factory` under `actor_id`.
+    pub fn new<F>(actor_id: impl Into<String>, factory: F) -> Self
+    where
+        F: ActorFactory,
+        F::Actor: RawActor<Msg = M>,
+    {
         Self {
-            builder_id,
-            index,
-            core,
-            mailbox_mode,
+            actor_id: Arc::from(actor_id.into()),
+            binding: OnceLock::new(),
+            factory: Box::new(factory),
+            actor_options: ActorOptions::new(),
+            child_id: None,
+            restart: None,
+            shutdown: None,
+            restart_config: None,
+            terminal_membership: None,
+        }
+    }
+
+    /// Returns this declaration's restart-stable typed actor ref.
+    pub fn actor_ref(&self) -> ActorRef<M> {
+        ActorRef::from_core(self.binding(), None)
+    }
+
+    pub(crate) fn binding(&self) -> &Arc<BindingCore<M>> {
+        self.binding
+            .get_or_init(|| match self.actor_options.size_hint {
+                Some(size_hint) => Arc::new(BindingCore::with_message_size(
+                    Arc::clone(&self.actor_id),
+                    size_hint,
+                )),
+                None => Arc::new(BindingCore::new(Arc::clone(&self.actor_id))),
+            })
+    }
+
+    /// Overrides the hosting scope's mailbox capacity for this actor.
+    #[must_use]
+    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.actor_options = self.actor_options.mailbox_capacity(capacity);
+        self
+    }
+
+    /// Selects the actor's mailbox storage policy.
+    #[must_use]
+    pub fn mailbox(mut self, mailbox: MailboxMode<M>) -> Self {
+        self.actor_options = self.actor_options.mailbox(mailbox);
+        self
+    }
+
+    /// Enables accepted-message byte observation.
+    ///
+    /// Configure this before calling [`actor_ref`](Self::actor_ref).
+    #[must_use]
+    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
+        assert!(
+            self.binding.get().is_none(),
+            "message_size must be configured before ActorSpec::actor_ref"
+        );
+        self.actor_options = self.actor_options.message_size(size_hint);
+        self
+    }
+
+    /// Overrides the enclosing scope's restart policy.
+    #[must_use]
+    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+        self.restart = Some(restart);
+        self
+    }
+
+    /// Overrides the enclosing scope's shutdown policy.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+
+    /// Gives this actor its own restart-intensity window.
+    #[must_use]
+    pub fn restart_config(mut self, config: RestartConfig) -> Self {
+        self.restart_config = Some(config);
+        self
+    }
+
+    /// Selects what happens to this child after a terminal exit.
+    #[must_use]
+    pub fn terminal_membership(mut self, membership: TerminalMembership) -> Self {
+        self.terminal_membership = Some(membership);
+        self
+    }
+
+    // Generated supervision uses a scope-local id while retaining its
+    // path-qualified actor label.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn child_id(mut self, id: impl Into<String>) -> Self {
+        self.child_id = Some(id.into());
+        self
+    }
+
+    pub(crate) fn into_node(self, builder: &RunnableActorBuilder) -> ActorNode {
+        let Self {
+            actor_id,
+            binding,
+            factory,
+            actor_options,
+            child_id,
+            restart,
+            shutdown,
+            restart_config,
+            terminal_membership,
+        } = self;
+        let binding = binding
+            .into_inner()
+            .unwrap_or_else(|| match actor_options.size_hint {
+                Some(size_hint) => Arc::new(BindingCore::with_message_size(
+                    Arc::clone(&actor_id),
+                    size_hint,
+                )),
+                None => Arc::new(BindingCore::new(Arc::clone(&actor_id))),
+            });
+        let actor = builder.actor_from_parts(
+            actor_id,
+            binding,
+            factory,
+            actor_options.mailbox_mode,
+            actor_options.mailbox_capacity,
+        );
+        ActorNode {
+            actor,
+            child_id,
+            restart,
+            shutdown,
+            restart_config,
+            terminal_membership,
+        }
+    }
+}
+
+impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ActorSpec")
+            .field("actor_id", &self.actor_id)
+            .field("restart", &self.restart)
+            .field("shutdown", &self.shutdown)
+            .field("restart_config", &self.restart_config)
+            .field("terminal_membership", &self.terminal_membership)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A linear placement token for one materialized actor declaration.
+///
+/// `ActorNode` is intentionally not cloneable. Moving it into a supervision
+/// tree makes duplicate placement unrepresentable. Custom actor hosts can
+/// explicitly leave the supervision vocabulary with
+/// [`into_runnable`](Self::into_runnable).
+pub struct ActorNode {
+    pub(crate) actor: RunnableActor,
+    pub(crate) child_id: Option<String>,
+    pub(crate) restart: Option<RestartPolicy>,
+    pub(crate) shutdown: Option<ShutdownPolicy>,
+    pub(crate) restart_config: Option<RestartConfig>,
+    pub(crate) terminal_membership: Option<TerminalMembership>,
+}
+
+impl ActorNode {
+    /// Converts this placement token into the advanced custom-host actor.
+    pub fn into_runnable(self) -> RunnableActor {
+        self.actor
+    }
+
+    pub(crate) fn actor_label(&self) -> &str {
+        self.actor.label()
+    }
+
+    pub(crate) fn resolved_id(&self) -> &str {
+        self.child_id
+            .as_deref()
+            .unwrap_or_else(|| self.actor.label())
+    }
+}
+
+impl fmt::Debug for ActorNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ActorNode")
+            .field("id", &self.resolved_id())
+            .field("label", &self.actor_label())
+            .field("restart", &self.restart)
+            .field("shutdown", &self.shutdown)
+            .field("restart_config", &self.restart_config)
+            .field("terminal_membership", &self.terminal_membership)
+            .finish()
+    }
+}
+
+/// Unfilled actor declaration for cyclic graph wiring.
+///
+/// Create the slot and its ref before factories that close a cycle, then pass
+/// the slot and factory to [`GraphBuilder::define`]. It has the same fluent
+/// configuration vocabulary as [`ActorSpec`].
+pub struct ActorSlot<M: Send + 'static> {
+    actor_id: Arc<str>,
+    binding: OnceLock<Arc<BindingCore<M>>>,
+    actor_options: ActorOptions<M>,
+    child_id: Option<String>,
+    restart: Option<RestartPolicy>,
+    shutdown: Option<ShutdownPolicy>,
+    restart_config: Option<RestartConfig>,
+    terminal_membership: Option<TerminalMembership>,
+}
+
+impl<M: Send + 'static> ActorSlot<M> {
+    /// Opens an unfilled actor declaration.
+    pub fn new(actor_id: impl Into<String>) -> Self {
+        Self {
+            actor_id: Arc::from(actor_id.into()),
+            binding: OnceLock::new(),
+            actor_options: ActorOptions::new(),
+            child_id: None,
+            restart: None,
+            shutdown: None,
+            restart_config: None,
+            terminal_membership: None,
+        }
+    }
+
+    /// Returns this slot's restart-stable typed actor ref.
+    pub fn actor_ref(&self) -> ActorRef<M> {
+        ActorRef::from_core(self.binding(), None)
+    }
+
+    fn binding(&self) -> &Arc<BindingCore<M>> {
+        self.binding
+            .get_or_init(|| match self.actor_options.size_hint {
+                Some(size_hint) => Arc::new(BindingCore::with_message_size(
+                    Arc::clone(&self.actor_id),
+                    size_hint,
+                )),
+                None => Arc::new(BindingCore::new(Arc::clone(&self.actor_id))),
+            })
+    }
+
+    /// Overrides the graph's default mailbox capacity for this slot.
+    #[must_use]
+    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.actor_options = self.actor_options.mailbox_capacity(capacity);
+        self
+    }
+
+    /// Selects the slot's mailbox storage policy.
+    #[must_use]
+    pub fn mailbox(mut self, mailbox: MailboxMode<M>) -> Self {
+        self.actor_options = self.actor_options.mailbox(mailbox);
+        self
+    }
+
+    /// Enables accepted-message byte observation for this slot.
+    #[must_use]
+    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
+        assert!(
+            self.binding.get().is_none(),
+            "message_size must be configured before ActorSlot::actor_ref"
+        );
+        self.actor_options = self.actor_options.message_size(size_hint);
+        self
+    }
+
+    /// Overrides the enclosing scope's restart policy.
+    #[must_use]
+    pub fn restart(mut self, restart: RestartPolicy) -> Self {
+        self.restart = Some(restart);
+        self
+    }
+    /// Overrides the enclosing scope's shutdown policy.
+    #[must_use]
+    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+    /// Gives this actor its own restart-intensity window.
+    #[must_use]
+    pub fn restart_config(mut self, config: RestartConfig) -> Self {
+        self.restart_config = Some(config);
+        self
+    }
+    /// Selects what happens to this child after a terminal exit.
+    #[must_use]
+    pub fn terminal_membership(mut self, membership: TerminalMembership) -> Self {
+        self.terminal_membership = Some(membership);
+        self
+    }
+
+    fn into_spec<F>(self, factory: F) -> ActorSpec<M>
+    where
+        F: ActorFactory,
+        F::Actor: RawActor<Msg = M>,
+    {
+        ActorSpec {
+            actor_id: self.actor_id,
+            binding: self.binding,
+            factory: Box::new(factory),
+            actor_options: self.actor_options,
+            child_id: self.child_id,
+            restart: self.restart,
+            shutdown: self.shutdown,
+            restart_config: self.restart_config,
+            terminal_membership: self.terminal_membership,
         }
     }
 }
 
 /// Builder for constructing a validated actor graph.
 ///
-/// Register actors in dependency order with [`actor`](Self::actor) or
-/// [`actor_with`](Self::actor_with). Each call installs the incarnation factory
+/// Register actors in dependency order with [`actor`](Self::actor). Each call installs the incarnation factory
 /// and returns a restart-stable, typed [`ActorRef`].
 ///
 /// Cyclic graphs need refs before every factory can be constructed. For those,
-/// open the cycle's refs with [`slot`](Self::slot) or
-/// [`slot_with`](Self::slot_with), then fill the slots with
-/// [`define`](Self::define).
+/// create independent [`ActorSlot`] values and their refs, then fill the slots
+/// with [`define`](Self::define).
 ///
 /// # Mailboxes and cycles
 ///
@@ -186,7 +485,6 @@ impl<M> ActorSlot<M> {
 /// [`MailboxMode::conflate`] mailbox for lossy
 /// state snapshots, and call only "downhill" along a DAG ordering.
 pub struct GraphBuilder {
-    builder_id: u64,
     name: Option<String>,
     slots: Vec<Slot>,
     index: HashMap<Arc<str>, usize>,
@@ -199,6 +497,11 @@ struct Slot {
     binding_lifecycle: Arc<dyn BindingLifecycle>,
     runner: Option<Arc<dyn ErasedRunner>>,
     mailbox_capacity: Option<usize>,
+    child_id: Option<String>,
+    restart: Option<RestartPolicy>,
+    shutdown: Option<ShutdownPolicy>,
+    restart_config: Option<RestartConfig>,
+    terminal_membership: Option<TerminalMembership>,
 }
 
 pub(crate) const DEFAULT_MAILBOX_CAPACITY: usize = 64;
@@ -214,7 +517,6 @@ impl GraphBuilder {
     /// 64 messages per actor.
     pub fn new() -> Self {
         Self {
-            builder_id: NEXT_BUILDER_ID.fetch_add(1, Ordering::Relaxed),
             name: None,
             slots: Vec::new(),
             index: HashMap::new(),
@@ -237,138 +539,69 @@ impl GraphBuilder {
     /// This is the FIFO queue capacity and the maximum number of distinct
     /// unread keys for keyed conflation. Unkeyed conflation always has
     /// capacity 1 and ignores this setting. Individual actors can depart from
-    /// this default with [`ActorOptions::mailbox_capacity`].
+    /// this default with [`ActorSpec::mailbox_capacity`].
     pub fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
         self.mailbox_capacity = capacity;
         self
     }
 
-    pub(crate) fn has_registered_actors(&self) -> bool {
-        !self.slots.is_empty()
-    }
-
-    /// Registers an actor with default [`ActorOptions`] and returns its
-    /// restart-stable ref.
+    /// Registers one complete actor declaration and returns its stable ref.
     ///
     /// Register actors in dependency order so each factory can capture refs
     /// returned by earlier calls. Use [`slot`](Self::slot) and
     /// [`define`](Self::define) instead when cyclic wiring requires a ref before
     /// its factory can be constructed.
-    pub fn actor<F>(&mut self, actor_id: &str, factory: F) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        self.actor_with(actor_id, ActorOptions::new(), factory)
-    }
-
-    /// Registers an actor with explicit options and returns its restart-stable
-    /// ref.
-    ///
-    /// `options` configures this actor's mailbox and message-size observation.
-    /// Use [`slot_with`](Self::slot_with) and [`define`](Self::define) instead
-    /// when cyclic wiring requires a ref before its factory can be constructed.
-    pub fn actor_with<F>(
-        &mut self,
-        actor_id: &str,
-        options: ActorOptions<<F::Actor as RawActor>::Msg>,
-        factory: F,
-    ) -> ActorRef<<F::Actor as RawActor>::Msg>
-    where
-        F: ActorFactory,
-    {
-        let (slot, actor_ref) = self.slot_with(actor_id, options);
-        self.define(slot, factory);
+    pub fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
+        let actor_ref = spec.actor_ref();
+        let options_validation = spec.actor_options.validate();
+        let ActorSpec {
+            actor_id,
+            binding,
+            factory,
+            actor_options,
+            child_id,
+            restart,
+            shutdown,
+            restart_config,
+            terminal_membership,
+        } = spec;
+        let binding = binding
+            .into_inner()
+            .expect("actor_ref initialized the declaration binding");
+        if let Err(ActorOptionsValidationError::ZeroMailboxCapacity) = options_validation {
+            self.errors.push(GraphBuildError::ZeroMailboxCapacity);
+            return actor_ref;
+        }
+        let Some((index, _)) = self.push_slot_with_core(
+            Arc::clone(&actor_id),
+            Arc::clone(&binding),
+            actor_options.mailbox_capacity,
+        ) else {
+            return actor_ref;
+        };
+        let slot = &mut self.slots[index];
+        slot.runner = Some(factory.into_runner(binding, actor_options.mailbox_mode));
+        slot.child_id = child_id;
+        slot.restart = restart;
+        slot.shutdown = shutdown;
+        slot.restart_config = restart_config;
+        slot.terminal_membership = terminal_membership;
         actor_ref
     }
 
-    /// Opens a named slot for cyclic wiring with default [`ActorOptions`] and
-    /// returns its fill token plus a restart-stable ref.
-    ///
-    /// See [`slot_with`](Self::slot_with) for cyclic-wiring order and explicit
-    /// mailbox or message-size options.
-    pub fn slot<M: Send + 'static>(&mut self, actor_id: &str) -> (ActorSlot<M>, ActorRef<M>) {
-        self.slot_with(actor_id, ActorOptions::new())
-    }
-
-    /// Opens a named slot for cyclic wiring with explicit options and returns
-    /// its fill token plus a restart-stable ref.
-    ///
-    /// This enables cyclic wiring: create all refs first, hand them to actor
-    /// constructors, then consume each [`ActorSlot`] with [`define`](Self::define).
-    /// The name is fixed when the slot is opened because it is used as the
-    /// actor label in observability. `options` configures this actor's mailbox
-    /// and message-size observation.
-    pub fn slot_with<M: Send + 'static>(
-        &mut self,
-        actor_id: &str,
-        options: ActorOptions<M>,
-    ) -> (ActorSlot<M>, ActorRef<M>) {
-        let options_validation = options.validate();
-        let ActorOptions {
-            mailbox_mode,
-            size_hint,
-            mailbox_capacity,
-        } = options;
-        let actor_id: Arc<str> = actor_id.into();
-        let core = Arc::new(match size_hint {
-            Some(size_hint) => {
-                BindingCore::<M>::with_message_size(Arc::clone(&actor_id), size_hint)
-            }
-            None => BindingCore::<M>::new(Arc::clone(&actor_id)),
-        });
-        let registration = match options_validation {
-            Ok(()) => {
-                self.push_slot_with_core(Arc::clone(&actor_id), Arc::clone(&core), mailbox_capacity)
-            }
-            Err(ActorOptionsValidationError::ZeroMailboxCapacity) => {
-                self.errors.push(GraphBuildError::ZeroMailboxCapacity);
-                None
-            }
-        };
-        let (index, actor_ref) = match registration {
-            Some((index, actor_ref)) => (Some(index), actor_ref),
-            None => (None, Self::detached_ref(&actor_id, size_hint)),
-        };
-        (
-            ActorSlot::new(self.builder_id, index, core, mailbox_mode),
-            actor_ref,
-        )
-    }
-
-    /// Fills a cyclic-wiring slot from a reusable incarnation factory.
+    /// Fills and registers a cyclic-wiring slot.
     ///
     /// The slot token's message type must match the actor's message type, so a
     /// mismatched actor is rejected by the compiler. Consuming the token makes
     /// double fills unrepresentable in ordinary Rust code. See [`ActorFactory`]
     /// for the incarnation lifecycle contract.
-    pub fn define<F>(&mut self, slot: ActorSlot<<F::Actor as RawActor>::Msg>, factory: F)
+    pub fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
     where
+        M: Send + 'static,
         F: ActorFactory,
+        F::Actor: RawActor<Msg = M>,
     {
-        let ActorSlot {
-            builder_id,
-            index,
-            core,
-            mailbox_mode,
-        } = slot;
-        if builder_id != self.builder_id {
-            self.errors.push(GraphBuildError::ForeignSlot);
-            return;
-        }
-
-        let Some(index) = index else {
-            return;
-        };
-        let slot = self
-            .slots
-            .get_mut(index)
-            .expect("actor slot index was registered by this builder");
-
-        slot.runner = Some(Arc::new(TypedRunner {
-            factory: Arc::new(factory),
-            binding: core,
-            mailbox_mode,
-        }));
+        self.actor(slot.into_spec(factory))
     }
 
     /// Validates the graph and returns an immutable [`Graph`].
@@ -395,18 +628,24 @@ impl GraphBuilder {
         let mut actors = Vec::with_capacity(self.slots.len());
 
         for slot in self.slots {
-            let Some(runner) = slot.runner else {
-                return Err(GraphBuildError::MissingActor {
-                    actor_id: slot.actor_id.to_string(),
-                });
-            };
-            actors.push(RunnableActor::new(RunnableActorParts {
+            let runner = slot
+                .runner
+                .unwrap_or_else(|| unreachable!("only complete declarations are registered"));
+            let actor = RunnableActor::new(RunnableActorParts {
                 actor_id: slot.actor_id,
                 binding_lifecycle: slot.binding_lifecycle,
                 runner,
                 mailbox_capacity: slot.mailbox_capacity.unwrap_or(self.mailbox_capacity),
                 observability: observability.clone(),
-            }));
+            });
+            actors.push(ActorNode {
+                actor,
+                child_id: slot.child_id,
+                restart: slot.restart,
+                shutdown: slot.shutdown,
+                restart_config: slot.restart_config,
+                terminal_membership: slot.terminal_membership,
+            });
         }
 
         Ok(Graph::new(
@@ -417,11 +656,12 @@ impl GraphBuilder {
         ))
     }
 
-    fn detached_ref<M>(actor_id: &str, size_hint: Option<fn(&M) -> usize>) -> ActorRef<M> {
-        match size_hint {
-            Some(size_hint) => ActorRef::detached_with_size_hint(actor_id.into(), size_hint),
-            None => ActorRef::detached(actor_id.into()),
-        }
+    /// Spawns all declared actors in a flat ordered one-for-one scope.
+    ///
+    /// Use [`build`](Self::build) plus [`crate::OrderedTree`] when actors need
+    /// a custom supervision topology.
+    pub fn spawn(self) -> Result<crate::Runtime, crate::GraphSpawnError> {
+        Ok(crate::OrderedTree::graph(self.build()?).spawn()?)
     }
 
     fn push_slot_with_core<M: Send + 'static>(
@@ -450,6 +690,11 @@ impl GraphBuilder {
             binding_lifecycle: core,
             runner: None,
             mailbox_capacity,
+            child_id: None,
+            restart: None,
+            shutdown: None,
+            restart_config: None,
+            terminal_membership: None,
         });
         Some((index, actor_ref))
     }
@@ -457,7 +702,7 @@ impl GraphBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActorOptions, GraphBuilder, MailboxMode};
+    use super::{ActorSpec, GraphBuilder, MailboxMode};
     use crate::{Actor, ActorResult, MessageContext};
 
     struct OpaqueMessage;
@@ -479,72 +724,60 @@ mod tests {
     }
 
     #[test]
-    fn actor_options_clone_and_debug_do_not_bound_the_message_type() {
-        let options: ActorOptions<OpaqueMessage> =
-            ActorOptions::new().mailbox(MailboxMode::conflate());
-
-        let cloned = options.clone();
-        assert_eq!(format!("{cloned:?}"), format!("{options:?}"));
+    fn actor_spec_debug_does_not_bound_the_message_type() {
+        let spec: ActorSpec<OpaqueMessage> =
+            ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate());
+        assert!(format!("{spec:?}").contains("worker"));
     }
 
     #[test]
     fn message_size_accepts_a_foreign_message_type() {
-        let options = ActorOptions::<String>::new().message_size(String::len);
-        let size_hint = options.size_hint.expect("message sizing is enabled");
+        let spec = ActorSpec::new("worker", || StringActor).message_size(String::len);
+        let size_hint = spec
+            .actor_options
+            .size_hint
+            .expect("message sizing is enabled");
 
         assert_eq!(size_hint(&"payload".to_owned()), 7);
     }
 
     #[test]
     fn message_size_accepts_an_explicitly_typed_non_capturing_closure() {
-        let options =
-            ActorOptions::<Snapshot>::new().message_size(|message: &Snapshot| message.0.len());
-        let size_hint = options.size_hint.expect("message sizing is enabled");
+        let spec = ActorSpec::new("worker", || SnapshotActor)
+            .message_size(|message: &Snapshot| message.0.len());
+        let size_hint = spec
+            .actor_options
+            .size_hint
+            .expect("message sizing is enabled");
 
         assert_eq!(size_hint(&Snapshot(vec![0; 7])), 7);
     }
 
     #[test]
-    fn graph_actor_for_uses_binding_identity() {
-        let mut first = GraphBuilder::new();
-        let actor_ref = first.actor("worker", || OpaqueActor);
-        let graph = first.build().expect("first graph builds");
-
-        assert_eq!(
-            graph
-                .actor_for(&actor_ref)
-                .expect("ref resolves in its graph")
-                .label(),
-            "worker"
-        );
-        assert!(graph.actor_for(&actor_ref.clone()).is_ok());
-
-        let mut second = GraphBuilder::new();
-        let foreign_ref = second.actor("worker", || OpaqueActor);
-        second.build().expect("second graph builds");
-        assert!(matches!(
-            graph.actor_for(&foreign_ref),
-            Err(crate::GraphLookupError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
-        ));
-
-        let detached = crate::ActorRef::<OpaqueMessage>::detached("worker".into());
-        assert!(matches!(
-            graph.actor_for(&detached),
-            Err(crate::GraphLookupError::ForeignActorRef { actor_id, .. }) if actor_id == "worker"
-        ));
-    }
-
-    #[test]
-    fn actor_with_applies_options_and_returns_the_registered_ref() {
+    fn actor_spec_applies_options_and_returns_linear_node() {
         let mut builder = GraphBuilder::new();
-        let actor_ref = builder.actor_with(
-            "worker",
-            ActorOptions::new().mailbox(MailboxMode::conflate()),
-            || OpaqueActor,
-        );
+        let actor_ref = builder
+            .actor(ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate()));
         let graph = builder.build().expect("graph builds");
+        let mut nodes = graph.into_nodes();
 
         assert_eq!(actor_ref.id(), "worker");
-        assert!(graph.actor_for(&actor_ref).is_ok());
+        assert_eq!(nodes.remove(0).into_runnable().label(), "worker");
+    }
+
+    struct StringActor;
+    impl Actor for StringActor {
+        type Msg = String;
+        async fn handle(&mut self, _: String, _: &mut MessageContext<'_, Self>) -> ActorResult {
+            Ok(())
+        }
+    }
+
+    struct SnapshotActor;
+    impl Actor for SnapshotActor {
+        type Msg = Snapshot;
+        async fn handle(&mut self, _: Snapshot, _: &mut MessageContext<'_, Self>) -> ActorResult {
+            Ok(())
+        }
     }
 }

@@ -290,7 +290,7 @@ pub mod __private {
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
-pub use child::{BoxError, ChildResult, ChildSpec};
+pub use child::{BoxError, ChildResult, ChildSpec, TerminalMembership};
 pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};

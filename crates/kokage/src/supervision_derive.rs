@@ -5,17 +5,14 @@
 //! code can name them; application code uses the generated refs, factories,
 //! `tree`, and `tree_with` surface.
 
-use crate::{Graph, GraphBuildError, GraphBuilder, GraphLookupError, OrderedTree};
+use crate::{Graph, GraphBuildError, GraphBuilder, OrderedTree};
 
 /// Rejects actor registration state that generated supervision constructors
 /// cannot include in their derived tree.
 #[doc(hidden)]
 pub fn validate_derived_builder(builder: &GraphBuilder) -> Result<(), GraphBuildError> {
-    if builder.has_registered_actors() {
-        Err(GraphBuildError::NonEmptyGraphBuilder)
-    } else {
-        Ok(())
-    }
+    let _ = builder;
+    Ok(())
 }
 
 /// Derive support for a group of actors and its supervision scope.
@@ -52,16 +49,13 @@ pub trait Supervision: Sized {
 
     /// Builds this struct's identity-owning supervision node for attachment to its parent scope.
     ///
-    /// `graph` must be the graph [`open`](Self::open) populated, so that the
-    /// node resolves the actors it was built with. A node handed some other
-    /// graph cannot find them and returns
-    /// [`GraphLookupError::ForeignActorRef`].
+    /// `graph` must be the graph [`open`](Self::open) populated.
     #[doc(hidden)]
     fn node(
         graph: &Graph,
         refs: &Self::Refs,
         scopes: Self::Scopes,
-    ) -> Result<OrderedTree, GraphLookupError>;
+    ) -> Result<OrderedTree, GraphBuildError>;
 }
 
 // Internal contract by which a generated factories bundle fills the slots of

@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorOptions, ActorRef, MailboxMode,
+    ActorRef, ActorSpec, TerminalMembership,
     actor::{
-        ActorOptionsValidationError, ActorStats, CancelOnDrop, RawActor, RunnableActor,
+        ActorNode, ActorOptionsValidationError, ActorStats, CancelOnDrop, RunnableActor,
         RunnableActorBuilder, SupervisorPathSegment,
     },
 };
@@ -63,15 +63,7 @@ impl ActorRuntimeState {
         (config.default_restart, config.default_shutdown)
     }
 
-    fn make_actor<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-        options: ActorOptions<<F::Actor as RawActor>::Msg>,
-    ) -> (RunnableActor, ActorRef<<F::Actor as RawActor>::Msg>)
-    where
-        F: ActorFactory,
-    {
+    fn make_actor<M: Send + 'static>(&self, spec: ActorSpec<M>) -> ActorNode {
         // Construction runs the caller's factory, which may reach back into
         // this runtime. Release the config lock first so that re-entry cannot
         // deadlock on a non-reentrant mutex.
@@ -81,7 +73,7 @@ impl ActorRuntimeState {
             .unwrap_or_else(PoisonError::into_inner)
             .actor_builder
             .clone();
-        actor_builder.actor_with_options(label, factory, options)
+        spec.into_node(&actor_builder)
     }
 }
 
@@ -114,153 +106,6 @@ impl RuntimeAttachment {
 
     fn belongs_to(&self, owner: &Arc<ActorRuntimeState>) -> bool {
         self.owner.ptr_eq(&Arc::downgrade(owner))
-    }
-}
-
-/// Options applied when adding a runtime actor to a supervised runtime.
-///
-/// These options configure both the actor's mailbox and its supervised-child
-/// lifecycle. The message type is inferred from the factory passed to
-/// [`DynamicRuntime::add_actor_with`]. Configure restart and shutdown behavior with
-/// [`restart`](Self::restart) and [`shutdown`](Self::shutdown); options left
-/// unset inherit the dynamic runtime's defaults.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct DynamicActorOptions<M = ()> {
-    // Restart-policy override for the supervised actor child.
-    restart: Option<RestartPolicy>,
-    // Shutdown-policy override for the supervised actor child.
-    shutdown: Option<ShutdownPolicy>,
-    // Optional restart intensity override for this actor child.
-    restart_config: Option<RestartConfig>,
-    actor_options: ActorOptions<M>,
-    // `None` selects the dynamic-actor default. Keeping the override unresolved
-    // makes `restart(...).remove_on_exit(...)` order-independent.
-    remove_on_exit: Option<bool>,
-}
-
-impl<M> Clone for DynamicActorOptions<M> {
-    fn clone(&self) -> Self {
-        Self {
-            restart: self.restart,
-            shutdown: self.shutdown,
-            restart_config: self.restart_config,
-            actor_options: self.actor_options.clone(),
-            remove_on_exit: self.remove_on_exit,
-        }
-    }
-}
-
-impl<M> Default for DynamicActorOptions<M> {
-    fn default() -> Self {
-        Self {
-            restart: None,
-            shutdown: None,
-            restart_config: None,
-            actor_options: ActorOptions::new(),
-            remove_on_exit: None,
-        }
-    }
-}
-
-impl<M> DynamicActorOptions<M> {
-    /// Creates options that inherit the dynamic scope's restart and shutdown
-    /// policies.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the restart policy for the supervised actor child.
-    ///
-    /// Without this override, the actor inherits the dynamic runtime's
-    /// configured restart default.
-    #[must_use]
-    pub fn restart(mut self, restart: RestartPolicy) -> Self {
-        self.restart = Some(restart);
-        self
-    }
-
-    /// Sets the shutdown policy for the supervised actor child.
-    ///
-    /// Without this override, the actor inherits the dynamic runtime's
-    /// configured shutdown default.
-    #[must_use]
-    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
-        self.shutdown = Some(shutdown);
-        self
-    }
-
-    /// Overrides the supervisor's restart intensity for this actor.
-    #[must_use]
-    pub fn restart_config(mut self, restart_config: RestartConfig) -> Self {
-        self.restart_config = Some(restart_config);
-        self
-    }
-
-    /// Overrides the hosting scope's mailbox capacity for this actor alone.
-    ///
-    /// [`ActorOptions::mailbox_capacity`] overrides the hosting scope's
-    /// default for this actor. Unkeyed
-    /// [`MailboxMode::conflate()`](crate::MailboxMode::conflate()) always has
-    /// capacity one and ignores both the scope default and the override.
-    #[must_use]
-    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.actor_options = self.actor_options.mailbox_capacity(capacity);
-        self
-    }
-
-    /// Selects the actor's mailbox storage policy.
-    #[must_use]
-    pub fn mailbox(mut self, mailbox: MailboxMode<M>) -> Self {
-        self.actor_options = self.actor_options.mailbox(mailbox);
-        self
-    }
-
-    /// Enables accepted-message byte observation using `size_hint`.
-    #[must_use]
-    pub fn message_size(mut self, size_hint: fn(&M) -> usize) -> Self {
-        self.actor_options = self.actor_options.message_size(size_hint);
-        self
-    }
-
-    /// Sets whether the actor child is removed after a terminal exit.
-    ///
-    /// Removal happens only when the restart policy declines a restart, never
-    /// during a restart cycle. Dynamic actors are removed on terminal exit by
-    /// default, independent of their restart policy. Pass `false` to retain a
-    /// terminal actor in supervisor snapshots. Watchers observe
-    /// [`Terminated`](crate::MonitorEvent::Terminated) before removal completes,
-    /// but the child id becomes reusable only when removal completes; wait for
-    /// the snapshot to drop the membership before re-adding the same id.
-    #[must_use]
-    pub fn remove_on_exit(mut self, remove_on_exit: bool) -> Self {
-        self.remove_on_exit = Some(remove_on_exit);
-        self
-    }
-
-    fn child_options(
-        &self,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
-    ) -> DynamicChildOptions {
-        let restart = self.restart.unwrap_or(default_restart);
-        let shutdown = self.shutdown.unwrap_or(default_shutdown);
-        let remove_on_exit = self.remove_on_exit.unwrap_or(true);
-        DynamicChildOptions {
-            restart,
-            shutdown,
-            restart_config: self.restart_config,
-            remove_on_exit,
-        }
-    }
-
-    fn into_parts(
-        self,
-        default_restart: RestartPolicy,
-        default_shutdown: ShutdownPolicy,
-    ) -> (ActorOptions<M>, DynamicChildOptions) {
-        let child_options = self.child_options(default_restart, default_shutdown);
-        (self.actor_options, child_options)
     }
 }
 
@@ -740,25 +585,7 @@ impl DynamicRuntime {
         self.supervisor.add_child(child).await
     }
 
-    /// Adds a supervised runtime actor with default options and returns its
-    /// stable typed ref.
-    ///
-    /// See [`Self::add_actor_with`] for child-id, readiness, and explicit
-    /// mailbox-option details.
-    pub async fn add_actor<F>(
-        &self,
-        label: impl Into<String>,
-        factory: F,
-    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
-    where
-        F: ActorFactory,
-    {
-        self.add_actor_with(label, factory, DynamicActorOptions::new())
-            .await
-    }
-
-    /// Adds a supervised runtime actor from an incarnation factory with
-    /// explicit options and returns its stable typed ref.
+    /// Adds one actor declaration and returns its stable typed ref.
     ///
     /// The actor's label is also its direct supervisor child id, so it can be
     /// removed later through the dynamic capability. See [`ActorFactory`] for
@@ -768,25 +595,26 @@ impl DynamicRuntime {
     /// the stronger readiness contract. A zero
     /// [`ActorOptions::mailbox_capacity`] is rejected with
     /// [`ControlError::Rejected`].
-    pub async fn add_actor_with<F>(
+    pub async fn add_actor<M: Send + 'static>(
         &self,
-        label: impl Into<String>,
-        factory: F,
-        options: DynamicActorOptions<<F::Actor as RawActor>::Msg>,
-    ) -> Result<ActorRef<<F::Actor as RawActor>::Msg>, ControlError>
-    where
-        F: ActorFactory,
-    {
-        let (default_restart, default_shutdown) = self.actors.actor_defaults();
-        let (actor_options, dynamic_options) =
-            options.into_parts(default_restart, default_shutdown);
-        actor_options
+        spec: ActorSpec<M>,
+    ) -> Result<ActorRef<M>, ControlError> {
+        let actor_ref = spec.actor_ref();
+        spec.actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
                 ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
             })?;
-        let actor = self.actors.make_actor(label, factory, actor_options);
-        self.add_constructed_actor(actor, dynamic_options).await
+        let (default_restart, default_shutdown) = self.actors.actor_defaults();
+        let dynamic_options = DynamicChildOptions {
+            restart: spec.restart.unwrap_or(default_restart),
+            shutdown: spec.shutdown.unwrap_or(default_shutdown),
+            restart_config: spec.restart_config,
+            remove_on_exit: !matches!(spec.terminal_membership, Some(TerminalMembership::Retain)),
+        };
+        let actor = self.actors.make_actor(spec);
+        self.add_constructed_actor((actor.actor, actor_ref), dynamic_options)
+            .await
     }
 
     async fn add_constructed_actor<M>(
@@ -947,7 +775,11 @@ pub(crate) fn actor_child_spec(
     )
     .wait_for_ready()
     .restart(restart)
-    .remove_on_exit(remove_on_exit)
+    .terminal_membership(if remove_on_exit {
+        TerminalMembership::Remove
+    } else {
+        TerminalMembership::Retain
+    })
     .shutdown(shutdown);
 
     if let Some(config) = restart_config {

@@ -1,11 +1,8 @@
 //! Supervision trees expressed as opaque, inspectable recursive data.
 
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
 use kokage_supervisor::{
@@ -15,7 +12,7 @@ use kokage_supervisor::{
 
 use crate::{
     Graph, Runtime, RuntimeHandle,
-    actor::{RunnableActor, RunnableActorBuilder},
+    actor::{ActorNode, ActorSpec, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
@@ -53,7 +50,7 @@ enum ScopeNode {
 }
 
 enum SupervisionChild {
-    Actor(ActorSpec),
+    Actor(ActorNode),
     Task(ChildSpec),
     Scope {
         id: String,
@@ -61,7 +58,7 @@ enum SupervisionChild {
     },
     ActorWithScope {
         id: String,
-        actor: ActorSpec,
+        actor: ActorNode,
         children: ScopeNode,
         strategy: Strategy,
     },
@@ -202,85 +199,20 @@ impl TreeNode {
     }
 }
 
-/// A graph actor placed in a supervision tree with optional policy overrides.
-#[derive(Clone)]
-pub struct ActorSpec {
-    actor: RunnableActor,
-    child_id: Option<String>,
-    restart: Option<RestartPolicy>,
-    shutdown: Option<ShutdownPolicy>,
-    restart_config: Option<RestartConfig>,
+#[doc(hidden)]
+pub trait IntoActorNode {
+    fn into_actor_node(self) -> ActorNode;
 }
 
-impl ActorSpec {
-    /// Places a runnable actor using its enclosing ordered scope's defaults.
-    pub fn new(actor: RunnableActor) -> Self {
-        Self {
-            actor,
-            child_id: None,
-            restart: None,
-            shutdown: None,
-            restart_config: None,
-        }
-    }
-
-    // Derive expansions use a scope-local child id while retaining the
-    // path-qualified graph label. The derive's Actor labels documentation
-    // explains the resulting public naming contract.
-    #[must_use]
-    #[doc(hidden)]
-    pub fn child_id(mut self, id: impl Into<String>) -> Self {
-        self.child_id = Some(id.into());
+impl IntoActorNode for ActorNode {
+    fn into_actor_node(self) -> ActorNode {
         self
-    }
-
-    /// Overrides the enclosing scope's default restart policy.
-    #[must_use]
-    pub fn restart(mut self, restart: RestartPolicy) -> Self {
-        self.restart = Some(restart);
-        self
-    }
-
-    /// Overrides the enclosing scope's default shutdown policy.
-    #[must_use]
-    pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
-        self.shutdown = Some(shutdown);
-        self
-    }
-
-    /// Gives this actor its own restart-intensity window.
-    #[must_use]
-    pub fn restart_config(mut self, config: RestartConfig) -> Self {
-        self.restart_config = Some(config);
-        self
-    }
-
-    fn actor_label(&self) -> &str {
-        self.actor.label()
-    }
-
-    fn resolved_id(&self) -> &str {
-        self.child_id
-            .as_deref()
-            .unwrap_or_else(|| self.actor_label())
     }
 }
 
-impl From<RunnableActor> for ActorSpec {
-    fn from(actor: RunnableActor) -> Self {
-        Self::new(actor)
-    }
-}
-
-impl std::fmt::Debug for ActorSpec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ActorSpec")
-            .field("id", &self.resolved_id())
-            .field("label", &self.actor_label())
-            .field("restart", &self.restart)
-            .field("shutdown", &self.shutdown)
-            .field("restart_config", &self.restart_config)
-            .finish()
+impl<M: Send + 'static> IntoActorNode for ActorSpec<M> {
+    fn into_actor_node(self) -> ActorNode {
+        self.into_node(&RunnableActorBuilder::new())
     }
 }
 
@@ -354,7 +286,7 @@ impl OrderedTree {
     /// The graph is consumed because its runnable bindings are single-use.
     /// Typed [`crate::ActorRef`]s issued while building it remain valid.
     pub fn graph(graph: Graph) -> Self {
-        let tree = TreeData::graph(&graph);
+        let tree = TreeData::graph(graph);
         Self {
             inner: tree.with_identity(),
         }
@@ -369,7 +301,7 @@ impl OrderedTree {
 
     /// Appends an actor node.
     #[must_use]
-    pub fn actor(mut self, actor: impl Into<ActorSpec>) -> Self {
+    pub fn actor(mut self, actor: impl IntoActorNode) -> Self {
         self.inner = self.inner.actor(actor);
         self
     }
@@ -397,12 +329,11 @@ impl OrderedTree {
     pub fn actor_with_scope(
         mut self,
         id: impl Into<String>,
-        actor: impl Into<ActorSpec>,
+        actor: impl IntoActorNode,
         children: impl Into<TreeNode>,
         strategy: Strategy,
     ) -> Self {
         let id = id.into();
-        let actor = actor.into();
         self.inner = match children.into().0 {
             TreeNodeKind::Ordered(tree) => self
                 .inner
@@ -421,12 +352,9 @@ impl OrderedTree {
     ///
     /// # Errors
     ///
-    /// Returns [`SupervisorBuildError::DuplicateActorBinding`] with the
-    /// offending actor label when one runnable binding occurs more than once
-    /// anywhere in this recursive tree. Other invalid child ids, restart
-    /// settings, or duplicate sibling ids return their corresponding build
-    /// error. A failed spawn consumes the tree and makes every handle issued
-    /// from it terminal.
+    /// Invalid child ids, restart settings, or duplicate sibling ids return
+    /// their corresponding build error. A failed spawn consumes the tree and
+    /// makes every handle issued from it terminal.
     pub fn spawn(self) -> Result<Runtime, SupervisorBuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
         Ok(Runtime::new(supervisor.spawn(), actors))
@@ -495,10 +423,12 @@ impl TreeData<false> {
     }
 
     /// Creates an ordered scope containing every actor in a graph.
-    fn graph(graph: &Graph) -> Self {
-        let mut tree = Self::new().derived_defaults(graph);
-        for actor in graph.actors() {
-            tree = tree.actor(actor.clone());
+    fn graph(graph: Graph) -> Self {
+        let dynamic_builder = graph.dynamic_builder();
+        let mut tree = Self::new();
+        tree.config_mut().dynamic_builder = Some(dynamic_builder);
+        for actor in graph.into_nodes() {
+            tree.children_mut().push(SupervisionChild::Actor(actor));
         }
         tree
     }
@@ -512,9 +442,9 @@ impl TreeData<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor(mut self, actor: impl Into<ActorSpec>) -> Self {
+    fn actor(mut self, actor: impl IntoActorNode) -> Self {
         self.children_mut()
-            .push(SupervisionChild::Actor(actor.into()));
+            .push(SupervisionChild::Actor(actor.into_actor_node()));
         self
     }
 
@@ -556,13 +486,14 @@ impl TreeData<false> {
     fn actor_with_scope<const CHILD_DYNAMIC: bool>(
         mut self,
         id: impl Into<String>,
-        actor: impl Into<ActorSpec>,
+        actor: impl IntoActorNode,
         children: TreeData<CHILD_DYNAMIC>,
         strategy: Strategy,
     ) -> Self {
+        let actor = actor.into_actor_node();
         self.children_mut().push(SupervisionChild::ActorWithScope {
             id: id.into(),
-            actor: actor.into(),
+            actor,
             children: children.node,
             strategy,
         });
@@ -671,42 +602,6 @@ impl ScopeNode {
             restart_intensity: config.restart_intensity.unwrap_or_default(),
             children,
         }
-    }
-
-    fn validate_unique_actor_bindings(
-        &self,
-        identities: &mut HashSet<usize>,
-    ) -> Result<(), SupervisorBuildError> {
-        let Self::Ordered { children, .. } = self else {
-            return Ok(());
-        };
-
-        for child in children {
-            match child {
-                SupervisionChild::Actor(actor) => {
-                    if !identities.insert(actor.actor.binding_identity()) {
-                        return Err(SupervisorBuildError::DuplicateActorBinding(
-                            actor.actor_label().to_owned(),
-                        ));
-                    }
-                }
-                SupervisionChild::Task(_) => {}
-                SupervisionChild::Scope { node, .. } => {
-                    node.validate_unique_actor_bindings(identities)?;
-                }
-                SupervisionChild::ActorWithScope {
-                    actor, children, ..
-                } => {
-                    if !identities.insert(actor.actor.binding_identity()) {
-                        return Err(SupervisorBuildError::DuplicateActorBinding(
-                            actor.actor_label().to_owned(),
-                        ));
-                    }
-                    children.validate_unique_actor_bindings(identities)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn lower(
@@ -846,12 +741,13 @@ impl SupervisionChild {
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<OrderedSupervisorBuilder, SupervisorBuildError> {
         Ok(match self {
-            Self::Actor(ActorSpec {
+            Self::Actor(ActorNode {
                 actor,
                 child_id,
                 restart,
                 shutdown,
                 restart_config,
+                terminal_membership,
             }) => builder.child(actor_child_spec(
                 actor,
                 actors,
@@ -860,7 +756,11 @@ impl SupervisionChild {
                     shutdown.unwrap_or(default_shutdown),
                 )
                 .restart_config(restart_config)
-                .child_id(child_id),
+                .child_id(child_id)
+                .remove_on_exit(matches!(
+                    terminal_membership,
+                    Some(crate::TerminalMembership::Remove)
+                )),
             )),
             Self::Task(child) => builder.child(child),
             Self::Scope { id, node } => {
@@ -873,12 +773,13 @@ impl SupervisionChild {
             Self::ActorWithScope {
                 id,
                 actor:
-                    ActorSpec {
+                    ActorNode {
                         actor,
                         child_id,
                         restart,
                         shutdown,
                         restart_config,
+                        terminal_membership,
                     },
                 children,
                 strategy,
@@ -902,6 +803,10 @@ impl SupervisionChild {
                     )
                     .restart_config(restart_config)
                     .child_id(child_id)
+                    .remove_on_exit(matches!(
+                        terminal_membership,
+                        Some(crate::TerminalMembership::Remove)
+                    ))
                     .children(children_handle),
                 );
                 let owned = Supervisor::ordered()
@@ -1037,9 +942,6 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
     }
 
     fn into_parts(self) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
-        self.tree
-            .node
-            .validate_unique_actor_bindings(&mut HashSet::new())?;
         let Self {
             tree,
             mut reservations,
@@ -1069,8 +971,7 @@ impl IdentityTree<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor(self, actor: impl Into<ActorSpec>) -> Self {
-        let actor = actor.into();
+    fn actor(self, actor: impl IntoActorNode) -> Self {
         self.map_tree(|tree| tree.actor(actor))
     }
 
@@ -1102,7 +1003,7 @@ impl IdentityTree<false> {
     fn attach_actor_scope<const CHILD_DYNAMIC: bool>(
         mut self,
         id: impl Into<String>,
-        actor: impl Into<ActorSpec>,
+        actor: impl IntoActorNode,
         children: IdentityTree<CHILD_DYNAMIC>,
         strategy: Strategy,
     ) -> Self {

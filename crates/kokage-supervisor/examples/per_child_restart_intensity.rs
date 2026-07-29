@@ -14,8 +14,8 @@ fn example_error(message: &'static str) -> BoxError {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut warm_cache_restart = RestartConfig::new(1, Duration::from_secs(1));
-    warm_cache_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
+    let warm_cache_restart = RestartConfig::new(1, Duration::from_secs(1))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
     let warm_cache_attempts = Arc::new(AtomicUsize::new(0));
 
     // Intensity uses a sliding timestamp window. Backoff attempts are tracked

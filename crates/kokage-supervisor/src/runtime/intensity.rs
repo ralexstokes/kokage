@@ -172,8 +172,7 @@ mod tests {
     use super::*;
 
     fn tracker(policy: BackoffPolicy) -> RestartTracker {
-        let mut intensity = RestartConfig::new(10, Duration::from_secs(10));
-        intensity.backoff = policy;
+        let intensity = RestartConfig::new(10, Duration::from_secs(10)).backoff(policy);
         RestartTracker {
             intensity,
             times: VecDeque::new(),

@@ -317,10 +317,10 @@ pub mod __private {
 /// qualified `kokage::...` names.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorOptions, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError, DynamicTree,
-        GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply, RestartConfig,
-        RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
-        StopContext, Strategy, TrySendError,
+        Actor, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError, DynamicTree, GraphBuilder,
+        LiveContext, MessageContext, OrderedTree, Reply, RestartConfig, RestartPolicy, Runtime,
+        RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext, Strategy,
+        TrySendError,
     };
 }
 
@@ -328,16 +328,16 @@ pub mod prelude {
 pub use kokage_derive::{ActorFactory, Supervision};
 
 pub use actor::{
-    Actor, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSlot, ActorStatus,
+    Actor, ActorFactory, ActorNode, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, CancellationHandle, DownReason, DrainPolicy,
-    DynamicRestrictedScope, Graph, GraphBuildError, GraphBuilder, GraphLookupError, LiveContext,
+    DynamicRestrictedScope, Graph, GraphBuildError, GraphBuilder, GraphSpawnError, LiveContext,
     MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SendError,
     StartContext, StopContext, TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
     BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
+    ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TerminalMembership,
 };
-pub use runtime::{DynamicActorOptions, DynamicRuntime, Runtime, RuntimeHandle};
-pub use supervision::{ActorSpec, DynamicTree, OrderedTree, TreeNode};
+pub use runtime::{DynamicRuntime, Runtime, RuntimeHandle};
+pub use supervision::{DynamicTree, OrderedTree, TreeNode};
 pub use supervision_derive::DynamicScope;

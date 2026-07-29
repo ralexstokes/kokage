@@ -23,6 +23,17 @@ pub type ChildResult = Result<(), BoxError>;
 pub(crate) type ChildFuture = Pin<Box<dyn Future<Output = ChildResult> + Send + 'static>>;
 pub(crate) type OpaqueAttachment = Arc<dyn Any + Send + Sync>;
 
+/// What happens to a child membership after a terminal exit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TerminalMembership {
+    /// Preserve the inactive child in supervisor state.
+    #[default]
+    Retain,
+    /// Remove the child and make its id available for reuse.
+    Remove,
+}
+
 #[derive(Clone)]
 pub(crate) struct ChildDefinition {
     pub(crate) id: String,
@@ -163,8 +174,8 @@ impl ChildSpec {
         })
     }
 
-    /// Sets whether this child is removed after an exit that its restart
-    /// policy declines to restart.
+    /// Selects what happens after an exit that this child's restart policy
+    /// declines to restart.
     ///
     /// This defaults to `false`, preserving the terminal child in supervisor
     /// snapshots. It is primarily useful for children added at runtime, where
@@ -184,8 +195,10 @@ impl ChildSpec {
     /// [`wait_completed`](crate::SupervisorHandle::wait_completed) set that
     /// awaits it.
     #[must_use]
-    pub fn remove_on_exit(self, remove_on_exit: bool) -> Self {
-        self.map_inner(|inner| inner.remove_on_exit = remove_on_exit)
+    pub fn terminal_membership(self, membership: TerminalMembership) -> Self {
+        self.map_inner(|inner| {
+            inner.remove_on_exit = matches!(membership, TerminalMembership::Remove)
+        })
     }
 
     /// Sets the shutdown policy for this child. See [`ShutdownPolicy`] for
