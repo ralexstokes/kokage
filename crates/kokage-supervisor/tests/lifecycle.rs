@@ -1473,12 +1473,13 @@ fn completing_supervisor(
     )
 }
 
-/// `restart_of` must give up at a `Lagged` marker even when the marker's
-/// envelope names a different child. The marker stands for a discarded prefix
-/// that may have carried the awaited `Started`, so scanning past it on an id
-/// mismatch would wait for a transition this watch can no longer deliver.
+/// Both `started_after` and `restart_of` must give up at a `Lagged` marker even
+/// when the marker's envelope names a different child. The marker stands for a
+/// discarded prefix that may have carried the awaited `Started`, so scanning
+/// past it on an id mismatch would wait for a transition these watches can no
+/// longer deliver.
 #[tokio::test]
-async fn restart_of_reports_a_start_lost_to_overflow() {
+async fn restart_waiters_report_a_start_lost_to_overflow() {
     const RESTARTS: usize = 80;
     let handle = Supervisor::dynamic()
         .build()
@@ -1493,6 +1494,7 @@ async fn restart_of_reports_a_start_lost_to_overflow() {
         }))
         .await
         .expect("dynamic add succeeds");
+    let mut lifecycle = handle.watch_lifecycle();
     let restarted = handle.restart_of("quiet");
 
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -1527,6 +1529,11 @@ async fn restart_of_reports_a_start_lost_to_overflow() {
 
     // The storm has evicted every "quiet" transition, so the marker that now
     // fronts the buffer is stamped with a "storm" envelope.
+    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.started_after("quiet", 0))
+        .await
+        .expect("started_after must not outlive the transitions it awaits");
+    assert_eq!(waited, None);
+
     let waited = timeout(common::EVENT_TIMEOUT, restarted)
         .await
         .expect("restart_of must not outlive the transitions it awaits");

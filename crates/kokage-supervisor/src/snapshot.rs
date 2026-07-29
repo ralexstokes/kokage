@@ -97,7 +97,7 @@ impl SupervisorSnapshot {
     ///
     /// This is primarily useful for adapters and tests that produce snapshot
     /// streams without running a supervisor.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn new(
         state: SupervisorStateView,
         strategy: Strategy,
@@ -144,7 +144,7 @@ impl ChildSnapshot {
     ///
     /// Additional details can be assigned through the snapshot's public
     /// fields.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn new(id: impl Into<String>, generation: u64, state: ChildStateView) -> Self {
         Self {
             id: id.into(),
