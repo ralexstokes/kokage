@@ -10,7 +10,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, GraphBuilder, MessageContext, OrderedTree, Reply,
+    Actor, ActorFactory, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree, Reply,
     RestartPolicy, RuntimeHandle,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
     observe::SupervisorSnapshotReceiver,
@@ -145,13 +145,12 @@ impl ActorFactory for NonCloneHandlerFactory {
 async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     let constructions = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("handler");
-    builder.define(
-        actor_ref_slot,
+    let actor_ref = builder.actor(ActorSpec::new(
+        "handler",
         NonCloneHandlerFactory {
             constructions: constructions.clone(),
         },
-    );
+    ));
     let handle = OrderedTree::graph(builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
@@ -216,15 +215,14 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     let constructions = Arc::new(AtomicUsize::new(0));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("raw");
-    builder.define(actor_ref_slot, {
+    let actor_ref = builder.actor(ActorSpec::new("raw", {
         let constructions = constructions.clone();
         move || NonCloneRaw {
             _guard: Mutex::new(()),
             incarnation: constructions.fetch_add(1, Ordering::SeqCst),
             observed: observed_tx.clone(),
         }
-    });
+    }));
     let handle = OrderedTree::graph(builder.build().expect("graph builds"))
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
@@ -263,10 +261,14 @@ async fn constructor_panic_uses_the_actor_panic_path() {
     }
 
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("panics");
-    builder.define(actor_slot, PanickingFactory);
+    builder.actor(ActorSpec::new("panics", PanickingFactory));
     let graph = builder.build().expect("registration does not construct");
-    let actor = graph.actors()[0].clone();
+    let actor = graph
+        .into_nodes()
+        .into_iter()
+        .next()
+        .expect("actor exists")
+        .into_runnable();
 
     let joined = tokio::spawn(async move {
         actor
@@ -295,8 +297,7 @@ impl Actor for DefaultActor {
 #[tokio::test]
 async fn default_constructor_path_is_an_actor_factory() {
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("DefaultActor");
-    builder.define(actor_ref_slot, DefaultActor::default);
+    let actor_ref = builder.actor(ActorSpec::new("DefaultActor", DefaultActor::default));
     let handle = OrderedTree::graph(builder.build().expect("graph builds"))
         .spawn()
         .expect("runtime builds");

@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, CancellationHandle, GraphBuilder, MessageContext,
-    OrderedTree, StartContext, TimerKey,
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSpec, CancellationHandle, GraphBuilder,
+    MessageContext, OrderedTree, StartContext, TimerKey,
     host::{ActorContext, BoxError, RawActor},
 };
 use kokage_supervisor::Strategy;
@@ -23,8 +23,7 @@ where
     F: ActorFactory,
 {
     let mut builder = GraphBuilder::new();
-    let (actor_ref_slot, actor_ref) = builder.slot("timer");
-    builder.define(actor_ref_slot, factory);
+    let actor_ref = builder.actor(ActorSpec::new("timer", factory));
     let graph = builder.build().expect("valid graph");
     let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
     (runtime, actor_ref)
@@ -34,11 +33,13 @@ struct OneShot {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
+const ONE_SHOT: TimerKey = TimerKey::new("one-shot");
+
 impl Actor for OneShot {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        let _timer = ctx.send_after("tick", Duration::from_millis(20));
+        ctx.set_timeout(ONE_SHOT, "tick", Duration::from_millis(20));
         Ok(())
     }
 
@@ -53,7 +54,7 @@ impl Actor for OneShot {
 }
 
 #[tokio::test(start_paused = true)]
-async fn send_after_fires_once_without_using_mailbox_capacity() {
+async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (runtime, actor_ref) = build_runtime(move || OneShot {
         observed: observed_tx.clone(),
@@ -83,13 +84,15 @@ struct CancelledTimer {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
+const CANCELLED: TimerKey = TimerKey::new("cancelled");
+
 impl Actor for CancelledTimer {
     type Msg = &'static str;
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        let timer = ctx.send_after("cancelled", Duration::from_millis(20));
-        timer.cancel();
-        assert!(timer.is_cancelled());
+        ctx.set_timeout(CANCELLED, "cancelled", Duration::from_millis(20));
+        ctx.clear_timeout(CANCELLED);
+        assert!(!ctx.timeout_armed(CANCELLED));
         Ok(())
     }
 
@@ -104,7 +107,7 @@ impl Actor for CancelledTimer {
 }
 
 #[tokio::test(start_paused = true)]
-async fn cancelling_send_after_prevents_delivery() {
+async fn clearing_a_keyed_timeout_prevents_delivery() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (runtime, _) = build_runtime(move || CancelledTimer {
         observed: observed_tx.clone(),
@@ -348,8 +351,6 @@ impl Actor for FarFutureTimers {
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         ctx.set_timeout(FAR_FUTURE_TIMEOUT, "never-timeout", Duration::MAX);
         self.timers
-            .push(ctx.send_after("never-after", Duration::MAX));
-        self.timers
             .push(ctx.interval("never-interval", Duration::MAX));
         Ok(())
     }
@@ -381,64 +382,6 @@ async fn far_future_delays_saturate_instead_of_panicking() {
         Some("ping")
     );
     assert!(observed_rx.try_recv().is_err());
-
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-struct ElapsedCancellation {
-    timer: mpsc::UnboundedSender<CancellationHandle>,
-    release: Arc<Notify>,
-    observed: mpsc::UnboundedSender<&'static str>,
-}
-
-impl Actor for ElapsedCancellation {
-    type Msg = &'static str;
-
-    async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        let timer = ctx.send_after("stale", Duration::from_millis(20));
-        self.timer.send(timer).expect("test receives timer");
-        self.release.notified().await;
-        Ok(())
-    }
-
-    async fn handle(
-        &mut self,
-        message: Self::Msg,
-        _ctx: &mut MessageContext<'_, Self>,
-    ) -> ActorResult {
-        self.observed.send(message).expect("observer alive");
-        Ok(())
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn send_after_can_be_cancelled_after_its_deadline_until_delivery() {
-    let (timer_tx, mut timer_rx) = mpsc::unbounded_channel();
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let release = Arc::new(Notify::new());
-    let (runtime, _) = build_runtime({
-        let release = release.clone();
-        move || ElapsedCancellation {
-            timer: timer_tx.clone(),
-            release: release.clone(),
-            observed: observed_tx.clone(),
-        }
-    });
-    let handle = runtime.spawn().expect("runtime builds");
-
-    let timer = timer_rx.recv().await.expect("timer armed");
-    advance(Duration::from_millis(20)).await;
-    let waiter = timer.clone();
-    let cancelled = tokio::spawn(async move { waiter.cancelled().await });
-    timer.cancel();
-    cancelled.await.expect("cancellation waiter completed");
-    release.notify_one();
-    assert!(
-        timeout(Duration::from_millis(60), observed_rx.recv())
-            .await
-            .is_err(),
-        "cancelled elapsed timer was delivered"
-    );
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -630,12 +573,10 @@ where
 {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (sink_ref_slot, sink_ref) = builder.slot("sink");
-    builder.define(sink_ref_slot, move || Sink {
+    let sink_ref = builder.actor(ActorSpec::new("sink", move || Sink {
         observed: observed_tx.clone(),
-    });
-    let (scheduler_ref_slot, scheduler_ref) = builder.slot("scheduler");
-    builder.define(scheduler_ref_slot, scheduler(sink_ref));
+    }));
+    let scheduler_ref = builder.actor(ActorSpec::new("scheduler", scheduler(sink_ref)));
     let graph = builder.build().expect("valid graph");
     let runtime = OrderedTree::graph(graph).strategy(Strategy::OneForOne);
     (runtime, scheduler_ref, observed_rx)
