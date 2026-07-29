@@ -154,21 +154,21 @@ or configure them as a runtime subtree for a scoped restart boundary.
 ## Derived Wiring, Explicit Topology
 
 `#[derive(Supervision)]` is intentionally limited to cyclic graph wiring and
-typed refs. Derive it on a concrete factory bundle, call `wire` on a
-caller-owned `GraphBuilder`, then build the supervision tree explicitly:
+typed refs. Derive it on an actor declaration, return the generated factory
+bundle from `wire`, then build the supervision tree explicitly:
 
 ```rust,ignore
 use kokage::{ActorSpec, GraphBuilder, OrderedTree, RestartPolicy, Strategy, Supervision};
 
 #[derive(Supervision)]
 struct App {
-    ingest: IngestFactory,
-    parser: ParserFactory,
-    renderer: RendererFactory,
+    ingest: Ingest,
+    parser: Parser,
+    renderer: Renderer,
 }
 
 let mut graph = GraphBuilder::new();
-let refs = App::wire(&mut graph, |refs| App {
+let refs = App::wire(&mut graph, |refs| AppFactories {
     ingest: IngestFactory::new(refs.parser.clone()),
     parser: ParserFactory::new(refs.renderer.clone()),
     renderer: RendererFactory::new(refs.ingest.clone()),
@@ -190,10 +190,9 @@ let tree = OrderedTree::new()
 let runtime = tree.spawn()?;
 ```
 
-The derived struct itself is the factory bundle; the macro generates only
-`AppRefs` and `App::wire`, not parallel `Factories`, `Slots`, or `Scopes`
-types. The wiring closure remains because every ref must exist before cyclic
-factories can capture it.
+The macro generates `AppRefs`, generic `AppFactories`, and `App::wire`; it no
+longer generates `Slots` or `Scopes` types. The wiring closure remains because
+every ref must exist before cyclic factories can capture it.
 
 Only `#[supervision(label = "...")]` remains as a field attribute. Mailbox
 configuration belongs on the explicit graph declaration. Restart/shutdown

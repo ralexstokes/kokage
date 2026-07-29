@@ -17,7 +17,7 @@ mod application {
 
     #[derive(Supervision)]
     pub struct Application {
-        pub worker: fn() -> Worker,
+        pub worker: Worker,
     }
 }
 
@@ -26,7 +26,7 @@ fn assert_clone<T: Clone>(_: &T) {}
 fn main() {
     let mut builder = GraphBuilder::new();
     builder.name("application").mailbox_capacity(8);
-    let refs = application::Application::wire(&mut builder, |_| application::Application {
+    let refs = application::Application::wire(&mut builder, |_| application::ApplicationFactories {
         worker: || application::Worker,
     });
     let graph = builder.build().expect("derived graph builds");
