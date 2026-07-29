@@ -275,6 +275,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
 enum AbortMsg {
     Start,
     Done,
+    Crash,
 }
 
 #[derive(Clone)]
@@ -296,6 +297,7 @@ impl Actor for AbortActor {
             AbortMsg::Done => {
                 self.done.fetch_add(1, Ordering::Relaxed);
             }
+            AbortMsg::Crash => return Err(std::io::Error::other("restart actor").into()),
         }
         Ok(())
     }
@@ -337,6 +339,62 @@ async fn dropping_offload_guard_cancels_and_updates_the_outstanding_gauge() {
     .unwrap();
     assert_eq!(done.load(Ordering::Relaxed), 0);
     shutdown_runtime(&runtime.handle(), "abort-handle runtime shutdown").await;
+}
+
+#[tokio::test]
+async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
+    let handle_slot = Arc::new(Mutex::new(None));
+    let done = Arc::new(AtomicUsize::new(0));
+    let mut graph = TreeBuilder::new();
+    let actor_slot = ActorSlot::new("RestartedOffloadActor");
+    let (actor_slot, actor) = actor_slot.actor_ref();
+    graph.define(actor_slot, {
+        let handle_slot = handle_slot.clone();
+        let done = done.clone();
+        move || AbortActor {
+            handle: handle_slot.clone(),
+            done: done.clone(),
+        }
+    });
+    let runtime = graph
+        .build()
+        .default_restart(Restart::on_failure())
+        .spawn()
+        .expect("runtime builds");
+    wait_runtime_started(&runtime.handle(), "offload restart runtime startup").await;
+    actor
+        .send(AbortMsg::Start)
+        .await
+        .expect("actor starts offload");
+    let guard = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if let Some(guard) = handle_slot.lock().unwrap().take() {
+                break guard;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("offload guard is published");
+
+    actor
+        .send(AbortMsg::Crash)
+        .await
+        .expect("actor accepts crash");
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while !guard.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("incarnation abort finishes offload");
+    assert!(
+        !guard.is_cancelled(),
+        "incarnation abort is environmental, not explicit cancellation"
+    );
+    assert_eq!(done.load(Ordering::Relaxed), 0);
+
+    shutdown_runtime(&runtime.handle(), "offload restart runtime shutdown").await;
 }
 
 #[derive(Debug)]

@@ -969,7 +969,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// Sends `message` to `target` after `delay` has elapsed.
     ///
     /// The timer belongs to this scheduling actor incarnation, not the target.
-    /// It is cancelled if this incarnation stops or restarts. Delivery uses an
+    /// It ends if this incarnation stops or restarts. Delivery uses an
     /// ordinary awaited [`ActorRef::send`], including the target mailbox's
     /// capacity and conflation behavior.
     ///
@@ -990,12 +990,12 @@ impl<M: Send + 'static> RawContext<M> {
             tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => {}
-                () = lifetime.cancelled() => task_cancellation.cancel(),
+                () = lifetime.cancelled() => {}
                 () = tokio::time::sleep(delay) => {
                     tokio::select! {
                         biased;
                         () = task_cancellation.cancelled() => {}
-                        () = lifetime.cancelled() => task_cancellation.cancel(),
+                        () = lifetime.cancelled() => {}
                         _ = target.send(message) => {}
                     }
                 }
@@ -1011,7 +1011,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// Missed ticks are skipped. The timer stops when cancelled, when this
     /// scheduling incarnation ends, or when the target permanently terminates.
     /// Dropping the returned [`Guard`] cancels it; call [`Guard::detach`] to
-    /// leave it running. A zero period returns an already-cancelled guard and
+    /// leave it running. A zero period returns an already-finished guard and
     /// sends no messages.
     pub fn interval<T: Clone + Send + 'static>(
         &self,
@@ -1022,7 +1022,6 @@ impl<M: Send + 'static> RawContext<M> {
         let cancellation = CancellationToken::new();
         if period.is_zero() {
             let finished = CancellationToken::new();
-            cancellation.cancel();
             finished.cancel();
             return guard_from_tokens(cancellation, finished);
         }
@@ -1039,22 +1038,15 @@ impl<M: Send + 'static> RawContext<M> {
                 tokio::select! {
                     biased;
                     () = task_cancellation.cancelled() => break,
-                    () = lifetime.cancelled() => {
-                        task_cancellation.cancel();
-                        break;
-                    }
+                    () = lifetime.cancelled() => break,
                     _ = interval.tick() => {
                         let sent = tokio::select! {
                             biased;
                             () = task_cancellation.cancelled() => break,
-                            () = lifetime.cancelled() => {
-                                task_cancellation.cancel();
-                                break;
-                            }
+                            () = lifetime.cancelled() => break,
                             sent = target.send(message.clone()) => sent,
                         };
                         if sent.is_err() {
-                            task_cancellation.cancel();
                             break;
                         }
                     }
@@ -1111,29 +1103,30 @@ impl<M: Send + 'static> RawContext<M> {
         T: Send + 'static,
         F: FnMut(MonitorEvent) -> M + Send + 'static,
     {
-        let (cancellation, finished, install) = self.monitors.register(&target.monitors);
+        let (cancellation, stop, finished, install) = self.monitors.register(&target.monitors);
         if !install {
             return guard_from_tokens(cancellation, finished.token());
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            cancellation.cancel();
             finished.signal();
             return guard_from_tokens(cancellation, finished.token());
         };
         // The guard closes the queue on drop, so the hub stops staging events
         // whether this task exits normally or unwinds through a panicking
         // `map` closure.
-        let guard = target
-            .monitors
-            .register_watch(cancellation.clone(), finished.clone());
+        let guard =
+            target
+                .monitors
+                .register_watch(cancellation.clone(), stop.clone(), finished.clone());
         let myself = self.myself();
         let task_cancellation = cancellation.clone();
+        let task_stop = stop;
         runtime.spawn(async move {
             loop {
                 // Registration can stage an immediate event before this task
                 // is first polled. Observe a guard dropped in that window
                 // before invoking the user mapper.
-                if task_cancellation.is_cancelled() {
+                if task_cancellation.is_cancelled() || task_stop.is_cancelled() {
                     break;
                 }
                 // Arm the wake-up before observing the queue so a push that
@@ -1145,6 +1138,7 @@ impl<M: Send + 'static> RawContext<M> {
                     tokio::select! {
                         biased;
                         () = task_cancellation.cancelled() => break,
+                        () = task_stop.cancelled() => break,
                         _ = myself.send(message) => {}
                     }
                     if terminal {
@@ -1155,6 +1149,7 @@ impl<M: Send + 'static> RawContext<M> {
                 tokio::select! {
                     biased;
                     () = task_cancellation.cancelled() => break,
+                    () = task_stop.cancelled() => break,
                     _ = waiter => {}
                 }
             }

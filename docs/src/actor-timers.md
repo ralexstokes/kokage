@@ -73,10 +73,10 @@ Missed ticks are skipped, but a full target mailbox delays the next send. A
 conflating target may replace an unread tick, and each successful send counts
 as an accepted mailbox message. The returned `Guard` cancels the interval when
 dropped; retain it for the desired lifetime or call `detach()` for explicit
-fire-and-forget scheduling. Calling `cancel` on any clone also cancels the
-shared operation. A zero period returns an already-cancelled guard. The
-interval also ends with the scheduling incarnation or when the target
-permanently terminates.
+fire-and-forget scheduling. Calling `cancel` also cancels the operation. A zero
+period returns an already-finished guard. The interval also ends with the
+scheduling incarnation or when the target permanently terminates; those
+environmental endings set `is_finished()` without setting `is_cancelled()`.
 
 When several independent one-shots cannot share a static protocol key, use
 `send_after(&ctx.myself(), message, delay)`. That deliberately takes the

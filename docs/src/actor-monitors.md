@@ -82,15 +82,15 @@ generation `0` starts, and a watch registered between incarnations stays
 silent until the next `Up`. This removes actor-start and restart ordering
 races from a declaration set: there is never a reason to retry registration.
 
-`ctx.watch` returns a cloneable `Guard`. Dropping any retained guard cancels
-the watch; call `detach()` when membership ownership should keep it alive
-without storing a guard. Calling `cancel` on any clone suppresses future
-delivery. Cancellation cannot retract an event already accepted by the
-mailbox. Permanently removing either actor membership also ends the watch; a
-watched actor's final `Terminated` event is queued before its membership
-removal completes. Once that terminal event is delivered, `is_finished()` is
-true while `is_cancelled()` remains false; explicit cancellation and observer
-membership removal report cancellation as well as eventual completion.
+`ctx.watch` returns a `Guard`. Dropping a retained guard cancels the watch;
+call `detach()` when membership ownership should keep it alive without storing
+a guard. Calling `cancel` suppresses future delivery. Cancellation cannot
+retract an event already accepted by the mailbox. Permanently removing either
+actor membership also ends the watch; a watched actor's final `Terminated`
+event is queued before its membership removal completes. Once the operation
+ends for either environmental reason, `is_finished()` is true while
+`is_cancelled()` remains false. Only `Guard::cancel` or dropping an armed guard
+marks cancellation.
 
 Calling `watch` again for the same observer/subject pair is idempotent. This
 keeps the common pattern of registering in `on_start` and detaching safe when
@@ -99,8 +99,8 @@ rather than a duplicate immediate `Up`. The mapping closure from the first
 registration is membership-owned and remains in use until cancellation, so it
 should capture durable configuration rather than incarnation-local state. This
 also applies to repeated calls within one incarnation: every returned `Guard`
-aliases the same watch, the later mapping closures are unused, and dropping or
-cancelling any non-detached alias cancels the pair.
+controls the same watch, the later mapping closures are unused, and dropping
+or cancelling any non-detached returned guard cancels the pair.
 
 That no-snapshot behavior depends on detaching the guard. If an actor retains
 the guard in incarnation state, a crash drops it and cancels the watch. The
