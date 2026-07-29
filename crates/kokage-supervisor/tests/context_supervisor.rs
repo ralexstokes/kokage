@@ -15,11 +15,12 @@ async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
             Ok(())
         }
     });
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(child)
         .build()
         .expect("ordered supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
 
     let result = timeout(Duration::from_secs(2), result_rx.recv())
         .await
@@ -35,10 +36,11 @@ async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
 #[tokio::test]
 async fn raw_child_can_await_a_supported_operation_on_its_own_scope() {
     let (result_tx, mut result_rx) = mpsc::unbounded_channel();
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")

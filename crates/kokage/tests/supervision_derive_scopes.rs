@@ -113,6 +113,7 @@ async fn a_derived_runtime_runs_actors_across_scope_levels() {
 
     // Stats report the graph label, which is qualified...
     let mut labels: Vec<_> = handle
+        .handle()
         .actor_stats()
         .into_iter()
         .map(|stats| stats.actor_id.to_string())
@@ -122,7 +123,7 @@ async fn a_derived_runtime_runs_actors_across_scope_levels() {
 
     // ...while the supervisor names each child locally, so scope path plus
     // child id reconstructs the label instead of repeating the scope name.
-    let workers = handle.subtree("workers").expect("workers scope");
+    let workers = handle.handle().subtree("workers").expect("workers scope");
     let mut ids: Vec<_> = workers
         .snapshot()
         .children
@@ -201,9 +202,16 @@ async fn a_dynamic_marker_scope_accepts_actors_at_runtime() {
     })
     .expect("tree builds");
     let handle = tree.spawn().expect("runtime builds");
-    handle.wait_started().await.expect("runtime starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
-    let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
+    let sessions = handle
+        .handle()
+        .subtree("sessions")
+        .expect("dynamic subtree exists");
     let session = sessions
         .dynamic()
         .expect("dynamic scope")
@@ -311,7 +319,11 @@ async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
     })
     .expect("tree builds");
     let handle = tree.spawn().expect("runtime builds");
-    handle.wait_started().await.expect("runtime starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
     // The mounter reaches the declared scope through the handle it was built
     // with, and the actor it adds there answers.
@@ -323,7 +335,10 @@ async fn a_dynamic_scope_hands_out_its_mount_before_wiring() {
         7
     );
 
-    let sessions = handle.subtree("sessions").expect("dynamic subtree exists");
+    let sessions = handle
+        .handle()
+        .subtree("sessions")
+        .expect("dynamic subtree exists");
     assert_eq!(sessions.snapshot().kind, ScopeKind::Dynamic);
     assert_eq!(
         sessions

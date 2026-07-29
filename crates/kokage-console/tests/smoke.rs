@@ -62,7 +62,8 @@ async fn spawn_console_with_stats(
         .build()
         .expect("test snapshot supervisor builds")
         .spawn();
-    snapshots
+    let snapshots_handle = snapshots.handle();
+    snapshots_handle
         .dynamic()
         .expect("test snapshot supervisor is dynamic")
         .add_child(ChildSpec::task("worker", |ctx| async move {
@@ -75,9 +76,9 @@ async fn spawn_console_with_stats(
         .build()
         .expect("test lifecycle supervisor builds")
         .spawn();
-    let lifecycle_source = lifecycle.clone();
+    let lifecycle_source = lifecycle.handle();
     let handle = Console::builder()
-        .snapshots(snapshots.subscribe_snapshots())
+        .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
         .actor_stats(stats)
         .bind(([127, 0, 0, 1], 0))
@@ -222,9 +223,10 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
         .build()
         .expect("test lifecycle supervisor builds")
         .spawn();
-    let lifecycle_source = lifecycle.clone();
+    let snapshots_handle = snapshots.handle();
+    let lifecycle_source = lifecycle.handle();
     let handle = Console::builder()
-        .snapshots(snapshots.subscribe_snapshots())
+        .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
         .access_token("test-token")
         .bind(([127, 0, 0, 1], 0))
@@ -314,9 +316,10 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
         .build()
         .expect("test lifecycle supervisor builds")
         .spawn();
-    let lifecycle_source = lifecycle.clone();
+    let snapshots_handle = snapshots.handle();
+    let lifecycle_source = lifecycle.handle();
     let handle = Console::builder()
-        .snapshots(snapshots.subscribe_snapshots())
+        .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle_recursive())
         .allowed_host("console.example:80")
         .bind(([127, 0, 0, 1], 0))
@@ -444,6 +447,7 @@ async fn ws_streams_snapshot_updates() {
     read_handshake(&mut socket).await;
 
     snapshots
+        .handle()
         .dynamic()
         .expect("test snapshot supervisor is dynamic")
         .add_child(ChildSpec::task("updated", |ctx| async move {
@@ -480,6 +484,7 @@ async fn ws_streams_events() {
     read_handshake(&mut socket).await;
 
     lifecycle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_child(ChildSpec::task("worker", |ctx| async move {
@@ -505,7 +510,7 @@ async fn dynamic_tree_wires_public_observability() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("failed to spawn empty runtime");
-    let console = Console::for_runtime(&runtime)
+    let console = Console::for_runtime(&runtime.handle())
         .bind(([127, 0, 0, 1], 0))
         .build()
         .expect("valid console configuration")
@@ -520,6 +525,7 @@ async fn dynamic_tree_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_child(ChildSpec::task("worker", |ctx| async move {
@@ -530,6 +536,7 @@ async fn dynamic_tree_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_actor("tracked", || IdleActor)

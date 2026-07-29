@@ -6,7 +6,8 @@ use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let running = Supervisor::dynamic().spawn()?;
+    let running_owner = Supervisor::dynamic().spawn()?;
+    let running = running_owner.handle();
     let mut events = running.watch_lifecycle_recursive();
 
     running

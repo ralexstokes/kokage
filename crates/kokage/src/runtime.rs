@@ -194,9 +194,8 @@ where
 ///
 /// Dropping this value requests graceful shutdown. Handles cloned from it are
 /// non-owning and may be dropped without affecting runtime lifetime.
-/// Because `Runtime` dereferences to [`RuntimeHandle`], `runtime.clone()` also
-/// compiles, but returns a non-owning `RuntimeHandle`; use [`handle`](Self::handle)
-/// to make that ownership transition explicit.
+/// Use [`handle`](Self::handle) to make the transition from the owning runtime
+/// to a non-owning [`RuntimeHandle`] explicit.
 #[must_use = "dropping the runtime requests graceful shutdown"]
 pub struct Runtime {
     supervisor: RunningSupervisor,
@@ -227,14 +226,6 @@ impl Runtime {
     /// Waits for the runtime to stop.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
-    }
-}
-
-impl std::ops::Deref for Runtime {
-    type Target = RuntimeHandle;
-
-    fn deref(&self) -> &Self::Target {
-        &self.handle
     }
 }
 
@@ -812,28 +803,33 @@ mod tests {
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
         let root = DynamicTree::new().spawn().expect("runtime builds");
-        root.dynamic()
+        root.handle()
+            .dynamic()
             .expect("dynamic scope")
             .add_subtree("workers", OrderedTree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
+            .handle()
             .snapshot()
             .child("workers")
             .expect("first membership is visible")
             .lineage;
 
-        root.dynamic()
+        root.handle()
+            .dynamic()
             .expect("dynamic scope")
             .remove_child("workers")
             .await
             .expect("first subtree removed");
-        root.dynamic()
+        root.handle()
+            .dynamic()
             .expect("dynamic scope")
             .add_subtree("workers", OrderedTree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root
+            .handle()
             .snapshot()
             .child("workers")
             .expect("replacement membership is visible")
@@ -841,12 +837,14 @@ mod tests {
 
         assert_ne!(first_lineage, replacement_lineage);
         assert!(
-            root.subtree_membership("workers", Some(first_lineage))
+            root.handle()
+                .subtree_membership("workers", Some(first_lineage))
                 .is_none(),
             "a lookup bound to the completed add must not return a same-id replacement"
         );
         assert!(
-            root.subtree_membership("workers", Some(replacement_lineage))
+            root.handle()
+                .subtree_membership("workers", Some(replacement_lineage))
                 .is_some()
         );
 

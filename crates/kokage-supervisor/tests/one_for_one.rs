@@ -66,12 +66,13 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         }
     })
     .restart(RestartPolicy::OnFailure);
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(slow)
         .child(fast)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     assert_eq!(common::recv_event(&mut slow_rx).await, 0);
     assert_eq!(common::recv_event(&mut fast_rx).await, 0);
     let mut events = common::event_watch(&handle);
@@ -153,7 +154,8 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut flaky_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_event(&mut sibling_rx).await, 0);
@@ -200,7 +202,8 @@ async fn permanent_child_restarts_after_completion() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
 
@@ -230,7 +233,8 @@ async fn temporary_child_does_not_restart() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
@@ -314,7 +318,8 @@ async fn child_restart_intensity_is_isolated_per_child() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut child_a_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut child_b_rx, 2).await, vec![0, 1]);
@@ -329,7 +334,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
 async fn restart_events_follow_exit_schedule_start_restart_order() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .restart_config(common::restart_config(
             2,
             Duration::from_secs(1),
@@ -352,6 +357,7 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
     let mut events = common::event_watch(&handle);
 
     let mut sequence = Vec::new();

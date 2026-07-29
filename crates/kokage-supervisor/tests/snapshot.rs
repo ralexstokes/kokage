@@ -33,7 +33,8 @@ async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let snapshot = handle.snapshot();
 
     assert_eq!(snapshot.kind, ScopeKind::Ordered);
@@ -60,7 +61,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
     let outer = Supervisor::dynamic()
         .build()
         .expect("valid outer supervisor");
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
 
     handle
         .dynamic()
@@ -159,7 +161,8 @@ async fn snapshot_shows_restart_state_and_last_exit() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
@@ -235,7 +238,8 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
 
     let supervisor = Supervisor::dynamic().build().expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
     handle
         .dynamic()
@@ -317,7 +321,8 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
 
     common::recv_event(&mut leaf_started_rx).await;
@@ -357,7 +362,8 @@ async fn stopped_snapshot_remains_available_after_shutdown() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
 
     let _ = wait_for_snapshot(&mut snapshots, |snapshot| {
@@ -397,7 +403,8 @@ async fn snapshot_reports_stopping_while_shutdown_drains_children() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
     let _ = wait_for_snapshot(&mut snapshots, |snapshot| {
         child(snapshot, "worker").is_some_and(|child| child.state.is_running())
@@ -426,7 +433,8 @@ async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
     let snapshot = wait_for_snapshot(&mut snapshots, |snapshot| {
         snapshot
@@ -460,7 +468,8 @@ async fn events_observe_already_published_snapshot_state() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     loop {

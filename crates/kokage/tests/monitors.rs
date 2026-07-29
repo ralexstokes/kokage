@@ -1336,6 +1336,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_actor_with(
@@ -1350,6 +1351,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .add_actor_with(
@@ -1371,6 +1373,7 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
     assert_eq!(next_event(&mut observed).await, up("peer", 0));
 
     handle
+        .handle()
         .dynamic()
         .expect("dynamic scope")
         .remove_child("peer")

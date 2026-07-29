@@ -91,12 +91,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(RestartPolicy::Always)
     };
 
-    let running = Supervisor::ordered()
+    let running_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(fetch)
         .child(decode)
         .child(sink)
         .spawn()?;
+    let running = running_owner.handle();
     let mut restarted_stage_names = BTreeSet::new();
 
     while restarted_stage_names.len() < 3 {

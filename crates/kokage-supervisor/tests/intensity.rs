@@ -28,7 +28,8 @@ async fn repeated_failures_can_exceed_restart_intensity() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let err = handle
         .wait()
         .await
@@ -53,7 +54,8 @@ async fn configured_backoff_delays_restart_attempts() {
         .expect("valid supervisor");
 
     let started = Instant::now();
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let err = handle
         .wait()
         .await
@@ -87,7 +89,8 @@ async fn jittered_exponential_backoff_delays_restart_attempts() {
         .expect("valid supervisor");
 
     let started = Instant::now();
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let err = handle
         .wait()
         .await
@@ -104,7 +107,7 @@ async fn jittered_exponential_backoff_delays_restart_attempts() {
 async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .restart_config(common::restart_config(
             3,
             Duration::from_secs(1),
@@ -135,6 +138,7 @@ async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
 
     let (_, started_0) = common::recv_event(&mut starts_rx).await;
     let (_, started_1) = common::recv_event(&mut starts_rx).await;
@@ -158,7 +162,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
     let release = Arc::new(Notify::new());
     let release_for_child = release.clone();
 
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .restart_config(common::restart_config(
             5,
             Duration::from_millis(200),
@@ -200,6 +204,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
 
     let mut events = common::event_watch(&handle);
     release.notify_one();
@@ -246,7 +251,8 @@ async fn child_restart_intensity_override_controls_backoff() {
         .expect("valid supervisor");
 
     let started = Instant::now();
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let err = handle
         .wait()
         .await
@@ -300,13 +306,14 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .restart_config(RestartConfig::new(1, Duration::from_secs(1)))
         .child(alpha)
         .child(beta)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut alpha_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut beta_rx, 2).await, vec![0, 1]);
@@ -319,7 +326,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
 async fn child_restart_intensity_override_is_enforced() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .restart_config(RestartConfig::new(10, Duration::from_secs(1)))
         .child(
             ChildSpec::task("flaky", move |ctx| {
@@ -337,6 +344,7 @@ async fn child_restart_intensity_override_is_enforced() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
 
     assert_eq!(common::recv_n(&mut starts_rx, 2).await, vec![0, 1]);
     common::assert_no_event(&mut starts_rx).await;
@@ -355,7 +363,7 @@ async fn restart_budget_recovers_after_failures_age_out_of_window() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let release_second_failure_for_child = release_second_failure.clone();
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .restart_config(RestartConfig::new(1, Duration::from_millis(100)))
         .child(
             ChildSpec::task("flaky", move |ctx| {
@@ -383,6 +391,7 @@ async fn restart_budget_recovers_after_failures_age_out_of_window() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
 
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
@@ -442,7 +451,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(kokage_supervisor::Strategy::OneForAll)
         .restart_config(RestartConfig::new(1, Duration::from_secs(1)))
         .child(alpha)
@@ -450,6 +459,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut alpha_rx).await, 0);
     assert_eq!(common::recv_event(&mut beta_rx).await, 0);

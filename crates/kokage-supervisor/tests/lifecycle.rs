@@ -94,7 +94,8 @@ async fn recursive_watch_reports_supervisor_transitions_and_restart_backoff() {
         );
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
 
     let started = next_recursive_for(&mut tree, |event| {
         event.supervisor_path.is_empty()
@@ -185,7 +186,8 @@ async fn recursive_started_after_matches_a_non_empty_supervisor_path() {
     let builder = Supervisor::ordered().child(ChildSpec::supervisor("nested", nested));
     let pre_spawn = builder.handle();
     let mut lifecycle = pre_spawn.watch_lifecycle_recursive();
-    let handle = builder.build().expect("valid root supervisor").spawn();
+    let handle_owner = builder.build().expect("valid root supervisor").spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
 
     let nested_path = loop {
@@ -232,11 +234,12 @@ async fn scheduled_restart_event_observes_its_aligned_snapshot() {
         Duration::from_secs(60),
         BackoffPolicy::Fixed(Duration::from_secs(30)),
     ));
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(child)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
 
@@ -264,7 +267,8 @@ async fn restart_intensity_is_recursive_only_and_closes_the_direct_watch() {
     let retained = builder.handle();
     let mut direct = retained.watch_lifecycle();
     let mut recursive = retained.watch_lifecycle_recursive();
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(
         handle.wait().await,
@@ -304,7 +308,8 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
     );
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
 
     let initial = next_recursive_for(&mut tree, |event| {
@@ -352,10 +357,11 @@ async fn recursive_watch_reattaches_with_new_path_after_ancestor_recreation() {
 
 #[tokio::test]
 async fn recursive_watch_path_distinguishes_reinserted_subtree_membership() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let mut tree = handle.watch_lifecycle_recursive();
 
@@ -428,7 +434,8 @@ async fn recursive_watch_overflow_is_one_tree_wide_in_band_marker() {
     let builder = Supervisor::dynamic();
     let retained = builder.handle();
     let mut tree = retained.watch_lifecycle_recursive();
-    let handle = builder.build().expect("valid supervisor").spawn();
+    let handle_owner = builder.build().expect("valid supervisor").spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     handle
         .dynamic()
@@ -482,11 +489,12 @@ async fn restart_is_an_ordered_exit_schedule_started_sequence() {
         }
     })
     .restart(RestartPolicy::OnFailure);
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(child)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let baseline = handle.snapshot();
     let mut lifecycle = handle.watch_lifecycle();
@@ -524,7 +532,7 @@ async fn restart_is_an_ordered_exit_schedule_started_sequence() {
 async fn restart_of_arms_before_the_returned_future_is_polled() {
     let crash = Arc::new(Notify::new());
     let child_crash = Arc::clone(&crash);
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(
             ChildSpec::task("worker", move |ctx| {
                 let crash = Arc::clone(&child_crash);
@@ -542,6 +550,7 @@ async fn restart_of_arms_before_the_returned_future_is_polled() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
     handle.wait_started().await.expect("startup succeeds");
 
     let restarted = handle.restart_of("worker");
@@ -567,10 +576,11 @@ async fn restart_of_arms_before_the_returned_future_is_polled() {
 
 #[tokio::test]
 async fn started_after_reports_membership_removal() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")
@@ -601,10 +611,11 @@ async fn started_after_reports_membership_removal() {
 
 #[tokio::test]
 async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let dynamic = handle.dynamic().expect("dynamic supervisor");
     dynamic
         .add_child(ChildSpec::task("worker", |ctx| async move {
@@ -628,10 +639,11 @@ async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
 
 #[tokio::test]
 async fn restart_of_returns_none_for_an_unknown_child() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(handle.restart_of("missing").await, None);
 
@@ -652,11 +664,12 @@ async fn readiness_gated_started_is_emitted_only_after_ready() {
         }
     })
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(child)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut lifecycle = handle.watch_lifecycle();
 
     timeout(
@@ -693,11 +706,12 @@ async fn remove_on_exit_emits_exited_before_removed() {
     })
     .restart(RestartPolicy::Never)
     .terminal_membership(TerminalMembership::Remove);
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(child)
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
 
@@ -725,10 +739,11 @@ async fn cooperative_remove_publishes_removed_before_reply() {
     .shutdown(ShutdownPolicy::Cooperative {
         grace: Duration::from_secs(1),
     });
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")
@@ -763,10 +778,11 @@ async fn cooperative_remove_publishes_removed_before_reply() {
 
 #[tokio::test]
 async fn dynamic_add_then_remove_has_gap_free_membership_lifecycle() {
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut lifecycle = handle.watch_lifecycle();
     handle
         .dynamic()
@@ -827,10 +843,11 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
     })
     .restart(RestartPolicy::OnFailure)
     .restart_config(RestartConfig::new(100, Duration::from_secs(60)));
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut lifecycle = handle.watch_lifecycle();
     handle
         .dynamic()
@@ -873,10 +890,11 @@ async fn overflow_collapses_into_one_lagged_marker_and_counters_resync() {
 #[tokio::test]
 async fn watch_snapshot_filter_is_gap_free_under_concurrent_churn() {
     const MEMBERS: usize = 12;
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut lifecycle = handle.watch_lifecycle();
     let churn = handle.clone();
     let task = tokio::spawn(async move {
@@ -948,7 +966,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         )
         .build()
         .expect("valid middle supervisor");
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             ChildSpec::supervisor("middle", middle)
                 .restart(RestartPolicy::OnFailure)
@@ -957,6 +975,7 @@ async fn nested_sequence_and_counters_continue_across_ancestor_recreation() {
         .build()
         .expect("valid root supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let middle = handle.supervisor("middle").expect("middle handle");
     let initial_worker_lineage = middle
@@ -1016,12 +1035,13 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
         }))
         .build()
         .expect("valid nested supervisor");
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(gate)
         .child(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let nested = handle
         .supervisor("nested")
         .expect("stable nested handle exists while start is queued");
@@ -1053,7 +1073,7 @@ async fn pre_spawn_snapshot_declaration_is_followed_by_added_and_started() {
 
 #[tokio::test]
 async fn closure_drains_staged_events_before_ending_the_watch() {
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -1061,6 +1081,7 @@ async fn closure_drains_staged_events_before_ending_the_watch() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
     handle.wait_started().await.expect("startup succeeds");
     let mut lifecycle = handle.watch_lifecycle();
     handle.shutdown();
@@ -1086,10 +1107,11 @@ async fn removing_nested_supervisor_closes_its_lifecycle_watch() {
         }))
         .build()
         .expect("valid nested supervisor");
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")
@@ -1133,7 +1155,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
     let leaf = leaf_builder.build().expect("valid leaf supervisor");
     let sibling_crash = Arc::clone(&crash_sibling);
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .strategy(kokage_supervisor::Strategy::OneForAll)
         .child(ChildSpec::supervisor("leaf", leaf).restart(RestartPolicy::OnFailure))
         .child(
@@ -1150,6 +1172,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
     handle.wait_started().await.expect("startup succeeds");
     let leaf = handle.supervisor("leaf").expect("leaf handle");
     let mut lifecycle = leaf.watch_lifecycle();
@@ -1200,11 +1223,12 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
         )
         .build()
         .expect("valid nested supervisor");
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let nested = handle.supervisor("nested").expect("nested handle");
     let mut lifecycle = nested.watch_lifecycle();
@@ -1221,11 +1245,12 @@ async fn non_restarted_nested_stop_closes_lifecycle_watch() {
 
 #[tokio::test]
 async fn parent_stop_closes_watch_while_stable_handle_is_retained() {
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(ChildSpec::supervisor("nested", idle_supervisor()))
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let nested = handle.supervisor("nested").expect("nested handle");
     let mut lifecycle = nested.watch_lifecycle();
@@ -1239,7 +1264,7 @@ async fn parent_stop_closes_watch_while_stable_handle_is_retained() {
 async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
     let crash_leaf = Arc::new(Notify::new());
     let crash_middle = Arc::new(Notify::new());
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
                 .restart(RestartPolicy::OnFailure)
@@ -1248,6 +1273,7 @@ async fn lifecycle_watch_survives_restartable_ancestor_reincarnation() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let middle = handle.supervisor("middle").expect("middle handle");
     let leaf = middle.supervisor("leaf").expect("leaf handle");
@@ -1296,7 +1322,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
     let middle = Supervisor::dynamic()
         .build()
         .expect("valid dynamic middle supervisor");
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             ChildSpec::supervisor("middle", middle)
                 .restart(RestartPolicy::OnFailure)
@@ -1305,6 +1331,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_lifecycle_watch() {
         .build()
         .expect("valid root supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("root starts");
 
     let middle = handle.supervisor("middle").expect("middle handle");
@@ -1355,13 +1382,14 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     let complete_tail = Arc::new(Notify::new());
     let (head_supervisor, _head_finished) = completing_supervisor(&complete_head);
     let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(ChildSpec::supervisor("head", head_supervisor).restart(RestartPolicy::OnFailure))
         .child(ChildSpec::supervisor("tail", tail_supervisor).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup succeeds");
     let head = handle.supervisor("head").expect("head handle");
     let tail = handle.supervisor("tail").expect("tail handle");
@@ -1481,10 +1509,11 @@ fn completing_supervisor(
 #[tokio::test]
 async fn restart_waiters_report_a_start_lost_to_overflow() {
     const RESTARTS: usize = 80;
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")

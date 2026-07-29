@@ -52,11 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let running = Supervisor::ordered()
+    let running_owner = Supervisor::ordered()
         .restart_config(RestartConfig::new(0, Duration::from_secs(1)))
         .child(warm_cache)
         .child(metrics)
         .spawn()?;
+    let running = running_owner.handle();
     let mut events = running.watch_lifecycle_recursive();
 
     loop {

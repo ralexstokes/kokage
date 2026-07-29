@@ -102,7 +102,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             out: out_tx.clone(),
         },
     })?;
-    let runtime = tree.spawn()?;
+    let runtime_owner = tree.spawn()?;
+    let runtime = runtime_owner.handle();
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))

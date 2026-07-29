@@ -318,8 +318,14 @@ async fn build_app() -> Result<App, AnyError> {
     } = refs.core;
 
     let runtime = tree.spawn()?;
-    let gateway = runtime.subtree("gateway").expect("gateway runtime subtree");
-    let core = runtime.subtree("core").expect("core runtime subtree");
+    let gateway = runtime
+        .handle()
+        .subtree("gateway")
+        .expect("gateway runtime subtree");
+    let core = runtime
+        .handle()
+        .subtree("core")
+        .expect("core runtime subtree");
     // `sessions_mount` was issued before the root existed and addresses the
     // same identity the post-spawn `runtime.subtree("sessions")` lookup would
     // return, so the phases below drive it directly.
@@ -347,7 +353,7 @@ async fn build_app() -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.handle().wait_started()).await??;
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
@@ -767,9 +773,9 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
             .message_bytes_accepted
             .is_some_and(|bytes| bytes > 0)
     );
-    let recursive_stats = app.runtime.actor_stats();
+    let recursive_stats = app.runtime.handle().actor_stats();
     let session_stats = app.sessions.actor_stats();
-    let final_snapshot = app.runtime.snapshot();
+    let final_snapshot = app.runtime.handle().snapshot();
     drop(app.lifecycle_watch);
     tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
     let latency = latency.snapshot();

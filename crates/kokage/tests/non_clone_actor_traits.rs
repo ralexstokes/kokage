@@ -162,7 +162,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
             .expect("first incarnation replies"),
         (0, 1)
     );
-    let (lifecycle, baseline) = restart_observer(&handle, "handler");
+    let (lifecycle, baseline) = restart_observer(&handle.handle(), "handler");
     actor_ref
         .send(ProbeMsg::Crash)
         .await
@@ -230,7 +230,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
 
     actor_ref.send(false).await.expect("first message accepted");
     assert_eq!(observed_rx.recv().await, Some((0, 1)));
-    let (lifecycle, baseline) = restart_observer(&handle, "raw");
+    let (lifecycle, baseline) = restart_observer(&handle.handle(), "raw");
     actor_ref.send(true).await.expect("crash accepted");
     tokio::time::timeout(
         Duration::from_secs(1),
@@ -299,7 +299,7 @@ async fn default_constructor_path_is_an_actor_factory() {
         .spawn()
         .expect("runtime builds");
 
-    handle.wait_started().await.expect("actor starts");
+    handle.handle().wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

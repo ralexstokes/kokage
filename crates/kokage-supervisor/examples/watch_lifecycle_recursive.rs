@@ -14,7 +14,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }))
         .spawn()?;
-    let mut events = running.watch_lifecycle_recursive();
+    let handle = running.handle();
+    let mut events = handle.watch_lifecycle_recursive();
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
@@ -30,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    running.shutdown_and_wait().await?;
+    handle.shutdown_and_wait().await?;
     observer.await?;
 
     Ok(())

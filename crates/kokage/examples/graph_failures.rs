@@ -65,10 +65,11 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         }
     });
 
-    let handle = OrderedTree::graph(builder.build()?)
+    let handle_owner = OrderedTree::graph(builder.build()?)
         .strategy(strategy)
         .default_restart(RestartPolicy::Always)
         .spawn()?;
+    let handle = handle_owner.handle();
 
     timeout(Duration::from_secs(1), async {
         loop {

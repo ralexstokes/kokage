@@ -154,7 +154,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.watch_lifecycle_recursive();
+    let mut events = handle.handle().watch_lifecycle_recursive();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -194,7 +194,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         } if child_id == "worker"
     ));
 
-    let snapshot = handle.snapshot();
+    let snapshot = handle.handle().snapshot();
     assert!(
         snapshot
             .child("worker")

@@ -266,7 +266,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         Err(SendError { actor_id , .. }) if actor_id == "worker"
     ));
 
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut snapshots = handle.handle().subscribe_snapshots();
     let completed = timeout(
         Duration::from_secs(1),
         snapshots.wait_for(|snapshot| {

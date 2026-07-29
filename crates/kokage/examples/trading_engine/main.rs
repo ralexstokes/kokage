@@ -361,6 +361,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // scope is direct children, so nested per-venue supervisors would each
     // need their own lifecycle pump.
     let lifecycle_watch = runtime
+        .handle()
         .subtree("venues")
         .expect("venues runtime subtree")
         .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
@@ -386,7 +387,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.handle().wait_started()).await??;
     assert_eq!(app.venue_a.feed_sessions(VENUE_A), 1);
     assert_eq!(app.venue_b.feed_sessions(VENUE_B), 1);
     assert_eq!(app.venue_a.gateway_sessions(VENUE_A), 1);
@@ -465,6 +466,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     let before_b = generation(app, "venue-b-feed");
     let venues = app
         .runtime
+        .handle()
         .subtree("venues")
         .expect("venues runtime subtree");
     let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
@@ -637,6 +639,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     await_until(|| async {
         let stats = app
             .runtime
+            .handle()
             .subtree("venues")
             .expect("venue runtime subtree")
             .actor_stats();
@@ -662,6 +665,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     flood.await?;
     let feed_stats = app
         .runtime
+        .handle()
         .subtree("venues")
         .expect("venue runtime subtree")
         .actor_stats();
@@ -682,6 +686,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
     let venues = app
         .runtime
+        .handle()
         .subtree("venues")
         .expect("venues runtime subtree");
     for (id, feed) in [
@@ -764,8 +769,14 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
             >= 2
     );
     println!("selected metrics: {selected_metrics:#?}");
-    println!("final supervisor snapshot: {:#?}", app.runtime.snapshot());
-    println!("final actor stats: {:#?}", app.runtime.actor_stats());
+    println!(
+        "final supervisor snapshot: {:#?}",
+        app.runtime.handle().snapshot()
+    );
+    println!(
+        "final actor stats: {:#?}",
+        app.runtime.handle().actor_stats()
+    );
     println!("PHASE 8 OK — staged shutdown and observability");
     Ok(())
 }
@@ -880,6 +891,7 @@ fn both_health(status: &ReconcilerStatus, health: VenueHealth) -> bool {
 
 fn generation(app: &App, child: &str) -> u64 {
     app.runtime
+        .handle()
         .snapshot()
         .descendant(["venues", child])
         .expect("nested child snapshot")

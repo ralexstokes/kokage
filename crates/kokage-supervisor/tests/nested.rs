@@ -30,7 +30,8 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     let mut snapshots = handle.subscribe_snapshots();
     let completed = snapshots
         .wait_for(|snapshot| {
@@ -86,7 +87,8 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
 
     common::recv_event(&mut starts_rx).await;
     let mut snapshots = handle.subscribe_snapshots();
@@ -137,7 +139,8 @@ async fn parent_shutdown_propagates_into_nested_supervisor() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     common::recv_event(&mut started_rx).await;
 
     handle.shutdown();
@@ -169,7 +172,8 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     let lineage = handle
@@ -258,7 +262,8 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     handle
@@ -371,7 +376,8 @@ async fn parent_event_stream_includes_forwarded_nested_events() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     let mut saw_nested_supervisor_started = false;
@@ -446,7 +452,8 @@ async fn nested_events_preserve_the_full_tree_path() {
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     loop {
@@ -477,10 +484,11 @@ async fn removing_nested_supervisor_unregisters_its_control_endpoint() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     handle
         .dynamic()
@@ -564,11 +572,12 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let nested_handle = handle
         .supervisor("nested")
         .expect("stable nested handle should exist before the first incarnation starts");
@@ -627,10 +636,11 @@ async fn abort_mode_hard_cascades_through_a_nested_supervisor() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")
@@ -688,7 +698,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             ChildSpec::supervisor("nested", nested).restart_config(common::restart_config(
                 5,
@@ -699,6 +709,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     let nested_handle = handle
         .supervisor("nested")
@@ -772,11 +783,12 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .build()
         .expect("valid middle supervisor");
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(ChildSpec::supervisor("mid", mid))
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     let mid_handle = handle.supervisor("mid").expect("stable mid handle");
     let grand_handle = mid_handle
@@ -852,7 +864,8 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .build()
         .expect("valid root supervisor");
 
-    let handle = root.spawn();
+    let handle_owner = root.spawn();
+    let handle = handle_owner.handle();
     common::recv_event(&mut started_rx).await;
     assert_eq!(
         handle.wait().await,
@@ -882,7 +895,8 @@ async fn nested_supervisor_view_reaches_the_parent_without_diverging_from_its_ba
         .build()
         .expect("valid outer supervisor");
 
-    let handle = outer.spawn();
+    let handle_owner = outer.spawn();
+    let handle = handle_owner.handle();
     handle.wait_started().await.expect("startup should succeed");
 
     let mut snapshots = handle.subscribe_snapshots();

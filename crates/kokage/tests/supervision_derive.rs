@@ -112,7 +112,11 @@ async fn derived_tree_runs_cyclic_pipeline() {
     assert_eq!(cloned_refs.parser.id(), "parser");
     assert_eq!(refs.sink.id(), "sink");
     let handle = tree.spawn().expect("tree builds");
-    handle.wait_started().await.expect("runtime starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))
@@ -232,7 +236,11 @@ async fn derived_tree_applies_per_actor_options() {
     })
     .expect("options tree builds");
     let handle = tree.spawn().expect("tree builds");
-    handle.wait_started().await.expect("runtime starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
     refs.mailbox_only
         .try_send(SizedMessage(vec![0; 2]))
@@ -278,7 +286,11 @@ async fn tree_with_applies_graph_builder_settings() {
 
     let park = park.expect("wiring closure captured park ref");
     let handle = tree.spawn().expect("tree builds");
-    handle.wait_started().await.expect("runtime starts");
+    handle
+        .handle()
+        .wait_started()
+        .await
+        .expect("runtime starts");
 
     park.send(()).await.expect("first message fits");
     assert!(matches!(

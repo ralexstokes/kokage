@@ -50,7 +50,8 @@ async fn external_shutdown_stops_all_children() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     common::recv_event(&mut started_rx).await;
     common::recv_event(&mut started_rx).await;
     handle.shutdown();
@@ -71,7 +72,8 @@ async fn shutdown_is_idempotent_across_handle_clones() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let clone = handle.clone();
 
     handle.shutdown();
@@ -117,10 +119,14 @@ async fn dropping_every_handle_leaves_the_owned_supervisor_running() {
     drop(last_handle);
     common::assert_no_event(&mut lifecycle_rx).await;
 
-    running.shutdown();
+    running.handle().shutdown();
     assert_eq!(common::recv_event(&mut lifecycle_rx).await, "cancelled");
 
-    running.wait().await.expect("supervisor stops cleanly");
+    running
+        .handle()
+        .wait()
+        .await
+        .expect("supervisor stops cleanly");
 }
 
 #[tokio::test]
@@ -206,7 +212,8 @@ async fn cooperative_child_observes_cancellation_before_shutdown_finishes() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     handle.shutdown();
 
     common::wait(&handle, "cooperative child shutdown")
@@ -242,7 +249,8 @@ async fn stubborn_child_is_aborted_and_reported_in_cooperative_mode() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     handle.shutdown();
 
     assert!(matches!(
@@ -284,7 +292,8 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
         )
         .build()
         .expect("valid supervisor");
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     common::recv_event(&mut started_rx).await;
 
     handle.shutdown();
@@ -320,7 +329,8 @@ async fn cooperative_shutdown_times_out_with_stuck_child_name() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     handle.shutdown();
 
     let err = handle
@@ -383,7 +393,8 @@ async fn mixed_cooperative_shutdown_reports_every_timed_out_child() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     common::recv_n(&mut started_rx, 2).await;
 
     handle.shutdown();
@@ -412,7 +423,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let live_flag = common::LiveFlag::new();
     let live = live_flag.clone();
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(
             ChildSpec::task("slow-wrapper", move |ctx| {
                 let started_tx = started_tx.clone();
@@ -430,6 +441,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
         .build()
         .expect("supervisor builds")
         .spawn();
+    let handle = running.handle();
     let mut lifecycle = handle.watch_lifecycle();
     common::recv_event(&mut started_rx).await;
 
@@ -458,10 +470,11 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (short_escalated_tx, mut short_escalated_rx) = mpsc::unbounded_channel();
     let short_started_tx = started_tx.clone();
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     let mut lifecycle = handle.watch_lifecycle();
 
     handle
@@ -532,10 +545,11 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
     let live_flag_for_child = live_flag.clone();
-    let handle = Supervisor::dynamic()
+    let handle_owner = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .dynamic()
         .expect("dynamic supervisor")
@@ -625,7 +639,8 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     common::recv_event(&mut started_rx).await;
     assert!(live_flag.is_live());
 
@@ -652,7 +667,8 @@ async fn shutdown_preempts_zero_delay_restart() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     loop {
@@ -720,7 +736,8 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     loop {
@@ -781,13 +798,14 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
             }
         })
     };
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(child("first", Arc::clone(&first_release)))
         .child(child("second", Arc::clone(&second_release)))
         .child(child("third", Arc::clone(&third_release)))
         .build()
         .expect("ordered supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     common::wait_started(&handle, "ordered shutdown children startup")
         .await
         .expect("children started");
@@ -867,12 +885,13 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
             Ok(())
         }
     });
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(dependency)
         .child(stubborn)
         .build()
         .expect("ordered supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     common::wait_started(&handle, "dynamic deadline children startup")
         .await
         .expect("children start");
@@ -923,7 +942,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .child(nested_child("tail", tail_live.clone(), true))
         .build()
         .expect("nested ordered supervisor builds");
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             kokage_supervisor::ChildSpec::supervisor("nested", nested).shutdown(
                 ShutdownPolicy::Cooperative {
@@ -934,6 +953,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .build()
         .expect("root builds")
         .spawn();
+    let handle = handle_owner.handle();
     common::wait_started(&handle, "slow nested tree startup")
         .await
         .expect("nested tree starts");
@@ -996,7 +1016,7 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         )
         .build()
         .expect("middle supervisor builds");
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(
             kokage_supervisor::ChildSpec::supervisor("middle", middle).shutdown(
                 ShutdownPolicy::Cooperative {
@@ -1007,6 +1027,7 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .build()
         .expect("root supervisor builds")
         .spawn();
+    let handle = handle_owner.handle();
     common::wait_started(&handle, "deep nested tree startup")
         .await
         .expect("nested tree starts");
@@ -1040,13 +1061,14 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
         .shutdown(ShutdownPolicy::Cooperative { grace: GRACE })
     };
 
-    let ordered = Supervisor::ordered()
+    let ordered_owner = Supervisor::ordered()
         .child(stubborn("first"))
         .child(stubborn("second"))
         .child(stubborn("third"))
         .build()
         .expect("ordered supervisor builds")
         .spawn();
+    let ordered = ordered_owner.handle();
     ordered
         .wait_started()
         .await
@@ -1064,10 +1086,11 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
 
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Barrier::new(4));
-    let dynamic = Supervisor::dynamic()
+    let dynamic_owner = Supervisor::dynamic()
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
+    let dynamic = dynamic_owner.handle();
     for id in ["first", "second", "third"] {
         let cancelled_tx = cancelled_tx.clone();
         let release = Arc::clone(&release);

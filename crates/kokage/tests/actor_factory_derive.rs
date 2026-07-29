@@ -104,7 +104,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
         (0, 2)
     );
 
-    let (lifecycle, baseline) = restart_observer(&handle, "derived");
+    let (lifecycle, baseline) = restart_observer(&handle.handle(), "derived");
     actor_ref
         .send(ProbeMsg::Crash)
         .await

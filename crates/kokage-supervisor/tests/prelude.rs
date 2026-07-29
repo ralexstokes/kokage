@@ -63,7 +63,7 @@ fn closed_policy_sets_can_be_matched_exhaustively_in_the_supervisor_crate() {
 async fn prelude_supports_handle_event_and_snapshot_helpers() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(ChildSpec::task("worker", move |ctx| {
             let started_tx = started_tx.clone();
             async move {
@@ -77,6 +77,7 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = running.handle();
 
     let mut events = common::event_watch(&handle);
     assert_eq!(common::recv_event(&mut started_rx).await, 0);
@@ -133,7 +134,7 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(
             ChildSpec::task("anchor", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -147,6 +148,7 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
         .build()
         .expect("valid outer supervisor")
         .spawn();
+    let handle = running.handle();
 
     common::recv_event(&mut leaf_started_rx).await;
 

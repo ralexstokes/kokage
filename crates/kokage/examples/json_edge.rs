@@ -32,7 +32,8 @@ impl Actor for Printer {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
     let printer = graph.actor("Printer", || Printer);
-    let runtime = OrderedTree::graph(graph.build()?).spawn()?;
+    let runtime_owner = OrderedTree::graph(graph.build()?).spawn()?;
+    let runtime = runtime_owner.handle();
 
     // A socket or file framing layer can supply the same byte slices.
     let input = b"{\"item\":\"labels\",\"quantity\":4}\n{\"item\":\"boxes\",\"quantity\":2}\n";

@@ -39,7 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
 
-    let running = Supervisor::ordered().child(flaky).child(metrics).spawn()?;
+    let running_owner = Supervisor::ordered().child(flaky).child(metrics).spawn()?;
+    let running = running_owner.handle();
     let mut lifecycle = running.watch_lifecycle();
 
     loop {

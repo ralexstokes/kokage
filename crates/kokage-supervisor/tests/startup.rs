@@ -50,12 +50,13 @@ async fn sequential_start_waits_for_explicit_readiness() {
     })
     .wait_for_ready();
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(first)
         .child(second)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
 
     tokio::time::timeout(common::EVENT_TIMEOUT, first_started.notified())
         .await
@@ -117,13 +118,14 @@ async fn one_for_all_restart_preserves_sequential_readiness_order() {
     })
     .wait_for_ready();
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(first)
         .child(second)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     common::wait_started(&handle, "initial one-for-all startup")
         .await
         .unwrap();
@@ -178,12 +180,13 @@ async fn startup_failure_is_skipped_before_later_sequential_children_start() {
     })
     .wait_for_ready();
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(failed)
         .child(later)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, later_started.notified())
         .await
         .expect("a terminal startup failure should be skipped");
@@ -228,12 +231,13 @@ async fn sequential_start_resumes_after_pre_ready_restart() {
         }
     })
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(flaky)
         .child(later)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, handle.wait_started())
         .await
         .unwrap()
@@ -250,7 +254,7 @@ async fn sequential_start_resumes_after_pre_ready_restart() {
 #[tokio::test]
 async fn wait_started_accepts_an_immediate_child_that_already_completed() {
     let completed = Arc::new(Notify::new());
-    let handle = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .child(
             ChildSpec::task("oneshot", {
                 let completed = Arc::clone(&completed);
@@ -267,6 +271,7 @@ async fn wait_started_accepts_an_immediate_child_that_already_completed() {
         .build()
         .unwrap()
         .spawn();
+    let handle = running.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, completed.notified())
         .await
         .expect("immediate child should complete before wait_started is called");
@@ -320,12 +325,13 @@ async fn nested_supervisor_gates_later_parent_siblings() {
         }
     })
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(ChildSpec::supervisor("nested", nested))
         .child(later)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, nested_started.notified())
         .await
         .expect("nested child should enter its readiness gate");
@@ -401,7 +407,8 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
     })
     .wait_for_ready();
 
-    let handle = root.child(gated).child(later).build().unwrap().spawn();
+    let handle_owner = root.child(gated).child(later).build().unwrap().spawn();
+    let handle = handle_owner.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, gated_started.notified())
         .await
         .expect("parent should reach the readiness-gated child");
@@ -482,7 +489,7 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
         }
     })
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(anchor)
         .child(middle)
@@ -490,6 +497,7 @@ async fn rest_for_one_restart_preserves_sequential_readiness_order() {
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     common::wait_started(&handle, "initial rest-for-one startup")
         .await
         .unwrap();
@@ -555,13 +563,14 @@ async fn pre_ready_one_for_all_failure_does_not_duplicate_children() {
     })
     .restart(RestartPolicy::Never)
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(first)
         .child(second)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, handle.wait_started())
         .await
         .unwrap()
@@ -599,11 +608,12 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
         .child(failed)
         .build()
         .unwrap();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     assert!(matches!(
         tokio::time::timeout(common::EVENT_TIMEOUT, handle.wait_started())
             .await
@@ -654,13 +664,14 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
         }
     })
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(failing)
         .child(never)
         .build()
         .unwrap()
         .spawn();
+    let handle = handle_owner.handle();
     tokio::time::timeout(common::EVENT_TIMEOUT, never_started.notified())
         .await
         .expect("never child should start and remain pre-ready");

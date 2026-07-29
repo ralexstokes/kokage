@@ -78,7 +78,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
         }
     })
     .wait_for_ready();
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger)
         .child(middle)
@@ -86,6 +86,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
         .build()
         .expect("ordered group builds")
         .spawn();
+    let handle = handle_owner.handle();
     handle
         .wait_started()
         .await
@@ -161,7 +162,8 @@ async fn restartable_child_failure_restarts_the_whole_group() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut trigger_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut peer_rx, 2).await, vec![0, 1]);
@@ -230,7 +232,8 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut temporary_rx).await, 0);
     assert_eq!(common::recv_event(&mut trigger_rx).await, 0);
@@ -294,7 +297,8 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut trigger_rx).await, 0);
     assert_eq!(common::recv_event(&mut trigger_rx).await, 1);
@@ -362,7 +366,8 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut peer_rx).await, 0);
     release_failure.notify_one();
@@ -432,7 +437,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     .restart(RestartPolicy::Always)
     .shutdown(ShutdownPolicy::Abort);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(cooperative)
         .child(trigger)
@@ -440,6 +445,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut peer_rx).await, 0);
     release_failure.notify_one();
@@ -512,7 +518,8 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_event(&mut trigger_rx).await, 0);
     assert_eq!(common::recv_event(&mut peer_rx).await, 0);
@@ -594,7 +601,8 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
         .build()
         .expect("valid supervisor");
 
-    let handle = supervisor.spawn();
+    let handle_owner = supervisor.spawn();
+    let handle = handle_owner.handle();
 
     assert_eq!(common::recv_n(&mut trigger_rx, 2).await, vec![0, 1]);
     assert_eq!(common::recv_n(&mut peer_rx, 2).await, vec![0, 1]);
@@ -626,7 +634,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
     })
     .restart(RestartPolicy::Always);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_config(common::restart_config(
             2,
@@ -638,6 +646,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     let mut sequence = Vec::new();
@@ -776,7 +785,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = Supervisor::ordered()
+    let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .restart_config(common::restart_config(
             2,
@@ -788,6 +797,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
         .build()
         .expect("valid supervisor")
         .spawn();
+    let handle = handle_owner.handle();
     let mut events = common::event_watch(&handle);
 
     release_trigger_failure.notify_one();

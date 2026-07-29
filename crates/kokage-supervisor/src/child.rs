@@ -55,7 +55,6 @@ pub(crate) enum ChildReadiness {
     Explicit,
 }
 
-#[derive(Clone)]
 pub(crate) enum ChildKind {
     Task(Arc<dyn ChildFactory>),
     Supervisor(Supervisor),
@@ -67,21 +66,8 @@ pub(crate) enum ChildKind {
 /// then apply the same restart, shutdown, and intensity policies to either
 /// kind of child.
 ///
-/// Cloning a task spec shares its factory. Cloning a nested-supervisor spec
-/// copies the supervisor configuration while reserving a fresh supervisor
-/// identity, matching [`Supervisor`]'s clone contract.
 pub struct ChildSpec {
     pub(crate) inner: Arc<ChildDefinition>,
-}
-
-impl Clone for ChildSpec {
-    fn clone(&self) -> Self {
-        let inner = match &self.inner.kind {
-            ChildKind::Task(_) => Arc::clone(&self.inner),
-            ChildKind::Supervisor(_) => Arc::new((*self.inner).clone()),
-        };
-        Self { inner }
-    }
 }
 
 pub(crate) trait ChildFactory: Send + Sync + 'static {
@@ -279,21 +265,9 @@ impl ChildSpec {
 }
 
 impl ChildDefinition {
-    /// Returns a mutable definition without ever invoking `Supervisor::clone`
-    /// as an accidental consequence of `Arc` copy-on-write.
-    ///
-    /// Task definitions may be shared because cloning a task spec intentionally
-    /// shares its factory. Nested-supervisor specs, by contrast, receive a
-    /// unique definition in `ChildSpec::clone`; losing that invariant is a bug
-    /// because cloning the embedded supervisor would mint a different stable
-    /// identity.
+    /// Returns the uniquely owned definition inside a linear child spec.
     pub(crate) fn make_mut_preserving_supervisor_identity(definition: &mut Arc<Self>) -> &mut Self {
-        if matches!(&definition.kind, ChildKind::Supervisor(_)) {
-            Arc::get_mut(definition)
-                .expect("nested supervisor child definitions must be uniquely owned while edited")
-        } else {
-            Arc::make_mut(definition)
-        }
+        Arc::get_mut(definition).expect("a child specification is uniquely owned while edited")
     }
 
     pub(crate) fn apply_defaults(&mut self, restart: RestartPolicy, shutdown: ShutdownPolicy) {
@@ -302,6 +276,15 @@ impl ChildDefinition {
         }
         if self.shutdown_is_default {
             self.shutdown_policy = shutdown;
+        }
+    }
+}
+
+impl Clone for ChildKind {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Task(factory) => Self::Task(Arc::clone(factory)),
+            Self::Supervisor(supervisor) => Self::Supervisor(supervisor.instantiate_runtime()),
         }
     }
 }
