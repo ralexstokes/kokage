@@ -49,10 +49,7 @@ use crate::actor::raw::RawActor;
 ///
 /// let ids = Arc::new(AtomicU64::new(0));
 /// let mut graph = GraphBuilder::new();
-/// let worker = graph.actor(ActorSpec::new(
-///     "worker",
-///     WorkerFactory { ids: ids.clone() },
-/// ));
+/// let worker = graph.actor(ActorSpec::new("worker", WorkerFactory { ids: ids.clone() }));
 /// assert_eq!(worker.id(), "worker");
 /// # }
 /// # #[cfg(not(feature = "derive"))]

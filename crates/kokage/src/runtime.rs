@@ -698,12 +698,12 @@ impl DynamicRuntimeHandle {
     /// Adds one actor declaration and returns its stable typed ref.
     ///
     /// The actor's label is also its direct supervisor child id, so it can be
-    /// removed later through the dynamic capability. See [`ActorFactory`] for
+    /// removed later through the dynamic capability. See [`crate::ActorFactory`] for
     /// the incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`RuntimeHandle::wait_started`] retains
-    /// the stronger readiness contract. An
-    /// [`ActorSpec::mailbox_capacity`] of zero is rejected with
+    /// the stronger readiness contract. A zero
+    /// [`ActorSpec::mailbox_capacity`] is rejected with
     /// [`ControlError::Rejected`].
     pub async fn add_actor<M: Send + 'static>(
         &self,

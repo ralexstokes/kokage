@@ -26,7 +26,7 @@ factory with a [`GraphBuilder`], move the completed graph into an
 [`OrderedTree`], and keep the returned [`Runtime`] alive:
 
 ```rust,no_run
-use kokage::prelude::*;
+use kokage::{ActorSpec, prelude::*};
 
 struct Greeter;
 
@@ -46,7 +46,7 @@ impl Actor for Greeter {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
-    let greeter = graph.actor("greeter", || Greeter);
+    let greeter = graph.actor(ActorSpec::new("greeter", || Greeter));
 
     let runtime = OrderedTree::graph(graph.build()?).spawn()?;
     greeter.send("print shop".to_owned()).await?;

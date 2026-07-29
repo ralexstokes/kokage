@@ -15,7 +15,7 @@ durable-factory versus local-actor state boundary.
 ```rust,no_run
 use std::{io, sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
 
-use kokage::host::BoxError;
+use kokage::{ActorSpec, RestartConfig, host::BoxError};
 use kokage::prelude::*;
 
 struct FrontDesk {
@@ -57,16 +57,22 @@ impl Actor for Press {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = GraphBuilder::new();
     let runs = Arc::new(AtomicUsize::new(0));
-    let press = builder.actor("press", move || Press { runs: runs.clone(), run: 0 });
-    let orders = builder.actor("front-desk", move || FrontDesk { press: press.clone() });
+    let press = builder.actor(ActorSpec::new("press", move || Press {
+        runs: runs.clone(),
+        run: 0,
+    }));
+    let orders = builder.actor(ActorSpec::new("front-desk", move || FrontDesk {
+        press: press.clone(),
+    }));
 
     let runtime = OrderedTree::graph(builder.build()?)
         .restart_config(RestartConfig::new(5, Duration::from_secs(60)))
         .spawn()?;
+    let handle = runtime.handle();
 
     orders.send("business cards x100".into()).await?;
-    let baseline = runtime.snapshot().child("press").unwrap().generation;
-    let mut snapshots = runtime.subscribe_snapshots();
+    let baseline = handle.snapshot().child("press").unwrap().generation;
+    let mut snapshots = handle.subscribe_snapshots();
     orders.send("origami cranes x1000".into()).await?;
     snapshots
         .wait_for_child("press", |child| {
@@ -96,7 +102,7 @@ let runtime = tree.spawn()?;
 
 The tree's declaration order is its startup order and reverses for shutdown.
 `RuntimeHandle::actor_stats()` recursively includes both graphs.
-`runtime.subtree("venues")` returns a scoped actor-aware runtime handle with
+`runtime.handle().subtree("venues")` returns a scoped actor-aware runtime handle with
 the same observation, completion, and shutdown operations. When that scope is
 dynamic, the scoped handle's `dynamic()` method returns its
 membership-mutation capability.
@@ -127,12 +133,16 @@ on that actor's `ActorSpec`. Scope methods set inherited defaults, while an
 `ActorSpec` is the explicit override:
 
 ```rust,ignore
+let press = ActorSpec::new("press", PressFactory::new())
+    .restart_config(RestartConfig::new(5, Duration::from_secs(60)));
+let press_ref = press.actor_ref();
+let orders = ActorSpec::new("front-desk", move || FrontDesk {
+    press: press_ref.clone(),
+});
+
 let tree = OrderedTree::new()
-    .actor(graph.actor_for(&orders)?)
-    .actor(
-        ActorSpec::new(graph.actor_for(&press_ref)?)
-            .restart_config(RestartConfig::new(5, Duration::from_secs(60))),
-    );
+    .actor(orders)
+    .actor(press);
 let runtime = tree.spawn()?;
 ```
 
