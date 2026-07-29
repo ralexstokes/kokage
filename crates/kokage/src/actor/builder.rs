@@ -319,13 +319,18 @@ pub struct ActorNode {
 }
 
 impl ActorNode {
+    /// Returns the actor label carried by this placement token.
+    pub fn label(&self) -> &str {
+        self.actor.label()
+    }
+
     /// Converts this placement token into the advanced custom-host actor.
     pub fn into_runnable(self) -> RunnableActor {
         self.actor
     }
 
     pub(crate) fn actor_label(&self) -> &str {
-        self.actor.label()
+        self.label()
     }
 
     pub(crate) fn resolved_id(&self) -> &str {
