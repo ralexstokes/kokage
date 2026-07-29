@@ -1,5 +1,5 @@
 use kokage::{
-    Actor, ActorResult, DynamicActorOptions, DynamicTree, MessageContext, RuntimeHandle,
+    Actor, ActorResult, ActorSpec, DynamicTree, MessageContext, RuntimeHandle,
 };
 use kokage::host::ChildSpec;
 
@@ -18,12 +18,8 @@ impl Actor for Idle {
 }
 
 fn universal_handles_cannot_mutate(handle: &RuntimeHandle) {
-    let _ = handle.add_actor("actor", || Idle);
-    let _ = handle.add_actor_with(
-        "actor",
-        || Idle,
-        DynamicActorOptions::new(),
-    );
+    let _ = handle.add_actor(ActorSpec::new("actor", || Idle));
+    let _ = handle.add_actor_with("actor", || Idle);
     let _ = handle.add_child(ChildSpec::task("task", |_| async { Ok(()) }));
     let _ = handle.add_subtree("subtree", DynamicTree::new());
     let _ = handle.remove_child("child");
