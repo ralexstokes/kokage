@@ -54,15 +54,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let mut builder = GraphBuilder::new();
     let actor_release = release.clone();
-    let worker = builder.actor("Worker", move || Worker {
+    let worker = builder.actor(ActorSpec::new("Worker", move || Worker {
         started: started_tx.clone(),
         release: actor_release.clone(),
         handled: handled_tx.clone(),
-    });
+    }));
     let graph = builder.build()?;
 
-    let runtime_owner = OrderedTree::graph(graph).spawn()?;
-    let runtime = runtime_owner.handle();
+    let runtime = OrderedTree::graph(graph).spawn()?;
     worker.send(Msg::Hold).await?;
     started_rx.recv().await.expect("worker entered hold");
 

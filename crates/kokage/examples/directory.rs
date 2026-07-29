@@ -1,7 +1,8 @@
 use std::{collections::HashMap, error::Error, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorResult, DynamicTree, GraphBuilder, MessageContext, OrderedTree, Reply,
+    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
+    OrderedTree, Reply,
 };
 use tokio::sync::mpsc;
 
@@ -61,15 +62,14 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut graph = GraphBuilder::new();
-    let (directory_slot, directory) = graph.slot("directory");
-    graph.define(directory_slot, || Directory::<String> {
+    let directory = graph.actor(ActorSpec::new("directory", || Directory::<String> {
         entries: HashMap::new(),
-    });
+    }));
     let graph = graph.build()?;
-    let handle_owner = OrderedTree::graph(graph)
+    let runtime = OrderedTree::graph(graph)
         .subtree("dynamic", DynamicTree::new())
         .spawn()?;
-    let handle = handle_owner.handle();
+    let handle = runtime.handle();
     handle.wait_started().await?;
     let dynamic = handle
         .subtree("dynamic")
@@ -79,9 +79,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let printer = dynamic
         .dynamic()
         .expect("dynamic scope")
-        .add_actor("printer", move || Printer {
+        .add_actor(ActorSpec::new("printer", move || Printer {
             printed: printed.clone(),
-        })
+        }))
         .await?;
     directory
         .send(DirectoryMsg::Insert("receipts".to_owned(), printer))
@@ -96,6 +96,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     receipts.send("order #42".to_owned()).await?;
     println!("{}", output.recv().await.expect("printed receipt"));
 
-    handle.shutdown_and_wait().await?;
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }

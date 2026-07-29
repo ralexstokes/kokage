@@ -1,6 +1,6 @@
 use std::{error::Error, thread, time::Duration};
 
-use kokage::{Actor, ActorResult, GraphBuilder, MessageContext};
+use kokage::{Actor, ActorResult, ActorSpec, GraphBuilder, MessageContext};
 use tokio::sync::mpsc;
 
 mod support;
@@ -46,13 +46,12 @@ impl Actor for Worker {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker) = builder.slot("Worker");
-    builder.define(worker_slot, move || Worker {
+    let worker = builder.actor(ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
-    });
+    }));
     let graph = builder.build()?;
 
-    let handle = support::ActorTasks::start(&graph);
+    let handle = support::ActorTasks::start(graph);
 
     worker.send(Command::Start(12)).await?;
     worker.send(Command::Start(-1)).await?;

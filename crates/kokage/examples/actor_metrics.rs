@@ -45,9 +45,9 @@ async fn sample(worker: ActorRef<&'static str>, runtime: RuntimeHandle, stop: Ca
 async fn main() -> Result<(), Box<dyn Error>> {
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let worker = graph.actor("Worker", move || Worker {
+    let worker = graph.actor(ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
-    });
+    }));
     let runtime = OrderedTree::graph(graph.build()?).spawn()?;
 
     let sampler_stop = CancellationToken::new();
