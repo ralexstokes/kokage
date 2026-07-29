@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use kokage_supervisor::{
     ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView, RestartConfig,
     RestartPolicy, RunningSupervisor, ScopeKind, ShutdownPolicy, Supervisor, SupervisorBuildError,
-    SupervisorError,
+    SupervisorError, TerminalMembership,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -172,7 +172,7 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
         .add_child(
             ChildSpec::task("temporary", |_ctx| async move { Ok(()) })
                 .restart(RestartPolicy::Never)
-                .remove_on_exit(true),
+                .terminal_membership(TerminalMembership::Remove),
         )
         .await
         .expect("temporary child added");
@@ -213,7 +213,7 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                 Ok(())
             })
             .restart(RestartPolicy::Never)
-            .remove_on_exit(true),
+            .terminal_membership(TerminalMembership::Remove),
         )
         .child(
             ChildSpec::task("trigger", {
@@ -271,7 +271,7 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .remove_on_exit(true),
+            .terminal_membership(TerminalMembership::Remove),
         )
         .child(
             ChildSpec::task("trigger", {
@@ -342,7 +342,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                 }
             })
             .restart(RestartPolicy::OnFailure)
-            .remove_on_exit(true),
+            .terminal_membership(TerminalMembership::Remove),
         )
         .child(
             ChildSpec::task("trigger", {

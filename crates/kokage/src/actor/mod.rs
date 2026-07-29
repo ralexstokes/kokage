@@ -18,7 +18,7 @@ mod raw;
 
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::ActorOptionsValidationError;
-pub use builder::{ActorOptions, ActorSlot, GraphBuilder};
+pub use builder::{ActorNode, ActorSlot, ActorSpec, GraphBuilder};
 pub(crate) use cancellation::CancelOnDrop;
 pub use cancellation::CancellationHandle;
 pub use context::{
@@ -26,7 +26,7 @@ pub use context::{
     Reply, RestrictedScope, StartContext, StopContext, TaskHandle, TimerKey,
 };
 pub use error::{
-    BlockingCancelled, CallError, GraphBuildError, GraphLookupError, OffloadDeadline, SendError,
+    BlockingCancelled, CallError, GraphBuildError, GraphSpawnError, OffloadDeadline, SendError,
     TrySendError,
 };
 pub use factory::ActorFactory;

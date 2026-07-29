@@ -9,7 +9,7 @@ use std::{
 use kokage_supervisor::{
     BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSpec, CompletionGuard,
     LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig, RestartPolicy,
-    ShutdownPolicy, Strategy, Supervisor, SupervisorLifecycleEvent,
+    ShutdownPolicy, Strategy, Supervisor, SupervisorLifecycleEvent, TerminalMembership,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -692,7 +692,7 @@ async fn remove_on_exit_emits_exited_before_removed() {
         }
     })
     .restart(RestartPolicy::Never)
-    .remove_on_exit(true);
+    .terminal_membership(TerminalMembership::Remove);
     let handle = Supervisor::ordered()
         .child(child)
         .build()
@@ -888,7 +888,7 @@ async fn watch_snapshot_filter_is_gap_free_under_concurrent_churn() {
                 .add_child(
                     ChildSpec::task(id, |_ctx| async { Ok(()) })
                         .restart(RestartPolicy::Never)
-                        .remove_on_exit(true),
+                        .terminal_membership(TerminalMembership::Remove),
                 )
                 .await
                 .expect("dynamic insertion succeeds");

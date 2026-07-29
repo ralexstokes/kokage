@@ -14,31 +14,17 @@ pub struct OffloadDeadline;
 
 /// Errors returned while validating a graph during build.
 ///
-/// This type intentionally excludes failures from resolving refs against an
-/// already-built graph. Hand-built declarations that perform both steps can
-/// use an application error type that accepts both this error and
-/// [`GraphLookupError`].
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GraphBuildError {
     /// The graph was built without any actors.
     #[error("graph must contain at least one actor")]
     EmptyGraph,
-    /// A builder passed to a generated supervision constructor already had actors registered.
-    #[error("graph builder passed to generated supervision must not contain registered actors")]
-    NonEmptyGraphBuilder,
     /// Two actor implementations shared the same id.
     #[error("duplicate actor id `{actor_id}`")]
     #[non_exhaustive]
     DuplicateActorId {
         /// Actor id registered twice.
-        actor_id: String,
-    },
-    /// An actor slot was opened but no implementation was registered.
-    #[error("actor `{actor_id}` slot was opened but never filled")]
-    #[non_exhaustive]
-    MissingActor {
-        /// Actor id without an implementation.
         actor_id: String,
     },
     /// A graph-wide or per-actor mailbox capacity was zero.
@@ -50,25 +36,18 @@ pub enum GraphBuildError {
     /// An actor slot was opened with an empty id.
     #[error("actor id must not be empty")]
     EmptyActorId,
-    /// An actor slot from a different graph builder was passed to `define`.
-    #[error("actor slot belongs to a different graph builder")]
-    ForeignSlot,
 }
 
-/// Errors returned when resolving graph members after build.
-///
-/// This type remains distinct from [`GraphBuildError`] because lookup only
-/// happens after a graph has built successfully.
-#[derive(Debug, Error, Clone, Eq, PartialEq)]
+/// Errors returned by [`GraphBuilder::spawn`](crate::GraphBuilder::spawn).
+#[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum GraphLookupError {
-    /// An actor ref does not belong to this graph.
-    #[error("actor ref `{actor_id}` does not belong to this graph")]
-    #[non_exhaustive]
-    ForeignActorRef {
-        /// Id carried by the foreign actor ref.
-        actor_id: String,
-    },
+pub enum GraphSpawnError {
+    /// Actor-graph declaration validation failed.
+    #[error(transparent)]
+    Graph(#[from] GraphBuildError),
+    /// Flat supervision-tree validation failed.
+    #[error(transparent)]
+    Supervision(#[from] kokage_supervisor::SupervisorBuildError),
 }
 
 /// Error returned when an awaited send cannot reach an actor membership.

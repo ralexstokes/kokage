@@ -99,11 +99,11 @@ impl BackoffPolicy {
 #[non_exhaustive]
 pub struct RestartConfig {
     /// Maximum number of restarts allowed inside the sliding window.
-    pub max_restarts: usize,
+    pub(crate) max_restarts: usize,
     /// Length of the sliding window. Must be non-zero.
-    pub within: Duration,
+    pub(crate) within: Duration,
     /// Delay strategy inserted before each restart attempt.
-    pub backoff: BackoffPolicy,
+    pub(crate) backoff: BackoffPolicy,
 }
 
 impl Default for RestartConfig {
@@ -120,6 +120,28 @@ impl RestartConfig {
             within,
             backoff: BackoffPolicy::None,
         }
+    }
+
+    /// Returns the maximum restarts allowed inside the sliding window.
+    pub fn max_restarts(&self) -> usize {
+        self.max_restarts
+    }
+
+    /// Returns the sliding restart-budget window.
+    pub fn within(&self) -> Duration {
+        self.within
+    }
+
+    /// Returns the configured delay strategy.
+    pub fn backoff_policy(&self) -> BackoffPolicy {
+        self.backoff
+    }
+
+    /// Sets the delay strategy inserted before each restart attempt.
+    #[must_use]
+    pub fn backoff(mut self, backoff: BackoffPolicy) -> Self {
+        self.backoff = backoff;
+        self
     }
 
     pub(crate) fn validate(&self) -> Result<(), SupervisorBuildError> {

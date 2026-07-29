@@ -175,9 +175,9 @@ fn prelude_policy_types_cover_common_configuration() {
         RestartConfig::new(3, Duration::from_secs(10)),
         RestartConfig::new(3, Duration::from_secs(10))
     );
-    let mut configured = RestartConfig::new(2, Duration::from_secs(5));
-    configured.backoff = BackoffPolicy::Fixed(Duration::from_millis(50));
-    let mut expected = RestartConfig::new(2, Duration::from_secs(5));
-    expected.backoff = BackoffPolicy::Fixed(Duration::from_millis(50));
+    let configured = RestartConfig::new(2, Duration::from_secs(5))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(50)));
+    let expected = RestartConfig::new(2, Duration::from_secs(5))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(50)));
     assert_eq!(configured, expected);
 }
