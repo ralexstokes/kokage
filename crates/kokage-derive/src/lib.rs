@@ -254,7 +254,8 @@ fn parse_factory_attributes(
 /// because cycles require refs before their factories can be constructed.
 ///
 /// Field names become graph actor labels. A field may use
-/// `#[supervision(label = "...")]` to select another non-empty label. No other
+/// `#[supervision(label = "...")]` to select another non-empty label. Labels
+/// cannot contain `.`, which separates supervisor path components. No other
 /// derive attributes are supported. Derived fields use the builder's graph
 /// defaults. Leave an actor out of the declaration and wire an explicit
 /// `ActorSlot` alongside it when that actor needs individual mailbox

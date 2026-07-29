@@ -63,7 +63,7 @@ impl ActorRuntimeState {
         (config.default_restart, config.default_shutdown)
     }
 
-    fn actor_builder(&self) -> RunnableActorBuilder {
+    pub(crate) fn actor_builder(&self) -> RunnableActorBuilder {
         // Construction runs the caller's factory, which may reach back into
         // this runtime. Release the config lock first so that re-entry cannot
         // deadlock on a non-reentrant mutex.

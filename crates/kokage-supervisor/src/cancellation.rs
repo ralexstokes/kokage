@@ -60,12 +60,12 @@ impl CancellationToken {
     /// Creates a child token linked to this token.
     ///
     /// A child observes cancellation of its parent, but cancelling the child
-    /// does not cancel the parent.
+    /// does not cancel the parent. Child tokens also keep the parent's
+    /// [`cancel_when`](Self::cancel_when) links alive.
     pub fn child_token(&self) -> Self {
-        let (liveness, _) = watch::channel(());
         Self {
             inner: self.inner.child_token(),
-            liveness,
+            liveness: self.liveness.clone(),
         }
     }
 
@@ -129,6 +129,22 @@ mod tests {
         sibling.cancelled().await;
         assert!(parent.is_cancelled());
         assert!(sibling.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn child_token_keeps_parent_cancel_when_link_alive() {
+        let parent = CancellationToken::new();
+        let child = parent.child_token();
+        let (signal, signalled) = oneshot::channel();
+        parent.cancel_when(async move {
+            signalled.await.expect("signal sender was dropped");
+        });
+        drop(parent);
+
+        signal.send(()).expect("linking task remains alive");
+        tokio::time::timeout(Duration::from_secs(1), child.cancelled())
+            .await
+            .expect("parent link cancels its live child");
     }
 
     #[tokio::test]

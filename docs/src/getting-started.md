@@ -15,9 +15,8 @@ kokage = { git = "https://github.com/ralexstokes/kokage" }
 `kokage::prelude` covers the day-one actor traits, contexts, graph builder, and
 ordered runtime. Advanced policies and dynamic membership remain explicit
 imports from the crate root. Plain async tasks can live beside actors through
-`kokage::host::ChildSpec`; the next chapter uses task children to explain
-restart, shutdown, and strategy policies without changing the tree/runtime
-vocabulary.
+`kokage::host::ChildSpec`; the task-supervision chapter later applies the same
+tree/runtime vocabulary to futures that are not actors.
 
 ## Your first actor
 
@@ -71,8 +70,23 @@ A few details establish the model used throughout the book:
   lifecycle effect, while dropping the owner requests graceful shutdown.
 
 The example shuts down explicitly so it can await the result. A discarded
-`let _ = tree.spawn()?;` drops the owner at the end of the statement and asks
+`let _ = graph.spawn()?;` drops the owner at the end of the statement and asks
 the runtime to stop immediately.
+
+## Supervision vocabulary
+
+The next chapters use three policy types when composing more than one actor:
+
+- `RestartPolicy` decides whether a clean or failed child exit gets a
+  replacement: `Always`, `OnFailure`, or `Never`.
+- `RestartConfig` bounds restart intensity and optionally selects backoff.
+- `Strategy` decides which siblings restart together: `OneForOne`,
+  `OneForAll`, or ordered `RestForOne`.
+
+These policies belong to the supervision tree rather than the actor type. The
+actor-graph and supervised-actor chapters apply them to actors; **Task children
+and supervision** later develops shutdown and restart behavior for plain async
+task children.
 
 ## One tree for actors and tasks
 
@@ -81,7 +95,8 @@ topology with `OrderedTree` / `DynamicTree` and control it with `Runtime` /
 `RuntimeHandle`. Those trees also accept plain futures as
 `kokage::host::ChildSpec` task children, so mixed applications retain the same
 topology, ownership, control, and observation model. The next chapter explains
-the policies on plain tasks before the later chapters apply them to actors.
+multi-actor graph wiring; the task-supervision chapter later revisits the same
+policies for plain futures.
 
 [`GraphBuilder`]: https://stokes.io/kokage/api/kokage/struct.GraphBuilder.html
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html

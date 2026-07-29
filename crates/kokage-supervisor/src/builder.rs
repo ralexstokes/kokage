@@ -98,15 +98,15 @@ impl OrderedSupervisorBuilder {
         self.channels().handle()
     }
 
-    /// Projects `ids` as this scope's declared children in its pre-spawn
+    /// Projects child ids and restart policies in this scope's pre-spawn
     /// snapshot.
     ///
     /// Not part of the public contract: this exists so `kokage` can project
     /// the membership its own higher-level builders will lower to, and is
     /// superseded by the real declaration once the scope is built.
     #[doc(hidden)]
-    pub fn project_declared_children(&self, ids: Vec<String>) {
-        self.channels().project_declared_children(ids);
+    pub fn project_declared_children(&self, children: Vec<(String, RestartPolicy)>) {
+        self.channels().project_declared_children(children);
     }
 
     /// Sets the restart strategy. See [`Strategy`] for options.

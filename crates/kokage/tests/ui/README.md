@@ -1,13 +1,16 @@
 # Compile-fail UI tests
 
-`actor-factory/`, `supervision/`, and `lifecycle-stages/` hold
+`actor-factory/`, `supervision/`, `single-use-tree/`, `public-api/`, and
+`lifecycle-stages/` hold
 [trybuild](https://github.com/dtolnay/trybuild) compile-fail cases run by
-`tests/derive_ui.rs`. The former covers the `#[derive(ActorFactory)]` shape
-and attribute contract. The latter covers the narrow `#[derive(Supervision)]`
-cyclic-wiring contract: supported declaration shapes, factory bounds, labels,
-typed refs, visibility, rejection of topology attributes, and absence of the
-removed topology constructors and helper types, plus the slot token guarantees
-(wrong-type `define` and reuse after move). Each
+`tests/derive_ui.rs`. `actor-factory/` covers the `#[derive(ActorFactory)]`
+shape and attribute contract. `supervision/` covers the narrow
+`#[derive(Supervision)]` cyclic-wiring contract: supported declaration shapes,
+factory bounds, label syntax (empty, duplicate, dotted, and unsupported
+options), typed refs, visibility, rejection of topology attributes, and
+absence of the removed topology constructors and helper types. The
+`single-use-tree/` fixtures pin linear placement and owner/handle boundaries;
+`public-api/` pins the documented export tiers. Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
 spans included. The corresponding `*-pass/` directories cover supported
 derive attributes and visibility.

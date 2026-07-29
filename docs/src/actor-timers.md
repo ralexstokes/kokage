@@ -1,15 +1,15 @@
 # Actor Timers
 
-An actor schedules work for two different destinations, and the distinction is
-important:
+An actor schedules work through two different mechanisms, and the distinction
+is important:
 
-- self-scheduled work belongs to the framework-owned actor loop;
-- work scheduled for another actor crosses that boundary through its
-  `ActorRef`.
+- keyed one-shot timeouts belong to the framework-owned actor loop;
+- arbitrary one-shots and periodic work use an `ActorRef`, even when the
+  destination is the scheduling actor itself.
 
-The mailbox therefore remains an inter-actor channel. Self timers do not
-consume mailbox capacity, wait behind FIFO backpressure, or conflate an unread
-external message.
+Only keyed loop-owned timeouts bypass the mailbox. `send_after_to` and
+`interval_to` use ordinary mailbox delivery, so capacity, FIFO backpressure,
+conflation, and accepted-message statistics all apply.
 
 ## Self-scheduling
 
@@ -62,26 +62,24 @@ impl Actor for Worker {
 }
 ```
 
-`set_timeout` owns its message and delivers it once; reusing its key replaces
-the prior entry and `clear_timeout` cancels it. `interval` keeps the original
-and clones it at each delivery, so only that method requires `Clone`. Dropping
-an interval handle does not cancel its entry; calling `cancel` on any clone
-cancels it exactly until the loop takes the message for delivery. A zero-period
-interval is an already-cancelled no-op.
+`set_timeout` owns its message and delivers it once inside the actor loop;
+reusing its key replaces the prior entry and `clear_timeout` cancels it. These
+deliveries count as received messages but not accepted mailbox messages. The
+keyed table drops with the incarnation, so a restart cannot leak stale local
+timeouts into fresh state.
 
-Each interval delivery arms the next period. If a handler is still busy when a
-deadline passes, one overdue tick is delivered when the loop is free and the
-following deadline starts from there. Missed ticks never pile up.
-
-Timer deliveries count as received messages in `observe::ActorStats`, but not as
-accepted mailbox messages. The whole table drops with the incarnation, so a
-restart cannot leak a stale timer into fresh state and no helper task is
-spawned per self timer.
+`interval_to` clones its message for each tick and awaits `ActorRef::send`.
+Missed ticks are skipped, but a full target mailbox delays the next send. A
+conflating target may replace an unread tick, and each successful send counts
+as an accepted mailbox message. The returned handle is cloneable; dropping it
+does not cancel the interval, while calling `cancel` on any clone does. A zero
+period returns an already-cancelled handle. The interval also ends with the
+scheduling incarnation or when the target permanently terminates.
 
 When several independent one-shots cannot share a static protocol key, use
 `send_after_to(&ctx.myself(), message, delay)`. That deliberately takes the
-ordinary mailbox path described below rather than adding a second actor-local
-one-shot vocabulary.
+same ordinary mailbox path as periodic work rather than adding a second
+actor-local one-shot vocabulary.
 
 ## Replaceable timeouts
 

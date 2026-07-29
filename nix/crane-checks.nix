@@ -64,6 +64,7 @@ in
       cargoArtifacts = cargoArtifactsStable;
       nativeBuildInputs = [
         pkgs.cargo-nextest
+        pkgs.jq
         pkgs.mdbook
       ];
       buildPhaseCargoCommand = ''

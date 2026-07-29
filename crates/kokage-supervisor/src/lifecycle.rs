@@ -75,7 +75,8 @@ impl LifecycleEvent {
     }
 
     /// Returns the emitting scope's cumulative restart count for a child
-    /// transition, or `None` for supervisor-level and lag events.
+    /// transition or [`RestartIntensityExceeded`](LifecycleEventKind::RestartIntensityExceeded).
+    /// Other supervisor-level events and lag markers return `None`.
     pub fn total_restarts(&self) -> Option<u64> {
         match &self.kind {
             LifecycleEventKind::ChildAdded { total_restarts, .. }
@@ -239,6 +240,8 @@ impl LifecycleWatch {
     ///
     /// Child events in this view are exactly the watched supervisor's direct
     /// children. Supervisor-level events for the watched scope remain visible.
+    /// The subscription still participates in recursive forwarding internally,
+    /// but nested events never enter or consume capacity in its direct queue.
     pub fn direct_children(mut self) -> Self {
         self.direct_only = true;
         self

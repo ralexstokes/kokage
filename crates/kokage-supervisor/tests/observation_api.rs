@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use kokage_supervisor::{
-    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, RestartPolicy, Supervisor,
+    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, RestartPolicy,
+    SnapshotRecvError, Supervisor,
 };
 use tokio::time::timeout;
 
@@ -78,6 +79,41 @@ async fn wait_for_child_accepts_snapshot_predicates() {
     .expect("worker becomes running")
     .expect("snapshot stream remains open");
     assert_eq!(worker.id, "worker");
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test]
+async fn wait_for_child_terminates_when_an_observed_membership_is_removed() {
+    let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
+    let dynamic = running
+        .handle()
+        .dynamic()
+        .expect("dynamic capability is present");
+    dynamic
+        .add_child(ChildSpec::task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("worker is added");
+    running
+        .handle()
+        .wait_started()
+        .await
+        .expect("worker starts");
+
+    let mut snapshots = running.handle().subscribe_snapshots();
+    let mut wait = Box::pin(snapshots.wait_for_child("worker", |_| false));
+    assert!(timeout(Duration::from_millis(20), &mut wait).await.is_err());
+    dynamic
+        .remove_child("worker")
+        .await
+        .expect("worker is removed");
+    assert_eq!(
+        timeout(WAIT, wait).await.expect("removal ends the wait"),
+        Err(SnapshotRecvError::ChildRemoved)
+    );
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }

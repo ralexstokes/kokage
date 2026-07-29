@@ -15,6 +15,9 @@ pub enum SnapshotRecvError {
     /// The supervisor identity is terminal and its snapshot sender was dropped.
     #[error("supervisor snapshot stream is closed")]
     Closed,
+    /// An observed child membership disappeared before its predicate matched.
+    #[error("child was removed before its snapshot predicate matched")]
+    ChildRemoved,
 }
 
 /// A conflating stream of snapshots for one stable supervisor identity.
@@ -88,19 +91,32 @@ impl SupervisorSnapshotReceiver {
     /// `generation == baseline + 1`). Use a lifecycle watch when every edge is
     /// required, and use [`wait_for`](Self::wait_for) on the whole snapshot for
     /// absence/removal predicates. A child that is not a current member may
-    /// appear later in a dynamic scope.
+    /// appear later in a dynamic scope. Once this receiver observes the child,
+    /// removal before the predicate matches returns
+    /// [`SnapshotRecvError::ChildRemoved`].
     pub async fn wait_for_child(
         &mut self,
         child_id: &str,
         mut predicate: impl FnMut(&ChildSnapshot) -> bool,
     ) -> Result<ChildSnapshot, SnapshotRecvError> {
-        let snapshot = self
-            .wait_for(|snapshot| snapshot.child(child_id).is_some_and(&mut predicate))
-            .await?;
-        Ok(snapshot
-            .child(child_id)
-            .expect("wait_for predicate established child membership")
-            .clone())
+        let mut seen = false;
+        loop {
+            let snapshot = self.take_latest();
+            match snapshot.child(child_id) {
+                Some(child) => {
+                    seen = true;
+                    if predicate(child) {
+                        return Ok(child.clone());
+                    }
+                }
+                None if seen => return Err(SnapshotRecvError::ChildRemoved),
+                None => {}
+            }
+            self.inner
+                .changed()
+                .await
+                .map_err(|_| SnapshotRecvError::Closed)?;
+        }
     }
 }
 
