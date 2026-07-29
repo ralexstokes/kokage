@@ -86,8 +86,8 @@ impl Actor for Burst {
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
 fn pipeline_runtime() -> OrderedTree {
-    let mut transform_restart = RestartConfig::new(60, Duration::from_secs(60));
-    transform_restart.backoff = BackoffPolicy::Fixed(Duration::from_secs(2));
+    let transform_restart = RestartConfig::new(60, Duration::from_secs(60))
+        .backoff(BackoffPolicy::Fixed(Duration::from_secs(2)));
     let source = ChildSpec::task("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
@@ -146,24 +146,24 @@ fn telemetry_runtime() -> OrderedTree {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut worker_restart = RestartConfig::new(60, Duration::from_secs(60));
-    worker_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(1500));
+    let worker_restart = RestartConfig::new(60, Duration::from_secs(60))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(1500)));
     let mut builder = GraphBuilder::new();
-    let worker = builder.actor("worker", || Worker);
-    let frontend = builder.actor("frontend", {
+    let worker_spec = ActorSpec::new("worker", || Worker).restart_config(worker_restart);
+    let worker = worker_spec.actor_ref();
+    let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
         move || Frontend {
             worker: worker.clone(),
         }
     });
+    let frontend = frontend_spec.actor_ref();
+    builder.actor(frontend_spec);
+    builder.actor(worker_spec);
     let graph = builder.build()?;
-    let frontend_actor = graph.actor_for(&frontend)?;
-    let worker_actor = graph.actor_for(&worker)?;
 
-    let runtime = OrderedTree::new()
+    let runtime = OrderedTree::graph(graph)
         .restart_config(RestartConfig::new(60, Duration::from_secs(60)))
-        .actor(frontend_actor)
-        .actor(ActorSpec::new(worker_actor).restart_config(worker_restart))
         .subtree("pipeline", pipeline_runtime())
         .subtree("telemetry", telemetry_runtime())
         .subtree("dynamic", DynamicTree::new())
@@ -194,7 +194,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         loop {
             sleep(Duration::from_secs(12)).await;
-            let Ok(burst) = dynamic.add_actor("burst", || Burst).await else {
+            let Ok(burst) = dynamic.add_actor(ActorSpec::new("burst", || Burst)).await else {
                 break;
             };
             for index in 0..40u32 {
