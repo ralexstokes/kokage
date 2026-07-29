@@ -1,11 +1,11 @@
-use kokage::{Actor, ActorResult, ActorSpec, MessageContext};
+use kokage::{Actor, ActorResult, ActorSpec, Context};
 
 struct Idle;
 
 impl Actor for Idle {
     type Msg = String;
 
-    async fn handle(&mut self, _: String, _: &mut MessageContext<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _: String, _: &mut Context<'_, Self>) -> ActorResult {
         Ok(())
     }
 }
