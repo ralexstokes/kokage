@@ -1660,6 +1660,22 @@ impl RestrictedScope {
 }
 
 impl DynamicRestrictedScope {
+    /// Shuts this dynamic scope down once every named child has completed.
+    ///
+    /// Absent ids are treated as future membership, so the watch can remain
+    /// pending indefinitely until those children are inserted and complete.
+    /// This differs from [`RestrictedScope::shutdown_on_completion`] on the
+    /// same scope, which validates ids against current or declared membership
+    /// and rejects an unknown child. The returned guard must be retained;
+    /// dropping it cancels the watch and leaves the scope running.
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::observe::CompletionGuard
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.dynamic.shutdown_on_completion(ids)
+    }
+
     /// Inserts one actor declaration into this scope.
     ///
     /// Success means insertion completed and startup was scheduled, not that
