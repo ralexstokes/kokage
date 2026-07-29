@@ -39,7 +39,7 @@ use std::{
     time::Duration,
 };
 
-use kokage::{ActorSpec, OrderedTree, RestartConfig, host::BoxError};
+use kokage::{ActorSpec, OrderedTree, Restart, host::BoxError};
 use kokage::prelude::*;
 
 struct FrontDesk(ActorRef<String>);
@@ -82,12 +82,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runs: runs.clone(),
         run: 0,
     });
-    let press = press_actor.actor_ref();
+    let (press_actor, press) = press_actor.actor_ref();
     let orders_actor = ActorSpec::new("front-desk", move || FrontDesk(press.clone()));
-    let orders = orders_actor.actor_ref();
+    let (orders_actor, orders) = orders_actor.actor_ref();
 
     let runtime = OrderedTree::new()
-        .restart_config(RestartConfig::new(5, Duration::from_secs(60)))
+        .default_restart(Restart::on_failure().limit(5, Duration::from_secs(60)))
         .actor(press_actor)
         .actor(orders_actor)
         .spawn()?;
