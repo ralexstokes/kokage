@@ -245,6 +245,24 @@ impl ChildSpec {
     pub(crate) fn restart_intensity_override(&self) -> Option<RestartConfig> {
         self.inner.restart_intensity
     }
+
+    pub(crate) fn resolved_policies(
+        &self,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) -> (RestartPolicy, ShutdownPolicy) {
+        let restart = if self.inner.restart_is_default {
+            default_restart
+        } else {
+            self.inner.restart
+        };
+        let shutdown = if self.inner.shutdown_is_default {
+            default_shutdown
+        } else {
+            self.inner.shutdown_policy
+        };
+        (restart, shutdown)
+    }
 }
 
 impl ChildDefinition {

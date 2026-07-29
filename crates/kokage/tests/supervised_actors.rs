@@ -185,7 +185,7 @@ async fn send_waits_during_permanent_restart_window() {
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::Always)
-                .restart_intensity(restart_config),
+                .restart_config(restart_config),
         )
         .spawn()
         .expect("runtime builds");
@@ -344,7 +344,7 @@ async fn call_succeeds_across_restart_window() {
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::OnFailure)
-                .restart_intensity(restart_config),
+                .restart_config(restart_config),
         )
         .spawn()
         .expect("runtime builds");

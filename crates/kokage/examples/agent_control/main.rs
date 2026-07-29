@@ -3,7 +3,7 @@
 //! The example is an assertion-driven acceptance script for dynamic actor
 //! lifecycles and the runtime surfaces not covered by `trading_engine`:
 //! per-conversation subtrees added and removed at runtime via
-//! `RuntimeHandle::add_subtree`, never-restarted transient children observed
+//! `DynamicRuntime::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
 //! a readiness-gated `RawActor` bridge, and a `#[derive(Supervision)]` supervision
 //! tree with a real budget ↔ guard cycle.
@@ -202,7 +202,7 @@ struct AgentControl {
 }
 
 struct App {
-    handle: RuntimeHandle,
+    handle: kokage::Runtime,
     gateway: RuntimeHandle,
     core: RuntimeHandle,
     sessions: RuntimeHandle,
@@ -395,7 +395,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
     println!(
-        "PHASE 1 OK — RuntimeHandle::add_subtree per conversation; continue_with; interval_to"
+        "PHASE 1 OK — DynamicRuntime::add_subtree per conversation; continue_with; interval_to"
     );
     Ok(())
 }

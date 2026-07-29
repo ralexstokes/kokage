@@ -82,11 +82,12 @@
 //! membership is written at runtime, startup is immediate, teardown is
 //! concurrent, and the strategy is always [`OneForOne`](Strategy::OneForOne).
 //!
-//! Dynamic membership is controlled through the [`SupervisorHandle`]:
+//! Dynamic membership is controlled through
+//! [`SupervisorHandle::dynamic`]:
 //!
-//! - [`add_child`](SupervisorHandle::add_child) /
-//!   [`remove_child`](SupervisorHandle::remove_child) target that handle's
-//!   supervisor.
+//! - [`add_child`](DynamicSupervisorHandle::add_child) /
+//!   [`remove_child`](DynamicSupervisorHandle::remove_child) target that
+//!   capability's supervisor.
 //! - [`ChildSpec::supervisor`] declares a first-class nested supervisor through
 //!   that same `add_child` method; [`supervisor`](SupervisorHandle::supervisor)
 //!   returns its restart-stable handle.
@@ -94,8 +95,7 @@
 //! Successful dynamic adds resolve once membership is inserted and immediate
 //! startup is scheduled; use [`SupervisorHandle::wait_started`] for readiness.
 //! Active removals resolve only after detachment, without blocking distinct-id
-//! control operations. Ordered handles reject every add/remove operation with
-//! [`ControlError::UnsupportedByScopeKind`].
+//! control operations. Ordered handles return `None` from `dynamic()`.
 //!
 //! Dynamic supervisors may start empty or have their last child removed. They
 //! idle at zero children and continue accepting control commands until
@@ -114,7 +114,7 @@
 //! # Nested supervisors
 //!
 //! A [`Supervisor`] is wrapped with [`ChildSpec::supervisor`] and added through
-//! an ordered builder's `child` method or [`SupervisorHandle::add_child`]. The
+//! an ordered builder's `child` method or [`DynamicSupervisorHandle::add_child`]. The
 //! nested supervisor:
 //!
 //! - Appears in ancestor
@@ -255,7 +255,7 @@ pub mod __private {
     use std::any::Any;
 
     pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
-    use crate::{ChildSpec, SupervisorHandle};
+    use crate::{ChildSpec, RestartPolicy, ShutdownPolicy, SupervisorHandle};
 
     /// Adds process-local metadata to a child specification.
     pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
@@ -272,6 +272,15 @@ pub mod __private {
     {
         handle.attached_children()
     }
+
+    /// Resolves one child's explicit policy overrides against scope defaults.
+    pub fn child_policies(
+        child: &ChildSpec,
+        default_restart: RestartPolicy,
+        default_shutdown: ShutdownPolicy,
+    ) -> (RestartPolicy, ShutdownPolicy) {
+        child.resolved_policies(default_restart, default_shutdown)
+    }
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
@@ -280,7 +289,7 @@ pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::ExitStatusView;
-pub use handle::SupervisorHandle;
+pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{
     ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, LifecycleEvent,
     LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent,

@@ -1993,6 +1993,15 @@ pub struct RestrictedScope {
     handle: RuntimeHandle,
 }
 
+/// Runtime-membership capability for a dynamic restricted actor scope.
+///
+/// This wrapper preserves [`RestrictedScope`]'s lifecycle closure: insertion
+/// never exposes a full [`RuntimeHandle`] to an actor callback.
+#[derive(Clone, Debug)]
+pub struct DynamicRestrictedScope {
+    dynamic: crate::DynamicRuntime,
+}
+
 macro_rules! restricted_scope_forwards {
     () => {
         /// Returns a point-in-time snapshot of the scope.
@@ -2016,62 +2025,11 @@ macro_rules! restricted_scope_forwards {
             self.handle.subtree(id).map(Self::new)
         }
 
-        /// Inserts an actor with default options into this scope.
-        ///
-        /// This is safe to await from an actor callback: success means the
-        /// membership was inserted and startup was scheduled, not that the
-        /// actor reported ready. See [`RuntimeHandle::add_actor`].
-        pub async fn add_actor<F>(
-            &self,
-            label: impl Into<String>,
-            factory: F,
-        ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
-        where
-            F: crate::ActorFactory,
-        {
-            self.handle.add_actor(label, factory).await
-        }
-
-        /// Inserts an actor with explicit options into this scope.
-        ///
-        /// This is safe to await from an actor callback because insertion only
-        /// schedules startup. See [`RuntimeHandle::add_actor_with`].
-        pub async fn add_actor_with<F>(
-            &self,
-            label: impl Into<String>,
-            factory: F,
-            options: crate::DynamicActorOptions<<F::Actor as crate::host::RawActor>::Msg>,
-        ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
-        where
-            F: crate::ActorFactory,
-        {
-            self.handle.add_actor_with(label, factory, options).await
-        }
-
-        /// Inserts an arbitrary supervised task child into this scope.
-        ///
-        /// This is safe to await from an actor callback because insertion only
-        /// schedules startup. See [`RuntimeHandle::add_child`].
-        pub async fn add_child(
-            &self,
-            child: crate::host::ChildSpec,
-        ) -> Result<u64, crate::ControlError> {
-            self.handle.add_child(child).await
-        }
-
-        /// Inserts an identity-owning subtree into this scope.
-        ///
-        /// This is safe to await from an actor callback because insertion only
-        /// schedules startup. Unlike [`RuntimeHandle::add_subtree`], this
-        /// restricted form returns `()` so a full handle cannot escape. Keep
-        /// the id and call [`subtree`](Self::subtree) after successful insertion
-        /// when a restricted handle is needed.
-        pub async fn add_subtree(
-            &self,
-            id: impl Into<String>,
-            tree: impl Into<crate::TreeNode>,
-        ) -> Result<(), crate::ControlError> {
-            self.handle.add_subtree(id, tree).await.map(drop)
+        /// Returns this scope's dynamic-membership capability.
+        pub fn dynamic(&self) -> Option<DynamicRestrictedScope> {
+            self.handle
+                .dynamic()
+                .map(|dynamic| DynamicRestrictedScope { dynamic })
         }
 
         /// Observes lifecycle transitions of this scope's direct children.
@@ -2131,6 +2089,64 @@ impl RestrictedScope {
     }
 
     restricted_scope_forwards!();
+}
+
+impl DynamicRestrictedScope {
+    /// Inserts an actor with default options into this scope.
+    ///
+    /// Success means insertion completed and startup was scheduled, not that
+    /// the actor reported ready.
+    pub async fn add_actor<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+    ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
+    where
+        F: crate::ActorFactory,
+    {
+        self.dynamic.add_actor(label, factory).await
+    }
+
+    /// Inserts an actor with explicit child and mailbox options.
+    pub async fn add_actor_with<F>(
+        &self,
+        label: impl Into<String>,
+        factory: F,
+        options: crate::DynamicActorOptions<<F::Actor as crate::host::RawActor>::Msg>,
+    ) -> Result<ActorRef<<F::Actor as crate::host::RawActor>::Msg>, crate::ControlError>
+    where
+        F: crate::ActorFactory,
+    {
+        self.dynamic.add_actor_with(label, factory, options).await
+    }
+
+    /// Inserts an arbitrary supervised task child into this scope.
+    pub async fn add_child(
+        &self,
+        child: crate::host::ChildSpec,
+    ) -> Result<u64, crate::ControlError> {
+        self.dynamic.add_child(child).await
+    }
+
+    /// Inserts an identity-owning subtree and returns a restricted handle.
+    pub async fn add_subtree(
+        &self,
+        id: impl Into<String>,
+        tree: impl Into<crate::TreeNode>,
+    ) -> Result<RestrictedScope, crate::ControlError> {
+        self.dynamic
+            .add_subtree(id, tree)
+            .await
+            .map(RestrictedScope::new)
+    }
+
+    /// Removes a child after applying its shutdown policy.
+    ///
+    /// Awaiting removal of the current actor from one of its own lifecycle
+    /// callbacks can deadlock until the shutdown grace period expires.
+    pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), crate::ControlError> {
+        self.dynamic.remove_child(id).await
+    }
 }
 
 /// Context handed to [`Actor::on_start`](crate::Actor::on_start).

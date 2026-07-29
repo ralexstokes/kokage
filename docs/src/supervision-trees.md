@@ -121,7 +121,7 @@ through the tree, and the same local child id may be reused in a different
 scope.
 
 An [`ActorSpec`] is a complete actor child declaration. Its runnable payload
-provides the id, while optional `restart`, `shutdown`, and `restart_intensity`
+provides the id, while optional `restart`, `shutdown`, and `restart_config`
 values override the enclosing scope's defaults. `child_id` overrides the local
 supervisor id when an actor label is already qualified by its scope path. Bare
 runnable actors convert to `ActorSpec`, so `.actor(runnable)` is the concise
@@ -148,20 +148,24 @@ let app_tree = OrderedTree::new()
     .subtree("sessions", sessions_tree)
     .actor(graph.actor_for(&router)?);
 let app_handle = app_tree.handle();
-let handle = app_tree.spawn()?;
-# drop((app_handle, handle));
+let runtime = app_tree.spawn()?;
+let handle = runtime.handle();
+# drop((app_handle, handle, runtime));
 ```
 
 Trees deliberately do not implement `Clone`: one identity can bind to one
 runtime. Before binding, control operations report
 `ControlError::Unavailable`, while projected snapshots and subscriptions are
-already usable. `spawn()` consumes the tree and returns its `RuntimeHandle`.
+already usable. `spawn()` consumes the tree and returns its owning `Runtime`;
+`Runtime::handle()` clones a non-owning `RuntimeHandle`.
 Moving a tree into `subtree` or `actor_with_scope` transfers its identity into
 the parent.
 
 Dropping an unspawned tree, failing to lower or spawn it, or having a dynamic
-insertion rejected makes all handles issued from that tree terminal. There is
-no intermediate `Runtime` object and no `into_supervisor` escape hatch.
+insertion rejected makes all handles issued from that tree terminal. Dropping
+any handles leaves a spawned runtime alive; dropping its `Runtime` owner is the
+one implicit graceful-shutdown path. `let _ = tree.spawn()?;` therefore starts
+shutdown at the end of that statement.
 
 ## Inspect the declaration
 

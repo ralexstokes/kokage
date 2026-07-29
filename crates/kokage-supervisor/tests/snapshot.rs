@@ -63,6 +63,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
     let handle = outer.spawn();
 
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -70,6 +72,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
         .await
         .expect("anchor added");
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested supervisor added");
@@ -77,6 +81,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
         .supervisor("nested")
         .expect("nested handle available");
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -84,6 +90,8 @@ async fn nested_supervisors_allocate_lineages_independently() {
         .await
         .expect("nested seed added");
     nested_handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("late", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -230,10 +238,14 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
     let handle = supervisor.spawn();
     let mut snapshots = handle.subscribe_snapshots();
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(removable)
         .await
         .expect("removable child should be accepted");
     handle
+        .dynamic()
+        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("keeper", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -244,7 +256,13 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
     common::recv_event(&mut started_rx).await;
 
     let remove_handle = handle.clone();
-    let remove_task = tokio::spawn(async move { remove_handle.remove_child("removable").await });
+    let remove_task = tokio::spawn(async move {
+        remove_handle
+            .dynamic()
+            .expect("dynamic supervisor")
+            .remove_child("removable")
+            .await
+    });
 
     common::recv_event(&mut cancelled_rx).await;
 

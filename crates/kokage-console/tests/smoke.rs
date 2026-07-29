@@ -487,6 +487,8 @@ async fn ws_streams_events() {
     read_handshake(&mut socket).await;
 
     lifecycle
+        .dynamic()
+        .expect("dynamic scope")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -525,6 +527,8 @@ async fn dynamic_tree_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
+        .dynamic()
+        .expect("dynamic scope")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -533,6 +537,8 @@ async fn dynamic_tree_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
+        .dynamic()
+        .expect("dynamic scope")
         .add_actor("tracked", || IdleActor)
         .await
         .expect("failed to add runtime actor");
