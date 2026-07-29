@@ -53,16 +53,6 @@ pub enum ShutdownPolicy {
 }
 
 impl ShutdownPolicy {
-    /// Ask the child to stop, waiting up to `grace` before aborting it.
-    pub const fn cooperative(grace: Duration) -> Self {
-        Self::Cooperative { grace }
-    }
-
-    /// Abort the Tokio task immediately with no grace period.
-    pub const fn abort() -> Self {
-        Self::Abort
-    }
-
     pub(crate) const fn grace(self) -> Duration {
         match self {
             Self::Cooperative { grace } => grace,
@@ -77,7 +67,9 @@ impl ShutdownPolicy {
 
 impl Default for ShutdownPolicy {
     fn default() -> Self {
-        Self::cooperative(Duration::from_secs(5))
+        Self::Cooperative {
+            grace: Duration::from_secs(5),
+        }
     }
 }
 

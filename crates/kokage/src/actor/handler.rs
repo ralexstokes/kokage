@@ -100,7 +100,7 @@ pub enum DrainPolicy {
     /// under supervision). A `Drain` actor under a too-short grace period
     /// therefore behaves like a slower `Discard`, which is the failure mode to
     /// watch for. The enclosing shutdown also reports the timeout. In particular,
-    /// [`ShutdownPolicy::abort`](crate::ShutdownPolicy::abort) has a zero grace
+    /// [`ShutdownPolicy::Abort`](crate::ShutdownPolicy::Abort) has a zero grace
     /// period and leaves effectively no drain window at all.
     ///
     /// Size the budget for the whole queued prefix, not one message: roughly

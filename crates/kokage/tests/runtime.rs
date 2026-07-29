@@ -874,7 +874,9 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Completed)
     ));
 
@@ -929,7 +931,9 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Completed)
     ));
 
@@ -1072,7 +1076,7 @@ impl RawActor for FailOnMessage {
 }
 
 #[tokio::test]
-async fn runtime_handle_exposes_lifecycle_watch() {
+async fn runtime_handle_restart_of_arms_before_the_future_is_polled() {
     let mut builder = GraphBuilder::new();
     let (worker_ref_slot, worker_ref) = builder.slot("worker");
     builder.define(worker_ref_slot, || FailOnMessage);
@@ -1084,15 +1088,26 @@ async fn runtime_handle_exposes_lifecycle_watch() {
         .spawn()
         .expect("runtime builds");
 
-    let (lifecycle, baseline) = restart_observer(&handle, "worker");
+    let restarted = handle.restart_of("worker");
+    let mut snapshots = handle.subscribe_snapshots();
     worker_ref.send(()).await.expect("message sent");
 
-    let generation = timeout(
+    timeout(
         Duration::from_secs(1),
-        await_restart(lifecycle, "worker", baseline),
+        snapshots.wait_for(|snapshot| {
+            snapshot
+                .child("worker")
+                .is_some_and(|child| child.generation == 1 && child.state.started())
+        }),
     )
     .await
-    .expect("lifecycle watch should observe restart");
+    .expect("replacement starts before the helper future is polled")
+    .expect("snapshot stream stays open");
+
+    let generation = timeout(Duration::from_secs(1), restarted)
+        .await
+        .expect("restart helper should observe restart")
+        .expect("runtime remains live");
     assert_eq!(generation, 1);
 
     handle
@@ -1296,7 +1311,9 @@ async fn child_grace_bounds_the_whole_actor_drain() {
         }
     });
     let handle = OrderedTree::graph(graph.build().expect("graph builds"))
-        .default_shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20)))
+        .default_shutdown(ShutdownPolicy::Cooperative {
+            grace: Duration::from_millis(20),
+        })
         .spawn()
         .expect("runtime builds");
 
@@ -1326,7 +1343,9 @@ async fn child_grace_bounds_the_whole_actor_drain() {
             .snapshot()
             .child("worker")
             .expect("static membership remains")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Aborted { after_grace: true })
     );
 }
@@ -1352,7 +1371,9 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
         }
     });
     let handle = OrderedTree::graph(builder.build().expect("valid graph"))
-        .default_shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20)))
+        .default_shutdown(ShutdownPolicy::Cooperative {
+            grace: Duration::from_millis(20),
+        })
         .spawn()
         .expect("runtime builds");
     let mut lifecycle = handle.watch_lifecycle();
@@ -1369,7 +1390,9 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
             .snapshot()
             .child("worker")
             .expect("actor remains in static membership")
-            .last_exit(),
+            .state
+            .last_exit()
+            .map(|exit| &exit.status),
         Some(&ExitStatusView::Aborted { after_grace: true })
     );
     while let Some(event) = lifecycle.next().await {

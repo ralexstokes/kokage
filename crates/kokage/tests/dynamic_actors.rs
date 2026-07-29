@@ -162,7 +162,7 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
             if snapshots
                 .borrow()
                 .child(id)
-                .is_some_and(|child| child.last_exit().is_some())
+                .is_some_and(|child| child.state.last_exit().map(|exit| &exit.status).is_some())
             {
                 return;
             }
@@ -186,10 +186,11 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
     wait_for_child(handle, "settle", false).await;
 
     assert!(
-        handle
-            .snapshot()
-            .child(id)
-            .is_some_and(|child| child.last_exit().is_some()),
+        handle.snapshot().child(id).is_some_and(|child| child
+            .state
+            .last_exit()
+            .map(|exit| &exit.status)
+            .is_some()),
         "terminal child stays retained once the control loop has settled"
     );
 }
@@ -827,7 +828,7 @@ async fn message_context_stop_applies_restart_policy_before_default_removal() {
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     let handle = DynamicTree::new()
         .default_restart(RestartPolicy::Always)
-        .default_shutdown(ShutdownPolicy::abort())
+        .default_shutdown(ShutdownPolicy::Abort)
         .spawn()
         .expect("dynamic runtime builds");
     let inherited_starts = Arc::new(AtomicUsize::new(0));
@@ -878,7 +879,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
 async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     let handle = DynamicTree::new()
         .default_restart(RestartPolicy::Always)
-        .default_shutdown(ShutdownPolicy::abort())
+        .default_shutdown(ShutdownPolicy::Abort)
         .spawn()
         .expect("dynamic tree builds");
     let starts = Arc::new(AtomicUsize::new(0));
@@ -1323,8 +1324,9 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         .add_actor_with(
             "dynamic",
             || PendingActor,
-            DynamicActorOptions::new()
-                .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20))),
+            DynamicActorOptions::new().shutdown(ShutdownPolicy::Cooperative {
+                grace: Duration::from_millis(20),
+            }),
         )
         .await
         .expect("actor added");

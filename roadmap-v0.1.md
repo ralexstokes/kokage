@@ -79,7 +79,7 @@ and post-restart reconciliation are application protocol responsibilities.
 
 ### Restart intensity remains per child
 
-`Supervisor::ordered().restart_intensity(...)` supplies the default policy for each
+`Supervisor::ordered().restart_config(...)` supplies the default policy for each
 child's independent restart tracker; a child override replaces that default.
 This differs from Erlang/OTP's aggregate supervisor restart budget.
 
