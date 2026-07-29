@@ -80,8 +80,8 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
 async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
-    let mut restart = RestartConfig::new(3, Duration::from_secs(1));
-    restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(1));
+    let restart = RestartConfig::new(3, Duration::from_secs(1))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(1)));
     let builder = Supervisor::ordered().child(
         ChildSpec::task("flaky", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
@@ -191,8 +191,9 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
 #[tokio::test]
 async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
     let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
-    let mut watch = running.watch_lifecycle().direct_children();
+    let mut watch = running.handle().watch_lifecycle().direct_children();
     running
+        .handle()
         .dynamic()
         .expect("dynamic capability")
         .add_child(ChildSpec::task("worker", |ctx| async move {
@@ -214,6 +215,7 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
     };
 
     running
+        .handle()
         .dynamic()
         .expect("dynamic capability")
         .remove_child("worker")
@@ -283,7 +285,11 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle().direct_children();
     let running = builder.spawn().expect("supervisor spawns");
-    running.wait_started().await.expect("children start");
+    running
+        .handle()
+        .wait_started()
+        .await
+        .expect("children start");
     running.shutdown_and_wait().await.expect("clean shutdown");
 
     let mut exited = Vec::new();
@@ -306,11 +312,12 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
 #[tokio::test]
 async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
     let running = Supervisor::dynamic().spawn().expect("supervisor spawns");
-    let mut watch = running.watch_lifecycle().direct_children();
+    let mut watch = running.handle().watch_lifecycle().direct_children();
 
     for index in 0..70 {
         let id = format!("child-{index}");
         running
+            .handle()
             .dynamic()
             .expect("dynamic capability")
             .add_child(ChildSpec::task(id.clone(), |ctx| async move {
@@ -320,6 +327,7 @@ async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
             .await
             .expect("child is added");
         running
+            .handle()
             .dynamic()
             .expect("dynamic capability")
             .remove_child(&id)
@@ -336,7 +344,7 @@ async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
         lagged.kind,
         LifecycleEventKind::Lagged { dropped } if dropped > 1
     ));
-    let snapshot = running.snapshot();
+    let snapshot = running.handle().snapshot();
     assert!(snapshot.children.is_empty());
     assert!(snapshot.lifecycle_seq >= 140);
 
