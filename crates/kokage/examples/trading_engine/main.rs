@@ -182,7 +182,7 @@ fn feed_options() -> ActorOptions<FeedMsg> {
 /// pinned so the qualified ids stay `venues.venue-a-feed` and friends.
 #[derive(Supervision)]
 #[supervision(
-    restart_intensity = RestartConfig::new(5, Duration::from_secs(10)),
+    restart_config = RestartConfig::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
     #[supervision(label = "venue-a-feed", options = feed_options())]
