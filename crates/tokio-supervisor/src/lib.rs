@@ -11,10 +11,9 @@
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`SupervisorBuilder`] | Constructs and validates a supervisor. |
-//! | [`Supervisor`] | A configured supervisor, ready to [`spawn`](Supervisor::spawn). |
+//! | [`Supervisor`] | Constructs ordered or dynamic supervisors and spawns built ones. |
 //! | [`SupervisorHandle`] | Control and observe a running supervisor. |
-//! | [`ChildSpec`] | Pairs an async factory with restart/shutdown policies. |
+//! | [`ChildSpec`] | Declares a task or nested supervisor with restart/shutdown policies. |
 //! | [`ChildContext`] | Per-spawn context given to each child (id, generation, cancellation token). |
 //!
 //! # Strategies
@@ -42,7 +41,7 @@
 //! - **[`Never`](RestartPolicy::Never)** — never restarted. Runs at most
 //!   once.
 //!
-//! Restarts are bounded by a [`RestartIntensity`] limit (default: 5 restarts
+//! Restarts are bounded by a [`RestartConfig`] limit (default: 5 restarts
 //! within 30 seconds). When exceeded, the supervisor exits with
 //! [`SupervisorError::RestartIntensityExceeded`]. An optional [`BackoffPolicy`]
 //! inserts a delay before each restart attempt (fixed, exponential, or
@@ -53,12 +52,12 @@
 //!
 //! Each child has a [`ShutdownPolicy`] that controls how it is stopped:
 //!
-//! - **[`CooperativeStrict`](ShutdownMode::CooperativeStrict)** — cancel the
-//!   child's token and wait up to the grace period. If the child does not
-//!   exit, a timeout error is reported after aborting the Tokio task.
-//! - **[`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort)** (default,
-//!   5 s grace) — cooperative with a fallback Tokio abort.
-//! - **[`Abort`](ShutdownMode::Abort)** — abort the Tokio task immediately.
+//! - **[`Cooperative`](ShutdownPolicy::Cooperative)** (default, 5 s grace) —
+//!   cancel the child's token and wait up to its grace period, then abort and
+//!   report a timeout for shutdown or removal if it does not exit. During a
+//!   group restart, the old generation is escalated to abort and the restart
+//!   proceeds once that task exits.
+//! - **[`Abort`](ShutdownPolicy::Abort)** — abort the Tokio task immediately.
 //!
 //! Ordered scopes drain in reverse declaration order, giving each cooperative
 //! child its own grace period before moving to the previous child. Once an
@@ -68,16 +67,16 @@
 //! grace. Ordered group and full-shutdown drains are atomic critical sections,
 //! so observation never sees a later generation overlap an earlier one.
 //!
-//! All shutdown modes are cooperative at Tokio poll boundaries. A non-yielding
+//! Tokio aborts take effect at poll boundaries. A non-yielding
 //! future is never forcibly preempted. If you need hard-stop guarantees for
 //! blocking work, isolate it in a dedicated blocking pool or external process
 //! and supervise the boundary.
 //!
 //! # Scope kinds
 //!
-//! [`SupervisorBuilder`] creates an ordered scope: a declared sequence with
+//! [`Supervisor::ordered`] creates an ordered builder: a declared sequence with
 //! readiness-gated startup, reverse sequential teardown, and immutable runtime
-//! membership. [`DynamicSupervisorBuilder`] creates an empty dynamic scope:
+//! membership. [`Supervisor::dynamic`] creates a dynamic builder for an empty scope:
 //! membership is written at runtime, startup is immediate, teardown is
 //! concurrent, and the strategy is always [`OneForOne`](Strategy::OneForOne).
 //!
@@ -86,9 +85,9 @@
 //! - [`add_child`](SupervisorHandle::add_child) /
 //!   [`remove_child`](SupervisorHandle::remove_child) target that handle's
 //!   supervisor.
-//! - [`add_supervisor`](SupervisorHandle::add_supervisor) adds a first-class
-//!   nested supervisor; [`supervisor`](SupervisorHandle::supervisor) returns
-//!   its restart-stable handle.
+//! - [`ChildSpec::supervisor`] declares a first-class nested supervisor through
+//!   that same `add_child` method; [`supervisor`](SupervisorHandle::supervisor)
+//!   returns its restart-stable handle.
 //!
 //! Successful dynamic adds resolve once membership is inserted and immediate
 //! startup is scheduled; use [`SupervisorHandle::wait_started`] for readiness.
@@ -102,9 +101,9 @@
 //!
 //! # Nested supervisors
 //!
-//! A [`Supervisor`] is added as a first-class child with
-//! [`SupervisorBuilder::supervisor`] or
-//! [`SupervisorHandle::add_supervisor`]. The nested supervisor:
+//! A [`Supervisor`] is wrapped with [`ChildSpec::supervisor`] and added through
+//! an ordered builder's `child` method or [`SupervisorHandle::add_child`]. The
+//! nested supervisor:
 //!
 //! - Appears in ancestor
 //!   [`watch_lifecycle_recursive`](SupervisorHandle::watch_lifecycle_recursive)
@@ -113,8 +112,8 @@
 //!   [`ChildSnapshot::supervisor`] field.
 //! - Has a restart-stable direct handle whose subscriptions and snapshots
 //!   survive nested restarts.
-//! - Is restarted by the parent according to its [`SupervisorSpec`] policies.
-//! - Is recursively hard-aborted when its wrapper uses [`ShutdownMode::Abort`]
+//! - Is restarted by the parent according to its [`ChildSpec`] policies.
+//! - Is recursively hard-aborted when its wrapper uses [`ShutdownPolicy::Abort`]
 //!   or when a terminal, non-revivable ancestor fails. A parent-restartable
 //!   failed incarnation lets nested runtimes finish cooperatively before their
 //!   stable identities rebind; a normal cooperative stop likewise applies the
@@ -127,12 +126,12 @@
 //!
 //! - **[`SupervisorSnapshot`] state** — current state and cumulative counters,
 //!   read directly or through [`SupervisorHandle::subscribe_snapshots`].
-//! - **Lifecycle streams** — ordered direct-child and restart-decision
-//!   [`LifecycleEvent`]s from
-//!   [`SupervisorHandle::watch_lifecycle`], or the whole tree (including
-//!   supervisor transitions and scheduled restarts) from
-//!   [`SupervisorHandle::watch_lifecycle_recursive`]. Both report overflow
-//!   explicitly rather than losing events silently.
+//! - **Lifecycle streams** — ordered direct-child
+//!   [`ChildLifecycleEvent`]s from
+//!   [`SupervisorHandle::watch_lifecycle`] (including scheduled restarts), or
+//!   the whole tree (adding supervisor transitions and restart-intensity
+//!   failures) from [`SupervisorHandle::watch_lifecycle_recursive`]. Both
+//!   report overflow explicitly rather than losing events silently.
 //! - **`tracing` spans and logs** — automatic structured output for every
 //!   lifecycle event. The supervisor runs inside an `info_span!("supervisor")`
 //!   and each child inside an `info_span!("child")`, both carrying
@@ -149,8 +148,8 @@
 //! Create a lifecycle watch first, then read a snapshot, then discard watched
 //! child transition events with `seq <= snapshot.lifecycle_seq`. This yields a gap-free
 //! state-plus-stream view without replay. Direct lifecycle overflow is
-//! explicit as [`LifecycleEvent::Lagged`]; recursive stream overflow uses the
-//! same tree-wide marker shape.
+//! explicit as [`ChildLifecycleEventKind::Lagged`]; recursive stream overflow
+//! uses [`LifecycleEventKind::Lagged`] as a tree-wide marker.
 //!
 //! # Deliberate dependency coupling
 //!
@@ -170,7 +169,7 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use tokio_supervisor::{ChildSpec, SupervisorBuilder};
+//! use tokio_supervisor::{ChildSpec, Supervisor};
 //! use tracing_subscriber::FmtSubscriber;
 //!
 //! # #[tokio::main]
@@ -178,8 +177,8 @@
 //! let subscriber = FmtSubscriber::builder().finish();
 //! tracing::subscriber::set_global_default(subscriber)?;
 //!
-//! let supervisor = SupervisorBuilder::new()
-//!     .child(ChildSpec::new("worker", |ctx| async move {
+//! let supervisor = Supervisor::ordered()
+//!     .child(ChildSpec::task("worker", |ctx| async move {
 //!         ctx.shutdown_token().cancelled().await;
 //!         Ok(())
 //!     }))
@@ -236,21 +235,52 @@ mod snapshot;
 mod strategy;
 mod supervisor;
 
+/// Implementation bridge for crates layered on top of `tokio-supervisor`.
+///
+/// This module is not a stable public API. It exists so `tokio-otp` can attach
+/// process-local actor metadata without exposing attachment machinery as part
+/// of the ordinary supervisor surface.
 #[doc(hidden)]
-pub use attachment::{AttachedChild, AttachedChildIdentity};
-pub use builder::{DynamicSupervisorBuilder, SupervisorBuilder};
-pub use child::{BoxError, ChildResult, ChildSpec, SupervisorSpec};
+pub mod __private {
+    use std::any::Any;
+
+    pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
+    use crate::{ChildSpec, SupervisorHandle};
+
+    /// Adds process-local metadata to a child specification.
+    pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
+    where
+        T: Any + Send + Sync,
+    {
+        child.attachment(attachment)
+    }
+
+    /// Returns process-local metadata from the current supervision tree.
+    pub fn attached_children<T>(handle: &SupervisorHandle) -> Vec<AttachedChild<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        handle.attached_children()
+    }
+}
+
+pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
+pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionGuard, CompletionOutcome};
 pub use context::ChildContext;
 pub use error::{ControlError, SupervisorBuildError, SupervisorError};
 pub use event::ExitStatusView;
 pub use handle::SupervisorHandle;
-pub use lifecycle::{LifecycleEvent, LifecyclePathSegment, LifecycleWatch};
-pub use restart::{BackoffPolicy, RestartIntensity, RestartPolicy};
-pub use scope::{ControlOperation, ScopeKind};
-pub use shutdown::{ShutdownMode, ShutdownPolicy};
+pub use lifecycle::{
+    ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, LifecycleEvent,
+    LifecycleEventKind, LifecyclePathSegment, LifecycleWatch, SupervisorLifecycleEvent,
+};
+pub use restart::{BackoffPolicy, RestartConfig, RestartPolicy};
+pub use scope::ScopeKind;
+pub use shutdown::ShutdownPolicy;
 pub use snapshot::{
-    ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
+    ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot,
+    SupervisorStateView,
 };
 pub use strategy::Strategy;
 pub use supervisor::Supervisor;

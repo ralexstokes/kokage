@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use tokio::time::{Duration, sleep, timeout};
-use tokio_supervisor::{LifecycleEvent, prelude::*};
+use tokio_supervisor::{ChildLifecycleEventKind, prelude::*};
 
 fn example_error(message: &'static str) -> BoxError {
     Box::new(std::io::Error::other(message))
@@ -14,7 +14,7 @@ fn example_error(message: &'static str) -> BoxError {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let flaky = ChildSpec::new("flaky-worker", move |ctx| {
+    let flaky = ChildSpec::task("flaky-worker", move |ctx| {
         let attempts = Arc::clone(&attempts);
         async move {
             let attempt = attempts.fetch_add(1, Ordering::SeqCst);
@@ -33,14 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let metrics = ChildSpec::new("metrics", |ctx| async move {
+    let metrics = ChildSpec::task("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
         ctx.shutdown_token().cancelled().await;
         println!("metrics observed shutdown");
         Ok(())
     });
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .child(flaky)
         .child(metrics)
@@ -55,8 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| std::io::Error::other("lifecycle stream closed"))?;
         println!("event: {event:?}");
 
-        if event.child_id() == Some("flaky-worker")
-            && let LifecycleEvent::Started { generation: 1, .. } = event
+        if event.child_id == "flaky-worker"
+            && let ChildLifecycleEventKind::Started { generation: 1 } = event.kind
         {
             println!("child flaky-worker restarted into generation 1");
             break;

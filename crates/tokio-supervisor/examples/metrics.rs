@@ -16,9 +16,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recorder = PrometheusBuilder::new().install_recorder()?;
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("flaky", move |ctx| {
+            ChildSpec::task("flaky", move |ctx| {
                 let attempts = Arc::clone(&attempts);
                 async move {
                     if attempts.fetch_add(1, Ordering::SeqCst) == 0 {

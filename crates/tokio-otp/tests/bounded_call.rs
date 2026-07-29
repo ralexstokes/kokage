@@ -11,8 +11,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorResult, CallError, DEFAULT_SHUTDOWN_BOUND, Graph, GraphBuilder, RawActor,
-    Reply, RestartPolicy, RunnableActor,
+    ActorContext, ActorResult, CallError, Graph, GraphBuilder, Reply, RestartPolicy,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio_util::sync::CancellationToken;
 

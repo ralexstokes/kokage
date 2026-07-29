@@ -15,9 +15,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    BoxError, ChildSnapshot, ChildSpec, ChildStateView, ExitStatusView, LifecycleEvent,
-    LifecycleWatch, RestartIntensity, RestartPolicy, SupervisorError, SupervisorHandle,
-    SupervisorSnapshot,
+    BoxError, ChildLifecycleEvent, ChildLifecycleEventKind, ChildSnapshot, ChildSpec,
+    ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartConfig,
+    RestartPolicy, SupervisorError, SupervisorHandle, SupervisorLifecycleEvent, SupervisorSnapshot,
 };
 
 pub const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -222,18 +222,27 @@ impl EventWatch {
     }
 
     fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
-        let path = event.supervisor_path().unwrap_or_default().to_vec();
+        let path = event.supervisor_path;
         let mut pending = None;
-        let leaf = match event {
-            LifecycleEvent::SupervisorStarted { .. } => ObservedEvent::SupervisorStarted,
-            LifecycleEvent::SupervisorStopping { .. } => ObservedEvent::SupervisorStopping,
-            LifecycleEvent::SupervisorStopped { .. } => ObservedEvent::SupervisorStopped,
-            LifecycleEvent::Added { .. } => return Ok(None),
-            LifecycleEvent::Started {
-                child_id,
-                generation,
+        let leaf = match event.kind {
+            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Started) => {
+                ObservedEvent::SupervisorStarted
+            }
+            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopping) => {
+                ObservedEvent::SupervisorStopping
+            }
+            LifecycleEventKind::Supervisor(SupervisorLifecycleEvent::Stopped) => {
+                ObservedEvent::SupervisorStopped
+            }
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                kind: ChildLifecycleEventKind::Added,
                 ..
-            } => {
+            }) => return Ok(None),
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                child_id,
+                kind: ChildLifecycleEventKind::Started { generation },
+                ..
+            }) => {
                 // This compatibility shim preserves the removed test-event
                 // shape. It deliberately assumes runtime generations are
                 // contiguous when synthesizing `ChildRestarted`. If that
@@ -251,33 +260,43 @@ impl EventWatch {
                     generation,
                 }
             }
-            LifecycleEvent::Exited {
+            LifecycleEventKind::Child(ChildLifecycleEvent {
                 child_id,
-                generation,
-                reason,
+                kind:
+                    ChildLifecycleEventKind::Exited {
+                        generation, reason, ..
+                    },
                 ..
-            } => ObservedEvent::ChildExited {
+            }) => ObservedEvent::ChildExited {
                 id: child_id,
                 generation,
                 status: reason,
             },
-            LifecycleEvent::Removed { child_id, .. } => {
-                ObservedEvent::ChildRemoved { id: child_id }
-            }
-            LifecycleEvent::RestartScheduled {
+            LifecycleEventKind::Child(ChildLifecycleEvent {
                 child_id,
-                generation,
-                delay,
+                kind: ChildLifecycleEventKind::Removed,
                 ..
-            } => ObservedEvent::ChildRestartScheduled {
+            }) => ObservedEvent::ChildRemoved { id: child_id },
+            LifecycleEventKind::Child(ChildLifecycleEvent {
+                child_id,
+                kind:
+                    ChildLifecycleEventKind::RestartScheduled {
+                        generation, delay, ..
+                    },
+                ..
+            }) => ObservedEvent::ChildRestartScheduled {
                 id: child_id,
                 generation,
                 delay,
             },
-            LifecycleEvent::RestartIntensityExceeded { .. } => {
+            LifecycleEventKind::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded
             }
-            LifecycleEvent::Lagged { dropped } => {
+            LifecycleEventKind::Lagged { dropped }
+            | LifecycleEventKind::Child(ChildLifecycleEvent {
+                kind: ChildLifecycleEventKind::Lagged { dropped },
+                ..
+            }) => {
                 return Err(EventRecvError::Lagged(dropped));
             }
             _ => return Ok(None),
@@ -323,7 +342,7 @@ pub fn fail_on_generations(
     trigger_failure: Arc<Notify>,
     generations_to_fail: u64,
 ) -> ChildSpec {
-    ChildSpec::new(id, move |ctx| {
+    ChildSpec::task(id, move |ctx| {
         let trigger_failure = trigger_failure.clone();
         async move {
             if ctx.generation() < generations_to_fail {
@@ -344,7 +363,7 @@ pub fn failing_child(
     error: &'static str,
 ) -> ChildSpec {
     let trigger_failure = trigger_failure.clone();
-    ChildSpec::new(id, move |_ctx| {
+    ChildSpec::task(id, move |_ctx| {
         let trigger_failure = trigger_failure.clone();
         async move {
             trigger_failure.notified().await;
@@ -352,7 +371,7 @@ pub fn failing_child(
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(RestartIntensity::new(0, Duration::from_secs(60)))
+    .restart_intensity(RestartConfig::new(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(
@@ -361,9 +380,9 @@ pub async fn wait_for_child_running(
     generation: u64,
 ) -> ChildSnapshot {
     wait_for_snapshot(snapshots, |snapshot| {
-        snapshot.child(id).is_some_and(|child| {
-            child.generation == generation && child.state == ChildStateView::Running
-        })
+        snapshot
+            .child(id)
+            .is_some_and(|child| child.generation == generation && child.state.is_running())
     })
     .await
     .child(id)

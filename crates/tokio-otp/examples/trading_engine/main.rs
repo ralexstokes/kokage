@@ -133,7 +133,9 @@ use std::{
 use metrics_util::debugging::Snapshotter;
 use tokio::time::Instant;
 use tokio_otp::{
-    CancellationToken, DownReason, LifecycleWatch, LifecycleWatchGuard, MailboxMode, prelude::*,
+    CancellationToken, DownReason, MailboxMode, Supervision,
+    observe::{ChildLifecycleWatch, LifecycleWatchGuard},
+    prelude::*,
 };
 
 use control::Control;
@@ -173,7 +175,7 @@ fn venue_options<M: Send + 'static>() -> ActorOptions<M> {
 fn feed_options() -> ActorOptions<FeedMsg> {
     venue_options()
         .mailbox(MailboxMode::conflate_by_key(feed_message_key))
-        .message_size()
+        .message_size(messages::feed_message_size)
 }
 
 /// One scope per venue-facing pair, restart-budgeted as a group. Labels are
@@ -181,7 +183,7 @@ fn feed_options() -> ActorOptions<FeedMsg> {
 #[derive(Supervision)]
 #[supervision(
     strategy = Strategy::OneForOne,
-    restart_intensity = RestartIntensity::new(5, Duration::from_secs(10)),
+    restart_intensity = RestartConfig::new(5, Duration::from_secs(10)),
 )]
 struct Venues {
     #[supervision(label = "venue-a-feed", options = feed_options())]
@@ -351,8 +353,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         ..
     } = venues;
 
-    let runtime = tree.build()?;
-    let handle = runtime.spawn();
+    let handle = tree.spawn()?;
 
     let background_stop = CancellationToken::new();
     let sampler = tokio::spawn(telemetry::sample(handle.clone(), background_stop.clone()));
@@ -366,7 +367,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree")
         .watch_lifecycle_to(&health, |event| HealthMsg::RestartsObserved {
-            total: event.total_restarts().unwrap_or_default(),
+            total: event.total_restarts,
         });
 
     Ok(App {
@@ -783,7 +784,7 @@ where
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
+fn restart_observer(handle: &RuntimeHandle, id: &str) -> (ChildLifecycleWatch, u64) {
     let lifecycle = handle.watch_lifecycle();
     let generation = handle
         .snapshot()
@@ -793,9 +794,9 @@ fn restart_observer(handle: &RuntimeHandle, id: &str) -> (LifecycleWatch, u64) {
     (lifecycle, generation)
 }
 
-async fn await_restart(mut lifecycle: LifecycleWatch, id: &str, baseline: u64) {
+async fn await_restart(mut lifecycle: ChildLifecycleWatch, id: &str, baseline: u64) {
     lifecycle
-        .started_after(&[], id, baseline)
+        .started_after(id, baseline)
         .await
         .unwrap_or_else(|| panic!("lifecycle closed before {id} restarted"));
 }

@@ -14,13 +14,12 @@ pub enum ExitStatusView {
     Failed(String),
     /// The child task panicked.
     Panicked,
-    /// The child task was aborted by the supervisor (e.g. after a grace-period
-    /// timeout).
-    Aborted,
-    /// The child's cooperative shutdown grace expired. The supervisor first
-    /// offered the child wrapper a tidy-abort accounting beat and then
-    /// hard-aborted it if necessary.
-    ShutdownTimedOut,
+    /// The child task was aborted by the supervisor.
+    Aborted {
+        /// Whether cooperative shutdown exhausted its grace period before the
+        /// supervisor aborted the task.
+        after_grace: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

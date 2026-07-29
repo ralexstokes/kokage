@@ -25,11 +25,13 @@ use std::{error::Error, io, time::Duration};
 
 use tokio::time::sleep;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext,
-    SupervisionTree,
+    Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
+    host::BoxError,
 };
 use tokio_otp_console::Console;
-use tokio_supervisor::{BackoffPolicy, ChildSpec, RestartIntensity, RestartPolicy, Strategy};
+use tokio_supervisor::{
+    BackoffPolicy, ChildSpec, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy,
+};
 
 fn example_error(message: &'static str) -> BoxError {
     Box::new(io::Error::other(message))
@@ -85,13 +87,13 @@ impl Actor for Burst {
 
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
-fn pipeline_runtime() -> SupervisionTree {
-    let source = ChildSpec::new("source", |ctx| async move {
+fn pipeline_runtime() -> OrderedTree {
+    let source = ChildSpec::task("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
 
-    let transform = ChildSpec::new("transform", |ctx| async move {
+    let transform = ChildSpec::task("transform", |ctx| async move {
         tokio::select! {
             _ = ctx.shutdown_token().cancelled() => Ok(()),
             _ = sleep(Duration::from_secs(9)) => {
@@ -101,50 +103,56 @@ fn pipeline_runtime() -> SupervisionTree {
         }
     })
     .restart_intensity(
-        RestartIntensity::new(60, Duration::from_secs(60))
+        RestartConfig::new(60, Duration::from_secs(60))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_secs(2))),
     );
 
-    SupervisionTree::new()
+    OrderedTree::new()
         .strategy(Strategy::OneForAll)
-        .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
-        .task(source)
-        .task(transform)
+        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
+        .task(source, RestartPolicy::default(), ShutdownPolicy::default())
+        .task(
+            transform,
+            RestartPolicy::default(),
+            ShutdownPolicy::default(),
+        )
 }
 
 /// A OneForOne group demonstrating the other restart policies, with a further
 /// nested supervisor one level deeper.
-fn telemetry_runtime() -> SupervisionTree {
+fn telemetry_runtime() -> OrderedTree {
     // `Always` restarts even after a clean exit, so this child completes and
     // comes back every 7 seconds.
-    let heartbeat = ChildSpec::new("heartbeat", |ctx| async move {
+    let heartbeat = ChildSpec::task("heartbeat", |ctx| async move {
         tokio::select! {
             _ = ctx.shutdown_token().cancelled() => {}
             _ = sleep(Duration::from_secs(7)) => {}
         }
         Ok(())
-    })
-    .restart(RestartPolicy::Always);
+    });
 
     // `Never` runs at most once: this child completes after 3 seconds and
     // stays Stopped for the rest of the run.
-    let migration = ChildSpec::new("schema-migration", |_ctx| async move {
+    let migration = ChildSpec::task("schema-migration", |_ctx| async move {
         sleep(Duration::from_secs(3)).await;
         Ok(())
-    })
-    .restart(RestartPolicy::Never);
+    });
 
-    let exporter = ChildSpec::new("stdout-exporter", |ctx| async move {
+    let exporter = ChildSpec::task("stdout-exporter", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let exporters = SupervisionTree::new().task(exporter);
+    let exporters = OrderedTree::new().task(
+        exporter,
+        RestartPolicy::default(),
+        ShutdownPolicy::default(),
+    );
 
-    SupervisionTree::new()
+    OrderedTree::new()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
-        .task(heartbeat)
-        .task(migration)
+        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
+        .task(heartbeat, RestartPolicy::Always, ShutdownPolicy::default())
+        .task(migration, RestartPolicy::Never, ShutdownPolicy::default())
         .subtree("exporters", exporters)
 }
 
@@ -159,23 +167,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     builder.define(worker_slot, || Worker);
     let graph = builder.build()?;
-    let frontend_actor = graph.actor("frontend").expect("frontend actor").clone();
-    let worker_actor = graph.actor("worker").expect("worker actor").clone();
+    let frontend_actor = graph.actor_for(&frontend)?;
+    let worker_actor = graph.actor_for(&worker_ref)?;
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
-        .restart_intensity(RestartIntensity::new(60, Duration::from_secs(60)))
+        .restart_intensity(RestartConfig::new(60, Duration::from_secs(60)))
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor).restart_intensity(
-                RestartIntensity::new(60, Duration::from_secs(60))
+                RestartConfig::new(60, Duration::from_secs(60))
                     .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(1500))),
             ),
         )
         .subtree("pipeline", pipeline_runtime())
         .subtree("telemetry", telemetry_runtime())
-        .build()?;
-    let handle = runtime.spawn();
+        .spawn()?;
 
     let console = Console::for_runtime(&handle)
         .bind(([127, 0, 0, 1], 0))

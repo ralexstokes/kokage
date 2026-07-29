@@ -31,8 +31,8 @@ impl ExitStatus {
             Self::Completed => ExitStatusView::Completed,
             Self::Failed(err) => ExitStatusView::Failed(err.to_string()),
             Self::Panicked => ExitStatusView::Panicked,
-            Self::Aborted => ExitStatusView::Aborted,
-            Self::ShutdownTimedOut => ExitStatusView::ShutdownTimedOut,
+            Self::Aborted => ExitStatusView::Aborted { after_grace: false },
+            Self::ShutdownTimedOut => ExitStatusView::Aborted { after_grace: true },
         }
     }
 }

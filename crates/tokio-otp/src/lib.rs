@@ -1,11 +1,11 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style fault tolerance on `tokio`: supervised typed
-//! actor graphs with one integrated [`Runtime`].
+//! actor graphs with one integrated [`RuntimeHandle`].
 //!
 //! For the common setup — every actor of a graph running as its own
-//! supervised child — build a graph, place it in a [`SupervisionTree`], and
-//! spawn the resulting runtime:
+//! supervised child — build a graph, move it into an [`OrderedTree`], and
+//! spawn the tree:
 //!
 //! ```no_run
 //! use tokio_otp::prelude::*;
@@ -28,10 +28,9 @@
 //! graph.define(echo_slot, || Echo);
 //!
 //! let graph = graph.build()?;
-//! let runtime = SupervisionTree::graph(&graph)
+//! let handle = OrderedTree::graph(graph)
 //!     .strategy(Strategy::OneForOne)
-//!     .build()?;
-//! let handle = runtime.spawn();
+//!     .spawn()?;
 //!
 //! echo.send("hello".to_owned()).await?;
 //! handle.shutdown_and_wait().await?;
@@ -39,39 +38,44 @@
 //! # }
 //! ```
 //!
-//! See [`SupervisionTree`] for recursive composition and per-actor policy
+//! See [`OrderedTree`] for recursive composition and per-actor policy
 //! examples. The [`prelude`] re-exports the day-one composition and actor
-//! surface plus the core `tokio-supervisor` policies. Observability, advanced
-//! configuration, and raw supervisor construction stay at their crate roots.
+//! surface plus the core `tokio-supervisor` policies. Host-facing execution
+//! types live in [`host`], observation types live in [`observe`], and advanced
+//! actor configuration stays at the crate root.
+//!
+//! These tiers are semantic, not a hard cap on the number of root exports.
+//! Types that configure actors and supervision trees, or that name the
+//! results and errors of their primary methods, remain at the root even when
+//! they are used less often. The `host` and `observe` modules isolate two
+//! coherent secondary surfaces instead of moving every non-prelude type.
 //!
 //! # Core types
 //!
 //! | Type | Role |
 //! |------|------|
-//! | [`SupervisionTree`] / [`ReservedSupervisionTree`] | Primary recursive declaration; reserve the non-cloneable form when a scope handle is needed before build. |
-//! | [`Runtime`] | Configured executable runtime produced by a supervision tree. |
+//! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their handles are available before spawn. |
 //! | [`RuntimeHandle`] | Control surface for shutdown, completion, and observability; dynamic-scope handles also add actors, task children, and subtrees. |
 //! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
-//! | [`RawActor`] | Custom-loop typed actor definition (the escape hatch). |
+//! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
-//! | [`ActorContext`] | The full context a [`RawActor`] run receives: mailbox, watches, lifetime, blocking work, shutdown token. |
+//! | [`ActorContext`] | The full context a [`host::RawActor`] run receives: mailbox, watches, lifetime, blocking work, shutdown token. |
 //! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
-//! | [`AmbientContext`] | Identity, shutdown observation, and blocking work shared by every context. |
 //! | [`LiveContext`] | Timers, continuations, and other capabilities shared by the running stages. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
-//! | [`RunnableActor`] | One actor plus stable binding — the unit of execution. |
+//! | [`host::RunnableActor`] | One actor plus stable binding — the unit of execution. |
 //! | [`timers`] | Cross-actor one-shot and interval delivery tied to an actor lifetime. |
 //!
 //! # Composition modes
 //!
-//! - **Ordered actor trees** via [`SupervisionTree::new`] or
-//!   [`SupervisionTree::graph`]: per-actor supervision, recursive actor-aware
+//! - **Ordered actor trees** via [`OrderedTree::new`] or
+//!   [`OrderedTree::graph`]: per-actor supervision, recursive actor-aware
 //!   subtrees, arbitrary task children, and actor-owned scopes.
-//! - **Dynamic actor membership** via [`SupervisionTree::dynamic`]: an
+//! - **Dynamic actor membership** via [`DynamicTree::new`]: an
 //!   initially empty `OneForOne` scope that accepts actors and subtrees at
-//!   runtime. Reserve it before build when its handle is needed during wiring.
+//!   runtime. Its handle can be captured during wiring before the tree spawns.
 //!
 //! Fate-sharing is selected with [`Strategy::OneForAll`]
 //! or supervision-tree shape; graphs themselves are not execution units.
@@ -88,7 +92,7 @@
 //! soon as shutdown is requested, even when messages are still queued. That is
 //! the primitive, not the default policy: [`Actor`]'s framework-owned loop
 //! defaults to [`DrainPolicy::Drain`] and finishes the queued mailbox before
-//! stopping. A hand-written [`RawActor`] loop opts back in with
+//! stopping. A hand-written [`host::RawActor`] loop opts back in with
 //! [`ActorContext::try_recv`].
 //!
 //! Restarts also lose queued messages: a restarted actor binds a fresh
@@ -116,20 +120,25 @@
 //! cyclic actor graphs and the supervision scopes that run them, derive
 //! [`Supervision`] on a named-field struct whose fields are the actors. The
 //! wiring closure receives typed refs for every field before any actor is
-//! constructed; see the [`Supervision`] docs for the full contract, and mind
-//! the bounded-mailbox cycle hazard documented on [`GraphBuilder`].
+//! constructed; see the [`Supervision`] derive docs for the generated API, and
+//! mind the bounded-mailbox cycle hazard documented on [`GraphBuilder`].
+//! Derive names are intentionally not part of [`prelude`]; add
+//! `use tokio_otp::{ActorFactory, Supervision};` when using their unqualified
+//! names alongside `use tokio_otp::prelude::*`, or qualify the derive as
+//! `#[derive(tokio_otp::Supervision)]`.
 //!
 //! # Hand-driving actors
 //!
-//! Supervision through [`Runtime`] is the normal host, but the execution
-//! surface is public: each [`RunnableActor`] can be driven directly with
-//! [`run_until`](RunnableActor::run_until), which is how tests (and hosts
-//! with their own supervision story) run actors.
+//! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal host,
+//! but the lower-level execution surface is also public: each
+//! [`host::RunnableActor`] can be driven directly with
+//! [`run_until`](host::RunnableActor::run_until), which is how tests and hosts
+//! with their own supervision story run actors.
 //!
 //! ```
 //! use tokio_otp::{
-//!     Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, MessageContext,
-//!     Reply, RestartPolicy,
+//!     Actor, ActorResult, CancellationToken, GraphBuilder, MessageContext, Reply, RestartPolicy,
+//!     host::DEFAULT_SHUTDOWN_BOUND,
 //! };
 //!
 //! enum CounterMsg {
@@ -199,7 +208,7 @@
 //! [`RuntimeHandle::actor_stats`]; exporting time-series is a user-side
 //! sampler task over those surfaces (see `examples/actor_metrics.rs`).
 //! Actors registered with [`ActorOptions::message_size`] expose
-//! application-defined accepted-byte totals through [`ActorStats`] and emit
+//! application-defined accepted-byte totals through [`observe::ActorStats`] and emit
 //! size metrics when the `metrics` feature is enabled. The same options can
 //! select a [`MailboxMode`] and apply to statically or dynamically registered
 //! actors.
@@ -213,7 +222,7 @@
 //! different: [`CancellationToken`] is the shared shutdown vocabulary at the
 //! Tokio ecosystem boundary. [`ActorContext::shutdown_token`],
 //! [`ActorContext::run_blocking`], and the shutdown futures passed to
-//! [`RunnableActor::run_until`] compose directly with that exact
+//! [`host::RunnableActor::run_until`] compose directly with that exact
 //! `tokio_util::sync::CancellationToken` type. Applications can therefore
 //! connect actor shutdown to existing cancellation trees without adapters. The
 //! token is re-exported at this crate's root so applications do not need an
@@ -264,21 +273,64 @@ mod supervision;
 mod supervision_derive;
 pub mod timers;
 
+/// Raw actor and task-hosting machinery.
+///
+/// Most applications use [`Actor`], [`GraphBuilder`], and a supervision tree.
+/// This module contains the lower-level execution surface for custom receive
+/// loops, directly driven runnable actors, and arbitrary supervised tasks.
+/// For task children it re-exports every type needed to name a
+/// [`tokio_supervisor::ChildSpec::task`] factory as a standalone function.
+///
+/// `ChildSpec` is exposed here for task children. Its lower-level
+/// `ChildSpec::supervisor` constructor still requires `tokio-supervisor`'s
+/// `Supervisor`; compose actor-aware nested scopes with
+/// [`OrderedTree::subtree`] or [`RuntimeHandle::add_subtree`] instead.
+pub mod host {
+    pub use crate::actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor};
+    pub use tokio_supervisor::{BoxError, ChildContext, ChildResult, ChildSpec};
+}
+
+/// Runtime observation, lifecycle, topology, and completion types.
+///
+/// Control remains on [`RuntimeHandle`]; this module groups the values and
+/// streams returned by that handle without injecting them into the crate root.
+pub mod observe {
+    pub use crate::{
+        actor::{ActorStats, SupervisorPathSegment},
+        runtime::LifecycleWatchGuard,
+        supervision::{ChildOutline, SupervisionOutline},
+    };
+    pub use tokio_supervisor::{
+        ChildExitView, ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch,
+        ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard, CompletionOutcome,
+        ExitStatusView, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch,
+        SupervisorLifecycleEvent, SupervisorSnapshot, SupervisorStateView,
+    };
+}
+
+/// Implementation bridge used by `tokio-otp` derive expansions.
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::supervision_derive::{SupervisionFactories, qualified_label};
+}
+
 /// Common imports for `tokio-otp` consumers.
 ///
 /// This prelude is intentionally limited to the actor traits and contexts,
-/// primary [`SupervisionTree`] composition path, core policies, and common
-/// send/call errors. Observability and advanced surfaces remain available at
-/// the crate root without being injected by a glob import.
+/// primary [`OrderedTree`] composition path, core policies, and common
+/// send/call errors. Observation and raw-hosting surfaces live in
+/// [`observe`] and [`host`] without being injected by a glob import.
+///
+/// Derive traits and macros are explicit root imports rather than prelude
+/// members. Add `use tokio_otp::{ActorFactory, Supervision};` for unqualified
+/// `#[derive(ActorFactory)]` and `#[derive(Supervision)]`, or use their fully
+/// qualified `tokio_otp::...` names.
 pub mod prelude {
-    // Resolves the `Supervision` trait, and additionally the derive macro of
-    // the same name when the `derive` feature is on.
     pub use crate::{
-        Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSpec,
-        AmbientContext, BoxError, CallError, GraphBuilder, GraphConfig, LiveContext,
-        MessageContext, RawActor, Reply, RestartIntensity, RestartPolicy, Runtime, RuntimeHandle,
-        SendError, ShutdownPolicy, StartContext, StopContext, Strategy, Supervision,
-        SupervisionTree,
+        Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ActorSpec, CallError,
+        DynamicTree, GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply, RestartConfig,
+        RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy, StartContext, StopContext,
+        Strategy, TrySendError,
     };
 }
 
@@ -286,29 +338,17 @@ pub mod prelude {
 pub use tokio_otp_derive::{ActorFactory, Supervision};
 
 pub use actor::{
-    Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorRunError,
-    ActorSlot, ActorStats, ActorSupervisorPathSegment, AmbientContext, BlockingCancelled,
-    CallError, CancellationHandle, DEFAULT_SHUTDOWN_BOUND, Down, DownReason, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, GraphConfig, Lifetime, LiveContext, MailboxMode, MessageContext,
-    MessageSize, MonitorEvent, OffloadDeadline, OffloadHandle, RawActor, Reply, RestrictedScope,
-    RunnableActor, SendError, StartContext, StopContext, TimerKey, TryRecvError,
+    Actor, ActorContext, ActorFactory, ActorOptions, ActorRef, ActorResult, ActorSlot,
+    BlockingCancelled, CallError, CancellationHandle, Down, DownReason, DrainPolicy, Graph,
+    GraphBuildError, GraphBuilder, GraphConfig, GraphLookupError, Lifetime, LiveContext,
+    MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, OffloadHandle, Reply,
+    RestrictedScope, ScopeWaitHandle, SendError, StartContext, StopContext, TimerKey, TrySendError,
 };
-pub use runtime::{
-    AddSubtreeError, DynamicActorOptions, LifecycleWatchGuard, Runtime, RuntimeHandle,
-};
-pub use supervision::{
-    ActorSpec, ChildOutline, ReservedSupervisionTree, SupervisionOutline, SupervisionTree,
-};
-#[doc(hidden)]
-pub use supervision_derive::qualified_label;
-pub use supervision_derive::{DynamicScope, Supervision, SupervisionFactories};
-#[doc(hidden)]
-pub use tokio_supervisor::{AttachedChild, AttachedChildIdentity};
+pub use runtime::{DynamicActorOptions, RuntimeHandle};
+pub use supervision::{ActorSpec, DynamicTree, OrderedTree, TreeNode};
+pub use supervision_derive::{DynamicScope, Supervision};
 pub use tokio_supervisor::{
-    BackoffPolicy, BoxError, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView,
-    CompletionGuard, CompletionOutcome, ControlError, ControlOperation, ExitStatusView,
-    LifecycleEvent, LifecyclePathSegment, LifecycleWatch, RestartIntensity, RestartPolicy,
-    ScopeKind, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError,
-    SupervisorSnapshot, SupervisorStateView,
+    BackoffPolicy, ControlError, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy, Strategy,
+    SupervisorBuildError, SupervisorError,
 };
 pub use tokio_util::sync::CancellationToken;

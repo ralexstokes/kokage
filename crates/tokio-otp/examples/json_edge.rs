@@ -3,7 +3,7 @@
 use std::io::{BufRead, Cursor};
 
 use serde::Deserialize;
-use tokio_otp::{Actor, ActorResult, DrainPolicy, GraphBuilder, MessageContext, SupervisionTree};
+use tokio_otp::{Actor, ActorResult, DrainPolicy, GraphBuilder, MessageContext, OrderedTree};
 
 #[derive(Deserialize)]
 struct Order {
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut graph = GraphBuilder::new();
     let (printer_slot, printer) = graph.slot("Printer");
     graph.define(printer_slot, || Printer);
-    let handle = SupervisionTree::graph(&graph.build()?).build()?.spawn();
+    let handle = OrderedTree::graph(graph.build()?).spawn()?;
 
     // A socket or file framing layer can supply the same byte slices.
     let input = b"{\"item\":\"labels\",\"quantity\":4}\n{\"item\":\"boxes\",\"quantity\":2}\n";

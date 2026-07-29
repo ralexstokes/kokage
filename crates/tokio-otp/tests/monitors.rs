@@ -5,9 +5,9 @@ use tokio::{
     time::timeout,
 };
 use tokio_otp::{
-    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, DEFAULT_SHUTDOWN_BOUND,
-    Down, DownReason, DynamicActorOptions, GraphBuilder, MonitorEvent, RawActor, RestartPolicy,
-    RunnableActor, SupervisionTree,
+    ActorContext, ActorFactory, ActorRef, ActorResult, CancellationHandle, Down, DownReason,
+    DynamicActorOptions, DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
+    host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio_supervisor::ShutdownPolicy;
 use tokio_util::sync::CancellationToken;
@@ -96,9 +96,8 @@ where
     builder.define(slot, factory);
     let graph = builder.build().expect("test graph builds");
     let actor = graph
-        .actor(label)
-        .expect("test actor is registered")
-        .clone();
+        .actor_for(&actor_ref)
+        .expect("test actor is registered");
     (actor, actor_ref)
 }
 
@@ -1321,10 +1320,7 @@ impl RawActor for UnitObserver {
 #[tokio::test]
 async fn supervisor_abort_delivers_failure_down_then_terminated() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let handle = SupervisionTree::dynamic()
-        .build()
-        .expect("dynamic runtime builds")
-        .spawn();
+    let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = handle
         .add_actor_with(
             "peer",

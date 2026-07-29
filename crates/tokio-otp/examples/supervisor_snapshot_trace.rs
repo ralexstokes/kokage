@@ -10,10 +10,10 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, MessageContext, StartContext,
-    SupervisionTree,
+    Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, MessageContext, OrderedTree,
+    StartContext, host::BoxError,
 };
-use tokio_supervisor::{RestartIntensity, Strategy};
+use tokio_supervisor::{RestartConfig, Strategy};
 
 #[derive(Clone)]
 struct Frontend {
@@ -82,18 +82,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         processed: processed_tx.clone(),
     });
     let graph = builder.build()?;
-    let frontend_actor = graph.actor("frontend").expect("frontend actor").clone();
-    let worker_actor = graph.actor("worker").expect("worker actor").clone();
+    let frontend_actor = graph.actor_for(&frontend)?;
+    let worker_actor = graph.actor_for(&worker_ref)?;
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .actor(frontend_actor)
         .actor(
             ActorSpec::new(worker_actor)
-                .restart_intensity(RestartIntensity::new(2, Duration::from_secs(1))),
+                .restart_intensity(RestartConfig::new(2, Duration::from_secs(1))),
         )
-        .build()?;
-    let handle = runtime.spawn();
+        .spawn()?;
     let mut events = handle.watch_lifecycle_recursive();
     let mut snapshots = handle.subscribe_snapshots();
 
@@ -112,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .generation;
     frontend.send("fail-worker".to_owned()).await?;
     lifecycle
-        .started_after(&[], "worker", baseline)
+        .started_after("worker", baseline)
         .await
         .ok_or_else(|| io::Error::other("worker restart could not be observed"))?;
     frontend.send("after-restart".to_owned()).await?;

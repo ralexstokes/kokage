@@ -43,7 +43,7 @@ hidden in example scaffolding, per the Milestone 2 rule:
   supervisor handles provides ordered child transitions with cumulative
   restart counters — the supported primitive for application-owned
   correlated-failure detection.
-- **Recursive runtime subtrees.** `SupervisionTree::subtree` composes nested
+- **Recursive runtime subtrees.** `OrderedTree::subtree` composes nested
   actor scopes with reconciled recursive actor stats. Static subtrees and
   runtime-added `RuntimeHandle::add_subtree` memberships now share the same
   actor-registry mechanism.
@@ -79,7 +79,7 @@ and post-restart reconciliation are application protocol responsibilities.
 
 ### Restart intensity remains per child
 
-`SupervisorBuilder::restart_intensity` supplies the default policy for each
+`Supervisor::ordered().restart_intensity(...)` supplies the default policy for each
 child's independent restart tracker; a child override replaces that default.
 This differs from Erlang/OTP's aggregate supervisor restart budget.
 
@@ -107,9 +107,10 @@ channel. Document this architecture in the proving example.
 
 ### One flagship composition path
 
-`SupervisionTree` is the primary documented entry point. Raw `ChildSpec`
-composition and hand-driven `RunnableActor` remain supported escape hatches,
-but are documented as advanced APIs rather than peer starting points.
+`OrderedTree` and `DynamicTree` are the primary documented entry points. Raw
+`ChildSpec` composition and hand-driven `RunnableActor` remain supported
+escape hatches, but are documented as advanced APIs rather than peer starting
+points.
 
 ## Milestone 1: freeze the public API shape — complete
 
@@ -212,13 +213,12 @@ example owns the direct `serde_json` pattern.
 
 ### 1.5 Contain dependency coupling
 
-**Status: complete.** `ActorContext::try_recv` now returns the crate-owned
-`TryRecvError`; the cancellation-token coupling and nested actor/supervisor
-shutdown deadlines are documented; and the deadline interaction is covered by
-runtime tests.
+**Status: complete.** `ActorContext::try_recv` now returns `Option<M>`; the
+cancellation-token coupling and nested actor/supervisor shutdown deadlines are
+documented; and the deadline interaction is covered by runtime tests.
 
-- Replace the direct `TryRecvError` re-export with a crate-owned error or a
-  method-specific result that can evolve independently of Tokio.
+- Replace the direct `TryRecvError` re-export with a method-specific result
+  that can evolve independently of Tokio.
 - Document deliberate public coupling to `tokio_util::sync::CancellationToken`
   where it remains in signatures.
 - Each child's `ShutdownPolicy` owns its shutdown clock; standalone
@@ -479,10 +479,10 @@ Big shapes that neither application covers, roughly in priority order:
    `shutdown_and_wait()`.
 2. **Supervision without actors.** `tokio-supervisor` is independently
    usable, but both applications go through `Runtime` + actors everywhere.
-   Raw `SupervisorBuilder`/`ChildSpec`/`ChildContext` over plain tokio
+   Raw `Supervisor`/`ChildSpec`/`ChildContext` over plain tokio
    tasks, mixed trees of raw children and actor subtrees, and meaningful use
-   of `ShutdownMode` variants (`Abort`, `CooperativeStrict`) and
-   `ShutdownPolicy` grace tuning have no real-application proof.
+   of both `ShutdownPolicy` variants and cooperative grace tuning have no
+   real-application proof.
 3. **Restart backoff as a load-bearing design.** `BackoffPolicy::Fixed` and
    `Exponential` (with and without jitter) appear only in unit examples. A
    flaky-external-dependency scenario should pin how backoff, the restart
@@ -490,7 +490,7 @@ Big shapes that neither application covers, roughly in priority order:
 4. **Overload where conflation does not apply.** Both applications absorb
    overload with keyed conflation, which only works for replaceable state.
    Bounded FIFO mailboxes under sustained pressure — `try_send` +
-   `SendError::Full` as deliberate load shedding, backpressure propagating
+   `TrySendError::Full` as deliberate load shedding, backpressure propagating
    through a multi-stage pipeline, and reading `ActorStats` correctly while
    it happens — is only covered by small unit examples.
 5. **The real-I/O boundary.** Both applications are deliberately in-process

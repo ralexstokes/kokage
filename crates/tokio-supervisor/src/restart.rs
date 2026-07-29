@@ -7,7 +7,6 @@ use crate::error::SupervisorBuildError;
 /// The default is [`OnFailure`](RestartPolicy::OnFailure).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
 pub enum RestartPolicy {
     /// Always restart the child, regardless of exit status. Equivalent to
     /// OTP's `permanent`.
@@ -84,11 +83,18 @@ impl BackoffPolicy {
     }
 }
 
-/// Bounds on how often a child (or child group) may be restarted before the
-/// supervisor gives up and exits with [`SupervisorError::RestartIntensityExceeded`].
+/// Restart-budget and backoff configuration for a child or child group.
 ///
-/// Tracks a sliding window of restart timestamps: if more than `max_restarts`
-/// occur within `within`, the intensity limit is breached.
+/// The budget tracks a sliding window of restart timestamps: if more than
+/// `max_restarts` occur within `within`, the supervisor gives up and exits with
+/// [`SupervisorError::RestartIntensityExceeded`]. The same value configures
+/// the delay between attempts because an exponential backoff resets after a
+/// run survives this window.
+///
+/// Public `restart_intensity` setters retain the name of the supervisor
+/// behavior they configure. `RestartConfig` names the value passed through
+/// those surfaces because it contains both the restart budget and its
+/// backoff policy; this naming is deliberate rather than transitional.
 ///
 /// The default is 5 restarts within 30 seconds with no backoff.
 ///
@@ -96,7 +102,7 @@ impl BackoffPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub struct RestartIntensity {
+pub struct RestartConfig {
     /// Maximum number of restarts allowed inside the sliding window.
     pub max_restarts: usize,
     /// Length of the sliding window. Must be non-zero.
@@ -105,14 +111,14 @@ pub struct RestartIntensity {
     pub backoff: BackoffPolicy,
 }
 
-impl Default for RestartIntensity {
+impl Default for RestartConfig {
     fn default() -> Self {
         Self::new(5, Duration::from_secs(30))
     }
 }
 
-impl RestartIntensity {
-    /// Creates a new intensity limit with no backoff.
+impl RestartConfig {
+    /// Creates restart configuration with the given budget and no backoff.
     pub fn new(max_restarts: usize, within: Duration) -> Self {
         Self {
             max_restarts,

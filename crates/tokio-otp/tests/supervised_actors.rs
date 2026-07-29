@@ -12,12 +12,10 @@ use tokio::{
     time::{advance, timeout},
 };
 use tokio_otp::{
-    ActorContext, ActorRef, ActorResult, ActorSpec, BoxError, GraphBuilder, RawActor, Reply,
-    SendError, SupervisionTree,
+    ActorContext, ActorRef, ActorResult, ActorSpec, GraphBuilder, OrderedTree, Reply, SendError,
+    host::{BoxError, RawActor},
 };
-use tokio_supervisor::{
-    BackoffPolicy, ChildStateView, ExitStatusView, RestartIntensity, RestartPolicy, Strategy,
-};
+use tokio_supervisor::{BackoffPolicy, ExitStatusView, RestartConfig, RestartPolicy, Strategy};
 
 fn oneshot_slot<T>(tx: oneshot::Sender<T>) -> Arc<Mutex<Option<oneshot::Sender<T>>>> {
     Arc::new(Mutex::new(Some(tx)))
@@ -100,13 +98,11 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .build()
+        .spawn()
         .expect("runtime builds");
-
-    let handle = runtime.spawn();
 
     frontend_ref
         .send("first".to_owned())
@@ -182,19 +178,18 @@ async fn send_waits_during_permanent_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::Always)
                 .restart_intensity(
-                    RestartIntensity::new(10, Duration::from_secs(1))
+                    RestartConfig::new(10, Duration::from_secs(1))
                         .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
                 ),
         )
-        .build()
+        .spawn()
         .expect("runtime builds");
-    let handle = runtime.spawn();
 
     timeout(Duration::from_secs(1), first_exited_rx)
         .await
@@ -254,12 +249,11 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .build()
+        .spawn()
         .expect("runtime builds");
-    let handle = runtime.spawn();
 
     timeout(Duration::from_secs(1), exited_rx)
         .await
@@ -270,7 +264,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         .expect("send returned promptly");
     assert!(matches!(
         result,
-        Err(SendError::ActorTerminated { actor_id , .. }) if actor_id == "worker"
+        Err(SendError { actor_id , .. }) if actor_id == "worker"
     ));
 
     let mut snapshots = handle.subscribe_snapshots();
@@ -279,7 +273,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         snapshots.wait_for(|snapshot| {
             snapshot
                 .child("worker")
-                .is_some_and(|child| child.state == ChildStateView::Stopped)
+                .is_some_and(|child| child.state.is_stopped())
         }),
     )
     .await
@@ -290,9 +284,8 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         completed
             .child("worker")
             .expect("worker remains visible")
-            .last_exit
-            .as_ref(),
-        Some(ExitStatusView::Completed)
+            .last_exit(),
+        Some(&ExitStatusView::Completed)
     ));
 
     handle.shutdown();
@@ -343,19 +336,18 @@ async fn call_succeeds_across_restart_window() {
     });
     let graph = builder.build().expect("valid graph");
 
-    let runtime = SupervisionTree::new()
+    let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
         .actor(
             ActorSpec::new(graph.actors()[0].clone())
                 .restart(RestartPolicy::OnFailure)
                 .restart_intensity(
-                    RestartIntensity::new(10, Duration::from_secs(1))
+                    RestartConfig::new(10, Duration::from_secs(1))
                         .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
                 ),
         )
-        .build()
+        .spawn()
         .expect("runtime builds");
-    let handle = runtime.spawn();
 
     rpc_ref
         .send(RpcMsg::FailOnce)

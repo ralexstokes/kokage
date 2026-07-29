@@ -64,7 +64,7 @@ Things this tutorial glossed over that matter in production:
 - **Messages in a failed actor's mailbox are lost** when it restarts. If an
   order must survive a press jam, persist it outside the graph and re-inject
   it — the same discipline OTP asks of you.
-- **Restart budgets are your circuit breakers.** Tune `RestartIntensity` so a
+- **Restart budgets are your circuit breakers.** Tune `RestartConfig` so a
   persistent fault escalates to something (a parent supervisor, your process
   manager, an alert) instead of looping forever.
 - **Application-level breakers must not infer restarts from event pairs.** A

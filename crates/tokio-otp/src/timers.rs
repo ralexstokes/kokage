@@ -32,19 +32,19 @@ pub fn send_after_to<T: Send + 'static>(
 ) -> CancellationHandle {
     let timer = CancellationHandle::new();
     let task_timer = timer.clone();
-    let lifetime = lifetime.clone();
+    let lifetime = lifetime.token();
     let target = target.clone();
 
     tokio::spawn(async move {
         tokio::select! {
             biased;
             () = task_timer.cancelled() => {}
-            () = lifetime.ended() => task_timer.cancel(),
+            () = lifetime.cancelled() => task_timer.cancel(),
             () = tokio::time::sleep(delay) => {
                 tokio::select! {
                     biased;
                     () = task_timer.cancelled() => {}
-                    () = lifetime.ended() => task_timer.cancel(),
+                    () = lifetime.cancelled() => task_timer.cancel(),
                     _ = target.send(message) => {}
                 }
             }
@@ -77,7 +77,7 @@ pub fn interval_to<T: Clone + Send + 'static>(
     }
 
     let task_timer = timer.clone();
-    let lifetime = lifetime.clone();
+    let lifetime = lifetime.token();
     let target = target.clone();
     tokio::spawn(async move {
         let start = deadline_after(period);
@@ -88,7 +88,7 @@ pub fn interval_to<T: Clone + Send + 'static>(
             tokio::select! {
                 biased;
                 () = task_timer.cancelled() => break,
-                () = lifetime.ended() => {
+                () = lifetime.cancelled() => {
                     task_timer.cancel();
                     break;
                 }
@@ -96,7 +96,7 @@ pub fn interval_to<T: Clone + Send + 'static>(
                     let sent = tokio::select! {
                         biased;
                         () = task_timer.cancelled() => break,
-                        () = lifetime.ended() => {
+                        () = lifetime.cancelled() => {
                             task_timer.cancel();
                             break;
                         }

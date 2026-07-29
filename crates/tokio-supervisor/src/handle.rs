@@ -14,9 +14,9 @@ use tokio::{
 
 use crate::{
     attachment::{AttachedChild, AttachedChildIdentity},
-    child::{ChildSpec, OpaqueAttachment, SupervisorSpec},
+    child::{ChildKind, ChildSpec, OpaqueAttachment},
     error::{ControlError, SupervisorError},
-    lifecycle::{LifecycleHub, LifecycleWatch},
+    lifecycle::{ChildLifecycleWatch, LifecycleHub, LifecycleWatch},
     snapshot::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot, SupervisorStateView,
     },
@@ -42,8 +42,8 @@ impl ControlEndpoint {
             .await
     }
 
-    async fn add_supervisor(&self, supervisor: PendingSupervisorSpec) -> Result<u64, ControlError> {
-        self.send(|reply| SupervisorCommand::AddSupervisor { supervisor, reply })
+    async fn add_nested(&self, child: PendingSupervisorChild) -> Result<u64, ControlError> {
+        self.send(|reply| SupervisorCommand::AddNested { child, reply })
             .await
     }
 
@@ -157,35 +157,37 @@ enum WaitTarget {
     Terminal,
 }
 
-pub(crate) struct PendingSupervisorSpec {
-    supervisor: Option<Box<SupervisorSpec>>,
+pub(crate) struct PendingSupervisorChild {
+    child: Option<Box<ChildSpec>>,
 }
 
-impl PendingSupervisorSpec {
-    fn new(supervisor: SupervisorSpec) -> Self {
+impl PendingSupervisorChild {
+    fn new(child: ChildSpec) -> Self {
         Self {
-            supervisor: Some(Box::new(supervisor)),
+            child: Some(Box::new(child)),
         }
     }
 
-    pub(crate) fn spec_mut(&mut self) -> &mut SupervisorSpec {
-        self.supervisor
+    pub(crate) fn spec_mut(&mut self) -> &mut ChildSpec {
+        self.child
             .as_deref_mut()
-            .expect("pending supervisor spec was already accepted")
+            .expect("pending supervisor child was already accepted")
     }
 
-    pub(crate) fn accept(mut self) -> SupervisorSpec {
+    pub(crate) fn accept(mut self) -> ChildSpec {
         *self
-            .supervisor
+            .child
             .take()
-            .expect("pending supervisor spec was already accepted")
+            .expect("pending supervisor child was already accepted")
     }
 }
 
-impl Drop for PendingSupervisorSpec {
+impl Drop for PendingSupervisorChild {
     fn drop(&mut self) {
-        if let Some(supervisor) = &self.supervisor {
-            supervisor.supervisor.channels.terminal();
+        if let Some(child) = &self.child
+            && let ChildKind::Supervisor(supervisor) = &child.inner.kind
+        {
+            supervisor.channels.terminal();
         }
     }
 }
@@ -373,12 +375,10 @@ impl StableSupervisorChannels {
                     id,
                     lineage: lineage as u64,
                     generation: 0,
-                    started: false,
-                    startup_aborted: false,
-                    state: ChildStateView::Starting,
+                    state: ChildStateView::Starting {
+                        previous_exit: None,
+                    },
                     membership: ChildMembershipView::Active,
-                    last_exit: None,
-                    last_exit_cancelled: false,
                     restart_count: 0,
                     next_restart_in: None,
                     supervisor: None,
@@ -833,26 +833,31 @@ mod tests {
 
     #[test]
     fn binding_a_new_incarnation_resets_the_stable_snapshot() {
-        let stale_snapshot = SupervisorSnapshot::new(
+        let mut stale_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
             vec![ChildSnapshot::new(
                 "dynamic-worker",
                 0,
-                ChildStateView::Running,
+                ChildStateView::Running {
+                    previous_exit: None,
+                },
             )],
-        )
-        .total_restarts(7);
+        );
+        stale_snapshot.total_restarts = 7;
         let initial_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
             vec![ChildSnapshot::new(
                 "static-worker",
                 0,
-                ChildStateView::Starting,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
             )],
         );
-        let expected_snapshot = initial_snapshot.clone().total_restarts(7);
+        let mut expected_snapshot = initial_snapshot.clone();
+        expected_snapshot.total_restarts = 7;
         let channels =
             StableSupervisorChannels::new(stale_snapshot, 8, empty_nested_channels(), Vec::new());
         let handle = channels.handle();
@@ -882,7 +887,9 @@ mod tests {
             vec![ChildSnapshot::new(
                 "static-worker",
                 0,
-                ChildStateView::Starting,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
             )],
         );
         let channels = StableSupervisorChannels::new(
@@ -1001,7 +1008,9 @@ mod tests {
             vec![ChildSnapshot::new(
                 "gated-worker",
                 0,
-                ChildStateView::Starting,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
             )],
         );
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -1022,7 +1031,7 @@ mod tests {
             panic!("replacement binding must be observable");
         };
         assert_eq!(observed.children.len(), 1);
-        assert!(!observed.children[0].started);
+        assert!(!observed.children[0].started());
     }
 
     #[test]
@@ -1049,7 +1058,13 @@ mod tests {
         let ancestor_snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
-            vec![ChildSnapshot::new("dynamic", 0, ChildStateView::Starting)],
+            vec![ChildSnapshot::new(
+                "dynamic",
+                0,
+                ChildStateView::Starting {
+                    previous_exit: None,
+                },
+            )],
         );
         let ancestor = StableSupervisorChannels::new(
             ancestor_snapshot.clone(),
@@ -1182,13 +1197,13 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_add_terminalizes_when_the_queued_supervisor_is_dropped() {
-        let child = crate::DynamicSupervisorBuilder::new();
+        let child = crate::Supervisor::dynamic();
         let retained = child.handle();
         let child = child.build().expect("nested supervisor builds");
         let (command_tx, mut command_rx) = mpsc::channel(1);
         let endpoint = ControlEndpoint { command_tx };
-        let mut adding = Box::pin(endpoint.add_supervisor(PendingSupervisorSpec::new(
-            SupervisorSpec::new("nested", child),
+        let mut adding = Box::pin(endpoint.add_nested(PendingSupervisorChild::new(
+            ChildSpec::supervisor("nested", child),
         )));
 
         let queued = tokio::select! {
@@ -1364,8 +1379,8 @@ pub(crate) enum SupervisorCommand {
         id: String,
         reply: oneshot::Sender<Result<(), ControlError>>,
     },
-    AddSupervisor {
-        supervisor: PendingSupervisorSpec,
+    AddNested {
+        child: PendingSupervisorChild,
         reply: oneshot::Sender<Result<u64, ControlError>>,
     },
 }
@@ -1495,24 +1510,19 @@ impl SupervisorHandle {
     /// even if the same child id is later removed and reused. Success means the
     /// membership was inserted and its start was
     /// scheduled. This operation is supported only by dynamic supervisors,
-    /// which spawn it immediately. Use [`wait_started`](Self::wait_started)
-    /// when readiness is required.
+    /// which spawn it immediately. A [`ChildSpec::supervisor`] registers the
+    /// nested supervisor's restart-stable handle and attachment at insertion,
+    /// before it is spawned. Use [`wait_started`](Self::wait_started) when
+    /// readiness is required.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.control_endpoint()?.add_child(child).await
-    }
-
-    /// Adds a nested supervisor at runtime with restart-stable observation and
-    /// control channels.
-    ///
-    /// On success, returns the lineage assigned atomically with the
-    /// insertion. The nested handle and attachment are registered at insertion,
-    /// before the child is spawned. This operation is supported only by
-    /// dynamic supervisors; use [`wait_started`](Self::wait_started) to await
-    /// readiness.
-    pub async fn add_supervisor(&self, supervisor: SupervisorSpec) -> Result<u64, ControlError> {
-        let supervisor = PendingSupervisorSpec::new(supervisor);
         let endpoint = self.control_endpoint()?;
-        endpoint.add_supervisor(supervisor).await
+        if matches!(&child.inner.kind, ChildKind::Supervisor(_)) {
+            endpoint
+                .add_nested(PendingSupervisorChild::new(child))
+                .await
+        } else {
+            endpoint.add_child(child).await
+        }
     }
 
     /// Removes a child by id from this supervisor.
@@ -1540,8 +1550,7 @@ impl SupervisorHandle {
     /// entry as the attachment. Values with other concrete types are skipped.
     /// Attachments are not part of [`SupervisorSnapshot`] and are never
     /// serialized by the `serde` feature.
-    #[doc(hidden)]
-    pub fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
+    pub(crate) fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
     where
         T: Any + Send + Sync,
     {
@@ -1715,14 +1724,14 @@ impl SupervisorHandle {
                 .children
                 .iter()
                 .filter(|child| child.membership == ChildMembershipView::Active)
-                .all(|child| child.started)
+                .all(|child| child.state.started())
             {
                 return Ok(());
             }
             if let Some(child) = snapshot.children.iter().find(|child| {
                 child.membership == ChildMembershipView::Active
-                    && !child.started
-                    && child.startup_aborted
+                    && !child.state.started()
+                    && child.state.startup_aborted()
             }) {
                 return Err(SupervisorError::StartupAborted(format!(
                     "child `{}` exited before reporting readiness",
@@ -1751,8 +1760,7 @@ impl SupervisorHandle {
     }
 
     /// Returns an ordered, reliable stream of lifecycle transitions among
-    /// this supervisor's direct children, including restart scheduling and
-    /// restart-intensity failure.
+    /// this supervisor's direct children, including restart scheduling.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
     /// To obtain a gap-free state-plus-stream view, create the watch first,
@@ -1765,11 +1773,15 @@ impl SupervisorHandle {
     /// incarnations of this stable supervisor identity.
     ///
     /// Each watch owns a bounded buffer. Sustained overflow is represented by
-    /// [`LifecycleEvent::Lagged`](crate::LifecycleEvent::Lagged), never
-    /// silent loss. This scope does not aggregate nested supervisors; obtain a
-    /// nested handle with [`supervisor`](Self::supervisor) and watch it
-    /// separately.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    /// [`ChildLifecycleEventKind::Lagged`](crate::ChildLifecycleEventKind::Lagged), never
+    /// silent loss. Restart-intensity failure is a scope transition rather
+    /// than a direct-child transition: the direct watch drains already-staged
+    /// child events and closes without an in-band intensity marker. Use
+    /// [`watch_lifecycle_recursive`](Self::watch_lifecycle_recursive) when
+    /// that signal is required. This scope does not aggregate nested
+    /// supervisors; obtain a nested handle with [`supervisor`](Self::supervisor)
+    /// and watch it separately.
+    pub fn watch_lifecycle(&self) -> ChildLifecycleWatch {
         self.lifecycle_hub().watch()
     }
 
@@ -1777,15 +1789,16 @@ impl SupervisorHandle {
     ///
     /// Each event carries a path relative to this handle. Direct-child
     /// transitions retain the source scope's monotonic lifecycle sequence;
-    /// supervisor start/stop transitions and pending restart delays are also
+    /// scheduled restarts use the same child-event vocabulary. Supervisor
+    /// start/stop transitions and restart-intensity failures are also
     /// represented. A nested supervisor's stable identity remains attached
     /// across its own restarts and ancestor-driven recreation.
     ///
     /// Each watch owns one bounded buffer for the whole tree. Sustained
     /// overflow is represented by a tree-wide
-    /// [`LifecycleEvent::Lagged`](crate::LifecycleEvent::Lagged)
-    /// marker. Consumers maintaining derived state should then resynchronize
-    /// from [`snapshot`](Self::snapshot).
+    /// [`LifecycleEventKind::Lagged`](crate::LifecycleEventKind::Lagged)
+    /// marker with an empty supervisor path. Consumers maintaining derived
+    /// state should then resynchronize from [`snapshot`](Self::snapshot).
     pub fn watch_lifecycle_recursive(&self) -> LifecycleWatch {
         self.lifecycle_hub().watch_recursive()
     }
@@ -1801,12 +1814,12 @@ impl SupervisorHandle {
     /// # Waiting until all children are running
     ///
     /// ```no_run
-    /// use tokio_supervisor::{ChildSpec, ChildStateView, SupervisorBuilder};
+    /// use tokio_supervisor::{ChildSpec, ChildStateView, Supervisor};
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let supervisor = SupervisorBuilder::new()
-    ///     .child(ChildSpec::new("worker", |ctx| async move {
+    /// let supervisor = Supervisor::ordered()
+    ///     .child(ChildSpec::task("worker", |ctx| async move {
     ///         ctx.shutdown_token().cancelled().await;
     ///         Ok(())
     ///     }))
@@ -1819,7 +1832,7 @@ impl SupervisorHandle {
     ///         snapshot
     ///             .children
     ///             .iter()
-    ///             .all(|child| child.state == ChildStateView::Running)
+    ///             .all(|child| child.state.is_running())
     ///     })
     ///     .await?;
     /// # handle.shutdown();

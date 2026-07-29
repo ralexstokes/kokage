@@ -18,36 +18,31 @@ pub(crate) fn tidy_abort_beat(grace: Duration) -> Duration {
     (grace / 10).clamp(MIN_TIDY_ABORT_BEAT, MAX_TIDY_ABORT_BEAT)
 }
 
-/// How the supervisor stops a child task during shutdown or removal.
+/// How the supervisor stops a child task during shutdown, removal, or restart.
+///
+/// With the `serde` feature, this enum uses Serde's externally tagged enum
+/// representation. It replaces the former `{ mode, grace }` struct shape, so
+/// persisted policy values using that shape require migration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum ShutdownMode {
-    /// Like [`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort), but
-    /// failing to exit within the grace period makes the enclosing shutdown or
-    /// removal operation return a timeout error. Both cooperative modes still
-    /// expose a [`ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut)
-    /// child exit.
+pub enum ShutdownPolicy {
+    /// Ask the child to stop and wait for `grace` before aborting its task.
     ///
-    /// On expiry the supervisor first signals
+    /// Timing out is reported by the enclosing shutdown or removal operation.
+    /// During a group restart, expiry instead escalates the old generation to
+    /// abort; the restart continues once the old task exits. A caller that only
+    /// needs best-effort cleanup may explicitly ignore a shutdown or removal
+    /// error. On expiry the supervisor first signals
     /// [`ChildContext::abort_token`](crate::ChildContext::abort_token), then
     /// hard-aborts the task after a short accounting beat proportional to
     /// `grace`. Abort remains cooperative at Tokio poll boundaries, so a
     /// non-yielding future can outlive the shutdown call briefly. For
     /// hard-stop guarantees, isolate blocking work outside the supervised
     /// Tokio task.
-    CooperativeStrict,
-    /// Wait for the grace period, then escalate and return from the enclosing
-    /// shutdown operation without a timeout error.
-    ///
-    /// On expiry the supervisor first signals
-    /// [`ChildContext::abort_token`](crate::ChildContext::abort_token), then
-    /// hard-aborts the task after a short accounting beat proportional to
-    /// `grace`. Abort remains cooperative at Tokio poll boundaries, so a
-    /// non-yielding future can outlive the shutdown call briefly. For
-    /// hard-stop guarantees, isolate blocking work outside the supervised
-    /// Tokio task.
-    CooperativeThenAbort,
+    Cooperative {
+        /// Maximum time to wait before escalating to abort.
+        grace: Duration,
+    },
     /// Issue a Tokio abort and return promptly.
     ///
     /// Abort remains cooperative at Tokio poll boundaries, so this mode does not
@@ -57,38 +52,32 @@ pub enum ShutdownMode {
     Abort,
 }
 
-/// Shutdown behaviour for a single child, combining a [`ShutdownMode`] with a
-/// grace period.
-///
-/// The default is [`CooperativeThenAbort`](ShutdownMode::CooperativeThenAbort)
-/// with a 5-second grace period.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub struct ShutdownPolicy {
-    /// How long to wait for the child to exit after its cancellation token is
-    /// triggered.
-    pub grace: Duration,
-    /// What to do when the grace period expires (or immediately, for
-    /// [`Abort`](ShutdownMode::Abort)).
-    pub mode: ShutdownMode,
-}
-
 impl ShutdownPolicy {
-    /// Creates a policy with an explicit mode and grace period.
-    pub fn new(grace: Duration, mode: ShutdownMode) -> Self {
-        Self { grace, mode }
+    /// Ask the child to stop, waiting up to `grace` before aborting it.
+    pub const fn cooperative(grace: Duration) -> Self {
+        Self::Cooperative { grace }
     }
 
     /// Abort the Tokio task immediately with no grace period.
-    pub fn abort() -> Self {
-        Self::new(Duration::ZERO, ShutdownMode::Abort)
+    pub const fn abort() -> Self {
+        Self::Abort
+    }
+
+    pub(crate) const fn grace(self) -> Duration {
+        match self {
+            Self::Cooperative { grace } => grace,
+            Self::Abort => Duration::ZERO,
+        }
+    }
+
+    pub(crate) const fn is_abort(self) -> bool {
+        matches!(self, Self::Abort)
     }
 }
 
 impl Default for ShutdownPolicy {
     fn default() -> Self {
-        Self::new(Duration::from_secs(5), ShutdownMode::CooperativeThenAbort)
+        Self::cooperative(Duration::from_secs(5))
     }
 }
 
@@ -108,7 +97,7 @@ mod tests {
         // ...and usable for a tiny or zero grace.
         assert_eq!(tidy_abort_beat(Duration::ZERO), MIN_TIDY_ABORT_BEAT);
         assert_eq!(
-            tidy_abort_beat(ShutdownPolicy::default().grace),
+            tidy_abort_beat(ShutdownPolicy::default().grace()),
             MAX_TIDY_ABORT_BEAT
         );
     }

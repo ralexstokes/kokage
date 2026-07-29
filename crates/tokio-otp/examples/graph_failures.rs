@@ -9,7 +9,7 @@ use std::{
 };
 
 use tokio::time::{sleep, timeout};
-use tokio_otp::prelude::*;
+use tokio_otp::{host::RawActor, prelude::*};
 
 #[derive(Clone)]
 struct FailsOnce {
@@ -62,11 +62,10 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         }
     });
 
-    let handle = SupervisionTree::graph(&builder.build()?)
+    let handle = OrderedTree::graph(builder.build()?)
         .strategy(strategy)
         .default_restart(RestartPolicy::Always)
-        .build()?
-        .spawn();
+        .spawn()?;
 
     timeout(Duration::from_secs(1), async {
         loop {

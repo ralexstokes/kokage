@@ -191,8 +191,8 @@ set until reaped. Each offload future is still bounded by its own required
 deadline; the standalone host bound or supervised child grace remains the
 outer backstop for slow handlers.
 
-`ActorStats::outstanding_offloads` exposes the current number of owned offloads.
+`observe::ActorStats::outstanding_offloads` exposes the current number of owned offloads.
 It falls when the actor loop reaps a completion or observes an abort. The method
 lives on the shared `ActorContext` type: `recv` and `try_recv` merge offload
-completions with mailbox messages for a `RawActor`, but a hand-written raw loop
+completions with mailbox messages for a `host::RawActor`, but a hand-written raw loop
 must still define its own shutdown and drain protocol.

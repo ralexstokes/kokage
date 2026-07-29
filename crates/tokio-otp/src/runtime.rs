@@ -4,15 +4,18 @@ use std::{
 };
 
 use crate::{
-    ActorFactory, ActorOptions, ActorRef, ActorStats, RawActor, RunnableActor,
-    actor::{ActorOptionsValidationError, RunnableActorBuilder, SupervisorPathSegment},
+    ActorFactory, ActorOptions, ActorRef,
+    actor::{
+        ActorOptionsValidationError, ActorStats, RawActor, RunnableActor, RunnableActorBuilder,
+        SupervisorPathSegment,
+    },
 };
-use thiserror::Error;
 use tokio::sync::watch;
 use tokio_supervisor::{
-    AttachedChildIdentity, ChildSpec, CompletionGuard, CompletionOutcome, ControlError,
-    LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownPolicy, Supervisor,
-    SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSpec,
+    __private::{self, AttachedChildIdentity},
+    ChildLifecycleEvent, ChildLifecycleWatch, ChildSpec, CompletionGuard, CompletionOutcome,
+    ControlError, LifecycleWatch, RestartConfig, RestartPolicy, ShutdownPolicy,
+    SupervisorBuildError, SupervisorError, SupervisorHandle, SupervisorSnapshot,
 };
 
 use tokio_util::sync::CancellationToken;
@@ -126,14 +129,12 @@ impl RuntimeAttachment {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct DynamicActorOptions<M = ()> {
-    // Restart policy for the supervised actor child.
-    restart: RestartPolicy,
-    restart_is_default: bool,
-    // Shutdown policy for the supervised actor child.
-    shutdown: ShutdownPolicy,
-    shutdown_is_default: bool,
+    // Restart-policy override for the supervised actor child.
+    restart: Option<RestartPolicy>,
+    // Shutdown-policy override for the supervised actor child.
+    shutdown: Option<ShutdownPolicy>,
     // Optional restart intensity override for this actor child.
-    restart_intensity: Option<RestartIntensity>,
+    restart_intensity: Option<RestartConfig>,
     actor_options: ActorOptions<M>,
     // `None` selects the dynamic-actor default. Keeping the override unresolved
     // makes `restart(...).remove_on_exit(...)` order-independent.
@@ -144,9 +145,7 @@ impl<M> Clone for DynamicActorOptions<M> {
     fn clone(&self) -> Self {
         Self {
             restart: self.restart,
-            restart_is_default: self.restart_is_default,
             shutdown: self.shutdown,
-            shutdown_is_default: self.shutdown_is_default,
             restart_intensity: self.restart_intensity,
             actor_options: self.actor_options.clone(),
             remove_on_exit: self.remove_on_exit,
@@ -157,10 +156,8 @@ impl<M> Clone for DynamicActorOptions<M> {
 impl<M> Default for DynamicActorOptions<M> {
     fn default() -> Self {
         Self {
-            restart: RestartPolicy::OnFailure,
-            restart_is_default: true,
-            shutdown: ShutdownPolicy::default(),
-            shutdown_is_default: true,
+            restart: None,
+            shutdown: None,
             restart_intensity: None,
             actor_options: ActorOptions::new(),
             remove_on_exit: None,
@@ -169,7 +166,8 @@ impl<M> Default for DynamicActorOptions<M> {
 }
 
 impl<M> DynamicActorOptions<M> {
-    /// Creates options with restart-on-failure and the default shutdown policy.
+    /// Creates options that inherit the dynamic scope's restart and shutdown
+    /// policies.
     pub fn new() -> Self {
         Self::default()
     }
@@ -180,8 +178,7 @@ impl<M> DynamicActorOptions<M> {
     /// configured restart default.
     #[must_use]
     pub fn restart(mut self, restart: RestartPolicy) -> Self {
-        self.restart = restart;
-        self.restart_is_default = false;
+        self.restart = Some(restart);
         self
     }
 
@@ -191,14 +188,13 @@ impl<M> DynamicActorOptions<M> {
     /// configured shutdown default.
     #[must_use]
     pub fn shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
-        self.shutdown = shutdown;
-        self.shutdown_is_default = false;
+        self.shutdown = Some(shutdown);
         self
     }
 
     /// Overrides the supervisor's restart intensity for this actor.
     #[must_use]
-    pub fn restart_intensity(mut self, restart_intensity: RestartIntensity) -> Self {
+    pub fn restart_intensity(mut self, restart_intensity: RestartConfig) -> Self {
         self.restart_intensity = Some(restart_intensity);
         self
     }
@@ -235,16 +231,8 @@ impl<M> DynamicActorOptions<M> {
         default_restart: RestartPolicy,
         default_shutdown: ShutdownPolicy,
     ) -> DynamicChildOptions {
-        let restart = if self.restart_is_default {
-            default_restart
-        } else {
-            self.restart
-        };
-        let shutdown = if self.shutdown_is_default {
-            default_shutdown
-        } else {
-            self.shutdown
-        };
+        let restart = self.restart.unwrap_or(default_restart);
+        let shutdown = self.shutdown.unwrap_or(default_shutdown);
         let remove_on_exit = self.remove_on_exit.unwrap_or(true);
         DynamicChildOptions {
             restart,
@@ -267,7 +255,7 @@ impl<M> DynamicActorOptions<M> {
 struct DynamicChildOptions {
     restart: RestartPolicy,
     shutdown: ShutdownPolicy,
-    restart_intensity: Option<RestartIntensity>,
+    restart_intensity: Option<RestartConfig>,
     remove_on_exit: bool,
 }
 
@@ -311,13 +299,13 @@ impl Drop for LifecycleWatchGuard {
 }
 
 fn spawn_lifecycle_watch_to<M, F>(
-    mut lifecycle: LifecycleWatch,
+    mut lifecycle: ChildLifecycleWatch,
     target: ActorRef<M>,
     mut map: F,
 ) -> LifecycleWatchGuard
 where
     M: Send + 'static,
-    F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
 {
     let cancellation = CancellationToken::new();
     let task_cancellation = cancellation.clone();
@@ -350,97 +338,6 @@ where
     LifecycleWatchGuard { cancellation }
 }
 
-/// Configured-but-not-yet-running runtime that owns a supervisor and its
-/// actor factory.
-///
-/// Start the runtime with [`spawn`](Self::spawn), which returns the
-/// [`RuntimeHandle`] control surface. To drive the runtime in the foreground
-/// while keeping that control surface, call `spawn()` and then
-/// [`RuntimeHandle::wait`]. Use [`into_supervisor`](Self::into_supervisor)
-/// as the explicit escape hatch to the raw [`Supervisor`].
-pub struct Runtime {
-    supervisor: Supervisor,
-    actors: Arc<ActorRuntimeState>,
-}
-
-impl Runtime {
-    pub(crate) fn with_actor_tree(supervisor: Supervisor, actors: Arc<ActorRuntimeState>) -> Self {
-        Self { supervisor, actors }
-    }
-
-    pub(crate) fn into_parts(self) -> (Supervisor, Arc<ActorRuntimeState>) {
-        (self.supervisor, self.actors)
-    }
-
-    /// Returns this runtime's stable actor-aware handle before it is spawned.
-    pub fn handle(&self) -> RuntimeHandle {
-        RuntimeHandle::new(self.supervisor.handle(), Arc::clone(&self.actors))
-    }
-
-    /// Returns the underlying [`Supervisor`] for first-class nesting.
-    ///
-    /// This is a one-way escape hatch to the lower-level supervisor API.
-    /// Declared actors keep running and restarting, but actor-aware control,
-    /// dynamic actor insertion, and recursive actor stats are no longer
-    /// available. Keep the full runtime and use [`spawn`](Self::spawn) when
-    /// those capabilities are required. Because `Supervisor` is intentionally
-    /// not re-exported, using this escape hatch requires a direct
-    /// `tokio-supervisor` dependency.
-    ///
-    /// ```no_run
-    /// use tokio_otp::{Actor, MessageContext, ActorResult, GraphBuilder, SupervisionTree};
-    /// use tokio_supervisor::{SupervisorBuilder, SupervisorSpec};
-    ///
-    /// struct Worker;
-    ///
-    /// impl Actor for Worker {
-    ///     type Msg = ();
-    ///
-    ///     async fn handle(&mut self, (): (), _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-    ///         Ok(())
-    ///     }
-    /// }
-    ///
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut graph = GraphBuilder::new();
-    /// let (actor_slot, _) = graph.slot("worker");
-    /// graph.define(actor_slot, || Worker);
-    /// let graph = graph.build()?;
-    /// let actor_subtree = SupervisionTree::graph(&graph)
-    ///     .build()?
-    ///     .into_supervisor();
-    /// let root = SupervisorBuilder::new()
-    ///     .supervisor(SupervisorSpec::new("actors", actor_subtree))
-    ///     .build()?;
-    /// # let _ = root;
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// This conversion is intentionally one-way. Already-declared actors keep
-    /// their factories and continue to execute and restart, but spawning the
-    /// returned value yields only a raw `SupervisorHandle`. The actor-aware
-    /// access path — including dynamic `add_actor` configuration, recursive
-    /// actor statistics, and actor-aware subtree attachment — is no longer
-    /// available. Use it only when handing ownership to APIs that explicitly
-    /// require the lower-level `tokio-supervisor` type.
-    pub fn into_supervisor(self) -> Supervisor {
-        self.supervisor
-    }
-
-    /// Spawns the supervisor in the background and returns a combined handle.
-    pub fn spawn(self) -> RuntimeHandle {
-        let supervisor = self.supervisor.spawn();
-        RuntimeHandle::new(supervisor, self.actors)
-    }
-}
-
-impl std::fmt::Debug for Runtime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Runtime").finish_non_exhaustive()
-    }
-}
-
 /// Cheaply cloneable runtime control surface.
 ///
 /// For a spawned root runtime, dropping the last public handle clone requests
@@ -450,18 +347,6 @@ impl std::fmt::Debug for Runtime {
 pub struct RuntimeHandle {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
-}
-
-/// Errors returned when adding an actor-aware runtime subtree dynamically.
-#[derive(Debug, Error, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum AddSubtreeError {
-    /// The reserved tree contains an invalid supervisor configuration.
-    #[error("failed to build runtime subtree: {0}")]
-    Build(#[from] tokio_supervisor::SupervisorBuildError),
-    /// The parent supervisor rejected the dynamic child operation.
-    #[error("failed to add runtime subtree: {0}")]
-    Control(#[from] ControlError),
 }
 
 impl RuntimeHandle {
@@ -474,7 +359,7 @@ impl RuntimeHandle {
 
         UNAVAILABLE
             .get_or_init(|| {
-                let builder = tokio_supervisor::DynamicSupervisorBuilder::new();
+                let builder = tokio_supervisor::Supervisor::dynamic();
                 let supervisor = builder.handle();
                 drop(builder);
                 Self::new(
@@ -507,12 +392,6 @@ impl RuntimeHandle {
     /// retained subtree handles then fail control operations with
     /// [`ControlError::Unavailable`].
     ///
-    /// The subtree must be in its non-cloneable reserved form. Call
-    /// [`SupervisionTree::reserve`](crate::SupervisionTree::reserve) for a
-    /// plain declaration. Reservation is explicit because accepting a fresh
-    /// plain declaration here could not preserve any
-    /// pre-spawn root or nested handles through insertion.
-    ///
     /// If the subtree itself restarts, its statically declared graph actors
     /// is recreated, while children added later through the returned handle
     /// are lost and must be replayed by the application. If this handle's
@@ -525,23 +404,33 @@ impl RuntimeHandle {
     /// immediately and dynamic siblings stop concurrently under one shared
     /// maximum-grace deadline. Use [`wait_started`](Self::wait_started) when
     /// readiness is needed.
-    pub async fn add_subtree<const DYNAMIC: bool>(
+    ///
+    /// Both failure phases use [`ControlError::Rejected`]: first the supplied
+    /// tree is lowered and validated, then the parent validates insertion of
+    /// the resulting child. For example, a duplicate actor binding fails the
+    /// first phase, while an already-occupied child id fails the second. The
+    /// nested [`SupervisorBuildError`] identifies the validation rule, but a
+    /// caller should not infer the phase solely from an error variant because
+    /// some rules, such as duplicate child ids, can arise in either phase.
+    /// Any error consumes the supplied tree and makes handles previously issued
+    /// from it terminal.
+    pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        tree: crate::ReservedSupervisionTree<DYNAMIC>,
-    ) -> Result<RuntimeHandle, AddSubtreeError> {
+        tree: impl Into<crate::TreeNode>,
+    ) -> Result<RuntimeHandle, ControlError> {
         let id = id.into();
-        let (nested_supervisor, nested_actors) = tree.build()?.into_parts();
+        let parts = tree.into().into_parts();
+        let (nested_supervisor, nested_actors) = parts.map_err(ControlError::Rejected)?;
         let lineage = self
             .supervisor
-            .add_supervisor(
-                SupervisorSpec::new(id.clone(), nested_supervisor).attachment(
-                    RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
-                ),
-            )
+            .add_child(__private::attach(
+                ChildSpec::supervisor(id.clone(), nested_supervisor),
+                RuntimeAttachment::subtree(&self.actors, Arc::clone(&nested_actors)),
+            ))
             .await?;
         self.subtree_membership(&id, Some(lineage))
-            .ok_or(ControlError::Unavailable.into())
+            .ok_or(ControlError::Unavailable)
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -552,8 +441,7 @@ impl RuntimeHandle {
     }
 
     fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<RuntimeHandle> {
-        self.supervisor
-            .attached_children::<RuntimeAttachment>()
+        __private::attached_children::<RuntimeAttachment>(&self.supervisor)
             .into_iter()
             .find_map(|attached| {
                 let [identity] = attached.path() else {
@@ -617,7 +505,7 @@ impl RuntimeHandle {
     /// can be used immediately, while [`wait_started`](Self::wait_started)
     /// retains the stronger readiness contract. A zero
     /// [`ActorOptions::mailbox_capacity`] is rejected with
-    /// [`ControlError::InvalidConfig`].
+    /// [`ControlError::Rejected`].
     pub async fn add_actor_with<F>(
         &self,
         label: impl Into<String>,
@@ -633,7 +521,7 @@ impl RuntimeHandle {
         actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
-                ControlError::InvalidConfig(error.message())
+                ControlError::Rejected(SupervisorBuildError::InvalidConfig(error.message()))
             })?;
         let actor = self.actors.make_actor(label, factory, actor_options);
         self.add_constructed_actor(actor, dynamic_options).await
@@ -672,9 +560,8 @@ impl RuntimeHandle {
     /// to the queued prefix handled before `on_stop`. With `Discard`, accepted
     /// work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly return
-    /// [`SendError::MailboxClosed`](crate::SendError::MailboxClosed), while an
-    /// awaited `send` waits and then returns
-    /// [`SendError::ActorTerminated`](crate::SendError::ActorTerminated).
+    /// [`TrySendError::Closed`](crate::TrySendError::Closed), while an awaited
+    /// `send` waits and then returns [`SendError`](crate::SendError).
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
@@ -728,7 +615,7 @@ impl RuntimeHandle {
     }
 
     /// Returns the ordered lifecycle stream for this runtime's direct
-    /// children, including restart scheduling and restart-intensity failure.
+    /// children, including restart scheduling.
     ///
     /// Create the watch before reading [`snapshot`](Self::snapshot), then
     /// discard child transitions whose `seq` is at most the snapshot's
@@ -736,7 +623,7 @@ impl RuntimeHandle {
     /// already project configured children, so reducers should apply their
     /// later `Added` events as idempotent membership upserts. Use a
     /// [`subtree`](Self::subtree) handle for nested scopes.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    pub fn watch_lifecycle(&self) -> ChildLifecycleWatch {
         self.supervisor.watch_lifecycle()
     }
 
@@ -765,7 +652,7 @@ impl RuntimeHandle {
     pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> LifecycleWatchGuard
     where
         M: Send + 'static,
-        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+        F: FnMut(ChildLifecycleEvent) -> M + Send + 'static,
     {
         spawn_lifecycle_watch_to(self.watch_lifecycle(), target.clone(), map)
     }
@@ -792,7 +679,7 @@ impl RuntimeHandle {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
 
-        for attached in self.supervisor.attached_children::<RuntimeAttachment>() {
+        for attached in __private::attached_children::<RuntimeAttachment>(&self.supervisor) {
             let Some((child, supervisor_path)) = attached.path().split_last() else {
                 continue;
             };
@@ -864,7 +751,7 @@ pub(crate) struct ActorChildOptions {
     pub(crate) child_id: Option<String>,
     pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: ShutdownPolicy,
-    pub(crate) restart_intensity: Option<RestartIntensity>,
+    pub(crate) restart_intensity: Option<RestartConfig>,
     /// Whether the membership disappears when the actor exits, rather than
     /// resting as an inactive entry.
     pub(crate) remove_on_exit: bool,
@@ -890,7 +777,7 @@ impl ActorChildOptions {
         self
     }
 
-    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartIntensity>) -> Self {
+    pub(crate) fn restart_intensity(mut self, intensity: Option<RestartConfig>) -> Self {
         self.restart_intensity = intensity;
         self
     }
@@ -924,25 +811,27 @@ pub(crate) fn actor_child_spec(
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
-    let mut child = ChildSpec::new(actor_id, move |ctx| {
-        let actor = child_guard.actor.clone();
-        let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
-        let children = children.clone();
-        async move {
-            actor
-                .run_until_ready(
-                    ctx.shutdown_token().cancelled(),
-                    ctx.abort_token().cancelled(),
-                    restart,
-                    supervisor,
-                    children,
-                    || ctx.mark_ready(),
-                )
-                .await
-                .map_err(Into::into)
-        }
-    })
-    .attachment(attachment)
+    let mut child = __private::attach(
+        ChildSpec::task(actor_id, move |ctx| {
+            let actor = child_guard.actor.clone();
+            let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
+            let children = children.clone();
+            async move {
+                actor
+                    .run_until_ready(
+                        ctx.shutdown_token().cancelled(),
+                        ctx.abort_token().cancelled(),
+                        restart,
+                        supervisor,
+                        children,
+                        || ctx.mark_ready(),
+                    )
+                    .await
+                    .map_err(Into::into)
+            }
+        }),
+        attachment,
+    )
     .wait_for_ready()
     .restart(restart)
     .remove_on_exit(remove_on_exit)
@@ -965,7 +854,7 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 
 #[cfg(test)]
 mod tests {
-    use crate::SupervisionTree;
+    use crate::{DynamicTree, OrderedTree};
 
     #[test]
     fn unavailable_runtime_handle_is_cached() {
@@ -977,11 +866,8 @@ mod tests {
 
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
-        let root = SupervisionTree::dynamic()
-            .build()
-            .expect("runtime builds")
-            .spawn();
-        root.add_subtree("workers", SupervisionTree::new().reserve())
+        let root = DynamicTree::new().spawn().expect("runtime builds");
+        root.add_subtree("workers", OrderedTree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -993,7 +879,7 @@ mod tests {
         root.remove_child("workers")
             .await
             .expect("first subtree removed");
-        root.add_subtree("workers", SupervisionTree::new().reserve())
+        root.add_subtree("workers", OrderedTree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

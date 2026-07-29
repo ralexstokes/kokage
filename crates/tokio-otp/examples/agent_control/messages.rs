@@ -7,7 +7,7 @@ use std::{
 };
 
 use tokio::time::Instant;
-use tokio_otp::{ActorRef, MessageSize, MonitorEvent, Reply};
+use tokio_otp::{ActorRef, MonitorEvent, Reply};
 
 pub type ChatId = &'static str;
 pub type EnvelopeId = u64;
@@ -140,22 +140,20 @@ pub enum JournalMsg {
     },
 }
 
-impl MessageSize for JournalMsg {
-    fn size_hint(&self) -> usize {
-        match self {
-            Self::Append { entry, .. } => match entry {
-                JournalEntry::UserMessage { text, .. }
-                | JournalEntry::Plan { text, .. }
-                | JournalEntry::Reply { text, .. }
-                | JournalEntry::Checkpoint { state: text, .. } => text.len(),
-                JournalEntry::ToolIntent { key, call, .. } => key.len() + call.len(),
-                JournalEntry::ToolEffect { key, outcome, .. } => key.len() + outcome.output.len(),
-                JournalEntry::Review { .. }
-                | JournalEntry::TaskCancelled { .. }
-                | JournalEntry::Evicted => 0,
-            },
-            Self::Replay { .. } | Self::Report { .. } => 0,
-        }
+pub fn journal_message_size(message: &JournalMsg) -> usize {
+    match message {
+        JournalMsg::Append { entry, .. } => match entry {
+            JournalEntry::UserMessage { text, .. }
+            | JournalEntry::Plan { text, .. }
+            | JournalEntry::Reply { text, .. }
+            | JournalEntry::Checkpoint { state: text, .. } => text.len(),
+            JournalEntry::ToolIntent { key, call, .. } => key.len() + call.len(),
+            JournalEntry::ToolEffect { key, outcome, .. } => key.len() + outcome.output.len(),
+            JournalEntry::Review { .. }
+            | JournalEntry::TaskCancelled { .. }
+            | JournalEntry::Evicted => 0,
+        },
+        JournalMsg::Replay { .. } | JournalMsg::Report { .. } => 0,
     }
 }
 
@@ -188,7 +186,7 @@ pub struct GuardReport {
 pub enum GuardMsg {
     RunFailureObserved { chat: ChatId, task: TaskId },
     BudgetExceeded,
-    BridgeRestarts { total: Option<u64> },
+    BridgeRestarts { total: u64 },
     Probe,
     Paused { reply: Reply<bool> },
     Report { reply: Reply<GuardReport> },
@@ -236,7 +234,7 @@ pub enum ToolHostMsg {
 #[derive(Debug)]
 pub enum RouterMsg {
     /// Ordered membership transition from the sessions mount alignment watch.
-    MountLifecycle(tokio_otp::LifecycleEvent),
+    MountLifecycle(tokio_otp::observe::ChildLifecycleEvent),
     UserMessage {
         envelope: EnvelopeId,
         chat: ChatId,

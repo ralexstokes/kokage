@@ -24,7 +24,7 @@ use crate::{
         },
         builder::{ActorOptions, DEFAULT_MAILBOX_CAPACITY},
         context::{ActorContext, ActorLifetime, ActorRef},
-        error::GraphBuildError,
+        error::GraphLookupError,
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},
         observability::{ActorExitStatus, GraphObservability, anonymous_graph_name},
@@ -97,6 +97,8 @@ where
                 continuations: Default::default(),
                 stop_requested: false,
                 offloads: Default::default(),
+                scope_waits: Default::default(),
+                scope_wait_gates: Default::default(),
                 supervisor: start.supervisor,
                 children: start.children,
             };
@@ -158,7 +160,7 @@ pub enum ActorRunError {
 ///
 /// This matches the default grace of
 /// [`ShutdownPolicy`](crate::ShutdownPolicy), so an actor behaves the same
-/// whether it is hosted by hand or by [`Runtime`](crate::Runtime).
+/// whether it is hosted by hand or by an [`OrderedTree`](crate::OrderedTree).
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
 /// An actor graph containing wiring and independently runnable actors.
@@ -166,7 +168,6 @@ pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 /// Stable typed refs remain functional across independent actor restarts.
 /// Execution is performed by driving the actors returned by [`actors`](Self::actors),
 /// normally as separate supervisor children.
-#[derive(Clone)]
 pub struct Graph {
     inner: Arc<GraphInner>,
 }
@@ -205,23 +206,11 @@ impl Graph {
         &self.inner.actors
     }
 
-    /// Finds a runnable actor by its label.
-    ///
-    /// Labels are unique within a graph, so at most one actor matches. This is
-    /// how a supervision declaration places a named actor without depending on
-    /// declaration order.
-    pub fn actor(&self, label: &str) -> Option<&RunnableActor> {
-        self.inner
-            .actors
-            .iter()
-            .find(|actor| actor.label() == label)
-    }
-
     /// Resolves a typed actor ref to the runnable actor with the same binding.
     ///
     /// Identity, rather than the actor label, is compared. A ref from another
     /// graph is rejected even when both graphs use the same label.
-    pub fn actor_for<M>(&self, actor_ref: &ActorRef<M>) -> Result<RunnableActor, GraphBuildError> {
+    pub fn actor_for<M>(&self, actor_ref: &ActorRef<M>) -> Result<RunnableActor, GraphLookupError> {
         self.inner
             .actors
             .iter()
@@ -232,7 +221,7 @@ impl Graph {
                 )
             })
             .cloned()
-            .ok_or_else(|| GraphBuildError::ForeignActorRef {
+            .ok_or_else(|| GraphLookupError::ForeignActorRef {
                 actor_id: actor_ref.id().to_owned(),
             })
     }
@@ -299,6 +288,10 @@ impl RunnableActor {
         &self.inner.actor_id
     }
 
+    pub(crate) fn binding_identity(&self) -> usize {
+        Arc::as_ptr(self.inner.binding_lifecycle.identity()) as usize
+    }
+
     pub(crate) fn stats(&self) -> ActorStats {
         self.inner.binding_lifecycle.stats()
     }
@@ -306,7 +299,8 @@ impl RunnableActor {
     /// Marks the actor's binding terminated.
     ///
     /// Call this when no further run will be started so senders fail fast with
-    /// `ActorTerminated` instead of waiting for a rebind that will never come.
+    /// [`SendError`](crate::SendError) instead of waiting for a rebind that
+    /// will never come.
     pub fn terminate_binding(&self) {
         self.apply_run_disposition(RunDisposition::Terminate);
     }
@@ -560,18 +554,6 @@ fn run_disposition(
         (RestartPolicy::Never, _)
         | (RestartPolicy::OnFailure, ActorExitStatus::Stopped)
         | (_, ActorExitStatus::Shutdown) => RunDisposition::Terminate,
-        // `RestartPolicy` is intentionally extensible. A future policy must
-        // opt in to more precise binding behavior when this crate adopts it.
-        _ => {
-            tracing::warn!(
-                "unknown restart policy; defaulting actor rebind behavior to on-failure"
-            );
-            if status == ActorExitStatus::Stopped {
-                RunDisposition::Terminate
-            } else {
-                RunDisposition::ExpectRebind
-            }
-        }
     }
 }
 

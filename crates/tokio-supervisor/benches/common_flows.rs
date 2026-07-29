@@ -15,8 +15,8 @@ use tokio::{
     sync::Notify,
 };
 use tokio_supervisor::{
-    BoxError, ChildSpec, DynamicSupervisorBuilder, LifecycleEvent, LifecycleWatch, RestartPolicy,
-    Strategy, SupervisorBuilder,
+    BoxError, ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec, RestartPolicy, Strategy,
+    Supervisor,
 };
 
 const DEFAULT_WARMUP_ITERS: usize = 10;
@@ -100,9 +100,9 @@ fn bench_async<F, Fut>(
 }
 
 async fn spawn_shutdown_flow(children: usize) {
-    let mut builder = SupervisorBuilder::new();
+    let mut builder = Supervisor::ordered();
     for index in 0..children {
-        builder = builder.child(ChildSpec::new(
+        builder = builder.child(ChildSpec::task(
             format!("worker-{index}"),
             |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -128,7 +128,7 @@ async fn one_for_one_restart_flow() {
     let trigger_failure = Arc::new(Notify::new());
     let flaky_attempts = Arc::clone(&attempts);
     let flaky_trigger = Arc::clone(&trigger_failure);
-    let flaky = ChildSpec::new("flaky", move |ctx| {
+    let flaky = ChildSpec::task("flaky", move |ctx| {
         let attempts = Arc::clone(&flaky_attempts);
         let trigger_failure = Arc::clone(&flaky_trigger);
         async move {
@@ -143,11 +143,11 @@ async fn one_for_one_restart_flow() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let mut builder = SupervisorBuilder::new()
+    let mut builder = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .child(flaky);
     for index in 0..3 {
-        builder = builder.child(ChildSpec::new(format!("peer-{index}"), |ctx| async move {
+        builder = builder.child(ChildSpec::task(format!("peer-{index}"), |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -165,7 +165,7 @@ async fn one_for_one_restart_flow() {
         .generation;
     trigger_failure.notify_one();
     let generation = lifecycle
-        .started_after(&[], "flaky", baseline)
+        .started_after("flaky", baseline)
         .await
         .expect("supervisor remains live during benchmark");
     black_box(generation);
@@ -178,7 +178,7 @@ async fn one_for_one_restart_flow() {
 async fn one_for_all_restart_flow() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let trigger_attempts = Arc::clone(&attempts);
-    let trigger = ChildSpec::new("trigger", move |ctx| {
+    let trigger = ChildSpec::task("trigger", move |ctx| {
         let attempts = Arc::clone(&trigger_attempts);
         async move {
             if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -191,12 +191,12 @@ async fn one_for_all_restart_flow() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let mut builder = SupervisorBuilder::new()
+    let mut builder = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(trigger);
     for index in 0..3 {
         builder = builder.child(
-            ChildSpec::new(format!("peer-{index}"), |ctx| async move {
+            ChildSpec::task(format!("peer-{index}"), |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
@@ -217,14 +217,14 @@ async fn one_for_all_restart_flow() {
 }
 
 async fn dynamic_add_remove_flow() {
-    let handle = DynamicSupervisorBuilder::new()
+    let handle = Supervisor::dynamic()
         .build()
         .expect("benchmark supervisor should build")
         .spawn();
     let mut events = handle.watch_lifecycle();
 
     handle
-        .add_child(ChildSpec::new("seed", |ctx| async move {
+        .add_child(ChildSpec::task("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -234,7 +234,7 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "seed").await;
 
     handle
-        .add_child(ChildSpec::new("dynamic", |ctx| async move {
+        .add_child(ChildSpec::task("dynamic", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -252,41 +252,44 @@ async fn dynamic_add_remove_flow() {
     handle.wait().await.expect("shutdown should succeed");
 }
 
-async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize) -> usize {
+async fn wait_for_child_start_count(events: &mut ChildLifecycleWatch, expected: usize) -> usize {
     let mut started = 0;
     while started < expected {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event, LifecycleEvent::Started { .. }) {
+        if matches!(event.kind, ChildLifecycleEventKind::Started { .. }) {
             started += 1;
         }
     }
     started
 }
 
-async fn wait_for_restart_count(events: &mut LifecycleWatch, expected: usize) -> usize {
+async fn wait_for_restart_count(events: &mut ChildLifecycleWatch, expected: usize) -> usize {
     let mut restarted = 0;
     while restarted < expected {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event, LifecycleEvent::Started { generation: 1, .. }) {
+        if matches!(
+            event.kind,
+            ChildLifecycleEventKind::Started { generation: 1 }
+        ) {
             restarted += 1;
         }
     }
     restarted
 }
 
-async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
+async fn wait_for_named_child_started(events: &mut ChildLifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if event.child_id() == Some(id) && matches!(event, LifecycleEvent::Started { .. }) {
+        if event.child_id == id && matches!(event.kind, ChildLifecycleEventKind::Started { .. }) {
             return;
         }
     }
 }
 
-async fn wait_for_named_child_removed(events: &mut LifecycleWatch, id: &str) {
+async fn wait_for_named_child_removed(events: &mut ChildLifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if event.child_id() == Some(id) && matches!(event, LifecycleEvent::Removed { .. }) {
+        if event.child_id == id && matches!(event.kind, ChildLifecycleEventKind::Removed) {
             return;
         }
     }

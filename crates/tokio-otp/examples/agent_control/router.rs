@@ -9,9 +9,12 @@ use std::{
 };
 
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, AmbientContext, ChildMembershipView, ControlError, GraphBuilder,
-    LifecycleEvent, LifecycleWatchGuard, LiveContext, MessageContext, RuntimeHandle, StartContext,
-    Strategy, SupervisionTree, SupervisorSnapshot,
+    Actor, ActorRef, ActorResult, ControlError, DynamicTree, GraphBuilder, LiveContext,
+    MessageContext, OrderedTree, RuntimeHandle, StartContext, Strategy, SupervisorError,
+    observe::{
+        ChildLifecycleEvent, ChildLifecycleEventKind, ChildMembershipView, LifecycleWatchGuard,
+        SupervisorSnapshot,
+    },
 };
 
 use crate::{
@@ -69,10 +72,13 @@ enum MountEventDisposition {
     Ignore,
 }
 
-fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountEventDisposition {
-    if matches!(event, LifecycleEvent::Lagged { .. }) {
+fn mount_event_disposition(
+    alignment_seq: u64,
+    event: &ChildLifecycleEvent,
+) -> MountEventDisposition {
+    if matches!(&event.kind, ChildLifecycleEventKind::Lagged { .. }) {
         MountEventDisposition::ReconcileSnapshot
-    } else if event.seq().is_some_and(|seq| seq > alignment_seq) {
+    } else if event.seq > alignment_seq {
         MountEventDisposition::Apply
     } else {
         MountEventDisposition::Ignore
@@ -163,14 +169,12 @@ impl Router {
                 let subtree = mount
                     .add_subtree(
                         offload_id,
-                        SupervisionTree::new()
-                            .actor_with_scope(
-                                "session-runtime",
-                                session_actor,
-                                SupervisionTree::dynamic(),
-                                Strategy::OneForAll,
-                            )
-                            .reserve(),
+                        OrderedTree::new().actor_with_scope(
+                            "session-runtime",
+                            session_actor,
+                            DynamicTree::new(),
+                            Strategy::OneForAll,
+                        ),
                     )
                     .await;
                 subtree.is_ok()
@@ -204,7 +208,7 @@ impl Router {
                     mount.remove_child(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
-                        | Err(ControlError::ShutdownTimedOut(_))
+                        | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
                 )
             },
             false,
@@ -228,7 +232,7 @@ impl Router {
                     mount.remove_child(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
-                        | Err(ControlError::ShutdownTimedOut(_))
+                        | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
                         | Err(ControlError::ChildRemovalInProgress(_))
                 )
             },
@@ -307,13 +311,11 @@ impl Actor for Router {
                         self.reconcile_mount_snapshot(ctx);
                     }
                     MountEventDisposition::Apply => {
-                        if let Some(seq) = event.seq() {
-                            self.alignment_seq = seq;
-                        }
-                        if let LifecycleEvent::Added { child_id, .. } = event
-                            && !self.routes_subtree(&child_id)
+                        self.alignment_seq = event.seq;
+                        if matches!(event.kind, ChildLifecycleEventKind::Added)
+                            && !self.routes_subtree(&event.child_id)
                         {
-                            self.pipeline_sweep(child_id, ctx);
+                            self.pipeline_sweep(event.child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}
@@ -444,22 +446,29 @@ impl Actor for Router {
 
 #[cfg(test)]
 mod tests {
-    use tokio_otp::{ChildSnapshot, ChildStateView, Strategy, SupervisorStateView};
+    use tokio_otp::{
+        Strategy,
+        observe::{ChildSnapshot, ChildStateView, SupervisorStateView},
+    };
 
     use super::*;
 
     #[test]
     fn lagged_event_bypasses_seq_filter_and_reconciles_active_orphans() {
-        let added = |seq| LifecycleEvent::Added {
-            supervisor_path: Vec::new(),
-            seq,
-            child_id: "orphan".to_owned(),
-            lineage: 0,
-            total_restarts: 0,
-            child_restart_count: 0,
-        };
+        let added =
+            |seq| ChildLifecycleEvent::new(seq, "orphan", 0, 0, 0, ChildLifecycleEventKind::Added);
         assert_eq!(
-            mount_event_disposition(72, &LifecycleEvent::Lagged { dropped: 71 }),
+            mount_event_disposition(
+                72,
+                &ChildLifecycleEvent::new(
+                    72,
+                    "orphan",
+                    0,
+                    0,
+                    0,
+                    ChildLifecycleEventKind::Lagged { dropped: 71 },
+                ),
+            ),
             MountEventDisposition::ReconcileSnapshot
         );
         assert_eq!(
@@ -471,19 +480,37 @@ mod tests {
             MountEventDisposition::Apply
         );
 
-        let mut already_removing =
-            ChildSnapshot::new("already-removing", 0, ChildStateView::Stopping);
+        let mut already_removing = ChildSnapshot::new(
+            "already-removing",
+            0,
+            ChildStateView::Stopping {
+                started: true,
+                previous_exit: None,
+            },
+        );
         already_removing.membership = ChildMembershipView::Removing;
-        let snapshot = SupervisorSnapshot::new(
+        let mut snapshot = SupervisorSnapshot::new(
             SupervisorStateView::Running,
             Strategy::OneForOne,
             vec![
-                ChildSnapshot::new("routed", 0, ChildStateView::Running),
-                ChildSnapshot::new("orphan", 0, ChildStateView::Running),
+                ChildSnapshot::new(
+                    "routed",
+                    0,
+                    ChildStateView::Running {
+                        previous_exit: None,
+                    },
+                ),
+                ChildSnapshot::new(
+                    "orphan",
+                    0,
+                    ChildStateView::Running {
+                        previous_exit: None,
+                    },
+                ),
                 already_removing,
             ],
-        )
-        .lifecycle_seq(73);
+        );
+        snapshot.lifecycle_seq = 73;
 
         let (alignment_seq, orphaned) = mount_reconciliation(snapshot, |id| id == "routed");
 

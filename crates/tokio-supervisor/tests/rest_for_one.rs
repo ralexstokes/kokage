@@ -7,9 +7,7 @@ use std::{
 };
 
 use tokio::sync::{Notify, mpsc};
-use tokio_supervisor::{
-    ChildSpec, RestartPolicy, ShutdownMode, ShutdownPolicy, Strategy, SupervisorBuilder,
-};
+use tokio_supervisor::{ChildSpec, RestartPolicy, ShutdownPolicy, Strategy, Supervisor};
 
 mod common;
 
@@ -23,7 +21,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
 
     let release_failure_for_child = release_failure.clone();
     let middle_started_tx = started_tx.clone();
-    let middle = ChildSpec::new("middle", move |ctx| {
+    let middle = ChildSpec::task("middle", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let middle_attempts = middle_attempts.clone();
         let started_tx = middle_started_tx.clone();
@@ -42,7 +40,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
     .restart(RestartPolicy::OnFailure);
 
     let downstream = reporting_child("downstream", started_tx);
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(upstream)
         .child(middle)
@@ -75,7 +73,7 @@ async fn last_child_failure_restarts_only_itself() {
     let first = reporting_child("first", started_tx.clone());
     let middle = reporting_child("middle", started_tx.clone());
     let release_failure_for_child = release_failure.clone();
-    let last = ChildSpec::new("last", move |ctx| {
+    let last = ChildSpec::task("last", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let last_attempts = last_attempts.clone();
         let started_tx = started_tx.clone();
@@ -93,7 +91,7 @@ async fn last_child_failure_restarts_only_itself() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(first)
         .child(middle)
@@ -115,6 +113,67 @@ async fn last_child_failure_restarts_only_itself() {
 }
 
 #[tokio::test]
+async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
+    let release_failure = Arc::new(Notify::new());
+    let trigger_attempts = Arc::new(AtomicUsize::new(0));
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+
+    let release_failure_for_child = release_failure.clone();
+    let trigger = ChildSpec::task("trigger", move |ctx| {
+        let release_failure = release_failure_for_child.clone();
+        let trigger_attempts = trigger_attempts.clone();
+        let started_tx = started_tx.clone();
+        async move {
+            started_tx
+                .send(("trigger", ctx.generation()))
+                .expect("test receiver dropped");
+            if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                release_failure.notified().await;
+                return Err(common::test_error("restart suffix"));
+            }
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::OnFailure);
+
+    let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
+    let peer = ChildSpec::task("stubborn-peer", move |ctx| {
+        let peer_tx = peer_tx.clone();
+        async move {
+            peer_tx
+                .send(ctx.generation())
+                .expect("test receiver dropped");
+            if ctx.generation() == 0 {
+                std::future::pending::<()>().await;
+            } else {
+                ctx.shutdown_token().cancelled().await;
+            }
+            Ok(())
+        }
+    })
+    .restart(RestartPolicy::Always)
+    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
+
+    let handle = Supervisor::ordered()
+        .strategy(Strategy::RestForOne)
+        .child(trigger)
+        .child(peer)
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    assert_eq!(common::recv_event(&mut started_rx).await, ("trigger", 0));
+    assert_eq!(common::recv_event(&mut peer_rx).await, 0);
+    release_failure.notify_one();
+    assert_eq!(common::recv_event(&mut started_rx).await, ("trigger", 1));
+    assert_eq!(common::recv_event(&mut peer_rx).await, 1);
+
+    handle.shutdown();
+    handle.wait().await.expect("shutdown should succeed");
+}
+
+#[tokio::test]
 async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() {
     let fail_upstream = Arc::new(Notify::new());
     let fail_middle = Arc::new(Notify::new());
@@ -125,7 +184,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
     let fail_upstream_for_child = fail_upstream.clone();
-    let upstream = ChildSpec::new("upstream", {
+    let upstream = ChildSpec::task("upstream", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let fail_upstream = fail_upstream_for_child.clone();
@@ -147,7 +206,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
     .restart(RestartPolicy::OnFailure);
 
     let fail_middle_for_child = fail_middle.clone();
-    let middle = ChildSpec::new("middle", {
+    let middle = ChildSpec::task("middle", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let fail_middle = fail_middle_for_child.clone();
@@ -168,7 +227,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
     })
     .restart(RestartPolicy::OnFailure);
 
-    let slow = ChildSpec::new("slow", {
+    let slow = ChildSpec::task("slow", {
         let started_tx = started_tx.clone();
         let slow_cancelled = slow_cancelled.clone();
         let release_slow = release_slow.clone();
@@ -190,12 +249,9 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_secs(1),
-        ShutdownMode::CooperativeThenAbort,
-    ));
+    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(upstream)
         .child(middle)
@@ -237,7 +293,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
     let (never_drained_tx, mut never_drained_rx) = mpsc::unbounded_channel();
 
     let fail_trigger_for_child = fail_trigger.clone();
-    let trigger = ChildSpec::new("trigger", {
+    let trigger = ChildSpec::task("trigger", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let fail_trigger = fail_trigger_for_child.clone();
@@ -258,7 +314,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
     })
     .restart(RestartPolicy::OnFailure);
 
-    let never = ChildSpec::new("never", {
+    let never = ChildSpec::task("never", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let started_tx = started_tx.clone();
@@ -276,7 +332,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
     .restart(RestartPolicy::Never);
     let eligible = reporting_child("eligible", started_tx);
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(trigger)
         .child(never)
@@ -305,7 +361,7 @@ fn reporting_child(
     id: &'static str,
     started_tx: mpsc::UnboundedSender<(&'static str, u64)>,
 ) -> ChildSpec {
-    ChildSpec::new(id, move |ctx| {
+    ChildSpec::task(id, move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx
@@ -336,7 +392,7 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
     let b = failing_once_child("b", fail_b.clone(), started_tx.clone());
     let trigger = failing_once_child("trigger", fail_trigger.clone(), started_tx.clone());
 
-    let slow = ChildSpec::new("slow", {
+    let slow = ChildSpec::task("slow", {
         let started_tx = started_tx.clone();
         let slow_cancelled = slow_cancelled.clone();
         let release_slow = release_slow.clone();
@@ -358,12 +414,9 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
         }
     })
     .restart(RestartPolicy::Always)
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_secs(1),
-        ShutdownMode::CooperativeThenAbort,
-    ));
+    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
         .child(a)
         .child(b)
@@ -417,7 +470,7 @@ fn failing_once_child(
     started_tx: mpsc::UnboundedSender<(&'static str, u64)>,
 ) -> ChildSpec {
     let attempts = Arc::new(AtomicUsize::new(0));
-    ChildSpec::new(id, move |ctx| {
+    ChildSpec::task(id, move |ctx| {
         let fail = fail.clone();
         let attempts = attempts.clone();
         let started_tx = started_tx.clone();
@@ -434,8 +487,5 @@ fn failing_once_child(
         }
     })
     .restart(RestartPolicy::OnFailure)
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_millis(200),
-        ShutdownMode::CooperativeThenAbort,
-    ))
+    .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(200)))
 }

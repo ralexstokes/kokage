@@ -1,7 +1,10 @@
 use std::error::Error;
 
 use tokio::task::JoinHandle;
-use tokio_otp::{ActorRunError, CancellationToken, DEFAULT_SHUTDOWN_BOUND, Graph, RestartPolicy};
+use tokio_otp::{
+    CancellationToken, Graph, RestartPolicy,
+    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND},
+};
 
 pub struct ActorTasks {
     stop: CancellationToken,

@@ -12,7 +12,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let handle = SupervisionTree::new().build()?.spawn();
+//! # let handle = OrderedTree::new().spawn()?;
 //! let console = Console::for_runtime(&handle)
 //!     .build()?
 //!     .spawn()
@@ -40,7 +40,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use thiserror::Error;
 use tokio::sync::watch;
-use tokio_otp::{ActorStats, RuntimeHandle};
+use tokio_otp::{RuntimeHandle, observe::ActorStats};
 use tokio_supervisor::{LifecycleWatch, SupervisorSnapshot};
 
 /// Display-oriented snapshot of one actor's message and mailbox statistics.
@@ -58,6 +58,7 @@ pub struct ActorStatsView {
     pub message_bytes_accepted: Option<u64>,
     pub sends_rejected: u64,
     pub outstanding_offloads: u64,
+    pub outstanding_scope_waits: u64,
     pub mailbox_depth: usize,
     pub mailbox_capacity: usize,
 }
@@ -90,6 +91,7 @@ impl From<ActorStats> for ActorStatsView {
             message_bytes_accepted: stats.message_bytes_accepted,
             sends_rejected: stats.sends_rejected,
             outstanding_offloads: stats.outstanding_offloads,
+            outstanding_scope_waits: stats.outstanding_scope_waits,
             mailbox_depth: stats.mailbox_depth,
             mailbox_capacity: stats.mailbox_capacity,
         }

@@ -17,9 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let attempts = Arc::new(AtomicUsize::new(0));
     let nested_attempts = Arc::clone(&attempts);
-    let nested = SupervisorBuilder::new()
+    let nested = Supervisor::ordered()
         .child(
-            ChildSpec::new("leaf", move |ctx| {
+            ChildSpec::task("leaf", move |ctx| {
                 let attempts = Arc::clone(&nested_attempts);
                 async move {
                     if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -32,18 +32,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .restart(RestartPolicy::OnFailure)
             .restart_intensity(
-                RestartIntensity::new(5, Duration::from_secs(5))
+                RestartConfig::new(5, Duration::from_secs(5))
                     .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
             ),
         )
         .build()?;
 
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("anchor", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .supervisor(SupervisorSpec::new("nested", nested))
+        .child(ChildSpec::supervisor("nested", nested))
         .build()?;
 
     let handle = supervisor.spawn();

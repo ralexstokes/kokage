@@ -6,8 +6,8 @@ use tokio_supervisor::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("leaf", |ctx| async move {
+    let nested = Supervisor::ordered()
+        .child(ChildSpec::task("leaf", |ctx| async move {
             println!("leaf started");
             ctx.shutdown_token().cancelled().await;
             println!("leaf stopping");
@@ -15,14 +15,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .build()?;
 
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
             println!("worker stopping");
             Ok(())
         }))
-        .supervisor(SupervisorSpec::new("nested", nested).restart(RestartPolicy::Never))
+        .child(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::Never))
         .build()?;
 
     let handle = supervisor.spawn();
@@ -73,11 +73,11 @@ fn print_child_snapshot(child: &ChildSnapshot, depth: usize) {
         "{indent}child id={} generation={} state={} membership={} restarts={} next_restart_in={:?} last_exit={:?}",
         child.id,
         child.generation,
-        child_state(child.state),
+        child_state(&child.state),
         child_membership(child.membership),
         child.restart_count,
         child.next_restart_in,
-        child.last_exit
+        child.last_exit()
     );
 
     if let Some(snapshot) = child.supervisor.as_ref() {
@@ -85,12 +85,13 @@ fn print_child_snapshot(child: &ChildSnapshot, depth: usize) {
     }
 }
 
-fn child_state(state: ChildStateView) -> &'static str {
+fn child_state(state: &ChildStateView) -> &'static str {
     match state {
-        ChildStateView::Starting => "starting",
-        ChildStateView::Running => "running",
-        ChildStateView::Stopping => "stopping",
-        ChildStateView::Stopped => "stopped",
+        ChildStateView::Starting { .. } => "starting",
+        ChildStateView::Running { .. } => "running",
+        ChildStateView::Stopping { .. } => "stopping",
+        ChildStateView::Stopped { .. } => "stopped",
+        ChildStateView::StartupAborted { .. } => "startup-aborted",
         _ => "unknown",
     }
 }

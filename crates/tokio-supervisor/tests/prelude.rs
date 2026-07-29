@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use tokio::{sync::mpsc, time::timeout};
-use tokio_supervisor::{BackoffPolicy, ChildStateView, ShutdownMode, prelude::*};
+use tokio_supervisor::{BackoffPolicy, prelude::*};
 
 mod common;
 use common::ObservedEvent;
@@ -11,28 +11,59 @@ mod coverage_probe {
     mod expected {
         use tokio_supervisor::prelude::{
             BoxError, ChildContext, ChildResult, ChildSpec, ControlError, DynamicSupervisorBuilder,
-            RestartIntensity, RestartPolicy, ShutdownPolicy, Strategy, Supervisor,
-            SupervisorBuildError, SupervisorBuilder, SupervisorError, SupervisorHandle,
-            SupervisorSpec,
+            OrderedSupervisorBuilder, RestartConfig, RestartPolicy, ShutdownPolicy, Strategy,
+            Supervisor, SupervisorBuildError, SupervisorError, SupervisorHandle,
         };
     }
 
     mod advanced_root {
         use tokio_supervisor::{
             BackoffPolicy, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionGuard,
-            CompletionOutcome, ControlOperation, ExitStatusView, LifecycleEvent,
-            LifecyclePathSegment, LifecycleWatch, ScopeKind, ShutdownMode, SupervisorSnapshot,
-            SupervisorStateView,
+            CompletionOutcome, ExitStatusView, LifecycleEvent, LifecyclePathSegment,
+            LifecycleWatch, ScopeKind, SupervisorSnapshot, SupervisorStateView,
         };
     }
+}
+
+#[test]
+fn closed_policy_sets_can_be_matched_exhaustively_in_the_supervisor_crate() {
+    fn strategy_name(strategy: Strategy) -> &'static str {
+        match strategy {
+            Strategy::OneForOne => "one-for-one",
+            Strategy::OneForAll => "one-for-all",
+            Strategy::RestForOne => "rest-for-one",
+        }
+    }
+
+    fn restart_name(policy: RestartPolicy) -> &'static str {
+        match policy {
+            RestartPolicy::Always => "always",
+            RestartPolicy::OnFailure => "on-failure",
+            RestartPolicy::Never => "never",
+        }
+    }
+
+    fn scope_name(kind: tokio_supervisor::ScopeKind) -> &'static str {
+        match kind {
+            tokio_supervisor::ScopeKind::Ordered => "ordered",
+            tokio_supervisor::ScopeKind::Dynamic => "dynamic",
+        }
+    }
+
+    assert_eq!(strategy_name(Strategy::default()), "one-for-one");
+    assert_eq!(restart_name(RestartPolicy::default()), "on-failure");
+    assert_eq!(
+        scope_name(tokio_supervisor::ScopeKind::default()),
+        "ordered"
+    );
 }
 
 #[tokio::test]
 async fn prelude_supports_handle_event_and_snapshot_helpers() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
-    let handle = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", move |ctx| {
+    let handle = Supervisor::ordered()
+        .child(ChildSpec::task("worker", move |ctx| {
             let started_tx = started_tx.clone();
             async move {
                 started_tx
@@ -71,12 +102,12 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
     ));
 
     let snapshot = handle.snapshot();
-    assert_eq!(
+    assert!(
         snapshot
             .child("worker")
             .expect("worker child should exist")
-            .state,
-        ChildStateView::Running
+            .state
+            .is_running()
     );
 
     handle
@@ -89,8 +120,8 @@ async fn prelude_supports_handle_event_and_snapshot_helpers() {
 async fn prelude_snapshot_helpers_walk_nested_children() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
 
-    let nested = SupervisorBuilder::new()
-        .child(ChildSpec::new("leaf", move |ctx| {
+    let nested = Supervisor::ordered()
+        .child(ChildSpec::task("leaf", move |ctx| {
             let leaf_started_tx = leaf_started_tx.clone();
             async move {
                 leaf_started_tx.send(()).expect("test receiver dropped");
@@ -101,18 +132,15 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
         .build()
         .expect("valid nested supervisor");
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(
-            ChildSpec::new("anchor", |ctx| async move {
+            ChildSpec::task("anchor", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(ShutdownPolicy::new(
-                Duration::from_millis(25),
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(25))),
         )
-        .supervisor(SupervisorSpec::new("nested", nested))
+        .child(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -121,7 +149,13 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 
     let snapshot = handle.snapshot();
     let nested = snapshot.child("nested").expect("nested child should exist");
-    assert!(nested.child("leaf").is_some());
+    assert!(
+        nested
+            .supervisor
+            .as_deref()
+            .and_then(|snapshot| snapshot.child("leaf"))
+            .is_some()
+    );
     assert!(snapshot.descendant(["nested", "leaf"]).is_some());
 
     handle
@@ -132,17 +166,16 @@ async fn prelude_snapshot_helpers_walk_nested_children() {
 
 #[test]
 fn prelude_policy_types_cover_common_configuration() {
-    assert_eq!(ShutdownPolicy::abort().mode, ShutdownMode::Abort);
-    assert!(ShutdownPolicy::abort().grace.is_zero());
+    assert_eq!(ShutdownPolicy::abort(), ShutdownPolicy::Abort);
 
     assert_eq!(
-        RestartIntensity::new(3, Duration::from_secs(10)),
-        RestartIntensity::new(3, Duration::from_secs(10))
+        RestartConfig::new(3, Duration::from_secs(10)),
+        RestartConfig::new(3, Duration::from_secs(10))
     );
     assert_eq!(
-        RestartIntensity::new(2, Duration::from_secs(5))
+        RestartConfig::new(2, Duration::from_secs(5))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50))),
-        RestartIntensity::new(2, Duration::from_secs(5))
+        RestartConfig::new(2, Duration::from_secs(5))
             .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(50)))
     );
 }

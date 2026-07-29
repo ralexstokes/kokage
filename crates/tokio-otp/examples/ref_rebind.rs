@@ -2,8 +2,8 @@ use std::{error::Error, future::pending, marker::PhantomData};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorResult, CancellationToken, DEFAULT_SHUTDOWN_BOUND, GraphBuilder, MessageContext,
-    RestartPolicy,
+    Actor, ActorResult, CancellationToken, GraphBuilder, MessageContext, RestartPolicy,
+    host::DEFAULT_SHUTDOWN_BOUND,
 };
 
 enum Command<M> {

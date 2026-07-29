@@ -2,7 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::sync::{Mutex, Notify, watch};
 use tokio_otp::{
-    ChildSpec, DrainPolicy, DynamicActorOptions, ExitStatusView, LiveContext, SupervisorError,
+    DrainPolicy, DynamicActorOptions, LiveContext, SupervisorError,
+    host::{BoxError, ChildSpec, RawActor},
+    observe::ExitStatusView,
     prelude::*,
 };
 
@@ -60,7 +62,7 @@ impl Actor for AddsChildOnStart {
         };
         let added_started = Arc::clone(&self.added_started);
         handle
-            .add_child(ChildSpec::new("added-from-on-start", move |ctx| {
+            .add_child(ChildSpec::task("added-from-on-start", move |ctx| {
                 let added_started = Arc::clone(&added_started);
                 async move {
                     added_started.notify_one();
@@ -81,10 +83,7 @@ impl Actor for AddsChildOnStart {
 async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
     let (handle_tx, handle_rx) = watch::channel::<Option<RuntimeHandle>>(None);
     let added_started = Arc::new(Notify::new());
-    let handle = SupervisionTree::dynamic()
-        .build()
-        .expect("dynamic runtime builds")
-        .spawn();
+    let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     handle_tx
         .send(Some(handle.clone()))
         .expect("startup actor retains handle receiver");
@@ -130,10 +129,7 @@ async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() 
         release: None,
     });
 
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
 
     first.send("mailbox").await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -185,11 +181,10 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
     let mut graph = GraphBuilder::new();
     let (actor_slot, _) = graph.slot("FailsOnStart");
     graph.define(actor_slot, || FailsOnStart);
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
+    let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
             .await
@@ -197,7 +192,7 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
         Err(SupervisorError::StartupAborted(_))
     ));
     let child = handle.snapshot().children.into_iter().next().unwrap();
-    assert!(matches!(child.last_exit, Some(ExitStatusView::Failed(_))));
+    assert!(matches!(child.last_exit(), Some(ExitStatusView::Failed(_))));
     handle.shutdown_and_wait().await.unwrap();
 }
 
@@ -253,10 +248,7 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
         started: actor_started.clone(),
         release: actor_release.clone(),
     });
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     handle.wait_started().await.unwrap();
     actor.send("hold").await.unwrap();
     started.notified().await;
@@ -282,10 +274,7 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
         started: actor_started.clone(),
         release: actor_release.clone(),
     });
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
 
     actor.send("hold-and-continue").await.unwrap();
     started.notified().await;
@@ -373,10 +362,7 @@ async fn is_draining_separates_the_drain_phase_from_ordinary_handling() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     handle.wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
@@ -398,11 +384,10 @@ async fn is_draining_is_true_after_a_self_stop_that_never_shuts_the_graph_down()
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
+    let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
     handle.wait_started().await.unwrap();
 
     actor.send("stop").await.unwrap();
@@ -483,11 +468,10 @@ async fn start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop() 
             policy: DrainPolicy::Discard,
         }
     });
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
+    let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -526,11 +510,10 @@ async fn start_context_stop_with_drain_handles_the_queued_mailbox_only() {
             policy: DrainPolicy::Drain,
         }
     });
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
+    let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -567,18 +550,17 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
     let mut graph = GraphBuilder::new();
     let (actor_slot, _) = graph.slot("PromptRaw");
     graph.define(actor_slot, || PromptRaw);
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
+    let handle = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::Never)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(1), handle.wait_started())
         .await
         .unwrap()
         .unwrap();
     assert!(matches!(
-        handle.snapshot().children[0].last_exit,
-        Some(ExitStatusView::Completed)
+        handle.snapshot().children[0].last_exit(),
+        Some(&ExitStatusView::Completed)
     ));
     handle.shutdown_and_wait().await.unwrap();
 }
@@ -635,10 +617,7 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
         started: actor_started.clone(),
         release: actor_release.clone(),
     });
-    let handle = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let handle = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     handle.wait_started().await.unwrap();
 
     // Park the handler so the next sends land in the mailbox rather than being

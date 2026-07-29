@@ -1,5 +1,5 @@
 use tokio_otp::{
-    ActorContext, ActorOptions, ActorResult, MailboxMode, MessageSize, RawActor, Supervision,
+    ActorContext, ActorOptions, ActorResult, MailboxMode, Supervision, host::RawActor,
 };
 
 struct MailboxMessage;
@@ -17,10 +17,8 @@ impl RawActor for MailboxWorker {
 
 struct SizedMessage(Vec<u8>);
 
-impl MessageSize for SizedMessage {
-    fn size_hint(&self) -> usize {
-        self.0.len()
-    }
+fn sized_message_size(message: &SizedMessage) -> usize {
+    message.0.len()
 }
 
 #[derive(Clone)]
@@ -38,11 +36,11 @@ impl RawActor for SizedWorker {
 struct OptionsGraph {
     #[supervision(options = ActorOptions::new().mailbox(MailboxMode::conflate()))]
     mailbox_only: MailboxWorker,
-    #[supervision(options = ActorOptions::new().message_size())]
+    #[supervision(options = ActorOptions::new().message_size(sized_message_size))]
     message_size_only: SizedWorker,
     #[supervision(options = ActorOptions::new()
         .mailbox(MailboxMode::conflate())
-        .message_size())]
+        .message_size(sized_message_size))]
     combined: SizedWorker,
 }
 

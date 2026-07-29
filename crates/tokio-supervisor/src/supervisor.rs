@@ -10,6 +10,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
+    builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder},
     child::{ChildDefinition, ChildKind, ChildResult},
     context::ChildContext,
     error::SupervisorError,
@@ -19,7 +20,7 @@ use crate::{
     },
     lifecycle::{LifecycleHub, LifecycleTreeSink},
     observability::{format_path, strategy_label, supervisor_name_for_path},
-    restart::{RestartIntensity, RestartPolicy},
+    restart::{RestartConfig, RestartPolicy},
     runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
     scope::ScopeKind,
     shutdown::ShutdownPolicy,
@@ -41,9 +42,9 @@ use crate::{
 /// the clone continues to address the original:
 ///
 /// ```no_run
-/// # use tokio_supervisor::SupervisorBuilder;
+/// # use tokio_supervisor::Supervisor;
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let supervisor = SupervisorBuilder::new().build()?;
+/// let supervisor = Supervisor::ordered().build()?;
 /// let handle = supervisor.handle();
 ///
 /// supervisor.clone().spawn(); // spawns the clone's identity, not `handle`'s
@@ -67,7 +68,7 @@ pub struct Supervisor {
 pub(crate) struct SupervisorConfig {
     pub(crate) kind: ScopeKind,
     pub(crate) strategy: Strategy,
-    pub(crate) restart_intensity: RestartIntensity,
+    pub(crate) restart_intensity: RestartConfig,
     pub(crate) default_restart: RestartPolicy,
     pub(crate) default_shutdown: ShutdownPolicy,
     pub(crate) children: Vec<Arc<ChildDefinition>>,
@@ -116,6 +117,16 @@ impl ParentLink {
 }
 
 impl Supervisor {
+    /// Starts an ordered-supervisor declaration.
+    pub fn ordered() -> OrderedSupervisorBuilder {
+        OrderedSupervisorBuilder::new()
+    }
+
+    /// Starts an empty dynamic-supervisor declaration.
+    pub fn dynamic() -> DynamicSupervisorBuilder {
+        DynamicSupervisorBuilder::new()
+    }
+
     pub(crate) fn new(config: SupervisorConfig) -> Self {
         let channels = stable_channels_for_config(&config);
         Self {
@@ -134,18 +145,6 @@ impl Supervisor {
             channels,
             terminalize_on_drop: AtomicBool::new(true),
         }
-    }
-
-    /// Returns the restart policy inherited by runtime-added children.
-    #[doc(hidden)]
-    pub fn default_restart_policy(&self) -> RestartPolicy {
-        self.config.default_restart
-    }
-
-    /// Returns the shutdown policy inherited by runtime-added children.
-    #[doc(hidden)]
-    pub fn default_shutdown_policy(&self) -> ShutdownPolicy {
-        self.config.default_shutdown
     }
 
     /// Returns this supervisor's stable control and observation handle.
@@ -501,12 +500,10 @@ pub(crate) fn initial_snapshot(config: &SupervisorConfig) -> SupervisorSnapshot 
                 id: child.id.clone(),
                 lineage: lineage as u64,
                 generation: 0,
-                started: false,
-                startup_aborted: false,
-                state: ChildStateView::Starting,
+                state: ChildStateView::Starting {
+                    previous_exit: None,
+                },
                 membership: ChildMembershipView::Active,
-                last_exit: None,
-                last_exit_cancelled: false,
                 restart_count: 0,
                 next_restart_in: None,
                 supervisor: None,
@@ -527,7 +524,7 @@ fn initial_attached_children(
         .iter()
         .enumerate()
         .map(|(lineage, child)| AttachedChildState {
-            identity: crate::AttachedChildIdentity {
+            identity: crate::attachment::AttachedChildIdentity {
                 id: child.id.clone(),
                 lineage: lineage as u64,
                 generation: 0,

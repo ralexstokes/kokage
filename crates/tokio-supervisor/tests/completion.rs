@@ -18,8 +18,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_supervisor::{
-    ChildSpec, CompletionOutcome, DynamicSupervisorBuilder, ExitStatusView, RestartIntensity,
-    RestartPolicy, ShutdownPolicy, Strategy, SupervisorBuilder, SupervisorError, SupervisorSpec,
+    ChildSpec, ChildStateView, CompletionOutcome, ExitStatusView, RestartConfig, RestartPolicy,
+    ShutdownPolicy, Strategy, Supervisor, SupervisorError,
 };
 
 mod common;
@@ -36,9 +36,9 @@ impl Drop for NotifyOnDrop {
 #[tokio::test]
 async fn a_completed_child_stops_siblings_and_supervisor() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let builder = SupervisorBuilder::new()
-        .child(ChildSpec::new("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
-        .child(ChildSpec::new("sibling", move |ctx| {
+    let builder = Supervisor::ordered()
+        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .child(ChildSpec::task("sibling", move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             async move {
                 ctx.shutdown_token().cancelled().await;
@@ -75,9 +75,9 @@ async fn a_completion_set_waits_for_its_last_child() {
     let (second_tx, second_rx) = oneshot::channel::<()>();
     let second_rx = Arc::new(std::sync::Mutex::new(Some(second_rx)));
 
-    let builder = SupervisorBuilder::new()
+    let builder = Supervisor::ordered()
         .child(
-            ChildSpec::new("first", move |_| {
+            ChildSpec::task("first", move |_| {
                 let rx = first_rx.lock().expect("lock poisoned").take().unwrap();
                 async move {
                     rx.await.expect("gate dropped");
@@ -87,7 +87,7 @@ async fn a_completion_set_waits_for_its_last_child() {
             .restart(RestartPolicy::Never),
         )
         .child(
-            ChildSpec::new("second", move |_| {
+            ChildSpec::task("second", move |_| {
                 let rx = second_rx.lock().expect("lock poisoned").take().unwrap();
                 async move {
                     rx.await.expect("gate dropped");
@@ -116,7 +116,7 @@ async fn a_completion_set_waits_for_its_last_child() {
 async fn a_failure_restarts_before_a_clean_exit_completes() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_child = attempts.clone();
-    let builder = SupervisorBuilder::new().child(ChildSpec::new("trigger", move |_| {
+    let builder = Supervisor::ordered().child(ChildSpec::task("trigger", move |_| {
         let attempt = attempts_for_child.fetch_add(1, Ordering::SeqCst);
         async move {
             if attempt == 0 {
@@ -140,7 +140,7 @@ async fn a_failure_restarts_before_a_clean_exit_completes() {
 
 #[tokio::test]
 async fn wait_completed_reports_a_supervisor_that_stopped_first() {
-    let builder = SupervisorBuilder::new().child(ChildSpec::new("worker", |ctx| async move {
+    let builder = Supervisor::ordered().child(ChildSpec::task("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -162,7 +162,7 @@ async fn wait_completed_reports_a_supervisor_that_stopped_first() {
 
 #[tokio::test]
 async fn an_empty_completion_set_is_already_satisfied() {
-    let builder = SupervisorBuilder::new().child(ChildSpec::new("worker", |ctx| async move {
+    let builder = Supervisor::ordered().child(ChildSpec::task("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -183,14 +183,52 @@ async fn an_empty_completion_set_is_already_satisfied() {
 }
 
 #[tokio::test]
+async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
+    let handle = Supervisor::ordered()
+        .child(
+            ChildSpec::task("worker", |_| async { Ok(()) })
+                .restart(RestartPolicy::Never)
+                .wait_for_ready(),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    assert!(matches!(
+        timeout(common::EVENT_TIMEOUT, handle.wait_started())
+            .await
+            .expect("startup result arrives"),
+        Err(SupervisorError::StartupAborted(_))
+    ));
+    assert!(matches!(
+        handle
+            .snapshot()
+            .child("worker")
+            .expect("worker remains in the snapshot")
+            .state,
+        ChildStateView::StartupAborted { .. }
+    ));
+
+    let outcome = timeout(common::EVENT_TIMEOUT, handle.wait_completed(["worker"]))
+        .await
+        .expect("snapshot realignment recognizes the completed exit");
+    assert_eq!(outcome, CompletionOutcome::Completed);
+
+    let _finished = handle.shutdown_on_completion(["worker"]);
+    timeout(common::EVENT_TIMEOUT, handle.wait())
+        .await
+        .expect("the completion guard also realigns and requests shutdown")
+        .expect("completion-driven shutdown succeeds");
+}
+
+#[tokio::test]
 async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
-    let inner_builder =
-        SupervisorBuilder::new().child(ChildSpec::new("done", |_| async { Ok(()) }));
+    let inner_builder = Supervisor::ordered().child(ChildSpec::task("done", |_| async { Ok(()) }));
     let _finished = inner_builder.handle().shutdown_on_completion(["done"]);
     let inner = inner_builder.build().expect("valid inner supervisor");
 
-    let parent = SupervisorBuilder::new()
-        .supervisor(SupervisorSpec::new("job", inner).restart(RestartPolicy::OnFailure))
+    let parent = Supervisor::ordered()
+        .child(ChildSpec::supervisor("job", inner).restart(RestartPolicy::OnFailure))
         .build()
         .expect("valid parent supervisor");
 
@@ -222,12 +260,11 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
 
 #[tokio::test]
 async fn a_completed_nested_scope_can_complete_its_parent() {
-    let inner_builder =
-        SupervisorBuilder::new().child(ChildSpec::new("done", |_| async { Ok(()) }));
+    let inner_builder = Supervisor::ordered().child(ChildSpec::task("done", |_| async { Ok(()) }));
     let _inner_finished = inner_builder.handle().shutdown_on_completion(["done"]);
     let inner = inner_builder.build().expect("valid inner supervisor");
 
-    let parent_builder = SupervisorBuilder::new().supervisor(SupervisorSpec::new("job", inner));
+    let parent_builder = Supervisor::ordered().child(ChildSpec::supervisor("job", inner));
     let _parent_finished = parent_builder.handle().shutdown_on_completion(["job"]);
 
     parent_builder
@@ -241,7 +278,7 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
 
 #[tokio::test]
 async fn a_dynamic_scope_can_await_completion() {
-    let builder = DynamicSupervisorBuilder::new().restart(RestartPolicy::Never);
+    let builder = Supervisor::dynamic().restart(RestartPolicy::Never);
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
     let _finished = builder.handle().shutdown_on_completion(["first", "second"]);
@@ -249,11 +286,11 @@ async fn a_dynamic_scope_can_await_completion() {
 
     let gate = Arc::new(Notify::new());
     spawned
-        .add_child(ChildSpec::new("first", |_| async { Ok(()) }))
+        .add_child(ChildSpec::task("first", |_| async { Ok(()) }))
         .await
         .expect("first added");
     spawned
-        .add_child(ChildSpec::new("second", {
+        .add_child(ChildSpec::task("second", {
             let gate = gate.clone();
             move |_| {
                 let gate = gate.clone();
@@ -281,12 +318,12 @@ async fn a_dynamic_scope_can_await_completion() {
 
 #[tokio::test]
 async fn a_failed_never_child_never_completes() {
-    let builder = SupervisorBuilder::new()
+    let builder = Supervisor::ordered()
         .child(
-            ChildSpec::new("failed", |_| async { Err(common::test_error("failed")) })
+            ChildSpec::task("failed", |_| async { Err(common::test_error("failed")) })
                 .restart(RestartPolicy::Never),
         )
-        .child(ChildSpec::new("completed", |_| async { Ok(()) }).restart(RestartPolicy::Never));
+        .child(ChildSpec::task("completed", |_| async { Ok(()) }).restart(RestartPolicy::Never));
     let _finished = builder
         .handle()
         .shutdown_on_completion(["failed", "completed"]);
@@ -310,7 +347,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
     let finish_b = Arc::new(Notify::new());
     let (restarted_tx, mut restarted_rx) = mpsc::unbounded_channel();
 
-    let a = ChildSpec::new("a", {
+    let a = ChildSpec::task("a", {
         let finish_a = finish_a.clone();
         let restarted_tx = restarted_tx.clone();
         move |ctx| {
@@ -326,7 +363,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
             }
         }
     });
-    let b = ChildSpec::new("b", {
+    let b = ChildSpec::task("b", {
         let finish_b = finish_b.clone();
         let restarted_tx = restarted_tx.clone();
         move |ctx| {
@@ -343,7 +380,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
             }
         }
     });
-    let failing = ChildSpec::new("failing", {
+    let failing = ChildSpec::task("failing", {
         let fail_group = fail_group.clone();
         move |ctx| {
             let fail_group = fail_group.clone();
@@ -358,7 +395,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
         }
     });
 
-    let builder = SupervisorBuilder::new()
+    let builder = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(a)
         .child(b)
@@ -390,7 +427,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
     let finish_restarted_for_child = finish_restarted.clone();
     let (restarted_tx, mut restarted_rx) = mpsc::unbounded_channel();
 
-    let natural = ChildSpec::new("natural", {
+    let natural = ChildSpec::task("natural", {
         let finish_natural = finish_natural.clone();
         move |_| {
             let finish_natural = finish_natural.clone();
@@ -403,7 +440,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
     .restart(RestartPolicy::Never);
     // Returns `Ok(())` because the supervisor cancelled it, not because its
     // work finished. That must not satisfy the completion set.
-    let restarted = ChildSpec::new("restarted", move |ctx| {
+    let restarted = ChildSpec::task("restarted", move |ctx| {
         let finish_restarted = finish_restarted_for_child.clone();
         let restarted_tx = restarted_tx.clone();
         async move {
@@ -416,7 +453,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
             Ok(())
         }
     });
-    let failing = ChildSpec::new("failing", move |ctx| {
+    let failing = ChildSpec::task("failing", move |ctx| {
         let finish_natural = finish_natural.clone();
         async move {
             if ctx.generation() == 0 {
@@ -428,7 +465,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
         }
     });
 
-    let builder = SupervisorBuilder::new()
+    let builder = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(natural)
         .child(restarted)
@@ -454,7 +491,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
 async fn natural_always_completion_during_group_drain_spawns_once() {
     let finish_always = Arc::new(Notify::new());
     let (restarted_tx, mut restarted_rx) = mpsc::unbounded_channel();
-    let always = ChildSpec::new("always", {
+    let always = ChildSpec::task("always", {
         let finish_always = finish_always.clone();
         move |ctx| {
             let finish_always = finish_always.clone();
@@ -473,7 +510,7 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
         }
     })
     .restart(RestartPolicy::Always);
-    let failing = ChildSpec::new("failing", move |ctx| {
+    let failing = ChildSpec::task("failing", move |ctx| {
         let finish_always = finish_always.clone();
         async move {
             if ctx.generation() == 0 {
@@ -485,7 +522,7 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
         }
     });
 
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
         .child(always)
         .child(failing)
@@ -503,9 +540,9 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
 
 #[tokio::test]
 async fn a_dropped_guard_leaves_the_supervisor_running() {
-    let builder = SupervisorBuilder::new()
-        .child(ChildSpec::new("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
-        .child(ChildSpec::new("worker", |ctx| async move {
+    let builder = Supervisor::ordered()
+        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(RestartPolicy::Never))
+        .child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -526,7 +563,7 @@ async fn a_dropped_guard_leaves_the_supervisor_running() {
 #[tokio::test]
 async fn a_retained_guard_does_not_keep_a_root_alive() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let builder = SupervisorBuilder::new().child(ChildSpec::new("worker", move |ctx| {
+    let builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -546,7 +583,7 @@ async fn a_retained_guard_does_not_keep_a_root_alive() {
 async fn fatal_restart_during_abort_removal_stops_supervisor() {
     let fail = Arc::new(Notify::new());
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let removable = ChildSpec::new("removable", {
+    let removable = ChildSpec::task("removable", {
         let fail = fail.clone();
         let started_tx = started_tx.clone();
         move |_| {
@@ -561,7 +598,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         }
     })
     .shutdown(ShutdownPolicy::abort());
-    let failing = ChildSpec::new("failing", move |_| {
+    let failing = ChildSpec::task("failing", move |_| {
         let fail = fail.clone();
         let started_tx = started_tx.clone();
         async move {
@@ -571,8 +608,8 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         }
     });
 
-    let handle = DynamicSupervisorBuilder::new()
-        .restart_intensity(RestartIntensity::new(0, Duration::from_secs(1)))
+    let handle = Supervisor::dynamic()
+        .restart_intensity(RestartConfig::new(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

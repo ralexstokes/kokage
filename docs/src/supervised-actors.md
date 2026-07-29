@@ -15,6 +15,7 @@ durable-factory versus local-actor state boundary.
 ```rust,no_run
 use std::{io, sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::Duration};
 
+use tokio_otp::host::BoxError;
 use tokio_otp::prelude::*;
 
 struct FrontDesk {
@@ -67,19 +68,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     builder.define(press_slot, move || Press { runs: runs.clone(), run: 0 });
     let graph = builder.build()?;
 
-    let runtime = SupervisionTree::graph(&graph)
+    let handle = OrderedTree::graph(graph)
         .strategy(Strategy::OneForOne)
         .default_restart(RestartPolicy::OnFailure)
-        .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60)))
-        .build()?;
-    let handle = runtime.spawn();
+        .restart_intensity(RestartConfig::new(5, Duration::from_secs(60)))
+        .spawn()?;
 
     orders.send("business cards x100".into()).await?;
     let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle.snapshot().child("press").unwrap().generation;
     orders.send("origami cranes x1000".into()).await?;
     lifecycle
-        .started_after(&[], "press", baseline)
+        .started_after("press", baseline)
         .await
         .expect("press restart is observed");
     orders.send("flyers x500".into()).await?;
@@ -89,23 +89,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`SupervisionTree` is the composition front door. `SupervisionTree::graph`
-handles the common flat case above by turning every actor in one graph into a
-direct child of one ordered scope. Call `reserve()` on the tree when a root
-handle is needed before build.
+`OrderedTree` is the static composition front door. `OrderedTree::graph`
+handles the common flat case above by consuming one graph and turning every
+actor into a direct child of one ordered scope. Call `handle()` before spawn
+when wiring needs the root handle.
 
 For nested scopes, build each graph independently so typed refs can cross graph
 boundaries, then compose them directly as a tree:
 
 ```rust,ignore
-let tree = SupervisionTree::graph(&core_graph)
+let tree = OrderedTree::graph(core_graph)
     .strategy(Strategy::OneForOne)
     .subtree(
         "venues",
-        SupervisionTree::graph(&venue_graph)
+        OrderedTree::graph(venue_graph)
             .strategy(Strategy::OneForOne),
     );
-let runtime = tree.build()?;
+let handle = tree.spawn()?;
 ```
 
 The tree's declaration order is its startup order and reverses for shutdown.
@@ -138,22 +138,25 @@ on that actor's `ActorSpec`. Scope methods set inherited defaults, while an
 `ActorSpec` is the explicit override:
 
 ```rust,ignore
-let tree = SupervisionTree::new()
+let tree = OrderedTree::new()
     .strategy(Strategy::OneForOne)
     .default_restart(RestartPolicy::OnFailure)
     .actor(graph.actor_for(&orders)?)
     .actor(
         ActorSpec::new(graph.actor_for(&press_ref)?)
-            .restart_intensity(RestartIntensity::new(5, Duration::from_secs(60))),
+            .restart_intensity(RestartConfig::new(5, Duration::from_secs(60))),
     );
-let runtime = tree.build()?;
+let handle = tree.spawn()?;
 ```
 
-Use `SupervisionTree::task` to mix an arbitrary non-actor `ChildSpec` into an
-ordered scope, and `SupervisionTree::subtree` for recursive actor-aware or
-graph-less scopes. A dynamic `RuntimeHandle::add_child` adds the same task
-shape at runtime; task children appear in snapshots and lifecycle watches but
-not actor stats.
+Use `OrderedTree::task` to mix an arbitrary non-actor `host::ChildSpec` into an
+ordered scope. Its explicit restart and shutdown arguments are authoritative
+for both the tree outline and the running child, so set those policies on the
+`task` call rather than on the `ChildSpec`; readiness and restart-intensity
+settings on the spec are preserved. Use `OrderedTree::subtree` for
+recursive actor-aware or graph-less scopes. A dynamic
+`RuntimeHandle::add_child` adds the same task shape at runtime; task children
+appear in snapshots and lifecycle watches but not actor stats.
 
 There are no string lookups anywhere on this path: every ref you need is
 minted at wiring time (or returned by `add_actor` for runtime-added actors)
@@ -165,7 +168,7 @@ or configure them as a runtime subtree for a scoped restart boundary.
 ## Declaring a Tree with the Derive
 
 When the shape is static, `#[derive(Supervision)]` can declare the graph and
-its `SupervisionTree` at once: struct nesting is scope nesting.
+its `OrderedTree` at once: struct nesting is scope nesting.
 
 ```rust,ignore
 use tokio_otp::{DynamicScope, RestartPolicy, Strategy, Supervision};
@@ -188,10 +191,8 @@ struct App {
     sessions: DynamicScope,
 }
 
-// Reserved before wiring, so an actor factory can capture the mount.
-let sessions = SupervisionTree::dynamic()
-    .default_restart(RestartPolicy::Never)
-    .reserve();
+// Identity exists before wiring, so an actor factory can capture the mount.
+let sessions = DynamicTree::new().default_restart(RestartPolicy::Never);
 let mount = sessions.handle();
 
 let (tree, refs) = App::tree(|_refs| AppFactories {
@@ -202,7 +203,7 @@ let (tree, refs) = App::tree(|_refs| AppFactories {
     },
     sessions,
 })?;
-let handle = tree.build()?.spawn();
+let handle = tree.spawn()?;
 ```
 
 All three actors join **one** graph, so refs cross scope boundaries freely and
@@ -230,17 +231,17 @@ Two field attributes select what a field is:
   scope.
 - `#[supervision(dynamic)]` — an empty scope whose membership is written at
   runtime. The field type is the `DynamicScope` marker, which is never
-  constructed; its wiring entry is a `ReservedSupervisionTree<true>`. Supplying the
-  reserved tree is what makes the scope's mount handle available *before* wiring, so
+  constructed; its wiring entry is a `DynamicTree`. Supplying the tree is what
+  makes the scope's mount handle available *before* wiring, so
   an actor can hold it as a durable factory field instead of looking the scope
   up after spawn. Policy comes from the tree
-  (`SupervisionTree::dynamic().default_restart(..)`), not from attributes.
+  (`DynamicTree::new().default_restart(..)`), not from attributes.
 
 Per-actor `restart`, `shutdown`, and `restart_intensity` overrides go on the
 field; scope-wide defaults and `strategy` go on the struct. `App::tree` returns
-the non-`Clone` `ReservedSupervisionTree` declaration — paired, like every
-generated constructor, with the refs bundle — without building it. The
-reservation carries the pre-spawn identities for dynamic fields, so the mount
+the non-`Clone` `OrderedTree` declaration — paired, like every generated
+constructor, with the refs bundle — without spawning it. The tree carries the
+pre-spawn identities for dynamic fields, so the mount
 handles supplied during wiring bind to the runtime eventually built from that
 exact declaration. It is also useful for asserting shape through `outline()`.
 
@@ -251,5 +252,5 @@ to generated composition.
 Use `GraphBuilder::slot(id)` plus `define` when graph actors are created in a
 loop or need hand-written wiring; choose `slot_with(id, ActorOptions)` for
 non-default mailbox behavior. Compose the resulting graph with
-`SupervisionTree`; reserve the tree first when wiring needs its pre-spawn
+`OrderedTree`; call `handle()` before spawn when wiring needs its pre-spawn
 handle.

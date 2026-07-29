@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 use tokio_otp::{
     Actor, ActorContext, ActorOptions, ActorRef, ActorResult, GraphBuildError, GraphBuilder,
-    GraphConfig, MailboxMode, MessageContext, MessageSize, RawActor, SendError, Supervision,
+    GraphConfig, MailboxMode, MessageContext, Supervision, TrySendError, host::RawActor,
 };
 
 enum FrontendMsg {
@@ -110,7 +110,7 @@ async fn derived_tree_runs_cyclic_pipeline() {
     assert_eq!(refs.frontend.id(), "frontend");
     assert_eq!(cloned_refs.parser.id(), "parser");
     assert_eq!(refs.sink.id(), "sink");
-    let handle = tree.build().expect("tree builds").spawn();
+    let handle = tree.spawn().expect("tree builds");
     handle.wait_started().await.expect("runtime starts");
 
     refs.frontend
@@ -190,10 +190,8 @@ struct ParkGraph {
 
 struct SizedMessage(Vec<u8>);
 
-impl MessageSize for SizedMessage {
-    fn size_hint(&self) -> usize {
-        self.0.len()
-    }
+fn sized_message_size(message: &SizedMessage) -> usize {
+    message.0.len()
 }
 
 #[derive(Clone)]
@@ -212,12 +210,12 @@ impl RawActor for OptionsActor {
 struct OptionsGraph {
     #[supervision(options = ActorOptions::new().mailbox(MailboxMode::conflate()))]
     mailbox_only: OptionsActor,
-    #[supervision(options = ActorOptions::new().message_size())]
+    #[supervision(options = ActorOptions::new().message_size(sized_message_size))]
     message_size_only: OptionsActor,
     #[supervision(
         options = ActorOptions::new()
             .mailbox(MailboxMode::conflate())
-            .message_size()
+            .message_size(sized_message_size)
     )]
     combined: OptionsActor,
     defaults: OptionsActor,
@@ -232,7 +230,7 @@ async fn derived_tree_applies_per_actor_options() {
         defaults: || OptionsActor,
     })
     .expect("options tree builds");
-    let handle = tree.build().expect("tree builds").spawn();
+    let handle = tree.spawn().expect("tree builds");
     handle.wait_started().await.expect("runtime starts");
 
     refs.mailbox_only
@@ -279,13 +277,13 @@ async fn tree_with_applies_graph_config() {
     .expect("configured graph builds");
 
     let park = park.expect("wiring closure captured park ref");
-    let handle = tree.build().expect("tree builds").spawn();
+    let handle = tree.spawn().expect("tree builds");
     handle.wait_started().await.expect("runtime starts");
 
     park.send(()).await.expect("first message fits");
     assert!(matches!(
         park.try_send(()),
-        Err(SendError::MailboxFull { actor_id, .. }) if actor_id == "park"
+        Err(TrySendError::Full { actor_id, .. }) if actor_id == "park"
     ));
 
     handle.shutdown_and_wait().await.expect("clean shutdown");

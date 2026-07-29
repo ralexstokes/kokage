@@ -1,4 +1,4 @@
-error: a dynamic scope takes its policy from the `ReservedSupervisionTree<true>` wired for this field, as in `SupervisionTree::dynamic().default_restart(..).reserve()`
+error: a dynamic scope takes its policy from the `DynamicTree` wired for this field, as in `DynamicTree::new().default_restart(..)`
   --> tests/ui/supervision/dynamic_policy_attribute.rs:16:5
    |
 16 | /     #[supervision(dynamic, restart = tokio_otp::RestartPolicy::Never)]

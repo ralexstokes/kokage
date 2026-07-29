@@ -96,9 +96,7 @@ impl Actor for Guard {
                 self.set_paused(true, ctx).await?;
             }
             GuardMsg::BridgeRestarts { total } => {
-                if let Some(total) = total {
-                    self.report.bridge_restarts = total;
-                }
+                self.report.bridge_restarts = total;
             }
             GuardMsg::Probe => {
                 self.report.probes += 1;

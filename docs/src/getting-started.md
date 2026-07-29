@@ -29,12 +29,12 @@ shutdown policies.
 ```rust,no_run
 use std::time::Duration;
 
-use tokio_supervisor::{ChildSpec, SupervisorBuilder};
+use tokio_supervisor::{ChildSpec, Supervisor};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("heartbeat", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("heartbeat", |ctx| async move {
             let mut ticker = tokio::time::interval(Duration::from_millis(500));
             loop {
                 tokio::select! {
@@ -91,6 +91,6 @@ supervisor stopped
 So far the child never fails, so the supervisor has nothing interesting to do.
 Let's fix that.
 
-[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildSpec.html
+[`ChildSpec`]: https://stokes.io/tokio-otp/api/tokio_otp/host/struct.ChildSpec.html
 [`ChildContext`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.ChildContext.html
 [`SupervisorHandle`]: https://stokes.io/tokio-otp/api/tokio_supervisor/struct.SupervisorHandle.html

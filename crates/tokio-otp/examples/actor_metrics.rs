@@ -49,8 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     graph.define(worker_slot, move || Worker {
         completed: completed_tx.clone(),
     });
-    let runtime = SupervisionTree::graph(&graph.build()?).build()?;
-    let handle = runtime.spawn();
+    let handle = OrderedTree::graph(graph.build()?).spawn()?;
 
     let sampler_stop = CancellationToken::new();
     let sampler = tokio::spawn(sample(worker.clone(), handle.clone(), sampler_stop.clone()));

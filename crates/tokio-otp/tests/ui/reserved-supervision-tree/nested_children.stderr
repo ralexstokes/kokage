@@ -1,5 +1,0 @@
-error[E0599]: no method named `children` found for struct `ReservedSupervisionTree<DYNAMIC>` in the current scope
- --> tests/ui/reserved-supervision-tree/nested_children.rs:9:29
-  |
-9 |     let _nested_copy = tree.children()[0].clone();
-  |                             ^^^^^^^^ method not found in `ReservedSupervisionTree`

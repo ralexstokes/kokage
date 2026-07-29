@@ -36,6 +36,9 @@ enum LoopEvent<M> {
 /// [offloads](crate::ActorContext::offload) instead of waiting for them — so it
 /// is the right answer for an actor holding long-running work that shutdown
 /// should cut short rather than see through.
+/// Actor-owned [scope waits](crate::LiveContext::spawn_scope_wait) are always
+/// aborted before either policy is applied; lifecycle waits are not accepted
+/// actor work for `Drain` to finish.
 ///
 /// Neither policy is a delivery guarantee. A message dropped by `Discard` and a
 /// message handled by `Drain` are equally invisible to the sender, which
@@ -53,15 +56,15 @@ enum LoopEvent<M> {
 /// stopped; drain handlers must tolerate that (skip or log the failed send)
 /// rather than propagate it, or the error fails the draining actor itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
 pub enum DrainPolicy {
     /// Stop immediately.
     ///
     /// Queued messages are dropped and queued [`call`](crate::ActorRef::call)s
     /// observe [`ReplyDropped`](crate::CallError::ReplyDropped). Outstanding
-    /// [offloads](crate::ActorContext::offload) are aborted rather than awaited. This
-    /// matches the behavior of a hand-written `while let Some(message) =
-    /// ctx.recv().await` loop.
+    /// [offloads](crate::ActorContext::offload) are aborted rather than awaited.
+    /// Actor-owned [scope waits](crate::LiveContext::spawn_scope_wait) are
+    /// aborted under both policies. This matches the behavior of a hand-written
+    /// `while let Some(message) = ctx.recv().await` loop.
     Discard,
     /// Close the mailbox to new sends, handle every message already queued,
     /// then stop.
@@ -82,7 +85,7 @@ pub enum DrainPolicy {
     /// The drain has no clock of its own. It spends the surrounding host's
     /// shutdown budget, which is set in a different place from this policy:
     /// the explicit bound passed to
-    /// [`RunnableActor::run_until`](crate::RunnableActor::run_until) for a
+    /// [`RunnableActor::run_until`](crate::host::RunnableActor::run_until) for a
     /// standalone actor, or the child [`ShutdownPolicy`](crate::ShutdownPolicy)
     /// under a runtime. The two are not checked against each other. Setting
     /// `Drain` does not extend the budget, and nothing warns when the budget is
@@ -92,13 +95,11 @@ pub enum DrainPolicy {
     /// remaining queued messages are dropped, [`on_stop`](Actor::on_stop) can be
     /// skipped, and the actor is aborted. There is no per-message signal for the
     /// messages that were lost — what surfaces is a timed-out exit
-    /// ([`ActorRunError::ShutdownTimedOut`](crate::ActorRunError::ShutdownTimedOut)
-    /// standalone, [`ExitStatusView::ShutdownTimedOut`](crate::ExitStatusView::ShutdownTimedOut)
-    /// under supervision), and under
-    /// [`CooperativeThenAbort`](crate::ShutdownMode::CooperativeThenAbort) not
-    /// even an error from the enclosing shutdown call. A `Drain` actor under a
-    /// too-short grace period therefore behaves like a slower `Discard`, which
-    /// is the failure mode to watch for. In particular,
+    /// ([`ActorRunError::ShutdownTimedOut`](crate::host::ActorRunError::ShutdownTimedOut)
+    /// standalone, [`ExitStatusView::Aborted { after_grace: true }`](crate::observe::ExitStatusView::Aborted)
+    /// under supervision). A `Drain` actor under a too-short grace period
+    /// therefore behaves like a slower `Discard`, which is the failure mode to
+    /// watch for. The enclosing shutdown also reports the timeout. In particular,
     /// [`ShutdownPolicy::abort`](crate::ShutdownPolicy::abort) has a zero grace
     /// period and leaves effectively no drain window at all.
     ///
@@ -106,9 +107,7 @@ pub enum DrainPolicy {
     /// mailbox depth times worst-case handler latency, plus room for
     /// [`on_stop`](Actor::on_stop). Ordered siblings stop one at a time, so
     /// sibling drains add up rather than overlap. Where the drain must finish
-    /// for correctness, prefer
-    /// [`CooperativeStrict`](crate::ShutdownMode::CooperativeStrict), which
-    /// reports the overrun as an error instead of absorbing it.
+    /// for correctness, handle the timeout reported by cooperative shutdown.
     #[default]
     Drain,
 }
@@ -128,8 +127,9 @@ pub enum DrainPolicy {
 /// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
 /// hook a stage-specific view instead. In return, the live startup and message
 /// stages implement [`LiveContext`](crate::LiveContext), which provides
-/// loop-owned timers and continuations that a custom raw loop must express
-/// directly. Watches and offloads remain available on [`ActorContext`].
+/// loop-owned timers, continuations, and actor-owned scope waits that a custom
+/// raw loop must express directly. Watches and offloads remain available on
+/// [`ActorContext`].
 ///
 /// A [`LiveContext::stop`](crate::LiveContext::stop) exit is normal for
 /// monitoring and supervision. An
@@ -323,6 +323,9 @@ impl<H: Actor> RawActor for H {
             }
         }
 
+        // Detached scope waits are incarnation-owned but are not actor work to
+        // drain. Stop them before applying the mailbox/offload drain policy.
+        ctx.abort_scope_waits();
         ctx.close_external_intake();
         if self.drain_policy() == DrainPolicy::Drain {
             // Completions and the mailbox are independent loop-owned sources.

@@ -8,18 +8,18 @@ use tokio::{
     time::{Duration, Instant, sleep, timeout},
 };
 use tokio_supervisor::{
-    BackoffPolicy, ChildSpec, ControlError, DynamicSupervisorBuilder, ExitStatusView,
-    LifecycleEvent, LifecycleWatch, RestartIntensity, RestartPolicy, ShutdownMode, ShutdownPolicy,
-    SupervisorBuilder, SupervisorError,
+    BackoffPolicy, ChildLifecycleEvent, ChildLifecycleEventKind, ChildLifecycleWatch, ChildSpec,
+    ControlError, ExitStatusView, RestartConfig, RestartPolicy, ShutdownPolicy, Supervisor,
+    SupervisorError,
 };
 
 mod common;
 use common::ObservedEvent;
 
 async fn next_lifecycle_event(
-    lifecycle: &mut LifecycleWatch,
+    lifecycle: &mut ChildLifecycleWatch,
     phase: &str,
-) -> Option<LifecycleEvent> {
+) -> Option<ChildLifecycleEvent> {
     timeout(common::EVENT_TIMEOUT, lifecycle.next())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -32,7 +32,7 @@ async fn external_shutdown_stops_all_children() {
 
     let make_child = |id: &'static str, exits: Arc<AtomicUsize>| {
         let started_tx = started_tx.clone();
-        ChildSpec::new(id, move |ctx| {
+        ChildSpec::task(id, move |ctx| {
             let exits = exits.clone();
             let started_tx = started_tx.clone();
             async move {
@@ -44,7 +44,7 @@ async fn external_shutdown_stops_all_children() {
         })
     };
 
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(make_child("worker-a", exits.clone()))
         .child(make_child("worker-b", exits.clone()))
         .build()
@@ -63,8 +63,8 @@ async fn external_shutdown_stops_all_children() {
 
 #[tokio::test]
 async fn shutdown_is_idempotent_across_handle_clones() {
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", |ctx| async move {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -90,8 +90,8 @@ async fn shutdown_is_idempotent_across_handle_clones() {
 async fn dropping_last_handle_clone_requests_graceful_shutdown() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
 
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", move |ctx| {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", move |ctx| {
             let lifecycle_tx = lifecycle_tx.clone();
             async move {
                 lifecycle_tx.send("started").expect("test receiver dropped");
@@ -126,7 +126,7 @@ async fn dropping_last_handle_clone_requests_graceful_shutdown() {
 
 #[tokio::test]
 async fn dropping_last_handle_stops_a_supervisor_idling_at_zero_children() {
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .build()
         .expect("empty supervisor builds");
 
@@ -147,8 +147,8 @@ async fn cooperative_child_observes_cancellation_before_shutdown_finishes() {
     let saw_cancel = Arc::new(AtomicBool::new(false));
 
     let saw_cancel_for_child = saw_cancel.clone();
-    let supervisor = SupervisorBuilder::new()
-        .child(ChildSpec::new("worker", move |ctx| {
+    let supervisor = Supervisor::ordered()
+        .child(ChildSpec::task("worker", move |ctx| {
             let saw_cancel = saw_cancel_for_child.clone();
             async move {
                 ctx.shutdown_token().cancelled().await;
@@ -169,15 +169,15 @@ async fn cooperative_child_observes_cancellation_before_shutdown_finishes() {
 }
 
 #[tokio::test]
-async fn stubborn_child_is_aborted_in_cooperative_then_abort_mode() {
+async fn stubborn_child_is_aborted_and_reported_in_cooperative_mode() {
     let saw_cancel = Arc::new(AtomicBool::new(false));
     let live_flag = common::LiveFlag::new();
 
     let saw_cancel_for_child = saw_cancel.clone();
     let live_flag_for_child = live_flag.clone();
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("stubborn", move |_ctx| {
+            ChildSpec::task("stubborn", move |_ctx| {
                 let saw_cancel = saw_cancel_for_child.clone();
                 let live_flag = live_flag_for_child.clone();
                 async move {
@@ -188,10 +188,7 @@ async fn stubborn_child_is_aborted_in_cooperative_then_abort_mode() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeThenAbort,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -199,9 +196,10 @@ async fn stubborn_child_is_aborted_in_cooperative_then_abort_mode() {
     let handle = supervisor.spawn();
     handle.shutdown();
 
-    common::wait(&handle, "stubborn child shutdown")
-        .await
-        .expect("shutdown should succeed");
+    assert!(matches!(
+        common::wait(&handle, "stubborn child shutdown").await,
+        Err(SupervisorError::ShutdownTimedOut(id)) if id == "stubborn"
+    ));
     assert!(!saw_cancel.load(Ordering::SeqCst));
     assert!(
         !live_flag.is_live(),
@@ -214,9 +212,9 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (blocking_tx, mut blocking_rx) = mpsc::unbounded_channel();
     let release_blocking_poll = Arc::new(ThreadBarrier::new(2));
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("non-yielding", {
+            ChildSpec::task("non-yielding", {
                 let release_blocking_poll = Arc::clone(&release_blocking_poll);
                 move |ctx| {
                     let started_tx = started_tx.clone();
@@ -231,10 +229,7 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                Duration::from_millis(20),
-                ShutdownMode::CooperativeThenAbort,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20))),
         )
         .build()
         .expect("valid supervisor");
@@ -245,9 +240,10 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
     common::recv_event(&mut blocking_rx).await;
     let wait_result = timeout(common::EVENT_TIMEOUT, handle.wait()).await;
     release_blocking_poll.wait();
-    wait_result
-        .expect("ordered shutdown should advance without joining the blocked poll")
-        .expect("cooperative-then-abort shutdown succeeds");
+    assert!(matches!(
+        wait_result.expect("ordered shutdown should advance without joining the blocked poll"),
+        Err(SupervisorError::ShutdownTimedOut(id)) if id == "non-yielding"
+    ));
 }
 
 #[tokio::test]
@@ -255,9 +251,9 @@ async fn cooperative_shutdown_times_out_with_stuck_child_name() {
     let live_flag = common::LiveFlag::new();
 
     let live_flag_for_child = live_flag.clone();
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("stubborn", move |_ctx| {
+            ChildSpec::task("stubborn", move |_ctx| {
                 let live_flag = live_flag_for_child.clone();
                 async move {
                     let _guard = live_flag.guard();
@@ -266,10 +262,7 @@ async fn cooperative_shutdown_times_out_with_stuck_child_name() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -292,7 +285,7 @@ async fn cooperative_shutdown_times_out_with_stuck_child_name() {
 }
 
 #[tokio::test]
-async fn mixed_shutdown_only_reports_pure_cooperative_children() {
+async fn mixed_cooperative_shutdown_reports_every_timed_out_child() {
     let cooperative_live_flag = common::LiveFlag::new();
     let aborting_live_flag = common::LiveFlag::new();
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -301,9 +294,9 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
     let aborting_live_flag_for_child = aborting_live_flag.clone();
     let started_tx_for_cooperative = started_tx.clone();
     let cooperative_live_flag_for_child = cooperative_live_flag.clone();
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("cooperative-then-abort", move |_ctx| {
+            ChildSpec::task("cooperative-peer", move |_ctx| {
                 let started_tx = started_tx_for_aborting.clone();
                 let live_flag = aborting_live_flag_for_child.clone();
                 async move {
@@ -314,13 +307,10 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeThenAbort,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .child(
-            ChildSpec::new("cooperative", move |_ctx| {
+            ChildSpec::task("cooperative", move |_ctx| {
                 let started_tx = started_tx_for_cooperative.clone();
                 let live_flag = cooperative_live_flag_for_child.clone();
                 async move {
@@ -331,10 +321,7 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -350,7 +337,7 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
         .expect_err("mixed shutdown should still report cooperative timeouts");
     assert_eq!(
         err,
-        SupervisorError::ShutdownTimedOut("cooperative".to_owned())
+        SupervisorError::ShutdownTimedOut("cooperative, cooperative-peer".to_owned())
     );
     assert!(
         !cooperative_live_flag.is_live(),
@@ -358,7 +345,7 @@ async fn mixed_shutdown_only_reports_pure_cooperative_children() {
     );
     assert!(
         !aborting_live_flag.is_live(),
-        "cooperative-then-abort child should also be aborted before wait resolves"
+        "second cooperative child should also be aborted before wait resolves"
     );
 }
 
@@ -368,9 +355,9 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let live_flag = common::LiveFlag::new();
     let live = live_flag.clone();
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(
-            ChildSpec::new("slow-wrapper", move |ctx| {
+            ChildSpec::task("slow-wrapper", move |ctx| {
                 let started_tx = started_tx.clone();
                 let live = live.clone();
                 async move {
@@ -381,7 +368,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::new(GRACE, ShutdownMode::CooperativeStrict)),
+            .shutdown(ShutdownPolicy::cooperative(GRACE)),
         )
         .build()
         .expect("supervisor builds")
@@ -401,8 +388,8 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     );
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "wrapper timeout exit").await {
-        if let LifecycleEvent::Exited { reason, .. } = event {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+        if let ChildLifecycleEventKind::Exited { reason, .. } = event.kind {
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             return;
         }
     }
@@ -414,7 +401,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (short_escalated_tx, mut short_escalated_rx) = mpsc::unbounded_channel();
     let short_started_tx = started_tx.clone();
-    let handle = DynamicSupervisorBuilder::new()
+    let handle = Supervisor::dynamic()
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
@@ -422,7 +409,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
 
     handle
         .add_child(
-            ChildSpec::new("short", move |ctx| {
+            ChildSpec::task("short", move |ctx| {
                 let started_tx = short_started_tx.clone();
                 let short_escalated_tx = short_escalated_tx.clone();
                 async move {
@@ -432,16 +419,13 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                Duration::from_millis(20),
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(Duration::from_millis(20))),
         )
         .await
         .expect("short child added");
     handle
         .add_child(
-            ChildSpec::new("long", move |ctx| {
+            ChildSpec::task("long", move |ctx| {
                 let started_tx = started_tx.clone();
                 async move {
                     started_tx.send(()).expect("test receiver dropped");
@@ -450,10 +434,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                Duration::from_secs(5),
-                ShutdownMode::CooperativeThenAbort,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(5))),
         )
         .await
         .expect("long child added");
@@ -470,10 +451,10 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "dynamic child timeout exit").await
     {
-        if event.child_id() == Some("short")
-            && let LifecycleEvent::Exited { reason, .. } = event
+        if event.child_id == "short"
+            && let ChildLifecycleEventKind::Exited { reason, .. } = event.kind
         {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             return;
         }
     }
@@ -486,13 +467,13 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
     let live_flag_for_child = live_flag.clone();
-    let handle = DynamicSupervisorBuilder::new()
+    let handle = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
     handle
         .add_child(
-            ChildSpec::new("stubborn", move |_ctx| {
+            ChildSpec::task("stubborn", move |_ctx| {
                 let started_tx = started_tx.clone();
                 let live_flag = live_flag_for_child.clone();
                 async move {
@@ -503,15 +484,12 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .await
         .expect("stubborn child added");
     handle
-        .add_child(ChildSpec::new("keeper", |ctx| async move {
+        .add_child(ChildSpec::task("keeper", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -524,7 +502,10 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .remove_child("stubborn")
         .await
         .expect_err("pure cooperative child removal should time out");
-    assert_eq!(err, ControlError::ShutdownTimedOut("stubborn".to_owned()));
+    assert_eq!(
+        err,
+        ControlError::Failed(SupervisorError::ShutdownTimedOut("stubborn".to_owned()))
+    );
     assert!(
         !live_flag.is_live(),
         "timed-out cooperative removal should abort the child before returning"
@@ -533,10 +514,10 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         let event = next_lifecycle_event(&mut lifecycle, "drop-triggered child exit")
             .await
             .expect("keeper keeps scope live");
-        if event.child_id() == Some("stubborn")
-            && let LifecycleEvent::Exited { reason, .. } = event
+        if event.child_id == "stubborn"
+            && let ChildLifecycleEventKind::Exited { reason, .. } = event.kind
         {
-            assert_eq!(reason, ExitStatusView::ShutdownTimedOut);
+            assert_eq!(reason, ExitStatusView::Aborted { after_grace: true });
             break;
         }
     }
@@ -553,9 +534,9 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
     let live_flag_for_child = live_flag.clone();
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::new("stubborn", move |_ctx| {
+            ChildSpec::task("stubborn", move |_ctx| {
                 let started_tx = started_tx.clone();
                 let live_flag = live_flag_for_child.clone();
                 async move {
@@ -566,10 +547,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
                     }
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::Abort,
-            )),
+            .shutdown(ShutdownPolicy::abort()),
         )
         .build()
         .expect("valid supervisor");
@@ -590,10 +568,10 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_preempts_zero_delay_restart() {
-    let supervisor = SupervisorBuilder::new()
-        .restart_intensity(RestartIntensity::new(8, Duration::from_secs(1)))
+    let supervisor = Supervisor::ordered()
+        .restart_intensity(RestartConfig::new(8, Duration::from_secs(1)))
         .child(
-            ChildSpec::new("flaky", |_ctx| async move {
+            ChildSpec::task("flaky", |_ctx| async move {
                 Err(common::test_error("restart immediately"))
             })
             .restart(RestartPolicy::OnFailure),
@@ -641,19 +619,19 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
     let saw_cancel = Arc::new(AtomicBool::new(false));
 
     let saw_cancel_for_keeper = saw_cancel.clone();
-    let supervisor = SupervisorBuilder::new()
+    let supervisor = Supervisor::ordered()
         .restart_intensity(
-            RestartIntensity::new(8, Duration::from_secs(1))
+            RestartConfig::new(8, Duration::from_secs(1))
                 .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(200))),
         )
         .child(
-            ChildSpec::new("flaky", |_ctx| async move {
+            ChildSpec::task("flaky", |_ctx| async move {
                 Err(common::test_error("restart later"))
             })
             .restart(RestartPolicy::OnFailure),
         )
         .child(
-            ChildSpec::new("keeper", move |ctx| {
+            ChildSpec::task("keeper", move |ctx| {
                 let saw_cancel = saw_cancel_for_keeper.clone();
                 async move {
                     ctx.shutdown_token().cancelled().await;
@@ -661,10 +639,7 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
                     Ok(())
                 }
             })
-            .shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeStrict,
-            )),
+            .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .build()
         .expect("valid supervisor");
@@ -719,7 +694,7 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
     let third_release = Arc::new(Notify::new());
     let child = |id: &'static str, release: Arc<Notify>| {
         let cancelled_tx = cancelled_tx.clone();
-        ChildSpec::new(id, move |ctx| {
+        ChildSpec::task(id, move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             let release = Arc::clone(&release);
             async move {
@@ -730,7 +705,7 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
             }
         })
     };
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(child("first", Arc::clone(&first_release)))
         .child(child("second", Arc::clone(&second_release)))
         .child(child("third", Arc::clone(&third_release)))
@@ -775,8 +750,8 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
             .next()
             .await
             .expect("staged lifecycle exits remain available");
-        if let LifecycleEvent::Exited { child_id, .. } = event {
-            exited.push(child_id);
+        if matches!(event.kind, ChildLifecycleEventKind::Exited { .. }) {
+            exited.push(event.child_id);
         }
     }
     assert_eq!(exited, ["third", "second", "first"]);
@@ -786,7 +761,7 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
 async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_advancing() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let stubborn_live = common::LiveFlag::new();
-    let stubborn = ChildSpec::new("stubborn", {
+    let stubborn = ChildSpec::task("stubborn", {
         let stubborn_live = stubborn_live.clone();
         let cancelled_tx = cancelled_tx.clone();
         move |ctx| {
@@ -803,11 +778,8 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
             }
         }
     })
-    .shutdown(ShutdownPolicy::new(
-        common::SHORT_GRACE,
-        ShutdownMode::CooperativeThenAbort,
-    ));
-    let dependency = ChildSpec::new("dependency", move |ctx| {
+    .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE));
+    let dependency = ChildSpec::task("dependency", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -817,7 +789,7 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
             Ok(())
         }
     });
-    let handle = SupervisorBuilder::new()
+    let handle = Supervisor::ordered()
         .child(dependency)
         .child(stubborn)
         .build()
@@ -838,10 +810,10 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
         !stubborn_live.is_live(),
         "the expired cursor child must be aborted and joined before advancing"
     );
-    shutdown
-        .await
-        .expect("shutdown task joins")
-        .expect("then-abort expiry is a clean shutdown");
+    assert!(matches!(
+        shutdown.await.expect("shutdown task joins"),
+        Err(SupervisorError::ShutdownTimedOut(id)) if id == "stubborn"
+    ));
 }
 
 #[tokio::test]
@@ -851,7 +823,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
     let (tail_cancelled_tx, mut tail_cancelled_rx) = mpsc::unbounded_channel();
     let nested_child = |id: &'static str, live: common::LiveFlag, report: bool| {
         let tail_cancelled_tx = tail_cancelled_tx.clone();
-        ChildSpec::new(id, move |ctx| {
+        ChildSpec::task(id, move |ctx| {
             let guard = live.guard();
             let tail_cancelled_tx = tail_cancelled_tx.clone();
             async move {
@@ -864,22 +836,17 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
                 Ok(())
             }
         })
-        .shutdown(ShutdownPolicy::new(
-            Duration::from_secs(5),
-            ShutdownMode::CooperativeThenAbort,
-        ))
+        .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(5)))
     };
-    let nested = SupervisorBuilder::new()
+    let nested = Supervisor::ordered()
         .child(nested_child("head", head_live.clone(), false))
         .child(nested_child("tail", tail_live.clone(), true))
         .build()
         .expect("nested ordered supervisor builds");
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            tokio_supervisor::SupervisorSpec::new("nested", nested).shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeThenAbort,
-            )),
+    let handle = Supervisor::ordered()
+        .child(
+            tokio_supervisor::ChildSpec::supervisor("nested", nested)
+                .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .build()
         .expect("root builds")
@@ -888,7 +855,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .await
         .expect("nested tree starts");
 
-    timeout(common::EVENT_TIMEOUT, async {
+    let shutdown = timeout(common::EVENT_TIMEOUT, async {
         let shutdown = handle.shutdown_and_wait();
         tokio::pin!(shutdown);
         tokio::select! {
@@ -900,8 +867,11 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         }
     })
     .await
-    .expect("parent grace bounds the slow nested walk")
-    .expect("parent then-abort shutdown succeeds");
+    .expect("parent grace bounds the slow nested walk");
+    assert!(matches!(
+        shutdown,
+        Err(SupervisorError::ShutdownTimedOut(id)) if id == "nested"
+    ));
     timeout(common::EVENT_TIMEOUT, async {
         while head_live.is_live() || tail_live.is_live() {
             tokio::task::yield_now().await;
@@ -914,7 +884,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
 #[tokio::test]
 async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
     let leaf_live = common::LiveFlag::new();
-    let leaf = ChildSpec::new("leaf", {
+    let leaf = ChildSpec::task("leaf", {
         let leaf_live = leaf_live.clone();
         move |ctx| {
             let guard = leaf_live.guard();
@@ -926,29 +896,22 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
             }
         }
     })
-    .shutdown(ShutdownPolicy::new(
-        Duration::from_secs(5),
-        ShutdownMode::CooperativeThenAbort,
-    ));
-    let inner = SupervisorBuilder::new()
+    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(5)));
+    let inner = Supervisor::ordered()
         .child(leaf)
         .build()
         .expect("inner supervisor builds");
-    let middle = SupervisorBuilder::new()
-        .supervisor(
-            tokio_supervisor::SupervisorSpec::new("inner", inner).shutdown(ShutdownPolicy::new(
-                Duration::from_secs(5),
-                ShutdownMode::CooperativeThenAbort,
-            )),
+    let middle = Supervisor::ordered()
+        .child(
+            tokio_supervisor::ChildSpec::supervisor("inner", inner)
+                .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(5))),
         )
         .build()
         .expect("middle supervisor builds");
-    let handle = SupervisorBuilder::new()
-        .supervisor(
-            tokio_supervisor::SupervisorSpec::new("middle", middle).shutdown(ShutdownPolicy::new(
-                common::SHORT_GRACE,
-                ShutdownMode::CooperativeThenAbort,
-            )),
+    let handle = Supervisor::ordered()
+        .child(
+            tokio_supervisor::ChildSpec::supervisor("middle", middle)
+                .shutdown(ShutdownPolicy::cooperative(common::SHORT_GRACE)),
         )
         .build()
         .expect("root supervisor builds")
@@ -958,10 +921,13 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .expect("nested tree starts");
     assert!(leaf_live.is_live());
 
-    timeout(common::EVENT_TIMEOUT, handle.shutdown_and_wait())
+    let shutdown = timeout(common::EVENT_TIMEOUT, handle.shutdown_and_wait())
         .await
-        .expect("parent grace bounds recursive nested shutdown")
-        .expect("parent fallback abort is a clean shutdown");
+        .expect("parent grace bounds recursive nested shutdown");
+    assert!(matches!(
+        shutdown,
+        Err(SupervisorError::ShutdownTimedOut(id)) if id == "middle"
+    ));
     timeout(common::EVENT_TIMEOUT, async {
         while leaf_live.is_live() {
             tokio::task::yield_now().await;
@@ -975,18 +941,15 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
 async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently() {
     const GRACE: Duration = Duration::from_millis(40);
     let stubborn = |id: &'static str| {
-        ChildSpec::new(id, |ctx| async move {
+        ChildSpec::task(id, |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             std::future::pending::<()>().await;
             Ok(())
         })
-        .shutdown(ShutdownPolicy::new(
-            GRACE,
-            ShutdownMode::CooperativeThenAbort,
-        ))
+        .shutdown(ShutdownPolicy::cooperative(GRACE))
     };
 
-    let ordered = SupervisorBuilder::new()
+    let ordered = Supervisor::ordered()
         .child(stubborn("first"))
         .child(stubborn("second"))
         .child(stubborn("third"))
@@ -998,10 +961,10 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
         .await
         .expect("ordered children start");
     let ordered_started = Instant::now();
-    ordered
-        .shutdown_and_wait()
-        .await
-        .expect("ordered shutdown succeeds");
+    assert!(matches!(
+        ordered.shutdown_and_wait().await,
+        Err(SupervisorError::ShutdownTimedOut(ids)) if ids == "third, second, first"
+    ));
     let ordered_elapsed = ordered_started.elapsed();
     assert!(
         ordered_elapsed >= GRACE * 3,
@@ -1010,7 +973,7 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
 
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Barrier::new(4));
-    let dynamic = DynamicSupervisorBuilder::new()
+    let dynamic = Supervisor::dynamic()
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
@@ -1019,7 +982,7 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
         let release = Arc::clone(&release);
         dynamic
             .add_child(
-                ChildSpec::new(id, move |ctx| {
+                ChildSpec::task(id, move |ctx| {
                     let cancelled_tx = cancelled_tx.clone();
                     let release = Arc::clone(&release);
                     async move {
@@ -1029,10 +992,7 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
                         Ok(())
                     }
                 })
-                .shutdown(ShutdownPolicy::new(
-                    GRACE,
-                    ShutdownMode::CooperativeThenAbort,
-                )),
+                .shutdown(ShutdownPolicy::cooperative(GRACE)),
             )
             .await
             .expect("dynamic member added");

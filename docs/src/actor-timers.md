@@ -66,7 +66,7 @@ Each interval delivery arms the next period. If a handler is still busy when a
 deadline passes, one overdue tick is delivered when the loop is free and the
 following deadline starts from there. Missed ticks never pile up.
 
-Timer deliveries count as received messages in `ActorStats`, but not as
+Timer deliveries count as received messages in `observe::ActorStats`, but not as
 accepted mailbox messages. The whole table drops with the incarnation, so a
 restart cannot leak a stale timer into fresh state and no helper task is
 spawned per self timer.
@@ -200,13 +200,14 @@ the target permanently terminates. A target that merely restarts receives
 later deliveries through its restart-stable ref. Messages should carry a key
 or generation when the target must reject stale cross-actor work.
 
-`Lifetime` cannot stop its actor; it only exposes `is_ended` and the awaitable
-`ended`. `CancellationHandle` owns the separate authority to stop the timer
-operation and exposes the awaitable `cancelled`.
+`Lifetime` is an opaque token passed to the cross-actor timer constructors. It
+cannot stop its actor and exposes no direct cancellation or waiting API.
+`CancellationHandle` owns the separate authority to stop the timer operation
+and exposes the awaitable `cancelled`.
 
-## `RawActor` deadlines
+## `host::RawActor` deadlines
 
-A `RawActor` owns its own receive loop, so it also owns its deadline branches.
+A `host::RawActor` owns its own receive loop, so it also owns its deadline branches.
 Use Tokio's `sleep_until` directly beside `ctx.recv()`:
 
 ```rust,ignore

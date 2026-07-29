@@ -11,7 +11,8 @@ use std::{
 
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_otp::{
-    DrainPolicy, LiveContext, MailboxMode, OffloadDeadline, OffloadHandle, prelude::*,
+    DrainPolicy, LiveContext, MailboxMode, OffloadDeadline, OffloadHandle, host::RawActor,
+    prelude::*,
 };
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -99,10 +100,7 @@ async fn offload_and_offload_or_deliver_total_and_fallback_outcomes() {
     graph.define(actor_slot, move || Outcomes {
         observed: observed.clone(),
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "offload outcome runtime startup").await;
 
     let mut observed = Vec::new();
@@ -243,11 +241,10 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
             done: done.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
+    let runtime = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::OnFailure)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
     wait_runtime_started(&runtime, "stale-offload runtime startup").await;
     actor.send(StaleMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -324,10 +321,7 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
             done: done.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "abort-handle runtime startup").await;
     actor.send(AbortMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -397,10 +391,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
             observed: observed.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "ready-abort runtime startup").await;
     actor.send(ReadyAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "ready-abort offload handle").await;
@@ -477,10 +468,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
             shutdown_seen: shutdown_seen.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "drain-abort runtime startup").await;
     actor.send(DrainAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "drain-abort offload handle").await;
@@ -564,10 +552,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
             observed: observed.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "draining-offload runtime startup").await;
     actor.send(DrainMsg::Start).await.unwrap();
     wait_notification(&entered, "draining actor handler entry").await;
@@ -664,10 +649,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
             observed: observed.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "backpressure runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(&offload_registered, "backpressure offload registration").await;
@@ -712,10 +694,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
             observed: observed.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "conflating completion runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(
@@ -794,10 +773,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
             observed: observed.clone(),
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     wait_runtime_started(&runtime, "deadline-drain runtime startup").await;
     actor.send(DeadlineDrainMsg::Start).await.unwrap();
     wait_notification(&registered, "deadline-drain offload registration").await;
@@ -838,10 +814,7 @@ async fn raw_actor_recv_reaps_offload_completions() {
     graph.define(actor_slot, move || RawCompletion {
         observed: observed.clone(),
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
-        .build()
-        .unwrap()
-        .spawn();
+    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
     assert_eq!(
         recv_test_event(&mut receiver, "raw actor offload completion").await,
         "done"
@@ -884,11 +857,10 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
             PanicActor
         }
     });
-    let runtime = SupervisionTree::graph(&graph.build().unwrap())
+    let runtime = OrderedTree::graph(graph.build().unwrap())
         .default_restart(RestartPolicy::OnFailure)
-        .build()
-        .unwrap()
-        .spawn();
+        .spawn()
+        .unwrap();
     wait_runtime_started(&runtime, "offload-panic runtime startup").await;
     actor.send(PanicMsg::Start).await.unwrap();
     tokio::time::timeout(TEST_TIMEOUT, async {

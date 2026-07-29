@@ -12,24 +12,12 @@ pub struct BlockingCancelled;
 #[error("actor offload deadline elapsed")]
 pub struct OffloadDeadline;
 
-/// Errors returned by [`ActorContext::try_recv`](crate::ActorContext::try_recv).
-///
-/// This crate-owned type keeps the actor mailbox API independent of Tokio's
-/// channel error types. It describes the actor-level states that callers can
-/// act on regardless of the mailbox implementation selected for an actor. The
-/// enum is intentionally exhaustive: future mailbox implementations must map
-/// their no-message and terminal states into this stable actor-level contract.
-#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
-pub enum TryRecvError {
-    /// No message is immediately available, but the mailbox may receive more.
-    #[error("actor mailbox is empty")]
-    Empty,
-    /// The mailbox is closed and cannot receive more messages.
-    #[error("actor mailbox is disconnected")]
-    Disconnected,
-}
-
 /// Errors returned while validating a graph during build.
+///
+/// This type intentionally excludes failures from resolving refs against an
+/// already-built graph. Hand-built declarations that perform both steps can
+/// use an application error type that accepts both this error and
+/// [`GraphLookupError`].
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GraphBuildError {
@@ -62,9 +50,15 @@ pub enum GraphBuildError {
     /// An actor slot from a different graph builder was passed to `define`.
     #[error("actor slot belongs to a different graph builder")]
     ForeignSlot,
-    /// An actor slot no longer names a registered position in its builder.
-    #[error("actor slot is detached")]
-    DetachedSlot,
+}
+
+/// Errors returned when resolving graph members after build.
+///
+/// This type remains distinct from [`GraphBuildError`] because lookup only
+/// happens after a graph has built successfully.
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GraphLookupError {
     /// An actor ref does not belong to this graph.
     #[error("actor ref `{actor_id}` does not belong to this graph")]
     #[non_exhaustive]
@@ -74,38 +68,50 @@ pub enum GraphBuildError {
     },
 }
 
-/// Errors returned when sending to an actor mailbox.
+/// Error returned when an awaited send cannot reach an actor membership.
 ///
-/// The variants form sender-visible lifecycle vocabulary. `MailboxFull` is
-/// transient backpressure from [`ActorRef::try_send`](crate::ActorRef::try_send).
-/// `ActorNotRunning` means the membership expects another incarnation, so an
-/// awaited [`ActorRef::send`](crate::ActorRef::send) waits for that rebind.
-/// `ActorTerminated` means the membership is terminal and will never rebind;
-/// removing and re-adding the same actor id creates a different membership.
-/// `MailboxClosed` is a race observed by non-waiting sends when the current
-/// incarnation has closed intake but its final lifecycle disposition is not
-/// visible yet.
+/// Awaited sends ride through mailbox capacity pressure, closed incarnations,
+/// and restart windows. They fail only after the target membership has
+/// terminated, or when its binding source has otherwise become unavailable.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum SendError {
+#[error("actor `{actor_id}` is unavailable")]
+pub struct SendError {
+    /// Stable id of the target actor.
+    pub actor_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SendError;
+
+    #[test]
+    fn send_error_display_covers_every_unavailable_binding() {
+        assert_eq!(
+            SendError {
+                actor_id: "worker".to_owned(),
+            }
+            .to_string(),
+            "actor `worker` is unavailable"
+        );
+    }
+}
+
+/// Errors returned by [`ActorRef::try_send`](crate::ActorRef::try_send).
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum TrySendError {
     /// The target actor is currently unbound and a restart is expected.
     #[error("actor `{actor_id}` is not currently running")]
     #[non_exhaustive]
-    ActorNotRunning {
-        /// Stable id of the target actor.
-        actor_id: String,
-    },
-    /// The target membership has terminated and no restart is scheduled.
-    #[error("actor `{actor_id}` has terminated")]
-    #[non_exhaustive]
-    ActorTerminated {
+    NotRunning {
         /// Stable id of the target actor.
         actor_id: String,
     },
     /// The target actor's mailbox is full.
     #[error("mailbox for actor `{actor_id}` is full")]
     #[non_exhaustive]
-    MailboxFull {
+    Full {
         /// Stable id of the target actor.
         actor_id: String,
     },
@@ -113,7 +119,14 @@ pub enum SendError {
     /// disposition is still being resolved.
     #[error("mailbox for actor `{actor_id}` is closed")]
     #[non_exhaustive]
-    MailboxClosed {
+    Closed {
+        /// Stable id of the target actor.
+        actor_id: String,
+    },
+    /// The target membership has terminated and no restart is scheduled.
+    #[error("actor `{actor_id}` has terminated")]
+    #[non_exhaustive]
+    Terminated {
         /// Stable id of the target actor.
         actor_id: String,
     },

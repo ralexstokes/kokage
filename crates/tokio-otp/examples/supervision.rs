@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             out: out_tx.clone(),
         },
     })?;
-    let handle = tree.build()?.spawn();
+    let handle = tree.spawn()?;
 
     refs.frontend
         .send(FrontendMsg::Feed("hello".to_owned()))

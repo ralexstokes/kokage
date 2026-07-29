@@ -2,7 +2,7 @@ use std::{collections::HashMap, error::Error, time::Duration};
 
 use tokio::sync::mpsc;
 use tokio_otp::{
-    Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, Reply, SupervisionTree,
+    Actor, ActorRef, ActorResult, DynamicTree, GraphBuilder, MessageContext, OrderedTree, Reply,
 };
 
 enum DirectoryMsg<M> {
@@ -66,10 +66,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         entries: HashMap::new(),
     });
     let graph = graph.build()?;
-    let handle = SupervisionTree::graph(&graph)
-        .subtree("dynamic", SupervisionTree::dynamic())
-        .build()?
-        .spawn();
+    let handle = OrderedTree::graph(graph)
+        .subtree("dynamic", DynamicTree::new())
+        .spawn()?;
     handle.wait_started().await?;
     let dynamic = handle
         .subtree("dynamic")

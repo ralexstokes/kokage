@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use tokio_otp::{ActorContext, ActorResult, GraphBuildError, GraphBuilder, RawActor};
+use tokio_otp::{ActorContext, ActorResult, GraphBuildError, GraphBuilder, host::RawActor};
 
 struct Idle<M>(PhantomData<fn(M)>);
 
