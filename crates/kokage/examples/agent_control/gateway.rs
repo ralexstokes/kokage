@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use kokage::{
-    Actor, ActorContext, ActorRef, ActorResult, DrainPolicy, MessageContext, host::RawActor,
+    Actor, ActorRef, ActorResult, DrainPolicy, MessageContext,
+    host::{ActorContext, RawActor},
 };
 
 use crate::{

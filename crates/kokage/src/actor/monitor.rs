@@ -22,19 +22,7 @@ const WATCH_BUFFER_CAP: usize = 128;
 // Overflow needs room for both a `Lagged` marker and a retained real event.
 const _: () = assert!(WATCH_BUFFER_CAP >= 2);
 
-/// Notification that an actor incarnation has exited.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Down {
-    /// Stable id of the actor that was watched.
-    pub actor_id: String,
-    /// Incarnation counter, starting at zero and increasing on every restart.
-    pub generation: u64,
-    /// How the watched incarnation exited.
-    pub reason: DownReason,
-}
-
-/// The reason carried by a [`Down`] notification.
+/// The reason carried by a [`MonitorEvent::Down`] notification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum DownReason {
@@ -46,7 +34,7 @@ pub enum DownReason {
 
 /// Lifecycle transition of a watched logical actor.
 ///
-/// Delivered by [`ActorContext::watch`](crate::ActorContext::watch). Events
+/// Delivered by [`ActorContext::watch`](crate::host::ActorContext::watch). Events
 /// for one watch arrive in lifecycle order: every [`Up`](Self::Up) for a
 /// generation precedes its [`Down`](Self::Down), and
 /// [`Terminated`](Self::Terminated) is final.
@@ -63,7 +51,15 @@ pub enum MonitorEvent {
     },
     /// The current incarnation exited. If the supervisor restarts the actor,
     /// a matching [`Up`](Self::Up) follows.
-    Down(Down),
+    Down {
+        /// Stable id of the watched actor.
+        actor_id: String,
+        /// Incarnation counter, starting at zero and increasing on every
+        /// restart.
+        generation: u64,
+        /// How the watched incarnation exited.
+        reason: DownReason,
+    },
     /// One or more transitions were dropped because the observer could not
     /// keep up (its mailbox stayed full while the target churned), and the
     /// per-watch buffer overflowed.
@@ -301,7 +297,7 @@ impl MonitorHub {
             return;
         };
         state.lifecycle = Lifecycle::Exited(generation);
-        let down = MonitorEvent::Down(self.down(generation, reason));
+        let down = self.down(generation, reason);
         state.watchers.retain(|watcher| watcher.notify(&down));
     }
 
@@ -310,9 +306,7 @@ impl MonitorHub {
         let (down, generation) = match state.lifecycle {
             Lifecycle::Pending => (None, None),
             Lifecycle::Running(generation) => (
-                Some(MonitorEvent::Down(
-                    self.down(generation, DownReason::Failure),
-                )),
+                Some(self.down(generation, DownReason::Failure)),
                 Some(generation),
             ),
             Lifecycle::Exited(generation) => (None, Some(generation)),
@@ -338,8 +332,8 @@ impl MonitorHub {
         }
     }
 
-    fn down(&self, generation: u64, reason: DownReason) -> Down {
-        Down {
+    fn down(&self, generation: u64, reason: DownReason) -> MonitorEvent {
+        MonitorEvent::Down {
             actor_id: self.actor_id.clone(),
             generation,
             reason,
@@ -449,11 +443,11 @@ mod tests {
     }
 
     fn down_event(generation: u64) -> MonitorEvent {
-        MonitorEvent::Down(Down {
+        MonitorEvent::Down {
             actor_id: "peer".to_owned(),
             generation,
             reason: DownReason::Failure,
-        })
+        }
     }
 
     fn lagged_count(events: &VecDeque<MonitorEvent>) -> u64 {

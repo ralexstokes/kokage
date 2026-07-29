@@ -8,7 +8,10 @@ use std::{
     time::Duration,
 };
 
-use kokage::{host::RawActor, prelude::*};
+use kokage::{
+    host::{ActorContext, RawActor},
+    prelude::*,
+};
 use tokio::time::{sleep, timeout};
 
 #[derive(Clone)]

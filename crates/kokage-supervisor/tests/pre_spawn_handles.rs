@@ -36,7 +36,7 @@ async fn retained_builder_handle_is_unavailable_then_binds_to_the_spawned_root()
     let declared = handle.snapshot();
     let worker = declared.child("worker").expect("worker is declared");
     assert!(worker.state.is_starting());
-    assert!(!worker.started());
+    assert!(!worker.state.started());
 
     let supervisor = builder.build().expect("builder is valid");
     let spawned = supervisor.spawn();
@@ -125,7 +125,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             "builder" => drop(builder),
             "failed-build" => {
                 let error = builder
-                    .restart_intensity(RestartConfig::new(1, Duration::ZERO))
+                    .restart_config(RestartConfig::new(1, Duration::ZERO))
                     .build()
                     .expect_err("invalid build fails");
                 assert!(error.to_string().contains("window"));
@@ -213,7 +213,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
         timeout(Duration::from_millis(50), stopped_rx.recv())
             .await
             .is_err(),
-        "a nested stable handle is not a lifecycle ownership lease"
+        "a nested stable handle does not own the supervisor lifecycle"
     );
     assert!(
         parent
@@ -221,7 +221,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
             .expect("nested scope remains attached")
             .snapshot()
             .child("worker")
-            .is_some_and(|worker| worker.started())
+            .is_some_and(|worker| worker.state.started())
     );
 
     parent

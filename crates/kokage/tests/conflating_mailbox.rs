@@ -8,9 +8,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorContext, ActorOptions, ActorResult, CallError, DrainPolicy, GraphBuilder,
-    MailboxMode, MessageContext, Reply, RestartPolicy, StartContext,
-    host::{DEFAULT_SHUTDOWN_BOUND, RawActor},
+    Actor, ActorOptions, ActorResult, CallError, DrainPolicy, GraphBuilder, MailboxMode,
+    MessageContext, Reply, RestartPolicy, StartContext,
+    host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;

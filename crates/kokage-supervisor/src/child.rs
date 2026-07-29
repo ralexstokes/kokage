@@ -203,8 +203,8 @@ impl ChildSpec {
     /// When set, this child tracks its own sliding restart window instead of
     /// sharing the supervisor's default.
     #[must_use]
-    pub fn restart_intensity(self, intensity: RestartConfig) -> Self {
-        self.map_inner(|inner| inner.restart_intensity = Some(intensity))
+    pub fn restart_config(self, config: RestartConfig) -> Self {
+        self.map_inner(|inner| inner.restart_intensity = Some(config))
     }
 
     /// Attaches process-local metadata to this supervised child.

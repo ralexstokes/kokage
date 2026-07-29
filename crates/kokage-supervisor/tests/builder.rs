@@ -4,6 +4,12 @@ use kokage_supervisor::{
     BackoffPolicy, ChildSpec, RestartConfig, Supervisor, SupervisorBuildError,
 };
 
+fn restart_config(backoff: BackoffPolicy) -> RestartConfig {
+    let mut config = RestartConfig::new(1, Duration::from_secs(1));
+    config.backoff = backoff;
+    config
+}
+
 #[test]
 fn empty_children_are_accepted() {
     Supervisor::ordered()
@@ -25,7 +31,7 @@ fn duplicate_child_ids_are_rejected() {
 #[test]
 fn invalid_restart_intensity_is_rejected() {
     let err = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(1, Duration::ZERO))
+        .restart_config(RestartConfig::new(1, Duration::ZERO))
         .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero-width restart windows should be rejected");
@@ -36,14 +42,12 @@ fn invalid_restart_intensity_is_rejected() {
 #[test]
 fn invalid_jittered_restart_intensity_is_rejected() {
     let err = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(1, Duration::from_secs(1)).with_backoff(
-            BackoffPolicy::Exponential {
-                base: Duration::ZERO,
-                factor: 2,
-                max: Duration::from_millis(10),
-                jitter: true,
-            },
-        ))
+        .restart_config(restart_config(BackoffPolicy::Exponential {
+            base: Duration::ZERO,
+            factor: 2,
+            max: Duration::from_millis(10),
+            jitter: true,
+        }))
         .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("invalid jittered exponential backoff should be rejected");
@@ -54,10 +58,7 @@ fn invalid_jittered_restart_intensity_is_rejected() {
 #[test]
 fn invalid_fixed_backoff_delay_is_rejected() {
     let err = Supervisor::ordered()
-        .restart_intensity(
-            RestartConfig::new(1, Duration::from_secs(1))
-                .with_backoff(BackoffPolicy::Fixed(Duration::ZERO)),
-        )
+        .restart_config(restart_config(BackoffPolicy::Fixed(Duration::ZERO)))
         .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero fixed backoff delay should be rejected");
@@ -68,14 +69,12 @@ fn invalid_fixed_backoff_delay_is_rejected() {
 #[test]
 fn invalid_exponential_restart_factor_is_rejected() {
     let err = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(1, Duration::from_secs(1)).with_backoff(
-            BackoffPolicy::Exponential {
-                base: Duration::from_millis(10),
-                factor: 0,
-                max: Duration::from_millis(20),
-                jitter: false,
-            },
-        ))
+        .restart_config(restart_config(BackoffPolicy::Exponential {
+            base: Duration::from_millis(10),
+            factor: 0,
+            max: Duration::from_millis(20),
+            jitter: false,
+        }))
         .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero exponential factor should be rejected");
@@ -86,14 +85,12 @@ fn invalid_exponential_restart_factor_is_rejected() {
 #[test]
 fn invalid_exponential_restart_max_is_rejected() {
     let err = Supervisor::ordered()
-        .restart_intensity(RestartConfig::new(1, Duration::from_secs(1)).with_backoff(
-            BackoffPolicy::Exponential {
-                base: Duration::from_millis(10),
-                factor: 2,
-                max: Duration::ZERO,
-                jitter: false,
-            },
-        ))
+        .restart_config(restart_config(BackoffPolicy::Exponential {
+            base: Duration::from_millis(10),
+            factor: 2,
+            max: Duration::ZERO,
+            jitter: false,
+        }))
         .child(ChildSpec::task("worker", |_| async { Ok(()) }))
         .build()
         .expect_err("zero exponential max should be rejected");
@@ -106,7 +103,7 @@ fn invalid_child_restart_intensity_is_rejected() {
     let err = Supervisor::ordered()
         .child(
             ChildSpec::task("worker", |_| async { Ok(()) })
-                .restart_intensity(RestartConfig::new(1, Duration::ZERO)),
+                .restart_config(RestartConfig::new(1, Duration::ZERO)),
         )
         .build()
         .expect_err("zero-width child restart windows should be rejected");

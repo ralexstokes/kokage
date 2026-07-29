@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use kokage::{DrainPolicy, LiveContext, prelude::*};
+use kokage::{DrainPolicy, prelude::*};
 use tokio::time::Instant;
 
 use crate::{

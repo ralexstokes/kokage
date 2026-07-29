@@ -11,10 +11,12 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorContext, ActorOptions, ActorRef, ActorResult, CallError, DrainPolicy, Graph,
-    GraphBuildError, GraphBuilder, LiveContext, MessageContext, Reply, RestartPolicy, SendError,
-    StartContext, StopContext, TrySendError,
-    host::{ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+    Actor, ActorOptions, ActorRef, ActorResult, ActorStatus, CallError, DrainPolicy, Graph,
+    GraphBuildError, GraphBuilder, MessageContext, Reply, RestartPolicy, SendError, StartContext,
+    StopContext, TrySendError,
+    host::{
+        ActorContext, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
+    },
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -518,9 +520,9 @@ impl Actor for ContextStop {
     type Msg = ();
 
     async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        assert!(!ctx.is_stopping());
+        assert_eq!(ctx.status(), ActorStatus::Running);
         ctx.stop();
-        assert!(ctx.is_stopping());
+        assert_eq!(ctx.status(), ActorStatus::Stopping);
         ctx.stop();
         Ok(())
     }
@@ -1325,10 +1327,12 @@ mod runnable_actor {
     };
 
     use kokage::{
-        Actor, ActorContext, ActorOptions, ActorRef, ActorResult, ControlError, DrainPolicy,
-        DynamicActorOptions, DynamicTree, Graph, GraphBuilder, MessageContext, RestartPolicy,
-        SendError, StartContext, SupervisorError, TrySendError,
-        host::{ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
+        Actor, ActorOptions, ActorRef, ActorResult, ControlError, DrainPolicy, DynamicActorOptions,
+        DynamicTree, Graph, GraphBuilder, MessageContext, RestartPolicy, SendError, StartContext,
+        SupervisorError, TrySendError,
+        host::{
+            ActorContext, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor,
+        },
     };
     use tokio::{
         sync::{Notify, mpsc},
@@ -1660,7 +1664,9 @@ mod runnable_actor {
                 "worker",
                 || NeverStops,
                 DynamicActorOptions::default().shutdown(
-                    kokage_supervisor::ShutdownPolicy::cooperative(Duration::from_millis(100)),
+                    kokage_supervisor::ShutdownPolicy::Cooperative {
+                        grace: Duration::from_millis(100),
+                    },
                 ),
             )
             .await

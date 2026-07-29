@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    ActorContext, ActorResult, Graph, GraphBuilder, RestartPolicy,
-    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor},
+    ActorResult, Graph, GraphBuilder, RestartPolicy,
+    host::{ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor},
 };
 use tokio::{
     sync::{Notify, oneshot},

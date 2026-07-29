@@ -167,22 +167,17 @@ an order deadline can clear the timeout instead of allowing a stale
 
 ## Cross-actor timers
 
-`kokage::timers::send_after_to` and `interval_to` are small utilities built
-on public API. Pass the scheduling incarnation's observe-only `Lifetime` and
-the target's `ActorRef`:
+`send_after_to` and `interval_to` live on every live stage context and on
+`host::ActorContext`. Pass the target's `ActorRef`; the context binds the timer
+to the scheduling incarnation internally:
 
 ```rust,ignore
-use kokage::timers;
-
-let lifetime = ctx.lifetime();
-timers::send_after_to(
-    &lifetime,
+ctx.send_after_to(
     &ledger,
     LedgerMsg::Expire { key },
     Duration::from_secs(30),
 );
-timers::interval_to(
-    &lifetime,
+ctx.interval_to(
     &monitor,
     MonitorMsg::Heartbeat,
     Duration::from_secs(5),
@@ -195,15 +190,14 @@ the timer task until capacity opens; a conflating mailbox may replace an unread
 earlier delivery. Successful sends increment accepted-message counters. None
 of those behaviors applies to loop-owned self timers, which bypass capacity
 and conflation and increment only received-message counters. The cross-actor
-timer tasks stop when cancelled, when the scheduling lifetime ends, or when
+timer tasks stop when cancelled, when the scheduling incarnation ends, or when
 the target permanently terminates. A target that merely restarts receives
 later deliveries through its restart-stable ref. Messages should carry a key
 or generation when the target must reject stale cross-actor work.
 
-`Lifetime` is an opaque token passed to the cross-actor timer constructors. It
-cannot stop its actor and exposes no direct cancellation or waiting API.
-`CancellationHandle` owns the separate authority to stop the timer operation
-and exposes the awaitable `cancelled`.
+`CancellationHandle` owns the authority to stop the timer operation and
+exposes the awaitable `cancelled`; the actor lifetime token itself remains
+private to the context.
 
 ## `host::RawActor` deadlines
 

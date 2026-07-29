@@ -27,7 +27,7 @@ refs bundle alongside the graph, for use as application entry points:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::{ActorContext, ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision};
+use kokage::{ActorRef, ActorResult, Actor, MessageContext, Reply, Supervision, host::ActorContext};
 
 struct Order(String);
 struct Parcel(String);
@@ -347,12 +347,12 @@ awaited. That is the right choice when queued work is replaceable — recomputed
 next run, conflated into a later snapshot, or retried by the sender.
 
 A drained message reaches the same `handle` as any other, so a handler that
-behaves differently on the way out has to ask: `ctx.is_draining()` is `true`
-for exactly the calls the drain makes. Reach for it when the handler would
+behaves differently on the way out checks whether `ctx.status()` is
+`ActorStatus::Draining`. Reach for it when the handler would
 otherwise queue work that nothing will run — a `continue_with`, a fresh timer,
-a follow-up offload. It is not `ctx.is_shutting_down()`: a drain also follows
-the actor's own `ctx.stop()` request, where the graph is not shutting down and
-`is_shutting_down()` stays `false` the whole time.
+a follow-up offload. Graph shutdown remains a separate signal available as
+`ctx.shutdown_token().is_cancelled()`: a drain can also follow the actor's own
+`ctx.stop()` request while that token remains live.
 
 Hand-written `host::RawActor::run` loops are
 still available as the escape hatch for custom loop control; after
@@ -360,15 +360,15 @@ still available as the escape hatch for custom loop control; after
 can use `ctx.try_recv()` to drain immediately queued messages.
 
 The two actor styles intentionally receive non-nested capability sets.
-`host::RawActor` owns `ActorContext`, so it can call `recv`, `try_recv`, and
+`host::RawActor` owns `host::ActorContext`, so it can call `recv`, `try_recv`, and
 `mark_ready`, but it must express timers and other loop branches directly.
 The framework owns those operations for `Actor`; its stage contexts therefore
 withhold direct mailbox reads and readiness, while the live stages implement
 `LiveContext` for loop-owned timers and continuations. Watches and offloads are
-available directly from `ActorContext` to both actor styles.
+available directly from each style's context.
 Identity, shutdown-observation, blocking-work, and scope-access methods are
 inherent on every stage context, including `StopContext`; no context trait
-import is needed to call them. `LiveContext` remains the generic bound for
+import is needed to call any concrete stage operation. `LiveContext` remains the generic bound for
 helpers shared by the startup and message stages.
 
 `ctx.try_recv()` returns `Option<M>`: `Some(message)` for an immediately

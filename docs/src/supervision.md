@@ -15,6 +15,9 @@ use kokage_supervisor::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut press_restart = RestartConfig::new(3, Duration::from_secs(10));
+    press_restart.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
+
     // A press that jams shortly after starting.
     let press = ChildSpec::task("press", |ctx| async move {
         println!("press starting (generation {})", ctx.generation());
@@ -22,11 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err("paper jam".into())
     })
     .restart(RestartPolicy::OnFailure)
-    .restart_intensity(
-        RestartConfig::new(3, Duration::from_secs(10))
-            .with_backoff(BackoffPolicy::Fixed(Duration::from_millis(100))),
-    )
-    .shutdown(ShutdownPolicy::cooperative(Duration::from_secs(1)));
+    .restart_config(press_restart)
+    .shutdown(ShutdownPolicy::Cooperative { grace: Duration::from_secs(1) });
 
     // A front desk that runs until asked to stop.
     let front_desk = ChildSpec::task("front-desk", |ctx| async move {
@@ -35,14 +35,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(RestartPolicy::Always);
 
-    let supervisor = Supervisor::ordered()
+    let running = Supervisor::ordered()
         .strategy(Strategy::OneForOne)
         .child(press)
         .child(front_desk)
-        .build()?;
+        .spawn()?;
 
-    let handle = supervisor.spawn();
-    match handle.wait().await {
+    match running.wait().await {
         Ok(()) => println!("supervisor stopped cleanly"),
         Err(error) => println!("supervisor gave up: {error}"),
     }
@@ -93,13 +92,12 @@ The exponential attempt count is a per-child consecutive-restart counter that
 resets once a run survives longer than the intensity window. A shutdown
 request always wins over a pending restart delay.
 
-The API deliberately keeps `restart_intensity` as the setter and serialized
-outline-field name: it names the supervisor behavior being configured.
-`RestartConfig` names the value passed through those surfaces because that
-value carries both the restart budget and its backoff policy.
+The setters are named `restart_config` after the value they accept. The
+configuration carries both the restart budget and its backoff policy; set the
+public `backoff` field after calling `RestartConfig::new`.
 
 Intensity can be set on the supervisor as a whole
-(`Supervisor::ordered().restart_intensity(...)`) or overridden per child, as we did
+(`Supervisor::ordered().restart_config(...)`) or overridden per child, as we did
 for the press.
 
 ## Ordered startup and readiness
@@ -173,14 +171,14 @@ example] pins the last-child behavior with per-child restart-count assertions.
 When a child must stop — on supervisor shutdown, removal, or a group restart —
 its [`ShutdownPolicy`] governs how:
 
-- **`ShutdownPolicy::cooperative(grace)`** (default, 5 s grace) — cancel
+- **`ShutdownPolicy::Cooperative { grace }`** (default, 5 s grace) — cancel
   the child's token and wait up to `grace` for a voluntary exit. On shutdown
   or removal, abort *and report a timeout error* otherwise; callers that only
   need best-effort cleanup may explicitly ignore that error. The child's
   lifecycle exit is `Aborted { after_grace: true }`. During a group restart,
   grace expiry escalates the old generation to abort and the restart continues
   once the old task exits.
-- **`ShutdownPolicy::abort()`** — abort immediately.
+- **`ShutdownPolicy::Abort`** — abort immediately.
 
 One caveat inherited from Tokio itself: aborts take effect at `.await` points.
 A child stuck in a non-yielding loop cannot be preempted — isolate truly

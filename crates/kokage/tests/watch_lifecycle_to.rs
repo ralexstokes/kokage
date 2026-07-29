@@ -152,7 +152,7 @@ async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) 
             if snapshots
                 .borrow()
                 .child(id)
-                .is_some_and(|child| child.generation == generation && child.started())
+                .is_some_and(|child| child.generation == generation && child.state.started())
             {
                 break;
             }
@@ -251,7 +251,10 @@ async fn lifecycle_pump_forwards_ordered_events_and_never_replays_after_target_r
     assert_eq!(second[0].1.seq, first[2].1.seq + 1);
     assert_eq!(second[1].1.seq, second[0].1.seq + 1);
     assert_eq!(second[2].1.seq, second[1].1.seq + 1);
-    assert!(!guard.is_cancelled());
+    assert_eq!(
+        format!("{guard:?}"),
+        "LifecycleWatchGuard { cancelled: false }"
+    );
     assert_no_buffered_lifecycle(
         &sink,
         &mut observed,
@@ -267,7 +270,10 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     guard.cancel();
-    assert!(guard.is_cancelled());
+    assert_eq!(
+        format!("{guard:?}"),
+        "LifecycleWatchGuard { cancelled: true }"
+    );
 
     crasher.send(()).await.expect("crash request delivered");
     wait_for_generation(&watched, "crasher", 1).await;
@@ -315,7 +321,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         ChildLifecycleEventKind::Exited { generation: 0, .. }
     ));
     timeout(Duration::from_secs(2), async {
-        while !guard.is_cancelled() {
+        while format!("{guard:?}") != "LifecycleWatchGuard { cancelled: true }" {
             tokio::task::yield_now().await;
         }
     })
@@ -329,7 +335,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle.remove_child("sink").await.expect("target removed");
     timeout(Duration::from_secs(2), async {
-        while !guard.is_cancelled() {
+        while format!("{guard:?}") != "LifecycleWatchGuard { cancelled: true }" {
             tokio::task::yield_now().await;
         }
     })

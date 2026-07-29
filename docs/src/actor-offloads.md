@@ -1,13 +1,12 @@
 # Bounded actor offloads
 
 An actor that awaits slow work inside `handle` stops receiving messages until
-that work completes. `ActorContext::offload_or` moves a bounded future off the
-handler loop, substitutes an explicit fallback value at the deadline, and maps
-the value back into an ordinary typed message:
+that work completes. `offload` moves a bounded future off the handler loop and
+maps its total result back into an ordinary typed message:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::ActorContext;
+use kokage::host::ActorContext;
 
 enum Msg {
     Loaded(String),
@@ -15,25 +14,23 @@ enum Msg {
 
 # async fn load() -> String { String::new() }
 # fn start(ctx: &mut ActorContext<Msg>) {
-ctx.offload_or(
+ctx.offload(
     Duration::from_millis(250),
     load(),
-    "value remained unknown".into(),
-    Msg::Loaded,
+    |result| Msg::Loaded(result.unwrap_or_else(|_| "value remained unknown".into())),
 );
 # }
 ```
 
-The deadline and fallback are required: timeout cannot be forgotten, but the
-common path does not need to expose a separate deadline type in the message
-protocol. The actor loop owns the completion directly. It does not consume
+The deadline is required and the continuation must handle both success and
+`OffloadDeadline`; `unwrap_or` is the one-line spelling when a fallback is all
+the protocol needs. The actor loop owns the completion directly. It does not consume
 mailbox capacity or participate in conflation, and its ordering relative to
 external mailbox messages is unspecified. The loop selects fairly between
 the two sources so neither one has priority.
 
-Use the lower-level `ActorContext::offload` when the actor must distinguish a
-deadline from a value returned by the future. Its continuation receives the
-total `Result<T, OffloadDeadline>` outcome.
+The continuation receives `Result<T, OffloadDeadline>` when the actor must
+distinguish a deadline from a value returned by the future.
 
 ## Ownership and correlation
 
@@ -47,7 +44,7 @@ concurrent offloads in one incarnation remains part of the message protocol:
 
 ```rust,no_run
 # use std::time::Duration;
-# use kokage::{ActorContext, OffloadDeadline};
+# use kokage::{OffloadDeadline, host::ActorContext};
 enum Msg {
     Fetched { request: u64, value: Result<String, OffloadDeadline> },
 }
@@ -115,7 +112,7 @@ impl Actor for Router {
                 self.in_flight.insert(order, venue);
                 let gateway = self.venues[venue].clone();
                 // ...then move the slow call off it.
-                ctx.offload_or(
+                ctx.offload(
                     Duration::from_millis(250),
                     async move {
                         matches!(
@@ -127,10 +124,9 @@ impl Actor for Router {
                             Ok(true)
                         )
                     },
-                    false,
-                    move |accepted| RouterMsg::Resolved {
+                    move |result| RouterMsg::Resolved {
                         order,
-                        accepted,
+                        accepted: result.unwrap_or(false),
                         reply,
                     },
                 );
@@ -164,7 +160,7 @@ while another venue's call is still waiting out its timeout.
 
 ## Abort is not undo
 
-`OffloadHandle::abort`, timeout, actor failure, and discard shutdown all abandon
+`TaskHandle::abort`, timeout, actor failure, and discard shutdown all abandon
 the local future. They cannot retract a request another actor or external
 service already accepted. Its outcome is unknown, not "not executed."
 
@@ -193,6 +189,6 @@ outer backstop for slow handlers.
 
 `observe::ActorStats::outstanding_offloads` exposes the current number of owned offloads.
 It falls when the actor loop reaps a completion or observes an abort. The method
-lives on the shared `ActorContext` type: `recv` and `try_recv` merge offload
+lives on `host::ActorContext`: `recv` and `try_recv` merge offload
 completions with mailbox messages for a `host::RawActor`, but a hand-written raw loop
 must still define its own shutdown and drain protocol.

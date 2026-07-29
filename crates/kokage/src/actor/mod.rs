@@ -16,15 +16,13 @@ mod monitor;
 mod observability;
 mod raw;
 
-pub(crate) use context::deadline_after;
-
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::ActorOptionsValidationError;
 pub use builder::{ActorOptions, ActorSlot, GraphBuilder};
-pub use cancellation::{CancellationHandle, Lifetime};
+pub use cancellation::CancellationHandle;
 pub use context::{
-    ActorContext, ActorRef, LiveContext, MessageContext, OffloadHandle, Reply, RestrictedScope,
-    ScopeWaitHandle, StartContext, StopContext, TimerKey,
+    ActorContext, ActorRef, ActorStatus, LiveContext, MessageContext, Reply, RestrictedScope,
+    StartContext, StopContext, TaskHandle, TimerKey,
 };
 pub use error::{
     BlockingCancelled, CallError, GraphBuildError, GraphLookupError, OffloadDeadline, SendError,
@@ -34,5 +32,5 @@ pub use factory::ActorFactory;
 pub(crate) use graph::RunnableActorBuilder;
 pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor};
 pub use handler::{Actor, DrainPolicy};
-pub use monitor::{Down, DownReason, MonitorEvent};
+pub use monitor::{DownReason, MonitorEvent};
 pub use raw::{ActorResult, RawActor};
