@@ -7,7 +7,7 @@ use std::{
 };
 
 use kokage::{
-    ActorResult, CallError, Graph, GraphBuilder, Reply, RestartPolicy,
+    ActorResult, ActorSpec, CallError, Graph, GraphBuilder, Reply, RestartPolicy,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
@@ -18,13 +18,13 @@ use tokio_util::sync::CancellationToken;
 
 const CALL_TIMEOUT: Duration = Duration::from_millis(50);
 
-fn actor(graph: &Graph, id: &str) -> RunnableActor {
+fn actor(graph: Graph, id: &str) -> RunnableActor {
     graph
-        .actors()
-        .iter()
+        .into_nodes()
+        .into_iter()
         .find(|actor| actor.label() == id)
         .expect("actor exists")
-        .clone()
+        .into_runnable()
 }
 
 fn start(actor: RunnableActor) -> (CancellationToken, tokio::task::JoinHandle<()>) {
@@ -74,8 +74,7 @@ impl RawActor for ReplyImmediately {
 #[tokio::test(start_paused = true)]
 async fn timeout_before_mailbox_binding_drops_the_request() {
     let mut builder = GraphBuilder::new();
-    let (rpc_slot, rpc) = builder.slot("rpc");
-    builder.define(rpc_slot, || ReplyImmediately);
+    let rpc = builder.actor(ActorSpec::new("rpc", || ReplyImmediately));
     let graph = builder.build().expect("valid graph");
 
     assert!(matches!(
@@ -84,7 +83,7 @@ async fn timeout_before_mailbox_binding_drops_the_request() {
     ));
     assert_eq!(rpc.stats().messages_accepted, 0);
 
-    let (stop_token, task) = start(actor(&graph, "rpc"));
+    let (stop_token, task) = start(actor(graph, "rpc"));
     assert_eq!(
         rpc.call(CALL_TIMEOUT, Request::Get)
             .await
@@ -135,17 +134,16 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
     let release = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
     builder.mailbox_capacity(1);
-    let (rpc_slot, rpc) = builder.slot("rpc");
-    builder.define(rpc_slot, {
+    let rpc = builder.actor(ActorSpec::new("rpc", {
         let release = release.clone();
         move || GatedMailbox {
             started: started_tx.clone(),
             release: release.clone(),
             observed: observed_tx.clone(),
         }
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let (stop_token, task) = start(actor(&graph, "rpc"));
+    let (stop_token, task) = start(actor(graph, "rpc"));
     started_rx.recv().await.expect("actor started");
 
     rpc.send(BackpressuredRequest::Occupy)
@@ -201,8 +199,7 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
     let release = Arc::new(Notify::new());
     let effects = Arc::new(AtomicUsize::new(0));
     let mut builder = GraphBuilder::new();
-    let (rpc_slot, rpc) = builder.slot("rpc");
-    builder.define(rpc_slot, {
+    let rpc = builder.actor(ActorSpec::new("rpc", {
         let release = release.clone();
         let effects = effects.clone();
         move || DelayedReply {
@@ -211,9 +208,9 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
             effects: effects.clone(),
             replied: replied_tx.clone(),
         }
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let (stop_token, task) = start(actor(&graph, "rpc"));
+    let (stop_token, task) = start(actor(graph, "rpc"));
 
     let call = tokio::spawn({
         let rpc = rpc.clone();
@@ -259,16 +256,15 @@ async fn accepted_unread_request_lost_with_incarnation_reports_reply_dropped() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let exit = Arc::new(Notify::new());
     let mut builder = GraphBuilder::new();
-    let (rpc_slot, rpc) = builder.slot("rpc");
-    builder.define(rpc_slot, {
+    let rpc = builder.actor(ActorSpec::new("rpc", {
         let exit = exit.clone();
         move || ExitWithoutReceiving {
             started: started_tx.clone(),
             exit: exit.clone(),
         }
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let (_stop_token, task) = start(actor(&graph, "rpc"));
+    let (_stop_token, task) = start(actor(graph, "rpc"));
     started_rx.recv().await.expect("actor started");
 
     let call = tokio::spawn({

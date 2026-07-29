@@ -77,25 +77,23 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     let (failed_tx, failed_rx) = oneshot::channel();
 
     let mut builder = GraphBuilder::new();
-    let (worker_slot, worker_ref) = builder.slot::<String>("worker");
-    let (frontend_ref_slot, frontend_ref) = builder.slot("frontend");
-    builder.define(frontend_ref_slot, {
-        let worker_ref = worker_ref.clone();
-        let frontend_starts = frontend_starts.clone();
-        move || Frontend {
-            worker: worker_ref.clone(),
-            starts: frontend_starts.clone(),
-        }
-    });
     let failed = oneshot_slot(failed_tx);
-    builder.define(worker_slot, {
+    let worker_ref = builder.actor(ActorSpec::new("worker", {
         let worker_starts = worker_starts.clone();
         move || Worker {
             observed: observed_tx.clone(),
             starts: worker_starts.clone(),
             failed: failed.clone(),
         }
-    });
+    }));
+    let frontend_ref = builder.actor(ActorSpec::new("frontend", {
+        let worker_ref = worker_ref.clone();
+        let frontend_starts = frontend_starts.clone();
+        move || Frontend {
+            worker: worker_ref.clone(),
+            starts: frontend_starts.clone(),
+        }
+    }));
     let graph = builder.build().expect("valid graph");
 
     let handle = OrderedTree::graph(graph)
@@ -164,29 +162,25 @@ impl RawActor for CleanThenReceive {
 
 #[tokio::test(start_paused = true)]
 async fn send_waits_during_permanent_restart_window() {
-    let mut restart_config = RestartConfig::new(10, Duration::from_secs(1));
-    restart_config.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
+    let restart_config = RestartConfig::new(10, Duration::from_secs(1))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (first_exited_tx, first_exited_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
     let first_exited = oneshot_slot(first_exited_tx);
 
-    let mut builder = GraphBuilder::new();
-    let (worker_ref_slot, worker_ref) = builder.slot("worker");
-    builder.define(worker_ref_slot, move || CleanThenReceive {
+    let worker = ActorSpec::new("worker", move || CleanThenReceive {
         runs: runs.clone(),
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
-    });
-    let graph = builder.build().expect("valid graph");
+    })
+    .restart(RestartPolicy::Always)
+    .restart_config(restart_config);
+    let worker_ref = worker.actor_ref();
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
-        .actor(
-            ActorSpec::new(graph.actors()[0].clone())
-                .restart(RestartPolicy::Always)
-                .restart_config(restart_config),
-        )
+        .actor(worker)
         .spawn()
         .expect("runtime builds");
 
@@ -242,10 +236,9 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     let exited = oneshot_slot(exited_tx);
 
     let mut builder = GraphBuilder::new();
-    let (worker_ref_slot, worker_ref) = builder.slot("worker");
-    builder.define(worker_ref_slot, move || NotifyCleanExit {
+    let worker_ref = builder.actor(ActorSpec::new("worker", move || NotifyCleanExit {
         exited: exited.clone(),
-    });
+    }));
     let graph = builder.build().expect("valid graph");
 
     let handle = OrderedTree::graph(graph)
@@ -324,27 +317,23 @@ impl RawActor for RestartingRpc {
 
 #[tokio::test(start_paused = true)]
 async fn call_succeeds_across_restart_window() {
-    let mut restart_config = RestartConfig::new(10, Duration::from_secs(1));
-    restart_config.backoff = BackoffPolicy::Fixed(Duration::from_millis(100));
+    let restart_config = RestartConfig::new(10, Duration::from_secs(1))
+        .backoff(BackoffPolicy::Fixed(Duration::from_millis(100)));
     let (failed_tx, failed_rx) = oneshot::channel();
     let runs = Arc::new(AtomicUsize::new(0));
     let failed = oneshot_slot(failed_tx);
 
-    let mut builder = GraphBuilder::new();
-    let (rpc_ref_slot, rpc_ref) = builder.slot("rpc");
-    builder.define(rpc_ref_slot, move || RestartingRpc {
+    let rpc = ActorSpec::new("rpc", move || RestartingRpc {
         runs: runs.clone(),
         failed: failed.clone(),
-    });
-    let graph = builder.build().expect("valid graph");
+    })
+    .restart(RestartPolicy::OnFailure)
+    .restart_config(restart_config);
+    let rpc_ref = rpc.actor_ref();
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
-        .actor(
-            ActorSpec::new(graph.actors()[0].clone())
-                .restart(RestartPolicy::OnFailure)
-                .restart_config(restart_config),
-        )
+        .actor(rpc)
         .spawn()
         .expect("runtime builds");
 

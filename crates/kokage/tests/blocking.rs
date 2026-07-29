@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    ActorResult, Graph, GraphBuilder, RestartPolicy,
-    host::{ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor},
+    ActorResult, ActorSpec, Graph, GraphBuilder, RestartPolicy,
+    host::{ActorContext, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use tokio::{
     sync::{Notify, oneshot},
@@ -31,9 +31,18 @@ fn send_once<T>(slot: &SenderSlot<T>, value: T) {
     }
 }
 
-fn start_graph(graph: &Graph) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
+fn only_actor(graph: Graph) -> RunnableActor {
+    graph
+        .into_nodes()
+        .into_iter()
+        .next()
+        .expect("actor exists")
+        .into_runnable()
+}
+
+fn start_graph(graph: Graph) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
     let stop = CancellationToken::new();
-    let actor = graph.actors().first().expect("actor exists").clone();
+    let actor = only_actor(graph);
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
@@ -79,12 +88,11 @@ async fn run_blocking_returns_the_closure_result() {
     let (observed_tx, observed_rx) = oneshot::channel();
     let observed = sender_slot(observed_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, move || ReturnsResult {
+    builder.actor(ActorSpec::new("worker", move || ReturnsResult {
         observed: observed.clone(),
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(&graph);
+    let (stop, task) = start_graph(graph);
 
     assert_eq!(observed_rx.await.expect("result observed"), Ok(Ok(42)));
     stop_graph(stop, task).await;
@@ -121,16 +129,15 @@ async fn run_blocking_token_is_cancelled_on_actor_shutdown() {
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let cancelled = sender_slot(cancelled_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, {
+    builder.actor(ActorSpec::new("worker", {
         let started = started.clone();
         move || WaitsForShutdown {
             started: started.clone(),
             cancelled: cancelled.clone(),
         }
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(&graph);
+    let (stop, task) = start_graph(graph);
 
     started.notified().await;
     stop.cancel();
@@ -185,8 +192,7 @@ async fn dropping_run_blocking_future_cancels_its_token() {
     let (cancelled_tx, cancelled_rx) = oneshot::channel();
     let cancelled = sender_slot(cancelled_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, {
+    builder.actor(ActorSpec::new("worker", {
         let started = started.clone();
         let drop_future = drop_future.clone();
         move || DropsFuture {
@@ -194,9 +200,9 @@ async fn dropping_run_blocking_future_cancels_its_token() {
             drop_future: drop_future.clone(),
             cancelled: cancelled.clone(),
         }
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let (stop, task) = start_graph(&graph);
+    let (stop, task) = start_graph(graph);
 
     started.notified().await;
     drop_future.notify_one();
@@ -241,8 +247,7 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
     let (finished_tx, finished_rx) = oneshot::channel();
     let finished = sender_slot(finished_tx);
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, {
+    builder.actor(ActorSpec::new("worker", {
         let started = started.clone();
         let release = release.clone();
         move || IgnoresCancellation {
@@ -250,9 +255,9 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
             release: release.clone(),
             finished: finished.clone(),
         }
-    });
+    }));
     let graph = builder.build().expect("valid graph");
-    let actor = graph.actors().first().expect("actor exists").clone();
+    let actor = only_actor(graph);
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
@@ -302,11 +307,10 @@ impl RawActor for Panics {
 #[tokio::test]
 async fn blocking_panic_propagates_as_actor_panic() {
     let mut builder = GraphBuilder::new();
-    let (actor_slot, _) = builder.slot("worker");
-    builder.define(actor_slot, || Panics);
+    builder.actor(ActorSpec::new("worker", || Panics));
     let graph = builder.build().expect("valid graph");
 
-    let actor = graph.actors()[0].clone();
+    let actor = only_actor(graph);
     let result = timeout(
         Duration::from_secs(1),
         tokio::spawn(async move {
