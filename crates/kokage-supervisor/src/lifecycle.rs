@@ -39,7 +39,7 @@ impl LifecyclePathSegment {
     ///
     /// This is primarily useful with [`LifecycleWatch::started_after`] when a
     /// caller already knows the supervisor membership it intends to observe.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
         Self {
             id: id.into(),
@@ -69,28 +69,6 @@ pub struct ChildLifecycleEvent {
     pub child_restart_count: u64,
     /// The transition that occurred.
     pub kind: ChildLifecycleEventKind,
-}
-
-impl ChildLifecycleEvent {
-    /// Creates a direct-child lifecycle event with total identity and counter fields.
-    #[allow(dead_code)]
-    pub(crate) fn new(
-        seq: u64,
-        child_id: impl Into<String>,
-        lineage: u64,
-        total_restarts: u64,
-        child_restart_count: u64,
-        kind: ChildLifecycleEventKind,
-    ) -> Self {
-        Self {
-            seq,
-            child_id: child_id.into(),
-            lineage,
-            total_restarts,
-            child_restart_count,
-            kind,
-        }
-    }
 }
 
 /// A transition in one direct child membership.
@@ -149,6 +127,7 @@ pub struct LifecycleEvent {
 
 impl LifecycleEvent {
     /// Creates a recursive lifecycle envelope at `supervisor_path`.
+    #[cfg(test)]
     pub(crate) fn new(
         supervisor_path: Vec<LifecyclePathSegment>,
         kind: LifecycleEventKind,
@@ -160,7 +139,10 @@ impl LifecycleEvent {
     }
 
     pub(crate) fn local(kind: LifecycleEventKind) -> Self {
-        Self::new(Vec::new(), kind)
+        Self {
+            supervisor_path: Vec::new(),
+            kind,
+        }
     }
 }
 
@@ -385,7 +367,7 @@ impl Laggable for LifecycleEvent {
     }
 
     fn into_lagged(self, dropped: u64) -> Self {
-        Self::new(Vec::new(), LifecycleEventKind::Lagged { dropped })
+        Self::local(LifecycleEventKind::Lagged { dropped })
     }
 
     fn accumulate_lagged(&mut self, newest_dropped: Self) {
