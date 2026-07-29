@@ -1,4 +1,4 @@
-# Kokage
+# kokage
 
 ## Running anything
 

@@ -1,4 +1,6 @@
-# Kokage
+# kokage 木陰
+
+> actors in the shade of a supervision tree
 
 OTP-style supervision trees and typed actors — a thin layer over an async
 scheduler (Tokio today).
