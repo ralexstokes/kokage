@@ -10,10 +10,10 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorOptions, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError,
-            DynamicTree, GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply,
-            RestartConfig, RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy,
-            StartContext, StopContext, Strategy, TrySendError,
+            Actor, ActorRef, ActorResult, ActorSpec, ActorStatus, CallError, DynamicTree,
+            GraphBuilder, LiveContext, MessageContext, OrderedTree, Reply, RestartConfig,
+            RestartPolicy, Runtime, RuntimeHandle, SendError, ShutdownPolicy, StartContext,
+            StopContext, Strategy, TrySendError,
         };
     }
 
@@ -140,10 +140,9 @@ impl Actor for BlockingWorker {
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = GraphBuilder::new();
-    let (worker_slot, worker) = graph.slot("worker");
-    graph.define(worker_slot, move || BlockingWorker {
+    let worker = graph.actor(ActorSpec::new("worker", move || BlockingWorker {
         observed: observed_tx.clone(),
-    });
+    }));
 
     let handle = OrderedTree::graph(graph.build().expect("valid graph"))
         .strategy(Strategy::OneForOne)

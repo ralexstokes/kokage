@@ -23,16 +23,13 @@ impl Actor for Worker {
 
 fn two_actor_graph() -> (Graph, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
     let mut builder = GraphBuilder::new();
-    let (ingest_slot, ingest) = builder.slot("ingest");
-    builder.define(ingest_slot, || Worker);
-    let (parse_slot, parse) = builder.slot("parse");
-    builder.define(parse_slot, || Worker);
+    let ingest = builder.actor(ActorSpec::new("ingest", || Worker));
+    let parse = builder.actor(ActorSpec::new("parse", || Worker));
     (builder.build().expect("graph builds"), ingest, parse)
 }
 
 #[test]
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
-    let (graph, _ingest, _parse) = two_actor_graph();
     let outline = OrderedTree::new()
         .strategy(Strategy::RestForOne)
         .default_restart(RestartPolicy::Always)
@@ -45,8 +42,8 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
             .restart(RestartPolicy::Always)
             .shutdown(ShutdownPolicy::Abort),
         )
-        .actor(ActorSpec::new(graph.actors()[0].clone()).restart(RestartPolicy::Never))
-        .actor(graph.actors()[1].clone())
+        .actor(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::Never))
+        .actor(ActorSpec::new("parse", || Worker))
         .outline();
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
@@ -126,7 +123,8 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
 #[test]
 fn graph_convenience_and_explicit_actors_outline_identically() {
     let (graph, _ingest, _parse) = two_actor_graph();
-    let actors = graph.actors().to_vec();
+    let (explicit_graph, _ingest, _parse) = two_actor_graph();
+    let mut actors = explicit_graph.into_nodes().into_iter();
     let from_graph = OrderedTree::graph(graph)
         .strategy(Strategy::OneForAll)
         .default_restart(RestartPolicy::Never)
@@ -134,8 +132,8 @@ fn graph_convenience_and_explicit_actors_outline_identically() {
     let from_tree = OrderedTree::new()
         .strategy(Strategy::OneForAll)
         .default_restart(RestartPolicy::Never)
-        .actor(actors[0].clone())
-        .actor(actors[1].clone())
+        .actor(actors.next().expect("ingest node"))
+        .actor(actors.next().expect("parse node"))
         .outline();
     assert_eq!(from_graph, from_tree);
 }
@@ -143,9 +141,11 @@ fn graph_convenience_and_explicit_actors_outline_identically() {
 #[tokio::test]
 async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
     let (graph, ingest, parse) = two_actor_graph();
-    let (ingest_actor, parse_actor) = (graph.actors()[0].clone(), graph.actors()[1].clone());
+    let mut actors = graph.into_nodes().into_iter();
+    let ingest_actor = actors.next().expect("ingest node");
+    let parse_actor = actors.next().expect("parse node");
     let handle = OrderedTree::new()
-        .actor(ActorSpec::new(ingest_actor).restart(RestartPolicy::Never))
+        .actor(ingest_actor)
         .subtree(
             "workers",
             OrderedTree::new()
@@ -196,9 +196,10 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
 #[tokio::test]
 async fn actor_with_scope_lowers_to_leader_then_children_scope() {
     let (graph, _ingest, _parse) = two_actor_graph();
+    let ingest = graph.into_nodes().into_iter().next().expect("ingest node");
     let tree = OrderedTree::new().actor_with_scope(
         "owned",
-        graph.actors()[0].clone(),
+        ingest,
         DynamicTree::new(),
         Strategy::RestForOne,
     );
@@ -244,6 +245,7 @@ async fn actor_with_scope_lowers_to_leader_then_children_scope() {
 #[tokio::test]
 async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default() {
     let (graph, _ingest, _parse) = two_actor_graph();
+    let ingest = graph.into_nodes().into_iter().next().expect("ingest node");
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
     let children = OrderedTree::new()
@@ -261,12 +263,7 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
         );
     let handle = OrderedTree::new()
         .default_restart(RestartPolicy::Never)
-        .actor_with_scope(
-            "owned",
-            graph.actors()[0].clone(),
-            children,
-            Strategy::OneForOne,
-        )
+        .actor_with_scope("owned", ingest, children, Strategy::OneForOne)
         .spawn()
         .expect("ActorWithScope builds");
     handle
