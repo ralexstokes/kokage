@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use kokage::{
-    CancellationToken, Restart,
+    CancellationToken, Restart, Shutdown,
     host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor},
 };
 use tokio::task::JoinHandle;
@@ -20,7 +20,11 @@ impl ActorTasks {
                 let stop = stop.clone();
                 tokio::spawn(async move {
                     actor
-                        .run_until(stop.cancelled(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+                        .run_until(
+                            stop.cancelled(),
+                            Restart::never(),
+                            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                        )
                         .await
                 })
             })
