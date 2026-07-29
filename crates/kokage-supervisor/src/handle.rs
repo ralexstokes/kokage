@@ -1435,7 +1435,7 @@ impl SupervisorHandle {
     ///
     /// Ordered supervisors have immutable membership and return `None`.
     pub fn dynamic(&self) -> Option<DynamicSupervisorHandle> {
-        (self.snapshot().kind == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
+        (self.snapshots_rx().borrow().kind == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
             handle: self.clone(),
         })
     }
@@ -1451,6 +1451,13 @@ impl SupervisorHandle {
 }
 
 impl DynamicSupervisorHandle {
+    pub(crate) fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        self.handle.attached_children()
+    }
+
     /// Adds a new child to the supervisor at runtime.
     ///
     /// Waits if the control channel is full. On success, returns the lineage
