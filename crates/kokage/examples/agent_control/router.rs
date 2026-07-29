@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, ControlError, DynamicTree, GraphBuilder, LiveContext,
+    Actor, ActorRef, ActorResult, ActorSlot, ControlError, DynamicTree, LiveContext,
     MessageContext, OrderedTree, RuntimeHandle, StartContext, Strategy, SupervisorError,
     observe::{
         ChildMembershipView, LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard,
@@ -152,34 +152,24 @@ impl Router {
     ) {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
-        let mut graph = GraphBuilder::new();
         let actor_slot = ActorSlot::new("session");
         let actor = actor_slot.actor_ref();
-        graph.define(
-            actor_slot,
-            SessionFactory {
-                chat,
-                generation,
-                subtree_id: subtree_id.clone(),
-                journal: self.journal.clone(),
-                budget: self.budget.clone(),
-                tool_host: self.tool_host.clone(),
-                guard: self.guard.clone(),
-                outbound: self.outbound.clone(),
-                progress: self.progress.clone(),
-                router: ctx.myself(),
-                gate: self.gate.clone(),
-                model: self.model.clone(),
-                task_sequence: self.task_sequence.clone(),
-                proof: self.proof.clone(),
-            },
-        );
-        let session_actor = graph
-            .build()
-            .expect("session graph builds")
-            .into_nodes_by_label()
-            .remove("session")
-            .expect("session graph contains its actor");
+        let session_actor = actor_slot.define(SessionFactory {
+            chat,
+            generation,
+            subtree_id: subtree_id.clone(),
+            journal: self.journal.clone(),
+            budget: self.budget.clone(),
+            tool_host: self.tool_host.clone(),
+            guard: self.guard.clone(),
+            outbound: self.outbound.clone(),
+            progress: self.progress.clone(),
+            router: ctx.myself(),
+            gate: self.gate.clone(),
+            model: self.model.clone(),
+            task_sequence: self.task_sequence.clone(),
+            proof: self.proof.clone(),
+        });
         let mount = self.mount();
         let offload_id = subtree_id.clone();
         ctx.offload(
@@ -195,11 +185,12 @@ impl Router {
                     .expect("the session mount is declared dynamic")
                     .add_subtree(
                         offload_id,
-                        OrderedTree::new().actor_with_scope(
+                        OrderedTree::new().subtree(
                             "session-runtime",
-                            session_actor,
-                            DynamicTree::new(),
-                            Strategy::OneForAll,
+                            OrderedTree::new()
+                                .strategy(Strategy::OneForAll)
+                                .actor(session_actor)
+                                .subtree("children", DynamicTree::new()),
                         ),
                     )
                     .await;

@@ -80,7 +80,7 @@ order:
 A watch registered before the target's first start stays silent until
 generation `0` starts, and a watch registered between incarnations stays
 silent until the next `Up`. This removes actor-start and restart ordering
-races from a graph: there is never a reason to retry registration.
+races from a declaration set: there is never a reason to retry registration.
 
 `ctx.watch` returns a cloneable `CancellationHandle`. Calling
 `cancel` on any clone suppresses future delivery. Cancellation cannot retract

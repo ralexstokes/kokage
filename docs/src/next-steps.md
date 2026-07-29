@@ -38,7 +38,7 @@ cargo run -p <crate> --example <name>
 | Example | Shows |
 |---------|-------|
 | `supervised_actors` | Per-actor supervision with default policies. |
-| `supervision` | A cyclic graph wired with `#[derive(Supervision)]`. |
+| `supervision` | A typed cycle wired explicitly with `ActorSlot`. |
 | `individual_actor_policies` | Per-actor restart/shutdown overrides. |
 | `dynamic_actors` | Adding and removing actors at runtime, refs distributed by message. |
 | `directory` | A typed, userland name-directory actor (registry replacement pattern). |
@@ -47,7 +47,7 @@ cargo run -p <crate> --example <name>
 | `send_vs_try_send` | Waiting `send` vs fail-fast `try_send` across a restart window. |
 | `mailbox_backpressure` | Bounded mailbox back-pressure. |
 | `graph_failures` | Supervisor policy around actor failures. |
-| `builder_validation` | Build-time graph validation errors. |
+| `builder_validation` | Tree validation errors reported at spawn. |
 | `blocking_work` | Awaiting cooperative blocking work with `run_blocking`. |
 | `blocking_lifecycle` | Detached blocking work returning results as actor messages. |
 | `actor_tracing` | Structured actor and message tracing. |
@@ -62,7 +62,7 @@ Things this tutorial glossed over that matter in production:
 - **Messages are ordinary owned Rust values.** Use enums to model protocol
   variants and put `Reply<T>` in a variant when callers need a response.
 - **Messages in a failed actor's mailbox are lost** when it restarts. If an
-  order must survive a press jam, persist it outside the graph and re-inject
+  order must survive a press jam, persist it outside the actor and re-inject
   it — the same discipline OTP asks of you.
 - **Restart budgets are your circuit breakers.** Tune `RestartConfig` so a
   persistent fault escalates to something (a parent supervisor, your process

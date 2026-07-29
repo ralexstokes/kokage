@@ -57,18 +57,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 async fn run() -> Result<(), Box<dyn Error>> {
     let (delivered_tx, mut delivered_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
     let worker_runs = Arc::new(AtomicUsize::new(0));
-    let worker = builder.actor(ActorSpec::new("worker", move || Worker {
+    let worker_spec = ActorSpec::new("worker", move || Worker {
         runs: worker_runs.clone(),
         delivered: delivered_tx.clone(),
         run: 0,
-    }));
-    let orders = builder.actor(ActorSpec::new("front-desk", move || Frontend {
+    });
+    let worker = worker_spec.actor_ref();
+    let orders_spec = ActorSpec::new("front-desk", move || Frontend {
         worker: worker.clone(),
-    }));
+    });
+    let orders = orders_spec.actor_ref();
 
-    let runtime = OrderedTree::graph(builder.build()?).spawn()?;
+    let runtime = OrderedTree::new()
+        .actor(worker_spec)
+        .actor(orders_spec)
+        .spawn()?;
     let handle = runtime.handle();
 
     orders.send("business cards x100".to_owned()).await?;

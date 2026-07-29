@@ -12,44 +12,6 @@ pub struct BlockingCancelled;
 #[error("actor offload deadline elapsed")]
 pub struct OffloadDeadline;
 
-/// Errors returned while validating a graph during build.
-///
-#[derive(Debug, Error, Clone, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum GraphBuildError {
-    /// The graph was built without any actors.
-    #[error("graph must contain at least one actor")]
-    EmptyGraph,
-    /// Two actor implementations shared the same id.
-    #[error("duplicate actor id `{actor_id}`")]
-    #[non_exhaustive]
-    DuplicateActorId {
-        /// Actor id registered twice.
-        actor_id: String,
-    },
-    /// A graph-wide or per-actor mailbox capacity was zero.
-    #[error("mailbox capacity must be non-zero")]
-    ZeroMailboxCapacity,
-    /// The graph's configured name was empty.
-    #[error("graph name must not be empty")]
-    EmptyGraphName,
-    /// An actor slot was opened with an empty id.
-    #[error("actor id must not be empty")]
-    EmptyActorId,
-}
-
-/// Errors returned by [`GraphBuilder::spawn`](crate::GraphBuilder::spawn).
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum GraphSpawnError {
-    /// Actor-graph declaration validation failed.
-    #[error(transparent)]
-    Graph(#[from] GraphBuildError),
-    /// Flat supervision-tree validation failed.
-    #[error(transparent)]
-    Supervision(#[from] kokage_supervisor::SupervisorBuildError),
-}
-
 /// Error returned when an awaited send cannot reach an actor membership.
 ///
 /// Awaited sends ride through mailbox capacity pressure, closed incarnations,

@@ -1,8 +1,12 @@
+mod support;
+
+use support::RunnableBuilder;
+
 use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
     ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, DownReason,
-    DynamicTree, GraphBuilder, MonitorEvent, RestartPolicy,
+    DynamicTree, MonitorEvent, RestartPolicy,
     host::{ActorContext, DEFAULT_SHUTDOWN_BOUND, RawActor, RunnableActor},
 };
 use kokage_supervisor::ShutdownPolicy;
@@ -91,11 +95,11 @@ fn runnable_actor<F>(
 where
     F: ActorFactory,
 {
-    let mut builder = GraphBuilder::new();
+    let mut builder = RunnableBuilder::new();
     let slot = ActorSlot::new(label);
     let actor_ref = slot.actor_ref();
     builder.define(slot, factory);
-    let graph = builder.build().expect("test graph builds");
+    let graph = builder.build();
     let actor = graph
         .into_nodes()
         .pop()

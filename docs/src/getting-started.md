@@ -2,31 +2,25 @@
 
 ## Dependencies
 
-The crates are not yet published to crates.io, so use a git dependency (or a
-path dependency if you are working inside this repository). `kokage` is the
-one dependency needed for actor applications:
+Add the actor crate:
 
 ```toml
 [dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 kokage = { git = "https://github.com/ralexstokes/kokage" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-`kokage::prelude` covers the day-one actor traits, contexts, graph builder, and
-ordered runtime. Advanced policies and dynamic membership remain explicit
-imports from the crate root. Plain async tasks can live beside actors through
-`kokage::host::ChildSpec`; the task-supervision chapter later applies the same
-tree/runtime vocabulary to futures that are not actors.
+`kokage::prelude` covers the day-one actor traits, contexts, declarations,
+typed refs, ordered trees, and snapshot types. Import advanced policies from
+the crate root as needed.
 
 ## Your first actor
 
-An actor owns state and handles one typed message at a time. Register its
-factory with a [`GraphBuilder`] and use the builder's flat one-for-one
-[`spawn`](https://stokes.io/kokage/api/kokage/struct.GraphBuilder.html#method.spawn)
-convenience when no custom tree shape is needed. Keep the returned [`Runtime`]
-alive:
+An actor implements `Actor`. An `ActorSpec` pairs its incarnation factory
+with a scope-local id and exposes the stable typed ref before the declaration
+moves into a tree.
 
-```rust,no_run
+```rust
 use kokage::prelude::*;
 
 struct Greeter;
@@ -46,59 +40,42 @@ impl Actor for Greeter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut graph = GraphBuilder::new();
-    let greeter = graph.actor(ActorSpec::new("greeter", || Greeter));
+    let greeter_actor = ActorSpec::new("greeter", || Greeter);
+    let greeter = greeter_actor.actor_ref();
 
-    let runtime = graph.spawn()?;
-    greeter.send("print shop".to_owned()).await?;
-
+    let runtime = OrderedTree::new().actor(greeter_actor).spawn()?;
+    greeter.send("world".to_owned()).await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
 
-A few details establish the model used throughout the book:
+The important boundaries are:
 
-- `Greeter` is ordinary Rust state. Its factory constructs fresh state for
-  every supervised restart.
-- `ActorRef<String>` is the typed, restart-stable address returned during
-  graph wiring. Senders keep using the same ref if the actor is replaced.
-- `ActorResult` reports whether a callback completed or failed. Restart policy
-  belongs to the supervision tree, not to the actor.
-- `Runtime` owns the spawned tree. Clone `runtime.handle()` when another
-  component needs a non-owning [`RuntimeHandle`]; dropping handles has no
-  lifecycle effect, while dropping the owner requests graceful shutdown.
+- the factory is retained and invoked again for every supervised restart;
+- `ActorRef<M>` is cloneable and follows the logical actor across those
+  incarnations;
+- `ActorSpec<M>` and trees are single-use declarations with one runtime owner;
+- actor ids are unique only within their immediate scope.
 
-The example shuts down explicitly so it can await the result. A discarded
-`let _ = graph.spawn()?;` drops the owner at the end of the statement and asks
-the runtime to stop immediately.
+`spawn()` returns the owning `Runtime`. Dropping it requests graceful
+shutdown, so do not discard it with `let _ = ...`. Use `runtime.handle()`
+for non-owning control and observation.
 
 ## Supervision vocabulary
 
-The next chapters use three policy types when composing more than one actor:
+A **child** is one actor, task, or nested supervisor. A **strategy** selects
+which siblings restart together. A **restart policy** decides whether a
+particular exit is restartable. A **restart budget** prevents an endless crash
+loop. A **shutdown policy** controls graceful-stop bounds.
 
-- `RestartPolicy` decides whether a clean or failed child exit gets a
-  replacement: `Always`, `OnFailure`, or `Never`.
-- `RestartConfig` bounds restart intensity and optionally selects backoff.
-- `Strategy` decides which siblings restart together: `OneForOne`,
-  `OneForAll`, or ordered `RestForOne`.
-
-These policies belong to the supervision tree rather than the actor type. The
-actor-graph and supervised-actor chapters apply them to actors; **Task children
-and supervision** later develops shutdown and restart behavior for plain async
-task children.
+`OrderedTree` composes static children recursively. `DynamicTree` is a
+runtime membership boundary. Both produce the same runtime-handle and
+observation model.
 
 ## One tree for actors and tasks
 
-Every actor runs as a supervised task, but actor applications normally express
-topology with `OrderedTree` / `DynamicTree` and control it with `Runtime` /
-`RuntimeHandle`. Those trees also accept plain futures as
-`kokage::host::ChildSpec` task children, so mixed applications retain the same
-topology, ownership, control, and observation model. The next chapter explains
-multi-actor graph wiring; the task-supervision chapter later revisits the same
-policies for plain futures.
-
-[`GraphBuilder`]: https://stokes.io/kokage/api/kokage/struct.GraphBuilder.html
-[`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
-[`Runtime`]: https://stokes.io/kokage/api/kokage/struct.Runtime.html
-[`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
+Actors and raw task children share a supervision tree. Place actors with
+`OrderedTree::actor`, nested scopes with `subtree`, and task children with
+`child`. The following chapters apply the same supervision vocabulary to
+each kind.

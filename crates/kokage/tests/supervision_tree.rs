@@ -1,12 +1,16 @@
-//! Recursive supervision-tree declarations and lowering.
+mod support;
+
+use support::TreeBuilder;
+
+// Recursive supervision-tree declarations and lowering.
 
 use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Notify, time::sleep};
 
 use kokage::{
-    ActorSpec, DynamicTree, Graph, MailboxMode, RestartConfig, RestartPolicy, ScopeKind,
-    ShutdownPolicy, Strategy, SupervisorBuildError, TerminalMembership,
+    ActorSpec, DynamicTree, MailboxMode, RestartConfig, RestartPolicy, ScopeKind, ShutdownPolicy,
+    Strategy, SupervisorBuildError, TerminalMembership,
     host::{ActorContext, ChildSpec, RawActor},
     observe::ChildOutline,
     prelude::*,
@@ -48,11 +52,11 @@ impl RawActor for Parked {
     }
 }
 
-fn two_actor_graph() -> (Graph, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
-    let mut builder = GraphBuilder::new();
+fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
+    let mut builder = TreeBuilder::new();
     let ingest = builder.actor(ActorSpec::new("ingest", || Worker));
     let parse = builder.actor(ActorSpec::new("parse", || Worker));
-    (builder.build().expect("graph builds"), ingest, parse)
+    (builder.build(), ingest, parse)
 }
 
 #[test]
@@ -147,30 +151,12 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     ));
 }
 
-#[test]
-fn graph_convenience_and_explicit_actors_outline_identically() {
-    let (graph, _ingest, _parse) = two_actor_graph();
-    let (explicit_graph, _ingest, _parse) = two_actor_graph();
-    let mut actors = explicit_graph.into_nodes().into_iter();
-    let from_graph = OrderedTree::graph(graph)
-        .strategy(Strategy::OneForAll)
-        .default_restart(RestartPolicy::Never)
-        .outline();
-    let from_tree = OrderedTree::new()
-        .strategy(Strategy::OneForAll)
-        .default_restart(RestartPolicy::Never)
-        .actor(actors.next().expect("ingest node"))
-        .actor(actors.next().expect("parse node"))
-        .outline();
-    assert_eq!(from_graph, from_tree);
-}
-
 #[tokio::test]
-async fn a_tree_spreads_one_graph_across_ordered_scope_levels() {
-    let (graph, ingest, parse) = two_actor_graph();
-    let mut actors = graph.into_nodes().into_iter();
-    let ingest_actor = actors.next().expect("ingest node");
-    let parse_actor = actors.next().expect("parse node");
+async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
+    let ingest_actor = ActorSpec::new("ingest", || Worker);
+    let ingest = ingest_actor.actor_ref();
+    let parse_actor = ActorSpec::new("parse", || Worker);
+    let parse = parse_actor.actor_ref();
     let handle = OrderedTree::new()
         .actor(ingest_actor)
         .subtree(
@@ -221,42 +207,61 @@ fn tree_placement_rejects_zero_actor_mailbox_capacity() {
     ));
 }
 
-#[tokio::test]
-async fn tree_placed_specs_inherit_the_hosting_graph_mailbox_default() {
-    let mut graph = GraphBuilder::new();
-    graph.name("shared-tree").mailbox_capacity(9);
-    let graph_actor = graph.actor(ActorSpec::new("graph-actor", || Worker));
-    let graph = graph.build().expect("graph builds");
+#[test]
+fn tree_placement_rejects_zero_scope_mailbox_capacity() {
+    let result = OrderedTree::new()
+        .mailbox_capacity(0)
+        .actor(ActorSpec::new("worker", || Worker))
+        .spawn();
 
+    assert!(matches!(
+        result,
+        Err(SupervisorBuildError::InvalidConfig(
+            "actor mailbox capacity must be non-zero"
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
+    let first = ActorSpec::new("first", || Worker);
+    let first_actor = first.actor_ref();
     let direct = ActorSpec::new("direct-actor", || Worker);
     let direct_actor = direct.actor_ref();
-    let runtime = OrderedTree::graph(graph)
+    let runtime = OrderedTree::new()
+        .mailbox_capacity(9)
+        .actor(first)
         .actor(direct)
         .spawn()
         .expect("tree builds");
     runtime.handle().wait_started().await.expect("actors start");
 
-    assert_eq!(graph_actor.stats().mailbox_capacity, 9);
+    assert_eq!(first_actor.stats().mailbox_capacity, 9);
     assert_eq!(direct_actor.stats().mailbox_capacity, 9);
     runtime.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 #[tokio::test]
-async fn actor_with_scope_leader_inherits_the_hosting_graph_mailbox_default() {
-    let mut graph = GraphBuilder::new();
-    graph.name("shared-owned-scope").mailbox_capacity(9);
-    let peer = graph.actor(ActorSpec::new("peer", || Worker));
-    let graph = graph.build().expect("graph builds");
-
+async fn leader_owned_scope_declares_its_own_mailbox_default() {
+    let peer = ActorSpec::new("peer", || Worker);
+    let peer_ref = peer.actor_ref();
     let leader = ActorSpec::new("leader", || Worker);
     let leader_ref = leader.actor_ref();
-    let runtime = OrderedTree::graph(graph)
-        .actor_with_scope("owned", leader, DynamicTree::new(), Strategy::OneForAll)
+    let runtime = OrderedTree::new()
+        .actor(peer)
+        .subtree(
+            "owned",
+            OrderedTree::new()
+                .mailbox_capacity(9)
+                .strategy(Strategy::OneForAll)
+                .actor(leader)
+                .subtree("children", DynamicTree::new()),
+        )
         .spawn()
         .expect("tree builds");
     runtime.handle().wait_started().await.expect("actors start");
 
-    assert_eq!(peer.stats().mailbox_capacity, 9);
+    assert_eq!(peer_ref.stats().mailbox_capacity, 64);
     assert_eq!(leader_ref.stats().mailbox_capacity, 9);
     runtime.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -350,28 +355,23 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
 }
 
 #[tokio::test]
-async fn actor_with_scope_lowers_to_leader_then_children_scope() {
-    let (graph, _ingest, _parse) = two_actor_graph();
-    let ingest = graph.into_nodes().into_iter().next().expect("ingest node");
-    let tree = OrderedTree::new().actor_with_scope(
+async fn leader_owned_scope_is_an_explicit_subtree() {
+    let ingest = ActorSpec::new("ingest", || Worker);
+    let tree = OrderedTree::new().subtree(
         "owned",
-        ingest,
-        DynamicTree::new(),
-        Strategy::RestForOne,
+        OrderedTree::new()
+            .strategy(Strategy::RestForOne)
+            .actor(ingest)
+            .subtree("children", DynamicTree::new()),
     );
     let outline = tree.outline();
-    let ChildOutline::ActorWithScope {
-        leader,
-        children,
-        strategy,
-        ..
-    } = outline.child("owned").expect("owned node exists")
+    let ChildOutline::Scope { outline: owned, .. } =
+        outline.child("owned").expect("owned node exists")
     else {
-        panic!("expected ActorWithScope outline");
+        panic!("expected explicit owned scope");
     };
-    assert_eq!(leader.id(), "ingest");
-    assert_eq!(children.kind, ScopeKind::Dynamic);
-    assert_eq!(*strategy, Strategy::RestForOne);
+    assert_eq!(owned.strategy, Strategy::RestForOne);
+    assert_eq!(owned.child_ids(), ["ingest", "children"]);
 
     let handle = tree.spawn().expect("ActorWithScope lowers");
     handle
@@ -399,9 +399,8 @@ async fn actor_with_scope_lowers_to_leader_then_children_scope() {
 }
 
 #[tokio::test]
-async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default() {
-    let (graph, _ingest, _parse) = two_actor_graph();
-    let ingest = graph.into_nodes().into_iter().next().expect("ingest node");
+async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
+    let ingest = ActorSpec::new("ingest", || Worker);
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
     let children = OrderedTree::new()
@@ -418,10 +417,15 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
             .shutdown(ShutdownPolicy::Abort),
         );
     let handle = OrderedTree::new()
-        .default_restart(RestartPolicy::Never)
-        .actor_with_scope("owned", ingest, children, Strategy::OneForOne)
+        .subtree(
+            "owned",
+            OrderedTree::new()
+                .default_restart(RestartPolicy::Never)
+                .actor(ingest)
+                .subtree("children", children),
+        )
         .spawn()
-        .expect("ActorWithScope builds");
+        .expect("leader-owned scope builds");
     handle
         .handle()
         .wait_started()
@@ -470,8 +474,8 @@ async fn actor_with_scope_children_edge_inherits_the_enclosing_restart_default()
 #[cfg(feature = "serde")]
 #[test]
 fn an_outline_round_trips_through_serde_with_scope_kinds() {
-    let (graph, _ingest, _parse) = two_actor_graph();
-    let outline = OrderedTree::graph(graph)
+    let (graph, _ingest, _parse) = two_actor_tree();
+    let outline = graph
         .strategy(Strategy::RestForOne)
         .subtree(
             "workers",

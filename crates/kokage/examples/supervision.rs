@@ -1,8 +1,6 @@
 use std::error::Error;
 
-use kokage::{
-    Actor, ActorRef, ActorResult, GraphBuilder, MessageContext, OrderedTree, Supervision,
-};
+use kokage::{Actor, ActorRef, ActorResult, ActorSlot, MessageContext, OrderedTree};
 use tokio::sync::mpsc;
 
 enum FrontendMsg {
@@ -70,45 +68,43 @@ impl Actor for Sink {
     }
 }
 
-#[derive(Supervision)]
-struct Pipeline {
-    frontend: Frontend,
-    parser: Parser,
-    sink: Sink,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (acked_tx, mut acked_rx) = mpsc::unbounded_channel();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel();
 
-    let mut graph = GraphBuilder::new();
-    let refs = Pipeline::wire(&mut graph, |refs| PipelineFactories {
-        frontend: {
-            let parser = refs.parser.clone();
-            move || Frontend {
-                parser: parser.clone(),
-                acked: acked_tx.clone(),
-            }
-        },
-        parser: {
-            let frontend = refs.frontend.clone();
-            let sink = refs.sink.clone();
-            move || Parser {
-                frontend: frontend.clone(),
-                sink: sink.clone(),
-            }
-        },
-        sink: move || Sink {
-            out: out_tx.clone(),
-        },
+    let frontend_slot = ActorSlot::<FrontendMsg>::new("frontend");
+    let frontend = frontend_slot.actor_ref();
+    let parser_slot = ActorSlot::<ParserMsg>::new("parser");
+    let parser = parser_slot.actor_ref();
+    let sink_slot = ActorSlot::<SinkMsg>::new("sink");
+    let sink = sink_slot.actor_ref();
+
+    let frontend_actor = frontend_slot.define({
+        let parser = parser.clone();
+        move || Frontend {
+            parser: parser.clone(),
+            acked: acked_tx.clone(),
+        }
     });
-    let tree = OrderedTree::graph(graph.build()?);
+    let parser_actor = parser_slot.define({
+        let frontend = frontend.clone();
+        let sink = sink.clone();
+        move || Parser {
+            frontend: frontend.clone(),
+            sink: sink.clone(),
+        }
+    });
+    let sink_actor = sink_slot.define(move || Sink {
+        out: out_tx.clone(),
+    });
+    let tree = OrderedTree::new()
+        .actor(frontend_actor)
+        .actor(parser_actor)
+        .actor(sink_actor);
     let runtime = tree.spawn()?;
 
-    refs.frontend
-        .send(FrontendMsg::Feed("hello".to_owned()))
-        .await?;
+    frontend.send(FrontendMsg::Feed("hello".to_owned())).await?;
     println!(
         "sink observed {}",
         out_rx.recv().await.expect("sink output")

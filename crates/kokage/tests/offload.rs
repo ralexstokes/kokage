@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     future::pending,
     pin::Pin,
@@ -91,12 +95,12 @@ impl Actor for Outcomes {
 #[tokio::test]
 async fn offload_continuations_deliver_total_and_fallback_outcomes() {
     let (observed, mut outcomes) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("Outcomes");
     graph.define(actor_slot, move || Outcomes {
         observed: observed.clone(),
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "offload outcome runtime startup").await;
 
     let mut observed = Vec::new();
@@ -221,7 +225,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     let release_drop = Arc::new(AtomicBool::new(false));
     let _release_on_drop = ReleaseOnDrop(release_drop.clone());
     let done = Arc::new(AtomicUsize::new(0));
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("StaleActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -238,7 +242,8 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
             done: done.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap())
+    let runtime = graph
+        .build()
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
         .unwrap();
@@ -308,7 +313,7 @@ impl Actor for AbortActor {
 async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
     let handle_slot = Arc::new(Mutex::new(None));
     let done = Arc::new(AtomicUsize::new(0));
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("AbortActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -319,7 +324,7 @@ async fn offload_handle_aborts_and_updates_the_outstanding_gauge() {
             done: done.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "abort-handle runtime startup").await;
     actor.send(AbortMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -379,7 +384,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     let (handle_tx, mut handle_rx) = mpsc::unbounded_channel();
     let (observed, mut observed_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("ReadyAbortActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -390,7 +395,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
             observed: observed.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "ready-abort runtime startup").await;
     actor.send(ReadyAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "ready-abort offload handle").await;
@@ -458,7 +463,7 @@ impl Actor for DrainAbortActor {
 async fn drain_reaps_an_offload_aborted_during_shutdown() {
     let (handle_tx, mut handle_rx) = mpsc::unbounded_channel();
     let shutdown_seen = Arc::new(Notify::new());
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DrainAbortActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -468,7 +473,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
             shutdown_seen: shutdown_seen.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "drain-abort runtime startup").await;
     actor.send(DrainAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "drain-abort offload handle").await;
@@ -539,7 +544,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
     let release = Arc::new(Notify::new());
     let entered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let actor_slot = ActorSlot::new("ShutdownActor");
     let actor = actor_slot.actor_ref();
@@ -553,7 +558,7 @@ async fn shutdown_case(policy: DrainPolicy) -> Vec<&'static str> {
             observed: observed.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "draining-offload runtime startup").await;
     actor.send(DrainMsg::Start).await.unwrap();
     wait_notification(&entered, "draining actor handler entry").await;
@@ -636,7 +641,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
     let offload_release = Arc::new(Notify::new());
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let actor_slot = ActorSlot::new("BackpressureActor");
     let actor = actor_slot.actor_ref();
@@ -651,7 +656,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
             observed: observed.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "backpressure runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(&offload_registered, "backpressure offload registration").await;
@@ -680,7 +685,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let offload_release = Arc::new(Notify::new());
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("conflating-offload").mailbox(MailboxMode::conflate());
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -694,7 +699,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
             observed: observed.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "conflating completion runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(
@@ -764,7 +769,7 @@ impl Actor for DeadlineDrainActor {
 async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
     let registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DeadlineDrainActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -774,7 +779,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
             observed: observed.clone(),
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.handle(), "deadline-drain runtime startup").await;
     actor.send(DeadlineDrainMsg::Start).await.unwrap();
     wait_notification(&registered, "deadline-drain offload registration").await;
@@ -810,12 +815,12 @@ impl RawActor for RawCompletion {
 #[tokio::test]
 async fn raw_actor_recv_reaps_offload_completions() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("RawCompletion");
     graph.define(actor_slot, move || RawCompletion {
         observed: observed.clone(),
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap()).spawn().unwrap();
+    let runtime = graph.build().spawn().unwrap();
     assert_eq!(
         recv_test_event(&mut receiver, "raw actor offload completion").await,
         "done"
@@ -849,7 +854,7 @@ impl Actor for PanicActor {
 #[tokio::test]
 async fn offload_panic_fails_the_actor_and_is_supervised() {
     let constructed = Arc::new(AtomicUsize::new(0));
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("PanicActor");
     let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
@@ -859,7 +864,8 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
             PanicActor
         }
     });
-    let runtime = OrderedTree::graph(graph.build().unwrap())
+    let runtime = graph
+        .build()
         .default_restart(RestartPolicy::OnFailure)
         .spawn()
         .unwrap();

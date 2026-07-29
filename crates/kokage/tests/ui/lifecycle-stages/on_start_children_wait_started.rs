@@ -8,7 +8,7 @@ impl Actor for Leader {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
-        if let Some(children) = ctx.children() {
+        if let Some(children) = ctx.supervisor().subtree("children") {
             children.wait_started().await?;
         }
         Ok(())

@@ -2,9 +2,7 @@
 
 use std::io::{BufRead, Cursor};
 
-use kokage::{
-    Actor, ActorResult, ActorSpec, DrainPolicy, GraphBuilder, MessageContext, OrderedTree,
-};
+use kokage::{Actor, ActorResult, ActorSpec, DrainPolicy, MessageContext, OrderedTree};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -32,9 +30,9 @@ impl Actor for Printer {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut graph = GraphBuilder::new();
-    let printer = graph.actor(ActorSpec::new("Printer", || Printer));
-    let runtime = OrderedTree::graph(graph.build()?).spawn()?;
+    let printer_spec = ActorSpec::new("Printer", || Printer);
+    let printer = printer_spec.actor_ref();
+    let runtime = OrderedTree::new().actor(printer_spec).spawn()?;
 
     // A socket or file framing layer can supply the same byte slices.
     let input = b"{\"item\":\"labels\",\"quantity\":4}\n{\"item\":\"boxes\",\"quantity\":2}\n";

@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, marker::PhantomData};
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, CancellationToken, GraphBuilder, MessageContext, RestartPolicy,
+    Actor, ActorResult, ActorSpec, CancellationToken, MessageContext, RestartPolicy,
     host::DEFAULT_SHUTDOWN_BOUND,
 };
 use tokio::sync::mpsc;
@@ -61,16 +61,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn run() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let mut builder = GraphBuilder::new();
-    let frontend = builder.actor(ActorSpec::new("Observe", move || {
+    let spec = ActorSpec::new("Observe", move || {
         Observe::<String>::new(observed_tx.clone())
-    }));
-    let actor = builder
-        .build()?
-        .into_nodes_by_label()
-        .remove("Observe")
-        .expect("Observe actor")
-        .into_runnable();
+    });
+    let frontend = spec.actor_ref();
+    let actor = spec.into_runnable();
     let first_run = tokio::spawn({
         let actor = actor.clone();
         async move {

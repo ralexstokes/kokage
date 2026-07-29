@@ -4,9 +4,8 @@
 //! async scheduler (Tokio today), with an owning [`Runtime`] and integrated
 //! non-owning [`RuntimeHandle`] values.
 //!
-//! For the common setup — every actor of a graph running as its own
-//! supervised child — build a graph, move it into an [`OrderedTree`], and
-//! spawn the tree:
+//! Declare each actor with [`ActorSpec`], place the specs directly in an
+//! [`OrderedTree`], and spawn the tree:
 //!
 //! ```no_run
 //! use kokage::{ActorSpec, prelude::*};
@@ -16,7 +15,11 @@
 //! impl Actor for Echo {
 //!     type Msg = String;
 //!
-//!     async fn handle(&mut self, message: String, _ctx: &mut MessageContext<'_, Self>) -> ActorResult {
+//!     async fn handle(
+//!         &mut self,
+//!         message: String,
+//!         _ctx: &mut MessageContext<'_, Self>,
+//!     ) -> ActorResult {
 //!         println!("{message}");
 //!         Ok(())
 //!     }
@@ -24,160 +27,105 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut graph = GraphBuilder::new();
-//! let echo = graph.actor(ActorSpec::new("Echo", || Echo));
+//! let echo = ActorSpec::new("echo", || Echo);
+//! let echo_ref = echo.actor_ref();
+//! let runtime = OrderedTree::new().actor(echo).spawn()?;
 //!
-//! let graph = graph.build()?;
-//! let runtime = OrderedTree::graph(graph).spawn()?;
-//!
-//! echo.send("hello".to_owned()).await?;
+//! echo_ref.send("hello".to_owned()).await?;
 //! runtime.shutdown_and_wait().await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! See [`OrderedTree`] for recursive composition and per-actor policy
-//! examples. The [`prelude`] re-exports the day-one composition and actor
-//! surface plus snapshot observation. Host-facing execution types live in
-//! [`host`], lifecycle-history types live in [`observe`], and advanced actor
-//! and supervisor configuration stays at the crate root.
+//! [`ActorSlot`] supports cyclic wiring: create every slot and clone its
+//! typed ref first, then consume each slot with [`ActorSlot::define`] and
+//! place the resulting specs in the desired scopes. Actor ids are local to
+//! their containing scope, so sibling scopes may reuse an id.
 //!
-//! These tiers are semantic, not a hard cap on the number of root exports.
-//! Types that configure actors and supervision trees, or that name the
-//! results and errors of their primary methods, remain at the root even when
-//! they are used less often. The `host` and `observe` modules isolate two
-//! coherent secondary surfaces instead of moving every non-prelude type.
+//! The [`prelude`] re-exports the day-one composition and actor surface plus
+//! snapshot observation. Host-facing execution types live in [`host`],
+//! lifecycle-history types live in [`observe`], and advanced actor and
+//! supervisor configuration stays at the crate root.
 //!
 //! # Core types
 //!
 //! | Type | Role |
 //! |------|------|
+//! | [`ActorSpec`] / [`ActorSlot`] | Single-actor declarations and typed cyclic wiring. |
 //! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their handles are available before spawn. |
 //! | [`Runtime`] | Owns a spawned root and requests graceful shutdown when dropped. |
 //! | [`RuntimeHandle`] | Non-owning control and observation surface; [`RuntimeHandle::dynamic`] exposes dynamic membership when supported. |
-//! | [`GraphBuilder`] / [`Graph`] | Constructs and validates the actor graph; wiring plus runnable actors. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
-//! | [`host::ActorContext`] | The full context a [`host::RawActor`] run receives: mailbox, watches, cross-actor timers, blocking work, shutdown token. |
-//! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage views of that context handed to the [`Actor`] lifecycle hooks. |
-//! | [`LiveContext`] | Timers, continuations, and other capabilities shared by the running stages. |
+//! | [`StartContext`] / [`MessageContext`] / [`StopContext`] | Stage-specific actor lifecycle capabilities. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
-//! | [`host::RunnableActor`] | One actor plus stable binding — the unit of execution. |
-//!
-//! # Composition modes
-//!
-//! - **Ordered actor trees** via [`OrderedTree::new`] or
-//!   [`OrderedTree::graph`]: per-actor supervision, recursive actor-aware
-//!   subtrees, arbitrary task children, and actor-owned scopes.
-//! - **Dynamic actor membership** via [`DynamicTree::new`]: an
-//!   initially empty `OneForOne` scope that accepts actors and subtrees at
-//!   runtime. Its handle can be captured during wiring before the tree spawns.
-//!
-//! Fate-sharing is selected with [`Strategy::OneForAll`]
-//! or supervision-tree shape; graphs themselves are not execution units.
+//! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
 //!
 //! # Delivery contract: at-most-once
 //!
 //! Mailboxes are incarnation-owned: each actor run binds a fresh mailbox, and
 //! messages accepted by a dead incarnation are lost with it. Delivery is
 //! therefore **at-most-once**, with loss windows at restart and shutdown.
-//! Stronger guarantees (acknowledgements, redelivery) are user protocol built
-//! on [`ActorRef::call`] and [`Reply`], not transport features.
+//! Stronger guarantees are user protocols built on [`ActorRef::call`] and
+//! [`Reply`]. [`ActorRef::send`] rides through restart windows when a
+//! rebind is expected.
 //!
-//! [`host::ActorContext::recv`] is fail-fast during shutdown: it returns `None` as
-//! soon as shutdown is requested, even when messages are still queued. That is
-//! the primitive, not the default policy: [`Actor`]'s framework-owned loop
-//! defaults to [`DrainPolicy::Drain`] and finishes the queued mailbox before
-//! stopping. A hand-written [`host::RawActor`] loop opts back in with
+//! [`host::ActorContext::recv`] returns `None` as soon as shutdown is
+//! requested. [`Actor`]'s framework-owned loop defaults to
+//! [`DrainPolicy::Drain`] and finishes queued messages before stopping; a
+//! hand-written [`host::RawActor`] loop can inspect remaining work with
 //! [`host::ActorContext::try_recv`].
 //!
-//! Restarts also lose queued messages: a restarted actor binds a fresh
-//! mailbox, so messages queued behind a poison message are dropped with the
-//! old one. This is deliberate — a mailbox that survived restarts would
-//! redeliver the poison message that caused the crash, converting one
-//! failure into a restart loop. [`ActorRef::send`] rides through restart
-//! windows when a rebind is expected. Registration factories are invoked once
-//! per incarnation, so a restart receives freshly constructed actor state (see
-//! [`Actor`]).
-//!
-//! Actors can watch a peer with [`host::ActorContext::watch`]. The watch follows
-//! the logical actor across restarts: each [`MonitorEvent`] — `Up` when an
-//! incarnation starts, `Down` when it exits, a final `Terminated` when the
-//! actor is permanently gone, and `Lagged` if a stalled observer misses
-//! transitions under overload — is mapped into the observer's message type and
-//! delivered through the ordinary mailbox. Watches survive restarts of both
-//! actors, [`CancellationHandle::cancel`] suppresses future delivery, and
-//! permanent removal of either actor membership ends the watch.
+//! Actors can watch a peer with [`host::ActorContext::watch`]. Watches follow
+//! logical actor membership across restarts and deliver [`MonitorEvent`]s
+//! through the observer's ordinary mailbox.
 //!
 //! # Static declarations
 //!
 //! Use `#[derive(ActorFactory)]` on named-field actors to generate reusable
-//! factory structs without repeating configuration fields or clone code. For
-//! cyclic actor graphs, derive [`Supervision`] on a named-field declaration of
-//! actor types. Its wiring closure receives typed refs for every field before
-//! constructing the generated factory bundle. Graph validation and supervision
-//! topology remain explicit; see the [`Supervision`] derive docs for the
-//! generated API, and mind the bounded-mailbox cycle hazard documented on
-//! [`GraphBuilder`].
-//! Derive names are intentionally not part of [`prelude`]; add
-//! `use kokage::{ActorFactory, Supervision};` when using their unqualified
-//! names alongside `use kokage::prelude::*`, or qualify the derive as
-//! `#[derive(kokage::Supervision)]`.
+//! factory structs without repeating configuration fields or clone code.
+//! Derive macros are intentionally not part of [`prelude`]; import
+//! [`ActorFactory`] from the crate root or use
+//! `#[derive(kokage::ActorFactory)]`.
+//!
+//! # Cyclic wiring
+//!
+//! Slots let factories refer to actors declared later without string lookup:
+//!
+//! ```
+//! use kokage::{ActorSlot, ActorSpec, OrderedTree};
+//! # struct Left(kokage::ActorRef<()>);
+//! # struct Right(kokage::ActorRef<()>);
+//! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+//! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::MessageContext<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+//! let left_slot = ActorSlot::<()>::new("left");
+//! let left = left_slot.actor_ref();
+//! let right_slot = ActorSlot::<()>::new("right");
+//! let right = right_slot.actor_ref();
+//!
+//! let left_actor = left_slot.define({ let right = right.clone(); move || Left(right.clone()) });
+//! let right_actor = right_slot.define({ let left = left.clone(); move || Right(left.clone()) });
+//! let tree = OrderedTree::new().actor(left_actor).actor(right_actor);
+//! # let _ = (left, right, tree);
+//! ```
 //!
 //! # Hand-driving actors
 //!
-//! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal host,
-//! but the lower-level execution surface is also public: each
-//! [`host::RunnableActor`] can be driven directly with
-//! [`run_until`](host::RunnableActor::run_until), which is how tests and hosts
-//! with their own supervision story run actors.
+//! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal
+//! host, but [`ActorSpec::into_runnable`] exposes one actor for direct hosts:
 //!
 //! ```
 //! use kokage::{
-//!     Actor, ActorResult, ActorSpec, CancellationToken, GraphBuilder, MessageContext, Reply,
+//!     Actor, ActorResult, ActorSpec, CancellationToken, MessageContext,
 //!     RestartPolicy, host::DEFAULT_SHUTDOWN_BOUND,
 //! };
-//!
-//! enum CounterMsg {
-//!     Add(u64),
-//!     Total(Reply<u64>),
-//! }
-//!
-//! struct Counter {
-//!     total: u64,
-//! }
-//!
-//! impl Actor for Counter {
-//!     type Msg = CounterMsg;
-//!
-//!     async fn handle(
-//!         &mut self,
-//!         message: CounterMsg,
-//!         _ctx: &mut MessageContext<'_, Self>,
-//!     ) -> ActorResult {
-//!         match message {
-//!             CounterMsg::Add(n) => self.total += n,
-//!             CounterMsg::Total(reply) => reply.send(self.total),
-//!         }
-//!         Ok(())
-//!     }
-//! }
-//!
+//! # struct Worker;
+//! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut MessageContext<'_, Self>) -> ActorResult { Ok(()) } }
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut builder = GraphBuilder::new();
-//! builder.name("example");
-//! let counter = builder.actor(ActorSpec::new("Counter", || Counter { total: 0 }));
-//! let graph = builder.build().expect("valid graph");
-//!
-//! let actor = graph
-//!     .into_nodes()
-//!     .into_iter()
-//!     .next()
-//!     .expect("counter node")
-//!     .into_runnable();
+//! let actor = ActorSpec::new("worker", || Worker).into_runnable();
 //! let stop = CancellationToken::new();
 //! let run = tokio::spawn({
 //!     let stop = stop.clone();
@@ -187,16 +135,6 @@
 //!             .await
 //!     }
 //! });
-//!
-//! counter.send(CounterMsg::Add(2)).await.expect("send succeeded");
-//! counter.send(CounterMsg::Add(3)).await.expect("send succeeded");
-//! assert_eq!(
-//!     counter
-//!         .call(std::time::Duration::from_secs(1), CounterMsg::Total)
-//!         .await?,
-//!     5
-//! );
-//!
 //! stop.cancel();
 //! run.await??;
 //! # Ok(())
@@ -206,58 +144,28 @@
 //! # Observability
 //!
 //! `tracing` spans and structured logs are emitted automatically for
-//! supervisor, actor, and mailbox lifecycle. Pull-based message counters and
-//! live mailbox usage are available through [`ActorRef::stats`] and
-//! [`RuntimeHandle::actor_stats`]; exporting time-series is a user-side
-//! sampler task over those surfaces (see `examples/actor_metrics.rs`).
-//! Actors registered with [`ActorSpec::message_size`] expose
-//! application-defined accepted-byte totals through [`observe::ActorStats`] and emit
-//! size metrics when the `metrics` feature is enabled. The same declaration can
-//! select a [`MailboxMode`] and apply to statically or dynamically registered
-//! actors.
-//! Install subscribers and samplers at the application boundary, not inside
-//! the library.
-//!
-//! # Runtime-independent boundaries
-//!
-//! Public mailbox errors, cancellation tokens, and supervisor snapshot
-//! receivers are crate-owned. Applications can build cancellation trees with
-//! [`CancellationToken`] and observe conflating snapshot updates through
-//! [`observe::SupervisorSnapshotReceiver`] without exposing the scheduler's
-//! channel or cancellation implementation in their own APIs.
+//! supervisor, actor, and mailbox lifecycle. Message counters and live mailbox
+//! usage are available through [`ActorRef::stats`] and
+//! [`RuntimeHandle::actor_stats`]. Actors configured with
+//! [`ActorSpec::message_size`] also expose accepted-byte totals.
 //!
 //! # Examples
 //!
-//! - `examples/supervised_actors.rs` — per-actor supervision with default
-//!   policies.
-//! - `examples/supervision.rs` — a cyclic graph wired with
-//!   `#[derive(Supervision)]`.
-//! - `examples/drain_policy.rs` — draining queued actor messages during
-//!   shutdown.
-//! - `examples/individual_actor_policies.rs` — per-actor restart/shutdown
-//!   overrides.
+//! - `examples/supervised_actors.rs` — per-actor supervision.
+//! - `examples/supervision.rs` — cyclic typed wiring with actor slots.
 //! - `examples/dynamic_actors.rs` — adding and removing actors at runtime.
-//! - `examples/directory.rs` — a typed, userland name directory actor.
 //! - `examples/ref_rebind.rs` — refs riding through supervised restarts.
-//! - `examples/graph_failures.rs` — supervisor policy around actor failures.
-//! - `examples/mailbox_backpressure.rs`, `examples/send_vs_try_send.rs` —
-//!   bounded mailboxes and send flavors.
-//! - `examples/builder_validation.rs` — build-time graph validation errors.
-//! - `examples/blocking_work.rs`, `examples/blocking_lifecycle.rs` —
-//!   cooperative and detached blocking work.
-//! - `examples/actor_metrics.rs` — the stats-sampler export pattern.
-//! - `examples/actor_tracing.rs`, `examples/supervisor_snapshot_trace.rs` —
-//!   tracing and snapshot observability.
-//! - `examples/json_edge.rs` — decoding byte-oriented JSON frames into typed
-//!   actor messages with `serde_json` at the application boundary.
+//! - `examples/builder_validation.rs` — tree validation at spawn.
+//! - `examples/actor_metrics.rs` and `examples/actor_tracing.rs` —
+//!   observability patterns.
 //!
 //! # Cargo features
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | yes | Re-exports `#[derive(ActorFactory)]` and `#[derive(Supervision)]`. |
+//! | `derive` | yes | Re-exports `#[derive(ActorFactory)]`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
-//! | `serde` | no | Serialization support for supervision outlines, actor stats, and view types. |
+//! | `serde` | no | Serialization support for outlines, actor stats, and view types. |
 
 mod actor;
 mod runtime;
@@ -265,7 +173,7 @@ mod supervision;
 
 /// Raw actor and task-hosting machinery.
 ///
-/// Most applications use [`Actor`], [`GraphBuilder`], and a supervision tree.
+/// Most applications use [`ActorSpec`] and a supervision tree.
 /// This module contains the lower-level execution surface for custom receive
 /// loops, directly driven runnable actors, and arbitrary supervised tasks.
 /// For task children it re-exports every type needed to name a
@@ -310,30 +218,29 @@ pub mod observe {
 /// crate root or in [`observe`] and [`host`].
 ///
 /// Derive macros are explicit root imports rather than prelude members. Add
-/// `use kokage::{ActorFactory, Supervision};` for unqualified
-/// `#[derive(ActorFactory)]` and `#[derive(Supervision)]`, or use their fully
-/// qualified `kokage::...` names.
+/// `use kokage::ActorFactory;` for an unqualified `#[derive(ActorFactory)]`,
+/// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, ActorSpec, GraphBuilder, LiveContext, MessageContext,
-        OrderedTree, Reply, StartContext, StopContext,
+        Actor, ActorRef, ActorResult, ActorSpec, LiveContext, MessageContext, OrderedTree, Reply,
+        StartContext, StopContext,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
 
 #[cfg(feature = "derive")]
-pub use kokage_derive::{ActorFactory, Supervision};
+pub use kokage_derive::ActorFactory;
 
 pub use actor::{
-    Actor, ActorFactory, ActorNode, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
+    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, CancellationHandle, DownReason, DrainPolicy,
-    DynamicRestrictedScope, Graph, GraphBuildError, GraphBuilder, GraphSpawnError, LiveContext,
-    MailboxMode, MessageContext, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SendError,
-    StartContext, StopContext, TaskHandle, TimerKey, TrySendError,
+    DynamicRestrictedScope, LiveContext, MailboxMode, MessageContext, MonitorEvent,
+    OffloadDeadline, Reply, RestrictedScope, SendError, StartContext, StopContext, TaskHandle,
+    TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
     BackoffPolicy, CancellationToken, ControlError, RestartConfig, RestartPolicy, ScopeKind,
     ShutdownPolicy, Strategy, SupervisorBuildError, SupervisorError, TerminalMembership,
 };
 pub use runtime::{DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle};
-pub use supervision::{DynamicTree, IntoActorNode, OrderedTree, TreeNode};
+pub use supervision::{DynamicTree, OrderedTree, TreeNode};

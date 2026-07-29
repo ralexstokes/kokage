@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     future::{Future, pending, poll_fn},
     io,
@@ -12,10 +16,10 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, CancellationHandle, ControlError,
-    DownReason, DrainPolicy, DynamicRuntime, DynamicTree, GraphBuilder, LiveContext, MailboxMode,
-    MessageContext, MonitorEvent, OrderedTree, RestartPolicy, RuntimeHandle, SendError,
-    ShutdownPolicy, StartContext, StopContext, SupervisorBuildError, SupervisorError,
-    TerminalMembership, TrySendError,
+    DownReason, DrainPolicy, DynamicRuntime, DynamicTree, LiveContext, MailboxMode, MessageContext,
+    MonitorEvent, OrderedTree, RestartPolicy, RuntimeHandle, SendError, ShutdownPolicy,
+    StartContext, StopContext, SupervisorBuildError, SupervisorError, TerminalMembership,
+    TrySendError,
     host::{ActorContext, BoxError, ChildSpec, RawActor},
     observe::ChildMembershipView,
 };
@@ -702,14 +706,14 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 #[tokio::test]
 async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph = GraphBuilder::new();
+    let mut graph = TreeBuilder::new();
     let watcher_slot = ActorSlot::new("watcher");
     let watcher = watcher_slot.actor_ref();
     graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
-    let graph = graph.build().expect("valid graph");
-    let handle = OrderedTree::graph(graph)
+    let graph = graph.build();
+    let handle = graph
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed scope runtime builds");
@@ -1196,21 +1200,20 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
 }
 
 #[tokio::test]
-async fn runtime_added_actor_preserves_an_explicit_supervisor_child_id() {
+async fn runtime_added_actor_uses_its_actor_id_as_the_child_id() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
     let actor = runtime
         .handle()
-        .add_actor(ActorSpec::new("qualified.actor", Drain::<u64>::new).child_id("local-actor"))
+        .add_actor(ActorSpec::new("local-actor", Drain::<u64>::new))
         .await
         .expect("actor is added");
 
     actor.send(1).await.expect("actor receives");
     let snapshot = runtime.handle().snapshot();
     assert!(snapshot.child("local-actor").is_some());
-    assert!(snapshot.child("qualified.actor").is_none());
-    assert_eq!(actor.id(), "qualified.actor");
+    assert_eq!(actor.id(), "local-actor");
 
     shutdown_dynamic_runtime(&runtime, "child id test shutdown").await;
 }
@@ -1218,12 +1221,12 @@ async fn runtime_added_actor_preserves_an_explicit_supervisor_child_id() {
 #[tokio::test]
 async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let forwarder_slot = ActorSlot::new("forwarder");
     let forwarder = forwarder_slot.actor_ref();
     builder.define(forwarder_slot, || Forwarder);
-    let graph = builder.build().expect("valid graph");
-    let handle = OrderedTree::graph(graph)
+    let graph = builder.build();
+    let handle = graph
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed scope runtime builds");
@@ -1280,14 +1283,14 @@ impl RawActor for ForwardTo {
 #[tokio::test]
 async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
+    let mut builder = TreeBuilder::new();
     let sink_slot = ActorSlot::new("sink");
     let sink = sink_slot.actor_ref();
     builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });
-    let graph = builder.build().expect("valid graph");
-    let handle = OrderedTree::graph(graph)
+    let graph = builder.build();
+    let handle = graph
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed scope runtime builds");

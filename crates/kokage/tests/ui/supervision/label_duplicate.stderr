@@ -1,5 +1,0 @@
-error: duplicate `label` option
-  --> tests/ui/supervision/label_duplicate.rs:15:37
-   |
-15 |     #[supervision(label = "worker", label = "other")]
-   |                                     ^^^^^

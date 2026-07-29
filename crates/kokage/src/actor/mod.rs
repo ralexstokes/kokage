@@ -1,4 +1,4 @@
-//! Actor layer: typed actor graphs with restart-stable refs.
+//! Actor layer: typed declarations with restart-stable refs.
 //!
 //! This module tree is private; its public API is re-exported flat from the
 //! crate root. The terminate-binding drop guard connecting the actor and
@@ -17,21 +17,18 @@ mod observability;
 mod raw;
 
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
-pub(crate) use builder::ActorOptionsValidationError;
-pub use builder::{ActorNode, ActorSlot, ActorSpec, GraphBuilder};
+pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
+pub use builder::{ActorSlot, ActorSpec};
 pub(crate) use cancellation::CancelOnDrop;
 pub use cancellation::CancellationHandle;
 pub use context::{
     ActorContext, ActorRef, ActorStatus, DynamicRestrictedScope, LiveContext, MessageContext,
     Reply, RestrictedScope, StartContext, StopContext, TaskHandle, TimerKey,
 };
-pub use error::{
-    BlockingCancelled, CallError, GraphBuildError, GraphSpawnError, OffloadDeadline, SendError,
-    TrySendError,
-};
+pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError};
 pub use factory::ActorFactory;
-pub(crate) use graph::RunnableActorBuilder;
-pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, Graph, RunnableActor};
+pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};
+pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActorBuilder};
 pub use handler::{Actor, DrainPolicy};
 pub use monitor::{DownReason, MonitorEvent};
 pub use raw::{ActorResult, RawActor};

@@ -217,7 +217,7 @@ increment it.
 
 ## Tracing And Stats
 
-The actor layer emits graph, actor, mailbox, and message tracing events.
+The actor layer emits actor, mailbox, and message tracing events.
 Message events include `source_actor_id` when the sender is another actor;
 external sends through an `ActorRef` have no source actor.
 
@@ -245,7 +245,7 @@ fn upload_size(message: &Upload) -> usize {
 let uploads = ActorSpec::new("uploads", UploadActor::new)
     .message_size(upload_size);
 let uploads_ref = uploads.actor_ref();
-graph.actor(uploads);
+let tree = OrderedTree::new().actor(uploads);
 ```
 
 The same declaration configures a dynamic actor before insertion:

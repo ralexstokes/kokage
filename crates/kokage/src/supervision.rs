@@ -11,7 +11,7 @@ use kokage_supervisor::{
 };
 
 use crate::{
-    DynamicRuntime, DynamicRuntimeHandle, Graph, Runtime, RuntimeHandle,
+    DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle,
     actor::{ActorNode, ActorSpec, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -22,7 +22,7 @@ struct ScopeConfig {
     restart_intensity: Option<RestartConfig>,
     default_restart: RestartPolicy,
     default_shutdown: ShutdownPolicy,
-    dynamic_builder: Option<RunnableActorBuilder>,
+    mailbox_capacity: usize,
     reservation: Option<u64>,
 }
 
@@ -33,7 +33,7 @@ impl ScopeConfig {
             restart_intensity: None,
             default_restart: RestartPolicy::default(),
             default_shutdown: ShutdownPolicy::default(),
-            dynamic_builder: None,
+            mailbox_capacity: crate::actor::DEFAULT_MAILBOX_CAPACITY,
             reservation: None,
         }
     }
@@ -52,16 +52,7 @@ enum ScopeNode {
 enum SupervisionChild {
     Actor(ActorNode),
     Task(ChildSpec),
-    Scope {
-        id: String,
-        node: ScopeNode,
-    },
-    ActorWithScope {
-        id: String,
-        actor: ActorNode,
-        children: ScopeNode,
-        strategy: Strategy,
-    },
+    Scope { id: String, node: ScopeNode },
 }
 
 enum ReservedScopeBuilder {
@@ -100,9 +91,8 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// by [`Strategy::RestForOne`]. Use [`DynamicTree`] for an empty leaf whose
 /// membership is written through a [`DynamicRuntimeHandle`] after spawn.
 ///
-/// A tree can place one graph's actors at different scope levels while
-/// retaining the graph's typed wiring. [`Supervision`](crate::Supervision) is
-/// the derive-based shorthand for declaring a graph and its tree together.
+/// Actor declarations can be placed directly at different scope levels while
+/// retaining their typed wiring.
 ///
 /// [`outline`](Self::outline) removes executable payloads, producing a
 /// [`SupervisionOutline`] that can be compared, debug-printed, and, with the
@@ -193,28 +183,6 @@ impl TreeNode {
     }
 }
 
-/// Conversion into a linear actor placement accepted by [`OrderedTree`].
-///
-/// This trait is implemented for [`ActorSpec`] and [`ActorNode`]. Applications
-/// normally rely on the implementations through [`OrderedTree::actor`] and
-/// [`OrderedTree::actor_with_scope`] rather than calling it directly.
-pub trait IntoActorNode {
-    /// Converts the value into a placement token.
-    fn into_actor_node(self) -> ActorNode;
-}
-
-impl IntoActorNode for ActorNode {
-    fn into_actor_node(self) -> ActorNode {
-        self
-    }
-}
-
-impl<M: Send + 'static> IntoActorNode for ActorSpec<M> {
-    fn into_actor_node(self) -> ActorNode {
-        self.into_deferred_node()
-    }
-}
-
 macro_rules! tree_common_methods {
     () => {
         /// Sets this scope's default restart intensity.
@@ -224,25 +192,30 @@ macro_rules! tree_common_methods {
             self
         }
 
-        /// Sets the restart policy inherited by actor nodes.
+        /// Sets the restart policy inherited by actors in this scope.
         #[must_use]
         pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
             self.inner = self.inner.default_restart(restart);
             self
         }
 
-        /// Sets the shutdown policy inherited by actor nodes.
+        /// Sets the shutdown policy inherited by actors in this scope.
         #[must_use]
         pub fn default_shutdown(mut self, shutdown: ShutdownPolicy) -> Self {
             self.inner = self.inner.default_shutdown(shutdown);
             self
         }
 
-        /// Applies a graph's dynamic actor construction settings to this scope.
-        #[doc(hidden)]
+        /// Sets the bounded mailbox capacity inherited by actors in this scope.
+        ///
+        /// This is the FIFO queue capacity and the maximum number of distinct
+        /// unread keys for keyed conflation. Unkeyed conflation always has
+        /// capacity 1 and ignores this setting. Individual actors can override
+        /// it with [`ActorSpec::mailbox_capacity`]. The value is validated when
+        /// the tree is spawned or dynamically inserted.
         #[must_use]
-        pub fn derived_defaults(mut self, graph: &Graph) -> Self {
-            self.inner = self.inner.derived_defaults(graph);
+        pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
+            self.inner = self.inner.mailbox_capacity(capacity);
             self
         }
 
@@ -280,17 +253,6 @@ impl OrderedTree {
         }
     }
 
-    /// Creates an ordered scope containing every actor in `graph`.
-    ///
-    /// The graph is consumed because its runnable bindings are single-use.
-    /// Typed [`crate::ActorRef`]s issued while building it remain valid.
-    pub fn graph(graph: Graph) -> Self {
-        let tree = TreeData::graph(graph);
-        Self {
-            inner: tree.with_identity(),
-        }
-    }
-
     /// Sets this scope's restart strategy.
     #[must_use]
     pub fn strategy(mut self, strategy: Strategy) -> Self {
@@ -298,9 +260,9 @@ impl OrderedTree {
         self
     }
 
-    /// Appends an actor node.
+    /// Appends an actor declaration.
     #[must_use]
-    pub fn actor(mut self, actor: impl IntoActorNode) -> Self {
+    pub fn actor<M: Send + 'static>(mut self, actor: ActorSpec<M>) -> Self {
         self.inner = self.inner.actor(actor);
         self
     }
@@ -319,27 +281,6 @@ impl OrderedTree {
         self.inner = match tree.into().0 {
             TreeNodeKind::Ordered(tree) => self.inner.attach_subtree(id, tree.inner),
             TreeNodeKind::Dynamic(tree) => self.inner.attach_subtree(id, tree.inner),
-        };
-        self
-    }
-
-    /// Appends an actor leader with a scope it owns.
-    #[must_use]
-    pub fn actor_with_scope(
-        mut self,
-        id: impl Into<String>,
-        actor: impl IntoActorNode,
-        children: impl Into<TreeNode>,
-        strategy: Strategy,
-    ) -> Self {
-        let id = id.into();
-        self.inner = match children.into().0 {
-            TreeNodeKind::Ordered(tree) => self
-                .inner
-                .attach_actor_scope(id, actor, tree.inner, strategy),
-            TreeNodeKind::Dynamic(tree) => self
-                .inner
-                .attach_actor_scope(id, actor, tree.inner, strategy),
         };
         self
     }
@@ -428,17 +369,6 @@ impl TreeData<false> {
         }
     }
 
-    /// Creates an ordered scope containing every actor in a graph.
-    fn graph(graph: Graph) -> Self {
-        let dynamic_builder = graph.dynamic_builder();
-        let mut tree = Self::new();
-        tree.config_mut().dynamic_builder = Some(dynamic_builder);
-        for actor in graph.into_nodes() {
-            tree.children_mut().push(SupervisionChild::Actor(actor));
-        }
-        tree
-    }
-
     /// Sets the restart strategy of this ordered scope.
     #[must_use]
     fn strategy(mut self, strategy: Strategy) -> Self {
@@ -448,9 +378,9 @@ impl TreeData<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor(mut self, actor: impl IntoActorNode) -> Self {
+    fn actor<M: Send + 'static>(mut self, actor: ActorSpec<M>) -> Self {
         self.children_mut()
-            .push(SupervisionChild::Actor(actor.into_actor_node()));
+            .push(SupervisionChild::Actor(actor.into_deferred_node()));
         self
     }
 
@@ -474,34 +404,6 @@ impl TreeData<false> {
         self.children_mut().push(SupervisionChild::Scope {
             id: id.into(),
             node: tree.node,
-        });
-        self
-    }
-
-    /// Appends an actor leader with a scope it owns.
-    ///
-    /// The generated ordered node installs the leader first and its owned
-    /// scope second. `strategy` controls their failure relationship:
-    /// [`Strategy::OneForOne`] restarts either independently,
-    /// [`Strategy::OneForAll`] recycles both when either fails, and
-    /// [`Strategy::RestForOne`] recycles the owned scope when the leader fails
-    /// while an owned-scope failure leaves the leader running.
-    /// The generated leader and `children` edges inherit this enclosing
-    /// scope's restart and shutdown defaults unless the leader overrides them.
-    #[must_use]
-    fn actor_with_scope<const CHILD_DYNAMIC: bool>(
-        mut self,
-        id: impl Into<String>,
-        actor: impl IntoActorNode,
-        children: TreeData<CHILD_DYNAMIC>,
-        strategy: Strategy,
-    ) -> Self {
-        let actor = actor.into_actor_node();
-        self.children_mut().push(SupervisionChild::ActorWithScope {
-            id: id.into(),
-            actor,
-            children: children.node,
-            strategy,
         });
         self
     }
@@ -559,6 +461,12 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
         self
     }
 
+    #[must_use]
+    fn mailbox_capacity(mut self, capacity: usize) -> Self {
+        self.config_mut().mailbox_capacity = capacity;
+        self
+    }
+
     fn with_identity(self) -> IdentityTree<DYNAMIC> {
         IdentityTree::new(self)
     }
@@ -566,14 +474,6 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
     /// Projects the executable scope to comparable, payload-free data.
     fn outline(&self) -> SupervisionOutline {
         self.node.outline()
-    }
-
-    /// Applies a graph's dynamic actor construction settings to this scope.
-    #[doc(hidden)]
-    #[must_use]
-    fn derived_defaults(mut self, graph: &Graph) -> Self {
-        self.config_mut().dynamic_builder = Some(graph.dynamic_builder());
-        self
     }
 }
 
@@ -615,7 +515,12 @@ impl ScopeNode {
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<(Supervisor, Arc<ActorRuntimeState>), SupervisorBuildError> {
         let config = self.config().clone();
-        let actor_builder = config.dynamic_builder.clone().unwrap_or_default();
+        if config.mailbox_capacity == 0 {
+            return Err(SupervisorBuildError::InvalidConfig(
+                "actor mailbox capacity must be non-zero",
+            ));
+        }
+        let actor_builder = RunnableActorBuilder::with_mailbox_capacity(config.mailbox_capacity);
         let reservation = config.reservation.and_then(|id| {
             reservations
                 .iter()
@@ -690,7 +595,7 @@ impl SupervisionChild {
         match self {
             Self::Actor(actor) => actor.resolved_id(),
             Self::Task(child) => child.id(),
-            Self::Scope { id, .. } | Self::ActorWithScope { id, .. } => id,
+            Self::Scope { id, .. } => id,
         }
     }
 
@@ -719,22 +624,6 @@ impl SupervisionChild {
                 id: id.clone(),
                 outline: node.outline(),
             },
-            Self::ActorWithScope {
-                id,
-                actor,
-                children,
-                strategy,
-            } => ChildOutline::ActorWithScope {
-                id: id.clone(),
-                leader: Box::new(ChildOutline::Actor {
-                    id: actor.resolved_id().to_owned(),
-                    restart: actor.restart.unwrap_or(default_restart),
-                    shutdown: actor.shutdown.unwrap_or(default_shutdown),
-                    restart_intensity: actor.restart_config,
-                }),
-                children: Box::new(children.outline()),
-                strategy: *strategy,
-            },
         }
     }
 
@@ -751,7 +640,6 @@ impl SupervisionChild {
                 let ActorNode {
                     actor,
                     deferred: _,
-                    child_id,
                     restart,
                     shutdown,
                     restart_config,
@@ -767,7 +655,6 @@ impl SupervisionChild {
                         shutdown.unwrap_or(default_shutdown),
                     )
                     .restart_config(restart_config)
-                    .child_id(child_id)
                     .remove_on_exit(matches!(
                         terminal_membership,
                         crate::TerminalMembership::Remove
@@ -782,63 +669,6 @@ impl SupervisionChild {
                     RuntimeAttachment::subtree(actors, nested_actors),
                 ))
             }
-            Self::ActorWithScope {
-                id,
-                actor,
-                children,
-                strategy,
-            } => {
-                let owned_actors = Arc::new(ActorRuntimeState::new(
-                    actors.actor_builder(),
-                    default_restart,
-                    default_shutdown,
-                ));
-                let ActorNode {
-                    actor,
-                    deferred: _,
-                    child_id,
-                    restart,
-                    shutdown,
-                    restart_config,
-                    terminal_membership,
-                } = owned_actors
-                    .materialize_actor_node(actor)
-                    .map_err(|error| SupervisorBuildError::InvalidConfig(error.message()))?;
-                let (children_supervisor, children_actors) = children.lower(reservations)?;
-                let children_handle = crate::RuntimeHandle::new(
-                    children_supervisor.handle(),
-                    Arc::clone(&children_actors),
-                );
-                let leader = actor_child_spec(
-                    actor.expect("tree lowering materialized the actor"),
-                    &owned_actors,
-                    ActorChildOptions::new(
-                        restart.unwrap_or(default_restart),
-                        shutdown.unwrap_or(default_shutdown),
-                    )
-                    .restart_config(restart_config)
-                    .child_id(child_id)
-                    .remove_on_exit(matches!(
-                        terminal_membership,
-                        crate::TerminalMembership::Remove
-                    ))
-                    .children(children_handle),
-                );
-                let owned = Supervisor::ordered()
-                    .strategy(strategy)
-                    .default_restart(default_restart)
-                    .default_shutdown(default_shutdown)
-                    .child(leader)
-                    .child(__private::attach(
-                        ChildSpec::supervisor("children", children_supervisor),
-                        RuntimeAttachment::subtree(&owned_actors, children_actors),
-                    ))
-                    .build()?;
-                builder.child(__private::attach(
-                    ChildSpec::supervisor(id, owned),
-                    RuntimeAttachment::subtree(actors, owned_actors),
-                ))
-            }
         })
     }
 }
@@ -850,7 +680,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         let id = NEXT_RESERVATION_ID.fetch_add(1, Ordering::Relaxed);
         tree.config_mut().reservation = Some(id);
         let actors = Arc::new(ActorRuntimeState::new(
-            tree.config().dynamic_builder.clone().unwrap_or_default(),
+            RunnableActorBuilder::with_mailbox_capacity(tree.config().mailbox_capacity),
             tree.config().default_restart,
             tree.config().default_shutdown,
         ));
@@ -903,8 +733,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
                             )
                             .0
                         }
-                        SupervisionChild::Scope { .. }
-                        | SupervisionChild::ActorWithScope { .. } => config.default_restart,
+                        SupervisionChild::Scope { .. } => config.default_restart,
                     };
                     (child.declared_id().to_owned(), restart)
                 })
@@ -917,7 +746,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
             .find(|reservation| reservation.id == id)
             .expect("reserved tree owns its root reservation");
         reservation.actors.configure(
-            config.dynamic_builder.unwrap_or_default(),
+            RunnableActorBuilder::with_mailbox_capacity(config.mailbox_capacity),
             config.default_restart,
             config.default_shutdown,
         );
@@ -968,6 +797,11 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         self.map_tree(|tree| tree.default_shutdown(shutdown))
     }
 
+    #[must_use]
+    fn mailbox_capacity(self, capacity: usize) -> Self {
+        self.map_tree(|tree| tree.mailbox_capacity(capacity))
+    }
+
     /// Projects the executable scope to comparable, payload-free data.
     fn outline(&self) -> SupervisionOutline {
         self.tree.outline()
@@ -985,13 +819,6 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         );
         Ok((supervisor, actors))
     }
-
-    /// Applies a graph's dynamic actor construction settings to this scope.
-    #[doc(hidden)]
-    #[must_use]
-    fn derived_defaults(self, graph: &Graph) -> Self {
-        self.map_tree(|tree| tree.derived_defaults(graph))
-    }
 }
 
 impl IdentityTree<false> {
@@ -1003,7 +830,7 @@ impl IdentityTree<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor(self, actor: impl IntoActorNode) -> Self {
+    fn actor<M: Send + 'static>(self, actor: ActorSpec<M>) -> Self {
         self.map_tree(|tree| tree.actor(actor))
     }
 
@@ -1025,24 +852,6 @@ impl IdentityTree<false> {
     ) -> Self {
         self.reservations.extend(tree.reservations);
         self.tree = self.tree.subtree(id, tree.tree);
-        self.refresh_root();
-        self
-    }
-
-    /// Appends an actor leader with an owned scope that is already reserved.
-    ///
-    #[must_use]
-    fn attach_actor_scope<const CHILD_DYNAMIC: bool>(
-        mut self,
-        id: impl Into<String>,
-        actor: impl IntoActorNode,
-        children: IdentityTree<CHILD_DYNAMIC>,
-        strategy: Strategy,
-    ) -> Self {
-        self.reservations.extend(children.reservations);
-        self.tree = self
-            .tree
-            .actor_with_scope(id, actor, children.tree, strategy);
         self.refresh_root();
         self
     }
@@ -1117,17 +926,6 @@ pub enum ChildOutline {
         /// Nested declaration.
         outline: SupervisionOutline,
     },
-    /// Generated actor-owned ordered scope.
-    ActorWithScope {
-        /// Node id in the parent.
-        id: String,
-        /// Leader actor declaration.
-        leader: Box<ChildOutline>,
-        /// Owned scope declaration.
-        children: Box<SupervisionOutline>,
-        /// Restart relationship of leader and owned scope.
-        strategy: Strategy,
-    },
 }
 
 impl SupervisionOutline {
@@ -1146,10 +944,7 @@ impl ChildOutline {
     /// Returns this node's id within its parent.
     pub fn id(&self) -> &str {
         match self {
-            Self::Actor { id, .. }
-            | Self::Task { id, .. }
-            | Self::Scope { id, .. }
-            | Self::ActorWithScope { id, .. } => id,
+            Self::Actor { id, .. } | Self::Task { id, .. } | Self::Scope { id, .. } => id,
         }
     }
 }

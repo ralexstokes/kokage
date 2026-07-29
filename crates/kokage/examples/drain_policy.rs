@@ -52,16 +52,15 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (handled_tx, mut handled_rx) = mpsc::unbounded_channel();
 
-    let mut builder = GraphBuilder::new();
     let actor_release = release.clone();
-    let worker = builder.actor(ActorSpec::new("Worker", move || Worker {
+    let worker_spec = ActorSpec::new("Worker", move || Worker {
         started: started_tx.clone(),
         release: actor_release.clone(),
         handled: handled_tx.clone(),
-    }));
-    let graph = builder.build()?;
+    });
+    let worker = worker_spec.actor_ref();
 
-    let runtime = OrderedTree::graph(graph).spawn()?;
+    let runtime = OrderedTree::new().actor(worker_spec).spawn()?;
     worker.send(Msg::Hold).await?;
     started_rx.recv().await.expect("worker entered hold");
 

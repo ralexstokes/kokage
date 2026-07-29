@@ -1,8 +1,7 @@
 use std::{collections::HashMap, error::Error, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, GraphBuilder, MessageContext,
-    OrderedTree, Reply,
+    Actor, ActorRef, ActorResult, ActorSpec, DynamicTree, MessageContext, OrderedTree, Reply,
 };
 use tokio::sync::mpsc;
 
@@ -61,14 +60,14 @@ impl Actor for Printer {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut graph = GraphBuilder::new();
-    let directory = graph.actor(ActorSpec::new("directory", || Directory::<String> {
+    let directory_spec = ActorSpec::new("directory", || Directory::<String> {
         entries: HashMap::new(),
-    }));
-    let graph = graph.build()?;
+    });
+    let directory = directory_spec.actor_ref();
     let dynamic_tree = DynamicTree::new();
     let dynamic = dynamic_tree.handle();
-    let runtime = OrderedTree::graph(graph)
+    let runtime = OrderedTree::new()
+        .actor(directory_spec)
         .subtree("dynamic", dynamic_tree)
         .spawn()?;
     let handle = runtime.handle();

@@ -32,7 +32,7 @@ use crate::actor::{
 
 macro_rules! ambient_context_method {
     (id, $item:item) => {
-        /// Returns the actor's unique identifier within the graph.
+        /// Returns the actor's identifier within its scope.
         $item
     };
     (myself $([$note:literal])?, $item:item) => {
@@ -44,7 +44,7 @@ macro_rules! ambient_context_method {
         $item
     };
     (shutdown_token, $item:item) => {
-        /// Returns the shared graph shutdown token.
+        /// Returns the shared execution shutdown token.
         $item
     };
     (run_blocking, $item:item) => {
@@ -74,18 +74,6 @@ macro_rules! scope_context_methods {
         pub fn supervisor(&self) -> RestrictedScope {
             RestrictedScope::new(self.supervisor.clone())
         }
-
-        /// Returns the actor-aware handle for this leader's declared child
-        /// scope.
-        ///
-        /// This is `Some` exactly for the leader of an
-        /// [`actor_with_scope`](crate::OrderedTree::actor_with_scope) node.
-        /// The child scope starts only after its leader's `on_start` returns,
-        /// so pipeline readiness waits with
-        /// [`LiveContext::spawn_scope_wait`] instead of awaiting them inline.
-        pub fn children(&self) -> Option<RestrictedScope> {
-            self.children.clone().map(RestrictedScope::new)
-        }
     };
     (start) => {
         /// Returns this actor's enclosing scope, restricted for the startup
@@ -94,15 +82,6 @@ macro_rules! scope_context_methods {
         /// See [`RestrictedScope`] for why lifecycle waits are withheld here.
         pub fn supervisor(&self) -> RestrictedScope {
             self.cx.supervisor()
-        }
-
-        /// Returns this leader's declared child scope, restricted for the
-        /// startup stage.
-        ///
-        /// The child scope starts only after this hook returns, so awaiting its
-        /// readiness inline can never succeed. See [`RestrictedScope`].
-        pub fn children(&self) -> Option<RestrictedScope> {
-            self.cx.children()
         }
     };
     (message) => {
@@ -114,12 +93,6 @@ macro_rules! scope_context_methods {
         pub fn supervisor(&self) -> RestrictedScope {
             self.cx.supervisor()
         }
-
-        /// Returns this leader's declared child scope with the same
-        /// restriction. See [`RestrictedScope`].
-        pub fn children(&self) -> Option<RestrictedScope> {
-            self.cx.children()
-        }
     };
     (stop) => {
         /// Returns this actor's enclosing scope, restricted for the shutdown
@@ -130,15 +103,6 @@ macro_rules! scope_context_methods {
         pub fn supervisor(&self) -> RestrictedScope {
             self.cx.supervisor()
         }
-
-        /// Returns this leader's declared child scope, restricted for the
-        /// shutdown stage.
-        ///
-        /// The child scope is torn down around this hook, so awaiting its
-        /// completion inline deadlocks the same way. See [`RestrictedScope`].
-        pub fn children(&self) -> Option<RestrictedScope> {
-            self.cx.children()
-        }
     };
 }
 
@@ -146,7 +110,7 @@ macro_rules! scope_context_methods {
 ///
 /// An `ActorRef<M>` is bound to a long-lived mailbox binding rather than a
 /// single actor runtime instance. When the target actor is restarted (either
-/// as part of a graph rerun or via per-actor supervision), the handle
+/// as part of a group restart or via per-actor supervision), the handle
 /// transparently follows the new mailbox. That binding belongs to one
 /// supervisor membership: removing a dynamic actor terminates its refs, and
 /// adding another actor under the same id mints a fresh binding. A stale ref
@@ -594,9 +558,9 @@ impl TaskHandle {
 /// The lifecycle state visible through an actor context.
 ///
 /// `Draining` takes precedence once a handler is replaying accepted work,
-/// including when a local stop and graph shutdown overlap. Graph shutdown on
+/// including when a local stop and runtime shutdown overlap. Runtime shutdown on
 /// its own does not change this status; inspect [`ActorContext::shutdown_token`]
-/// when graph-wide cancellation matters.
+/// when execution-wide cancellation matters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActorStatus {
     /// The callback is live and has not requested a local stop.
@@ -767,7 +731,7 @@ impl Drop for ActorLifetime {
 }
 
 /// Runtime context passed to a [`RawActor`](crate::host::RawActor) each time the
-/// graph is run.
+/// actor is run.
 ///
 /// This is the widest context: a `RawActor` owns its receive loop, so it gets
 /// the incoming [`mailbox`](Self::recv) and explicit
@@ -798,7 +762,6 @@ pub struct ActorContext<M> {
     pub(crate) scope_waits: JoinSet<()>,
     pub(crate) scope_wait_gates: HashMap<TaskId, Arc<SendGate>>,
     pub(crate) supervisor: RuntimeHandle,
-    pub(crate) children: Option<RuntimeHandle>,
 }
 
 impl<M: Send + 'static> ActorContext<M> {
@@ -1051,12 +1014,12 @@ impl<M: Send + 'static> ActorContext<M> {
         self.sync_scope_wait_gauge();
     }
 
-    /// Returns the actor's unique identifier within the graph.
+    /// Returns the actor's identifier within its scope.
     pub fn id(&self) -> &str {
         &self.id
     }
 
-    /// Returns the shared graph shutdown token.
+    /// Returns the shared execution shutdown token.
     pub fn shutdown_token(&self) -> &CancellationToken {
         &self.shutdown
     }
@@ -1397,7 +1360,7 @@ mod sealed {
 /// This trait is sealed. It exists to name the shared surface, not to let
 /// callers substitute their own context.
 pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
-    /// Returns the actor's unique identifier within the graph.
+    /// Returns the actor's identifier within its scope.
     fn id(&self) -> &str {
         self.cx().id()
     }
@@ -1407,7 +1370,7 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
         self.cx().myself()
     }
 
-    /// Returns the shared graph shutdown token.
+    /// Returns the shared execution shutdown token.
     fn shutdown_token(&self) -> &CancellationToken {
         self.cx().shutdown_token()
     }
@@ -1437,14 +1400,14 @@ pub trait LiveContext<M: Send + 'static>: sealed::Sealed<M> {
     /// fire, and a fresh [`offload`](Self::offload) races the shutdown budget.
     /// `StartContext` never reports `Draining`.
     ///
-    /// This status is deliberately distinct from graph shutdown. A local
+    /// This status is deliberately distinct from runtime shutdown. A local
     /// [`stop`](Self::stop) can lead to `Draining` while
     /// [`shutdown_token`](Self::shutdown_token) remains live; conversely,
-    /// graph shutdown requested during an in-flight ordinary callback cancels
+    /// runtime shutdown requested during an in-flight ordinary callback cancels
     /// that token while this method still reports `Running`. Ask `status` when
     /// the question is whether work queued by this callback can run, and
-    /// inspect the token when the question is about the graph. `Draining`
-    /// takes precedence when local stop and graph shutdown overlap.
+    /// inspect the token when the question is about the runtime. `Draining`
+    /// takes precedence when local stop and runtime shutdown overlap.
     fn status(&self) -> ActorStatus {
         sealed::Sealed::status(self)
     }

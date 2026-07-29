@@ -1,5 +1,0 @@
-error[E0599]: no method named `clone` found for struct `ActorNode` in the current scope
-  --> tests/ui/single-use-tree/actor_node_clone.rs:21:22
-   |
-21 |     let _copy = node.clone();
-   |                      ^^^^^ method not found in `ActorNode`

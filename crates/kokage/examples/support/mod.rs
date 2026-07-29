@@ -1,8 +1,8 @@
 use std::error::Error;
 
 use kokage::{
-    CancellationToken, Graph, RestartPolicy,
-    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND},
+    CancellationToken, RestartPolicy,
+    host::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor},
 };
 use tokio::task::JoinHandle;
 
@@ -12,14 +12,12 @@ pub struct ActorTasks {
 }
 
 impl ActorTasks {
-    pub fn start(graph: Graph) -> Self {
+    pub fn start(actors: impl IntoIterator<Item = RunnableActor>) -> Self {
         let stop = CancellationToken::new();
-        let tasks = graph
-            .into_nodes()
+        let tasks = actors
             .into_iter()
-            .map(|node| {
+            .map(|actor| {
                 let stop = stop.clone();
-                let actor = node.into_runnable();
                 tokio::spawn(async move {
                     actor
                         .run_until(

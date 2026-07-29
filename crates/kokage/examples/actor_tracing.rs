@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorResult, ActorSpec, GraphBuilder, LiveContext, MessageContext};
+use kokage::{Actor, ActorResult, ActorSpec, LiveContext, MessageContext};
 use tokio::sync::mpsc;
 
 mod support;
@@ -30,13 +30,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt().init();
 
     let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
-    let mut builder = GraphBuilder::new();
-    let worker = builder.actor(ActorSpec::new("Worker", move || Worker {
+    let worker_spec = ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
-    }));
-    let graph = builder.build()?;
+    });
+    let worker = worker_spec.actor_ref();
 
-    let handle = support::ActorTasks::start(graph);
+    let handle = support::ActorTasks::start([worker_spec.into_runnable()]);
 
     worker.send("hello tracing").await?;
     completed_rx.recv().await.expect("message processed");

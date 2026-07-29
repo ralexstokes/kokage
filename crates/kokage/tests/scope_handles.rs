@@ -1,3 +1,7 @@
+mod support;
+
+use support::TreeBuilder;
+
 use std::{
     sync::{
         Arc,
@@ -7,9 +11,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, ControlError, DynamicRuntimeHandle, DynamicTree, GraphBuilder,
-    LiveContext, MessageContext, OrderedTree, RestartConfig, RestrictedScope, RuntimeHandle,
-    ScopeKind, StartContext, StopContext, Strategy, SupervisorBuildError,
+    Actor, ActorResult, ActorSpec, ControlError, DynamicRuntimeHandle, DynamicTree, LiveContext,
+    MessageContext, OrderedTree, RestartConfig, RestrictedScope, RuntimeHandle, ScopeKind,
+    StartContext, StopContext, Strategy, SupervisorBuildError,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, SupervisorSnapshotReceiver},
 };
@@ -38,6 +42,7 @@ struct ScopeProbe {
     reports: mpsc::UnboundedSender<&'static str>,
     starts: Arc<AtomicUsize>,
     child_stopped: Option<Arc<AtomicBool>>,
+    children_id: Option<&'static str>,
     mutate_children_on_start: bool,
 }
 
@@ -46,7 +51,7 @@ impl Actor for ScopeProbe {
 
     async fn on_start(&mut self, ctx: &mut StartContext<'_, Self>) -> ActorResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
-        let Some(children) = ctx.children() else {
+        let Some(children_id) = self.children_id else {
             let supervisor = ctx.supervisor();
             assert_eq!(supervisor.snapshot().kind, ScopeKind::Ordered);
             assert!(supervisor.dynamic().is_none());
@@ -56,6 +61,10 @@ impl Actor for ScopeProbe {
             self.reports.send("none").expect("test receiver open");
             return Ok(());
         };
+        let children = ctx
+            .supervisor()
+            .subtree(children_id)
+            .expect("declared child scope resolves before startup");
         self.reports.send("some").expect("test receiver open");
         let Some(dynamic) = children.dynamic() else {
             self.reports
@@ -103,7 +112,10 @@ impl Actor for ScopeProbe {
     ) -> ActorResult {
         match message {
             LeaderMsg::AddFromHandler => {
-                let children = ctx.children().expect("ActorWithScope leader has children");
+                let children = ctx
+                    .supervisor()
+                    .subtree(self.children_id.expect("leader declares a child scope"))
+                    .expect("declared child scope remains registered");
                 children
                     .dynamic()
                     .expect("dynamic scope")
@@ -180,7 +192,10 @@ impl Actor for RestrictedTaskAdder {
     type Msg = ();
 
     async fn handle(&mut self, (): (), ctx: &mut MessageContext<'_, Self>) -> ActorResult {
-        let children = ctx.children().expect("actor owns a dynamic scope");
+        let children = ctx
+            .supervisor()
+            .subtree("children")
+            .expect("actor's declared child scope is registered");
         let dynamic = children.dynamic().expect("dynamic scope");
         let lineage = dynamic
             .add_child(ChildSpec::task("task", |ctx| async move {
@@ -551,6 +566,7 @@ async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
             reports: reports_tx.clone(),
             starts: Arc::new(AtomicUsize::new(0)),
             child_stopped: None,
+            children_id: None,
             mutate_children_on_start: false,
         }))
         .spawn()
@@ -562,7 +578,7 @@ async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
 }
 
 #[tokio::test]
-async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_mutation() {
+async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mutation() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let starts = Arc::new(AtomicUsize::new(0));
     let leader_spec = ActorSpec::new("leader", {
@@ -571,19 +587,21 @@ async fn actor_with_dynamic_scope_injects_children_for_on_start_and_handler_muta
             reports: reports_tx.clone(),
             starts: Arc::clone(&starts),
             child_stopped: None,
+            children_id: Some("children"),
             mutate_children_on_start: true,
         }
     });
     let leader = leader_spec.actor_ref();
     let handle = OrderedTree::new()
-        .actor_with_scope(
+        .subtree(
             "owned",
-            leader_spec,
-            DynamicTree::new(),
-            Strategy::RestForOne,
+            OrderedTree::new()
+                .strategy(Strategy::RestForOne)
+                .actor(leader_spec)
+                .subtree("children", DynamicTree::new()),
         )
         .spawn()
-        .expect("ActorWithScope builds");
+        .expect("leader-owned scope builds");
 
     assert_eq!(next_report(&mut reports_rx).await, "some");
     assert_eq!(
@@ -636,7 +654,12 @@ async fn restricted_scope_add_child_returns_the_inserted_lineage() {
     });
     let adder = adder_spec.actor_ref();
     let handle = OrderedTree::new()
-        .actor_with_scope("owned", adder_spec, DynamicTree::new(), Strategy::OneForOne)
+        .subtree(
+            "owned",
+            OrderedTree::new()
+                .actor(adder_spec)
+                .subtree("children", DynamicTree::new()),
+        )
         .spawn()
         .expect("tree builds");
     handle.handle().wait_started().await.expect("tree starts");
@@ -680,6 +703,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
             reports: reports_tx.clone(),
             starts: Arc::clone(&starts),
             child_stopped: Some(Arc::clone(&child_stopped)),
+            children_id: Some("children"),
             mutate_children_on_start: false,
         }
     });
@@ -687,11 +711,12 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
         let child_stopped = Arc::clone(&child_stopped);
         move || StopProbe(Arc::clone(&child_stopped))
     });
-    let runtime = OrderedTree::new().actor_with_scope(
+    let runtime = OrderedTree::new().subtree(
         "owned",
-        leader,
-        OrderedTree::new().actor(worker),
-        Strategy::RestForOne,
+        OrderedTree::new()
+            .strategy(Strategy::RestForOne)
+            .actor(leader)
+            .subtree("children", OrderedTree::new().actor(worker)),
     );
     assert_eq!(runtime.handle().snapshot().strategy, Strategy::OneForOne);
     let handle = runtime.spawn().expect("ordered ActorWithScope builds");
@@ -754,7 +779,7 @@ async fn wait_count(counter: &AtomicUsize, expected: usize) {
 }
 
 #[tokio::test]
-async fn actor_with_scope_uses_explicit_rest_for_one() {
+async fn leader_owned_scope_uses_explicit_rest_for_one() {
     let leader_starts = Arc::new(AtomicUsize::new(0));
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let leader_spec = ActorSpec::new("leader", {
@@ -771,19 +796,18 @@ async fn actor_with_scope_uses_explicit_rest_for_one() {
         }
     });
     let worker = worker_spec.actor_ref();
-    let tree = OrderedTree::new().actor_with_scope(
+    let tree = OrderedTree::new().subtree(
         "owned",
-        leader_spec,
-        OrderedTree::new().actor(worker_spec),
-        Strategy::RestForOne,
+        OrderedTree::new()
+            .strategy(Strategy::RestForOne)
+            .actor(leader_spec)
+            .subtree("children", OrderedTree::new().actor(worker_spec)),
     );
     let outline = tree.outline();
     assert!(matches!(
         outline.child("owned"),
-        Some(kokage::observe::ChildOutline::ActorWithScope {
-            strategy: Strategy::RestForOne,
-            ..
-        })
+        Some(kokage::observe::ChildOutline::Scope { outline, .. })
+            if outline.strategy == Strategy::RestForOne
     ));
     let handle = tree.spawn().expect("tree builds");
     handle.handle().wait_started().await.expect("tree starts");
@@ -819,7 +843,13 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
         .actor(worker_spec)
         .restart_config(RestartConfig::new(1, Duration::from_secs(30)));
     let handle = OrderedTree::new()
-        .actor_with_scope("owned", leader, inner, Strategy::OneForAll)
+        .subtree(
+            "owned",
+            OrderedTree::new()
+                .strategy(Strategy::OneForAll)
+                .actor(leader)
+                .subtree("children", inner),
+        )
         .spawn()
         .expect("tree builds");
     handle.handle().wait_started().await.expect("tree starts");
@@ -833,12 +863,11 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 }
 
 #[tokio::test]
-async fn consuming_a_graph_into_a_tree_preserves_issued_actor_refs() {
-    let mut graph = GraphBuilder::new();
-    let actor_ref = graph.actor(ActorSpec::new("actor", || Idle));
-    let graph = graph.build().expect("graph builds");
+async fn consuming_a_tree_builder_preserves_issued_actor_refs() {
+    let mut builder = TreeBuilder::new();
+    let actor_ref = builder.actor(ActorSpec::new("actor", || Idle));
+    let tree = builder.build();
 
-    let tree = OrderedTree::graph(graph);
     let spawned = tree.spawn().expect("tree builds and spawns");
     spawned.handle().wait_started().await.expect("tree starts");
     actor_ref.send(()).await.expect("issued ref remains bound");
@@ -861,4 +890,32 @@ async fn duplicate_actor_bindings_are_rejected_during_tree_lowering() {
         Err(SupervisorBuildError::DuplicateChildId(label)) if label == "actor"
     ));
     assert_snapshot_stream_closes(&handle).await;
+}
+
+#[tokio::test]
+async fn sibling_scopes_may_reuse_the_same_local_actor_id() {
+    let tree = OrderedTree::new()
+        .subtree(
+            "left",
+            OrderedTree::new().actor(ActorSpec::new("worker", || Idle)),
+        )
+        .subtree(
+            "right",
+            OrderedTree::new().actor(ActorSpec::new("worker", || Idle)),
+        );
+
+    let runtime = tree.spawn().expect("sibling-local ids are independent");
+    runtime.handle().wait_started().await.expect("tree starts");
+    let snapshot = runtime.handle().snapshot();
+    for scope in ["left", "right"] {
+        assert!(
+            snapshot
+                .child(scope)
+                .and_then(|child| child.supervisor.as_deref())
+                .and_then(|subtree| subtree.child("worker"))
+                .is_some(),
+            "{scope}.worker exists"
+        );
+    }
+    runtime.shutdown_and_wait().await.expect("tree stops");
 }

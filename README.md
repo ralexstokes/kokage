@@ -58,15 +58,19 @@ impl Actor for FrontDesk {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Wire a static graph with typed, restart-stable actor refs.
-    let mut builder = GraphBuilder::new();
-    let press = builder.actor(ActorSpec::new("press", Press::default));
-    let orders = builder.actor(ActorSpec::new("front-desk", move || FrontDesk {
+    // Mint the typed ref before moving the declarations into the tree.
+    let press_actor = ActorSpec::new("press", Press::default);
+    let press = press_actor.actor_ref();
+    let orders_actor = ActorSpec::new("front-desk", move || FrontDesk {
         press: press.clone(),
-    }));
+    });
+    let orders = orders_actor.actor_ref();
 
     // Compose the supervision tree, then run it.
-    let runtime = OrderedTree::graph(builder.build()?).spawn()?;
+    let runtime = OrderedTree::new()
+        .actor(press_actor)
+        .actor(orders_actor)
+        .spawn()?;
 
     orders.send("business cards x100".to_owned()).await?;
 
@@ -86,16 +90,16 @@ The full runnable version is
 
 ## The crates
 
-`kokage` is the product: typed actor graphs plus the runtime that
+`kokage` is the product: typed actors plus the runtime that
 supervises them, in one crate. `kokage-supervisor` underneath is deliberately
 independent — it knows nothing about actors and is useful on its own for
 supervising plain async tasks.
 
 | Crate | Role |
 |-------|------|
-| [`kokage`](crates/kokage) | The front door: static graphs of communicating actors — typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, cooperative blocking work — with each actor running as its own supervised child under single-use ordered or dynamic trees with an owning runtime and non-owning control handles. |
+| [`kokage`](crates/kokage) | The front door: communicating actors with typed mailboxes, restart-stable `ActorRef<M>` handles, request/reply, and cooperative blocking work, with each actor running as its own supervised child under single-use ordered or dynamic trees. |
 | [`kokage-supervisor`](crates/kokage-supervisor) | Structured supervision of async tasks: restart policies (`permanent`/`transient`/`temporary`), restart intensity limits, `one_for_one`/`one_for_all` strategies, graceful shutdown, and nested supervision trees. |
-| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories and `#[derive(Supervision)]` for cyclic graph wiring with typed refs; re-exported by `kokage` under the default `derive` feature. |
+| [`kokage-derive`](crates/kokage-derive) | `#[derive(ActorFactory)]` for reusable incarnation factories; re-exported by `kokage` under the default `derive` feature. |
 | [`kokage-console`](crates/kokage-console) | *(experimental, git-only)* A live web dashboard for watching a running supervision tree. It is kept outside the published `kokage` feature and dependency surface. |
 
 ## Getting started
