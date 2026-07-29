@@ -7,7 +7,8 @@
 shape and attribute contract. The `single-use-tree/` fixtures pin linear
 placement, single-definition actor slots, and owner/handle boundaries;
 `declaration-sealing/` proves mailbox
-configuration is unavailable after `actor_ref()`; `public-api/` pins the
+configuration is unavailable after `actor_ref()` and prevents alternate
+ref-minting methods from bypassing that transition; `public-api/` pins the
 documented export tiers. Each
 `.rs` case has a checked-in `.stderr` snapshot of the exact compiler output,
 spans included. The corresponding `*-pass/` directories cover supported
