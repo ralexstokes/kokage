@@ -698,11 +698,29 @@ struct DroppedCrossInterval {
     target: ActorRef<&'static str>,
 }
 
+struct DetachedCrossInterval {
+    target: ActorRef<&'static str>,
+}
+
 impl Actor for DroppedCrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
         drop(ctx.interval(&self.target, "dropped-tick", Duration::from_millis(10)));
+        Ok(())
+    }
+
+    async fn handle(&mut self, (): Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+        Ok(())
+    }
+}
+
+impl Actor for DetachedCrossInterval {
+    type Msg = ();
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+        ctx.interval(&self.target, "detached-tick", Duration::from_millis(10))
+            .detach();
         Ok(())
     }
 
@@ -745,6 +763,22 @@ async fn cross_actor_interval_repeats_until_cancelled() {
             .is_err(),
         "cross-actor interval continued after cancellation"
     );
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+#[tokio::test(start_paused = true)]
+async fn detached_interval_keeps_delivering() {
+    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+        move || DetachedCrossInterval {
+            target: target.clone(),
+        }
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    for _ in 1..=3 {
+        assert_eq!(observed_rx.recv().await, Some("detached-tick"));
+    }
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

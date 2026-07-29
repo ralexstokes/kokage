@@ -59,6 +59,7 @@ enum WatchMode {
     Cancel,
     Drop,
     Detach,
+    Retain,
 }
 
 impl RawActor for Observer {
@@ -72,11 +73,21 @@ impl RawActor for Observer {
             }
             ObserverMessage::Event(event)
         });
-        match self.watch_mode {
-            WatchMode::Cancel => watch.cancel(),
-            WatchMode::Drop => drop(watch),
-            WatchMode::Detach => watch.detach(),
-        }
+        let _retained_watch = match self.watch_mode {
+            WatchMode::Cancel => {
+                watch.cancel();
+                None
+            }
+            WatchMode::Drop => {
+                drop(watch);
+                None
+            }
+            WatchMode::Detach => {
+                watch.detach();
+                None
+            }
+            WatchMode::Retain => Some(watch),
+        };
         self.started.send(()).expect("start receiver alive");
 
         while let Some(message) = ctx.recv().await {
@@ -511,6 +522,65 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
     second_task.abort();
 }
 
+#[tokio::test]
+async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() {
+    let mut fixture = fixture(WatchMode::Retain);
+    let peer = fixture.peer.clone();
+    let peer_task = tokio::spawn(async move {
+        peer.run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .await
+    });
+    started(&mut fixture.peer_started).await;
+
+    let first_observer = fixture.observer.clone();
+    let first_task = tokio::spawn(async move {
+        first_observer
+            .run_until(
+                pending::<()>(),
+                Restart::on_failure(),
+                DEFAULT_SHUTDOWN_BOUND,
+            )
+            .await
+    });
+    started(&mut fixture.observer_started).await;
+    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    fixture
+        .observer_ref
+        .send(ObserverMessage::Crash)
+        .await
+        .expect("crash command sent");
+    assert!(
+        first_task
+            .await
+            .expect_err("observer task panicked")
+            .is_panic()
+    );
+
+    let second_observer = fixture.observer.clone();
+    let second_task = tokio::spawn(async move {
+        second_observer
+            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .await
+    });
+    started(&mut fixture.observer_started).await;
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        up("peer", 0),
+        "dropping incarnation-owned guard installs a fresh snapshot watch"
+    );
+
+    fixture
+        .peer_ref
+        .send(PeerMessage::Stop)
+        .await
+        .expect("stop command sent");
+    peer_task
+        .await
+        .expect("peer task joined")
+        .expect("peer stopped cleanly");
+    second_task.abort();
+}
+
 enum TaggedObserverMessage {
     Event {
         registration: usize,
@@ -759,9 +829,26 @@ async fn repeated_watch_calls_alias_until_cancelled() {
     assert_eq!(registration, 0, "the first mapper owns the watch");
     assert_eq!(event, up("peer", 0));
 
-    second.cancel();
+    second.detach();
+    assert!(
+        !first.is_cancelled(),
+        "detaching an alias leaves the primary watch alive"
+    );
+
+    observer_ref
+        .send(AliasedObserverMessage::Rewatch)
+        .await
+        .expect("alias request sent");
+    let alias = recv_test_event(&mut watch_rx, "detached watch alias").await;
+    assert!(
+        timeout(Duration::from_millis(50), observed.recv())
+            .await
+            .is_err(),
+        "an aliased registration emitted another immediate snapshot"
+    );
+    alias.cancel();
     watch_cancelled(&first).await;
-    assert!(second.is_cancelled(), "both handles alias one watch");
+    assert!(alias.is_cancelled(), "both handles alias one watch");
 
     observer_ref
         .send(AliasedObserverMessage::Rewatch)

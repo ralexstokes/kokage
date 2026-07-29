@@ -22,6 +22,28 @@ const WATCH_BUFFER_CAP: usize = 128;
 // Overflow needs room for both a `Lagged` marker and a retained real event.
 const _: () = assert!(WATCH_BUFFER_CAP >= 2);
 
+/// Shared completion signal for one actor watch.
+#[derive(Clone)]
+pub(crate) struct Finished(CancellationToken);
+
+impl Finished {
+    fn new() -> Self {
+        Self(CancellationToken::new())
+    }
+
+    pub(crate) fn signal(&self) {
+        self.0.cancel();
+    }
+
+    fn is_signalled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+
+    pub(crate) fn token(&self) -> CancellationToken {
+        self.0.clone()
+    }
+}
+
 /// The reason carried by a [`MonitorEvent::Down`] notification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -177,7 +199,7 @@ impl WatchQueue {
 /// unwinds through a panicking `map` closure.
 pub(crate) struct WatchQueueGuard {
     queue: Arc<WatchQueue>,
-    finished: CancellationToken,
+    finished: Finished,
 }
 
 impl WatchQueueGuard {
@@ -189,7 +211,7 @@ impl WatchQueueGuard {
 impl Drop for WatchQueueGuard {
     fn drop(&mut self) {
         self.queue.close();
-        self.finished.cancel();
+        self.finished.signal();
     }
 }
 
@@ -258,7 +280,7 @@ impl MonitorHub {
     pub(crate) fn register_watch(
         &self,
         cancellation: CancellationToken,
-        finished: CancellationToken,
+        finished: Finished,
     ) -> WatchQueueGuard {
         let queue = WatchQueue::new(&self.actor_id);
         let mut state = self.state();
@@ -380,7 +402,7 @@ impl Drop for MonitorExitGuard {
 struct MembershipWatch {
     subject: Weak<MonitorHub>,
     cancellation: CancellationToken,
-    finished: CancellationToken,
+    finished: Finished,
 }
 
 /// Owns the watches created by one actor membership.
@@ -407,11 +429,11 @@ impl ActorMonitors {
     pub(crate) fn register(
         &self,
         subject: &Arc<MonitorHub>,
-    ) -> (CancellationToken, CancellationToken, bool) {
+    ) -> (CancellationToken, Finished, bool) {
         let mut watches = self.watches.lock().unwrap_or_else(PoisonError::into_inner);
         watches.retain(|watch| {
             !watch.cancellation.is_cancelled()
-                && !watch.finished.is_cancelled()
+                && !watch.finished.is_signalled()
                 && watch.subject.strong_count() > 0
         });
         if let Some(watch) = watches.iter().find(|watch| {
@@ -424,7 +446,7 @@ impl ActorMonitors {
         }
 
         let cancellation = self.lifetime.child_token();
-        let finished = CancellationToken::new();
+        let finished = Finished::new();
         watches.push(MembershipWatch {
             subject: Arc::downgrade(subject),
             cancellation: cancellation.clone(),
@@ -516,7 +538,7 @@ mod tests {
     #[test]
     fn dropping_guard_closes_queue_and_prunes_watcher() {
         let hub = MonitorHub::new("peer");
-        let guard = hub.register_watch(CancellationToken::new(), CancellationToken::new());
+        let guard = hub.register_watch(CancellationToken::new(), Finished::new());
         assert_eq!(hub.state().watchers.len(), 1);
 
         // A panicking `map` closure unwinds the forwarder, which drops the

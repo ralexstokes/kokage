@@ -256,7 +256,10 @@ pub mod __private {
     use std::any::Any;
 
     pub use crate::attachment::{AttachedChild, AttachedChildIdentity};
-    use crate::{ChildSpec, DynamicSupervisorHandle, Restart, Shutdown, SupervisorHandle};
+    use crate::{
+        CancellationToken, ChildSpec, DynamicSupervisorHandle, Guard, Restart, Shutdown,
+        SupervisorHandle,
+    };
 
     /// Adds process-local metadata to a child specification.
     pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
@@ -289,6 +292,33 @@ pub mod __private {
         default_shutdown: Shutdown,
     ) -> (Restart, Shutdown) {
         child.resolved_policies(default_restart, default_shutdown)
+    }
+
+    /// Builds a guard around cancellation and completion tokens for the
+    /// higher-level `kokage` crate.
+    pub fn guard_from_tokens(
+        cancellation: CancellationToken,
+        finished: CancellationToken,
+    ) -> Guard {
+        Guard::from_tokens(cancellation, finished)
+    }
+
+    /// Builds a probe-backed guard for the higher-level `kokage` crate.
+    pub fn guard_from_probe(
+        cancellation: CancellationToken,
+        is_finished: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Guard {
+        Guard::from_probe(cancellation, is_finished)
+    }
+
+    /// Builds a probe-backed guard with a custom cancellation hook for the
+    /// higher-level `kokage` crate.
+    pub fn guard_from_probe_with_cancel(
+        cancellation: CancellationToken,
+        is_finished: impl Fn() -> bool + Send + Sync + 'static,
+        cancel_action: impl Fn() + Send + Sync + 'static,
+    ) -> Guard {
+        Guard::from_probe_with_cancel(cancellation, is_finished, cancel_action)
     }
 }
 

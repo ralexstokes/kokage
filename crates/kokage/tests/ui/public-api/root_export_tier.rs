@@ -33,7 +33,6 @@ use kokage::LifecycleEvent;
 use kokage::LifecycleEventKind;
 use kokage::LifecyclePathSegment;
 use kokage::LifecycleWatch;
-use kokage::Guard as _;
 use kokage::RawActor;
 use kokage::RunnableActor;
 use kokage::ScopeKind;

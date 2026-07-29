@@ -9,7 +9,10 @@ use std::{
     time::Duration,
 };
 
-use kokage_supervisor::{CancellationToken, Guard};
+use kokage_supervisor::{
+    __private::{guard_from_probe, guard_from_probe_with_cancel, guard_from_tokens},
+    CancellationToken, Guard,
+};
 use tokio::{
     sync::{oneshot, watch},
     task::{AbortHandle, Id as TaskId, JoinError, JoinSet},
@@ -847,7 +850,7 @@ impl<M: Send + 'static> RawContext<M> {
         let cancellation = CancellationToken::new();
         let cancel = TaskCancellation::ScopeWait(gate);
         let guard_abort = abort.clone();
-        Guard::from_probe_with_cancel(
+        guard_from_probe_with_cancel(
             cancellation,
             move || abort.is_finished(),
             move || cancel.cancel(&guard_abort),
@@ -901,7 +904,7 @@ impl<M: Send + 'static> RawContext<M> {
         let cancellation = CancellationToken::new();
         let cancel = TaskCancellation::Offload(cancelled);
         let guard_abort = abort.clone();
-        Guard::from_probe_with_cancel(
+        guard_from_probe_with_cancel(
             cancellation,
             move || abort.is_finished(),
             move || cancel.cancel(&guard_abort),
@@ -969,6 +972,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// It is cancelled if this incarnation stops or restarts. Delivery uses an
     /// ordinary awaited [`ActorRef::send`], including the target mailbox's
     /// capacity and conflation behavior.
+    ///
     /// Dropping the returned [`Guard`] cancels delivery; call
     /// [`Guard::detach`] to leave it running.
     pub fn send_after<T: Send + 'static>(
@@ -999,7 +1003,7 @@ impl<M: Send + 'static> RawContext<M> {
         });
 
         let task = task.abort_handle();
-        Guard::from_probe(cancellation, move || task.is_finished())
+        guard_from_probe(cancellation, move || task.is_finished())
     }
 
     /// Sends a clone of `message` to `target` after every `period`.
@@ -1020,7 +1024,7 @@ impl<M: Send + 'static> RawContext<M> {
             let finished = CancellationToken::new();
             cancellation.cancel();
             finished.cancel();
-            return Guard::from_tokens(cancellation, finished);
+            return guard_from_tokens(cancellation, finished);
         }
 
         let task_cancellation = cancellation.clone();
@@ -1059,7 +1063,7 @@ impl<M: Send + 'static> RawContext<M> {
         });
 
         let task = task.abort_handle();
-        Guard::from_probe(cancellation, move || task.is_finished())
+        guard_from_probe(cancellation, move || task.is_finished())
     }
 
     /// Watches the target logical actor across restarts.
@@ -1097,6 +1101,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// without bound. On overflow the oldest transitions are dropped and the
     /// loss surfaces as a [`MonitorEvent::Lagged`] resync marker rather than
     /// silently; the terminal `Terminated` is never dropped.
+    ///
     /// Dropping the returned [`Guard`] cancels the watch; call
     /// [`Guard::detach`] when membership ownership should keep it alive.
     /// Delivery of the terminal event finishes the guard without marking it
@@ -1108,12 +1113,12 @@ impl<M: Send + 'static> RawContext<M> {
     {
         let (cancellation, finished, install) = self.monitors.register(&target.monitors);
         if !install {
-            return Guard::from_tokens(cancellation, finished);
+            return guard_from_tokens(cancellation, finished.token());
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             cancellation.cancel();
-            finished.cancel();
-            return Guard::from_tokens(cancellation, finished);
+            finished.signal();
+            return guard_from_tokens(cancellation, finished.token());
         };
         // The guard closes the queue on drop, so the hub stops staging events
         // whether this task exits normally or unwinds through a panicking
@@ -1155,7 +1160,7 @@ impl<M: Send + 'static> RawContext<M> {
             }
         });
 
-        Guard::from_tokens(cancellation, finished)
+        guard_from_tokens(cancellation, finished.token())
     }
 
     /// Waits for the next mailbox message or offload completion, or `None`

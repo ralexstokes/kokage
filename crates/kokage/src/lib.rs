@@ -61,7 +61,7 @@
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
-//! | [`Guard`] | Cancel-on-drop ownership for watches, timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
+//! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, scope waits, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
 //! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
 //!
 //! # Composition modes

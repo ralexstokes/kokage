@@ -185,9 +185,7 @@ impl Session {
                 text,
             })
             .await?;
-        if let Some(timer) = self.heartbeat.take() {
-            timer.cancel();
-        }
+        self.heartbeat = None;
         self.proof
             .lock()
             .expect("proof lock poisoned")
@@ -308,9 +306,7 @@ impl Actor for Session {
                     }
                     RunOutput::Cancelled => {
                         self.active = None;
-                        if let Some(timer) = self.heartbeat.take() {
-                            timer.cancel();
-                        }
+                        self.heartbeat = None;
                         self.proof
                             .lock()
                             .expect("proof lock poisoned")
@@ -362,9 +358,7 @@ impl Actor for Session {
                         .await?;
                     } else if active.retry_after_termination {
                         self.pending.push_front(active.input);
-                        if let Some(timer) = self.heartbeat.take() {
-                            timer.cancel();
-                        }
+                        self.heartbeat = None;
                     }
                 }
             }
