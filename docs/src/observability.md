@@ -309,6 +309,12 @@ let console = kokage_console::Console::for_runtime(&runtime)
 println!("console at http://{}", console.local_addr());
 ```
 
+The console's `actor_stats` WebSocket frames serialize
+`observe::ActorStats` directly. Enabling Kokage's `serde` feature gives
+`ActorStats` and `SupervisorPathSegment` `Serialize` and `Deserialize`
+implementations, so other observers can use the same protocol types without a
+console-specific mirror.
+
 Run `cargo run -p kokage-console --example console` to try it from the
 workspace checkout. The console is experimental, git-only tooling and is not
 a `kokage` feature or dependency.
