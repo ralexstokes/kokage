@@ -551,17 +551,14 @@ async fn nested_handle_subscription_survives_parent_restart() {
     assert_eq!(common::recv_event(&mut starts_rx).await, 0);
     let mut nested_events = common::event_watch(&nested_handle);
 
-    let mut lifecycle = handle.watch_lifecycle();
     let baseline = handle
         .snapshot()
         .child("nested")
         .expect("nested child exists")
         .generation;
+    let restarted = handle.restart_of("nested");
     fail_first.notify_one();
-    let restarted_generation = lifecycle
-        .started_after("nested", baseline)
-        .await
-        .expect("outer supervisor remains live");
+    let restarted_generation = restarted.await.expect("outer supervisor remains live");
     assert_eq!(restarted_generation, baseline + 1);
     assert_eq!(common::recv_event(&mut starts_rx).await, 1);
 

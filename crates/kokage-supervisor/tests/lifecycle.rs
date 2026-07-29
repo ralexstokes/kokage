@@ -512,6 +512,51 @@ async fn restart_is_an_ordered_exit_schedule_started_sequence() {
 }
 
 #[tokio::test]
+async fn restart_of_arms_before_the_returned_future_is_polled() {
+    let crash = Arc::new(Notify::new());
+    let child_crash = Arc::clone(&crash);
+    let handle = Supervisor::ordered()
+        .child(
+            ChildSpec::task("worker", move |ctx| {
+                let crash = Arc::clone(&child_crash);
+                async move {
+                    if ctx.generation() == 0 {
+                        crash.notified().await;
+                        return Err(common::test_error("boom"));
+                    }
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            })
+            .restart(RestartPolicy::OnFailure),
+        )
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle.wait_started().await.expect("startup succeeds");
+
+    let restarted = handle.restart_of("worker");
+    let mut snapshots = handle.subscribe_snapshots();
+    crash.notify_one();
+
+    wait_for_snapshot(&mut snapshots, |snapshot| {
+        snapshot
+            .child("worker")
+            .is_some_and(|child| child.generation == 1 && child.started())
+    })
+    .await;
+
+    assert_eq!(
+        timeout(common::EVENT_TIMEOUT, restarted)
+            .await
+            .expect("restart is observed"),
+        Some(1)
+    );
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
 async fn started_after_reports_membership_removal() {
     let handle = Supervisor::dynamic()
         .build()
@@ -537,6 +582,44 @@ async fn started_after_reports_membership_removal() {
         .await
         .expect("worker removal succeeds");
     assert_eq!(lifecycle.started_after("worker", baseline).await, None);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn restart_of_reports_membership_removal_when_awaited_after_removal() {
+    let handle = Supervisor::dynamic()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+    handle
+        .add_child(ChildSpec::task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }))
+        .await
+        .expect("worker is added");
+    handle.wait_started().await.expect("startup succeeds");
+
+    let restarted = handle.restart_of("worker");
+    handle
+        .remove_child("worker")
+        .await
+        .expect("worker removal succeeds");
+
+    assert_eq!(restarted.await, None);
+
+    shutdown(handle).await;
+}
+
+#[tokio::test]
+async fn restart_of_returns_none_for_an_unknown_child() {
+    let handle = Supervisor::dynamic()
+        .build()
+        .expect("valid supervisor")
+        .spawn();
+
+    assert_eq!(handle.restart_of("missing").await, None);
 
     shutdown(handle).await;
 }
@@ -1344,19 +1427,17 @@ fn completing_supervisor(
     )
 }
 
-/// `wait_started` must give up at a `Lagged` marker even when the marker's
+/// `restart_of` must give up at a `Lagged` marker even when the marker's
 /// envelope names a different child. The marker stands for a discarded prefix
 /// that may have carried the awaited `Started`, so scanning past it on an id
 /// mismatch would wait for a transition this watch can no longer deliver.
 #[tokio::test]
-async fn started_after_reports_a_start_lost_to_overflow() {
+async fn restart_of_reports_a_start_lost_to_overflow() {
     const RESTARTS: usize = 80;
     let handle = Supervisor::dynamic()
         .build()
         .expect("valid supervisor")
         .spawn();
-    let mut lifecycle = handle.watch_lifecycle();
-
     handle
         .add_child(ChildSpec::task("quiet", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -1364,6 +1445,7 @@ async fn started_after_reports_a_start_lost_to_overflow() {
         }))
         .await
         .expect("dynamic add succeeds");
+    let restarted = handle.restart_of("quiet");
 
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
@@ -1395,9 +1477,9 @@ async fn started_after_reports_a_start_lost_to_overflow() {
 
     // The storm has evicted every "quiet" transition, so the marker that now
     // fronts the buffer is stamped with a "storm" envelope.
-    let waited = timeout(common::EVENT_TIMEOUT, lifecycle.started_after("quiet", 0))
+    let waited = timeout(common::EVENT_TIMEOUT, restarted)
         .await
-        .expect("started_after must not outlive the transitions it awaits");
+        .expect("restart_of must not outlive the transitions it awaits");
     assert_eq!(waited, None);
 
     shutdown(handle).await;

@@ -1785,6 +1785,32 @@ impl SupervisorHandle {
         self.lifecycle_hub().watch()
     }
 
+    /// Arms a watch for the next restart of `child_id`.
+    ///
+    /// The lifecycle subscription and current generation are captured before
+    /// this method returns. The restart may therefore be triggered before the
+    /// returned future is first polled without losing its `Started` event.
+    ///
+    /// Returns `None` if the child is not currently supervised, is removed
+    /// before restarting, the watch lags, or this supervisor identity becomes
+    /// terminal before the restart is observed.
+    pub fn restart_of(
+        &self,
+        child_id: &str,
+    ) -> impl std::future::Future<Output = Option<u64>> + Send + 'static {
+        // Subscribe before sampling the baseline so every transition after the
+        // snapshot is staged, including transitions that happen before the
+        // returned future is first polled.
+        let mut lifecycle = self.watch_lifecycle();
+        let baseline = self
+            .snapshot()
+            .child(child_id)
+            .map(|child| child.generation);
+        let child_id = child_id.to_owned();
+
+        async move { lifecycle.started_after(&child_id, baseline?).await }
+    }
+
     /// Returns an ordered lifecycle stream for this entire supervisor tree.
     ///
     /// Each event carries a path relative to this handle. Direct-child

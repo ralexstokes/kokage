@@ -1073,7 +1073,7 @@ impl RawActor for FailOnMessage {
 }
 
 #[tokio::test]
-async fn runtime_handle_exposes_lifecycle_watch() {
+async fn runtime_handle_restart_of_arms_before_the_future_is_polled() {
     let mut builder = GraphBuilder::new();
     let (worker_ref_slot, worker_ref) = builder.slot("worker");
     builder.define(worker_ref_slot, || FailOnMessage);
@@ -1085,15 +1085,26 @@ async fn runtime_handle_exposes_lifecycle_watch() {
         .spawn()
         .expect("runtime builds");
 
-    let (lifecycle, baseline) = restart_observer(&handle, "worker");
+    let restarted = handle.restart_of("worker");
+    let mut snapshots = handle.subscribe_snapshots();
     worker_ref.send(()).await.expect("message sent");
 
-    let generation = timeout(
+    timeout(
         Duration::from_secs(1),
-        await_restart(lifecycle, "worker", baseline),
+        snapshots.wait_for(|snapshot| {
+            snapshot
+                .child("worker")
+                .is_some_and(|child| child.generation == 1 && child.started())
+        }),
     )
     .await
-    .expect("lifecycle watch should observe restart");
+    .expect("replacement starts before the helper future is polled")
+    .expect("snapshot stream stays open");
+
+    let generation = timeout(Duration::from_secs(1), restarted)
+        .await
+        .expect("restart helper should observe restart")
+        .expect("runtime remains live");
     assert_eq!(generation, 1);
 
     handle
