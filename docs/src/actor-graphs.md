@@ -130,8 +130,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-For lower-level hosting, construct a `GraphBuilder` manually, iterate
-`graph.actors()`, and drive each `host::RunnableActor::run_until` independently.
+For lower-level hosting, construct a `GraphBuilder` manually, consume
+`graph.into_nodes()`, convert each node with `into_runnable()`, and drive each
+`host::RunnableActor::run_until` independently.
 `kokage` performs that adaptation for the common supervised runtime.
 
 ## Incarnation-local state
@@ -147,7 +148,7 @@ as a startup or run panic.
 Constructor functions are the common case:
 
 ```rust,ignore
-let worker = builder.actor("worker", Worker::new);
+let worker = builder.actor(ActorSpec::new("worker", Worker::new));
 ```
 
 Closures automatically implement `ActorFactory`. For a small wired actor,
@@ -156,7 +157,10 @@ constructing each incarnation:
 
 ```rust,ignore
 let ledger = ledger_ref.clone();
-let gateway = builder.actor("gateway", move || Gateway::new(ledger.clone()));
+let gateway = builder.actor(ActorSpec::new(
+    "gateway",
+    move || Gateway::new(ledger.clone()),
+));
 ```
 
 Larger wiring can derive a named factory directly from the actor. Unmarked
@@ -173,7 +177,10 @@ struct Gateway {
     pending: Vec<Order>,
 }
 
-let gateway = builder.actor("gateway", GatewayFactory { ledger, exchange });
+let gateway = builder.actor(ActorSpec::new(
+    "gateway",
+    GatewayFactory { ledger, exchange },
+));
 ```
 
 Fallible or asynchronous acquisition belongs in `Actor::on_start` or at the
@@ -206,20 +213,19 @@ The derive keeps that shape in the type system:
   compile error
 
 The derive intentionally has no mailbox, restart, shutdown, nested-scope, or
-dynamic-scope attributes. Apply those concerns through the explicit graph and
-tree APIs.
+dynamic-scope attributes. Derived fields use the graph-wide builder defaults.
+Wire an individually configured actor through an explicit `ActorSlot` alongside
+the derived declaration, and apply topology through the explicit tree APIs.
 
 ## Dynamic and Advanced Builder Wiring
 
 Use `GraphBuilder` directly when actors are generated in a loop or require
 hand-written wiring. Register the ordinary acyclic case in dependency order
-with `builder.actor(id, factory)`; use `builder.actor_with(id, options,
-factory)` when an actor needs a different mailbox or message-size observation.
+with `builder.actor(ActorSpec::new(id, factory))`.
 
-Slots are the cyclic-wiring escape hatch. `builder.slot::<M>(id)` or
-`slot_with::<M>(id, options)` creates a typed ref before its factory exists;
-reserve every ref in the cycle, then fill each token with
-`builder.define(slot, factory)`.
+`ActorSlot::new(id)` is the cyclic-wiring escape hatch. Configure it with the
+same fluent methods as `ActorSpec`, call `actor_ref()` before its factory
+exists, then fill the linear token with `builder.define(slot, factory)`.
 
 The direct builder still validates runtime configuration facts:
 
@@ -240,20 +246,16 @@ opposite policy—a slow consumer should skip stale updates instead of making
 the producer fall behind. Configure those actors explicitly:
 
 ```rust,ignore
-use kokage::{ActorOptions, MailboxMode};
+use kokage::{ActorSpec, MailboxMode};
 
-let latest = builder.actor_with(
-    "latest-market",
-    ActorOptions::new().mailbox(MailboxMode::conflate()),
-    MarketActor::new,
+let latest = builder.actor(
+    ActorSpec::new("latest-market", MarketActor::new)
+        .mailbox(MailboxMode::conflate()),
 );
 
-let per_symbol = builder.actor_with(
-    "market-by-symbol",
-    ActorOptions::new().mailbox(MailboxMode::conflate_by_key(
-        |tick: &Tick| tick.symbol_id,
-    )),
-    KeyedMarketActor::new,
+let per_symbol = builder.actor(
+    ActorSpec::new("market-by-symbol", KeyedMarketActor::new)
+        .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol_id)),
 );
 ```
 

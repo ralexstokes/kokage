@@ -312,6 +312,15 @@ impl ActorNode {
         self.actor.label()
     }
 
+    /// Overrides the supervisor-local child id while retaining the graph-wide
+    /// actor label. This is useful when placing a qualified graph actor in a
+    /// nested supervision scope.
+    #[must_use]
+    pub fn child_id(mut self, id: impl Into<String>) -> Self {
+        self.child_id = Some(id.into());
+        self
+    }
+
     /// Converts this placement token into the advanced custom-host actor.
     pub fn into_runnable(self) -> RunnableActor {
         self.actor

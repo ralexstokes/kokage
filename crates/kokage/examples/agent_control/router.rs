@@ -9,10 +9,10 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ControlError, DynamicRuntimeHandle, DynamicTree, GraphBuilder,
-    LiveContext, MessageContext, OrderedTree, StartContext, Strategy, SupervisorError,
+    Actor, ActorRef, ActorResult, ActorSlot, ControlError, DynamicTree, GraphBuilder, LiveContext,
+    MessageContext, OrderedTree, RuntimeHandle, StartContext, Strategy, SupervisorError,
     observe::{
-        ChildMembershipView, LifecycleEvent, LifecycleEventKind, LifecycleWatchGuard,
+        ChildLifecycleEvent, ChildLifecycleEventKind, ChildMembershipView, LifecycleWatchGuard,
         SupervisorSnapshot,
     },
 };
@@ -86,11 +86,14 @@ enum MountEventDisposition {
     Ignore,
 }
 
-fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountEventDisposition {
+fn mount_event_disposition(
+    alignment_seq: u64,
+    event: &ChildLifecycleEvent,
+) -> MountEventDisposition {
     event_disposition(
         alignment_seq,
-        event.seq().unwrap_or(0),
-        matches!(&event.kind, LifecycleEventKind::Lagged { .. }),
+        event.seq,
+        matches!(&event.kind, ChildLifecycleEventKind::Lagged { .. }),
     )
 }
 
@@ -108,7 +111,7 @@ fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountE
 pub struct Router {
     /// Reserved before the root is built and retained by `RouterFactory`, so
     /// it survives router restarts without late binding.
-    mount: DynamicRuntimeHandle,
+    mount: RuntimeHandle,
     #[factory(default)]
     sessions: HashMap<ChatId, SessionSlot>,
     journal: ActorRef<JournalMsg>,
@@ -133,7 +136,7 @@ pub struct Router {
 }
 
 impl Router {
-    fn mount(&self) -> DynamicRuntimeHandle {
+    fn mount(&self) -> RuntimeHandle {
         self.mount.clone()
     }
 
@@ -153,7 +156,8 @@ impl Router {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
         let mut graph = GraphBuilder::new();
-        let (actor_slot, actor) = graph.slot("session");
+        let actor_slot = ActorSlot::new("session");
+        let actor = actor_slot.actor_ref();
         graph.define(
             actor_slot,
             SessionFactory {
@@ -174,7 +178,10 @@ impl Router {
             },
         );
         let graph = graph.build().expect("session graph builds");
-        let session_actor = graph.actors()[0].clone();
+        let session_actor = graph
+            .into_nodes()
+            .pop()
+            .expect("session graph contains its actor");
         let mount = self.mount();
         let offload_id = subtree_id.clone();
         ctx.offload(
@@ -186,6 +193,8 @@ impl Router {
                 // skipped by the group respawn and cannot themselves recycle
                 // the session.
                 let subtree = mount
+                    .dynamic()
+                    .expect("dynamic scope")
                     .add_subtree(
                         offload_id,
                         OrderedTree::new().actor_with_scope(
@@ -226,7 +235,11 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child(remove_id).await,
+                    mount
+                        .dynamic()
+                        .expect("dynamic scope")
+                        .remove_child(remove_id)
+                        .await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -249,7 +262,11 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount.remove_child(remove_id).await,
+                    mount
+                        .dynamic()
+                        .expect("dynamic scope")
+                        .remove_child(remove_id)
+                        .await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -333,11 +350,11 @@ impl Actor for Router {
                         self.reconcile_mount_snapshot(ctx);
                     }
                     MountEventDisposition::Apply => {
-                        self.alignment_seq = event.seq().expect("child event has a sequence");
-                        if let LifecycleEventKind::ChildAdded { child_id, .. } = event.kind
-                            && !self.routes_subtree(&child_id)
+                        self.alignment_seq = event.seq;
+                        if matches!(event.kind, ChildLifecycleEventKind::Added)
+                            && !self.routes_subtree(&event.child_id)
                         {
-                            self.pipeline_sweep(child_id, ctx);
+                            self.pipeline_sweep(event.child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}

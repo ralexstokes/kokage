@@ -25,7 +25,7 @@ use syn::{Data, DeriveInput, Field, Fields, parse_macro_input, spanned::Spanned}
 ///
 /// ```
 /// # use std::collections::VecDeque;
-/// # use kokage::{Actor, MessageContext, ActorResult, GraphBuilder};
+/// # use kokage::{Actor, ActorSlot, MessageContext, ActorResult, GraphBuilder};
 /// # struct Job;
 /// # struct Client;
 /// # impl Clone for Client { fn clone(&self) -> Self { Self } }
@@ -44,7 +44,8 @@ use syn::{Data, DeriveInput, Field, Fields, parse_macro_input, spanned::Spanned}
 /// # }
 ///
 /// let mut graph = GraphBuilder::new();
-/// let (worker_slot, _worker_ref) = graph.slot("worker");
+/// let worker_slot = ActorSlot::new("worker");
+/// let _worker_ref = worker_slot.actor_ref();
 /// graph.define(worker_slot, WorkerFactory { client: Client });
 /// ```
 ///
@@ -254,12 +255,14 @@ fn parse_factory_attributes(
 ///
 /// Field names become graph actor labels. A field may use
 /// `#[supervision(label = "...")]` to select another non-empty label. No other
-/// derive attributes are supported. Mailbox configuration belongs on the
-/// explicit actor declaration, while restart/shutdown policy, nested scopes,
-/// and dynamic scopes belong on the explicit supervision tree.
+/// derive attributes are supported. Derived fields use the builder's graph
+/// defaults. Leave an actor out of the declaration and wire an explicit
+/// `ActorSlot` alongside it when that actor needs individual mailbox
+/// configuration. Restart/shutdown policy, nested scopes, and dynamic scopes
+/// belong on the explicit supervision tree.
 ///
 /// The refs struct and `wire` inherit the derived struct's visibility; each
-/// refs field inherits the corresponding factory field's visibility. Generic,
+/// refs field inherits the corresponding declaration field's visibility. Generic,
 /// tuple, unit, empty, and non-struct declarations are rejected. Every field
 /// must implement `RawActor`, and every returned factory must build its
 /// declared field actor type.
@@ -395,14 +398,15 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             >
         }
     });
-    let factory_fields = fields
-        .iter()
-        .zip(&idents)
-        .zip(&factory_params)
-        .map(|((field, ident), factory)| {
-            let field_vis = &field.vis;
-            quote_spanned! {field.span()=> #field_vis #ident: #factory }
-        });
+    let factory_fields =
+        fields
+            .iter()
+            .zip(&idents)
+            .zip(&factory_params)
+            .map(|((field, ident), factory)| {
+                let field_vis = &field.vis;
+                quote_spanned! {field.span()=> #field_vis #ident: #factory }
+            });
     let factory_bounds = fields.iter().zip(&factory_params).map(|(field, factory)| {
         let actor = &field.ty;
         quote_spanned! {actor.span()=> #factory: ::kokage::ActorFactory<Actor = #actor> }
@@ -415,8 +419,9 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             let actor = &field.ty;
             let slot = format_ident!("__kokage_{ident}_slot");
             quote_spanned! {field.span()=>
-                let (#slot, #ident) = builder.slot::
-                    <<#actor as ::kokage::host::RawActor>::Msg>(#label);
+                let #slot = ::kokage::ActorSlot::
+                    <<#actor as ::kokage::host::RawActor>::Msg>::new(#label);
+                let #ident = #slot.actor_ref();
             }
         });
     let define_stmts = idents.iter().map(|ident| {

@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, CancellationHandle, CancellationToken, DrainPolicy,
-    DynamicActorOptions, LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
+    Actor, ActorRef, ActorResult, ActorSpec, CancellationHandle, CancellationToken, DrainPolicy,
+    LiveContext, MessageContext, RestartPolicy, StartContext, TimerKey,
 };
 use tokio::time::Instant;
 
@@ -109,23 +109,25 @@ impl Session {
         let run_ref = children
             .dynamic()
             .expect("dynamic scope")
-            .add_actor_with(
-                id.clone(),
-                AgentRunFactory {
-                    chat: self.chat,
-                    task,
-                    role,
-                    attempt,
-                    user_text: input.text.clone(),
-                    model: self.model.clone(),
-                    journal: self.journal.clone(),
-                    budget: self.budget.clone(),
-                    tool_host: self.tool_host.clone(),
-                    progress: self.progress.clone(),
-                    session: ctx.myself(),
-                    cancel: cancel.clone(),
-                },
-                DynamicActorOptions::default().restart(RestartPolicy::Never),
+            .add_actor(
+                ActorSpec::new(
+                    id.clone(),
+                    AgentRunFactory {
+                        chat: self.chat,
+                        task,
+                        role,
+                        attempt,
+                        user_text: input.text.clone(),
+                        model: self.model.clone(),
+                        journal: self.journal.clone(),
+                        budget: self.budget.clone(),
+                        tool_host: self.tool_host.clone(),
+                        progress: self.progress.clone(),
+                        session: ctx.myself(),
+                        cancel: cancel.clone(),
+                    },
+                )
+                .restart(RestartPolicy::Never),
             )
             .await?;
         ctx.watch(&run_ref, move |event| SessionMsg::RunEvent {
