@@ -826,13 +826,9 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
     let guard = guard_rx.recv().await.expect("scheduler reports guard");
 
     advance(Duration::from_millis(10)).await;
-    timeout(Duration::from_secs(1), async {
-        while !guard.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("target termination finishes interval");
+    timeout(Duration::from_secs(1), guard.finished())
+        .await
+        .expect("target termination finishes interval");
     assert!(
         !guard.is_cancelled(),
         "target termination is environmental, not explicit cancellation"

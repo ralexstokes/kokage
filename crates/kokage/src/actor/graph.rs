@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{CancellationToken, Restart, Shutdown, ShutdownMode};
+use crate::supervisor::{CancelOnDrop, CancellationToken, Restart, Shutdown, ShutdownMode};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
 use tokio_util::task::AbortOnDropHandle;
@@ -22,7 +22,6 @@ use crate::{
             ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
             mailbox,
         },
-        cancellation::CancelOnDrop,
         context::{ActorLifetime, ActorRef, RawContext},
         factory::ActorFactory,
         monitor::{DownReason, MonitorExitGuard},

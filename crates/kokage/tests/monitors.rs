@@ -219,13 +219,9 @@ async fn watch_cancelled(watch: &Guard) {
 }
 
 async fn watch_finished(watch: &Guard) {
-    timeout(Duration::from_secs(1), async {
-        while !watch.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("watch finished promptly");
+    timeout(Duration::from_secs(1), watch.finished())
+        .await
+        .expect("watch finished promptly");
 }
 
 async fn assert_mapper_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEvent>) {

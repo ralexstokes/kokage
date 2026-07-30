@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::supervisor::{
-    CancellationToken, ChildExitView, Guard, LifecycleEvent, LifecycleEventKind,
+    CancelOnDrop, CancellationToken, ChildExitView, Guard, LifecycleEvent, LifecycleEventKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
@@ -119,8 +119,11 @@ impl SupervisorHandle {
         let set = CompletionSet::new(ids);
         let handle = self.clone();
         let cancellation = CancellationToken::new();
+        let finished = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let task_finished = finished.clone();
         let task = tokio::spawn(async move {
+            let _finished_on_drop = CancelOnDrop::new(task_finished);
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
@@ -131,8 +134,8 @@ impl SupervisorHandle {
             }
         });
 
-        let task = task.abort_handle();
-        Guard::from_probe(cancellation, move || task.is_finished())
+        std::mem::drop(task);
+        Guard::from_tokens(cancellation, finished)
     }
 
     /// Shuts this supervisor down once children that may be added later have
@@ -153,8 +156,11 @@ impl SupervisorHandle {
         let set = CompletionSet::new(ids);
         let handle = self.clone();
         let cancellation = CancellationToken::new();
+        let finished = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let task_finished = finished.clone();
         let task = tokio::spawn(async move {
+            let _finished_on_drop = CancelOnDrop::new(task_finished);
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
@@ -165,8 +171,8 @@ impl SupervisorHandle {
             }
         });
 
-        let task = task.abort_handle();
-        Guard::from_probe(cancellation, move || task.is_finished())
+        std::mem::drop(task);
+        Guard::from_tokens(cancellation, finished)
     }
 }
 

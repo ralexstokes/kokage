@@ -1,0 +1,5 @@
+# `cargo package` rewrites versioned path dependencies to registry dependencies
+# before verification. Keep unpublished workspace peers available to that
+# verification step; this configuration is not included in either crate package.
+[patch.crates-io]
+kokage-derive = { path = "crates/kokage-derive" }
