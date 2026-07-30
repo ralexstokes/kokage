@@ -555,10 +555,14 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     );
     assert!(!removal.is_finished(), "removal waits for on_stop");
     assert!(snapshots.latest().child("removable").is_some());
+    let not_running = actor
+        .try_send(RemovalMsg::Work(8))
+        .expect_err("closed intake rejects try_send");
     assert!(matches!(
-        actor.try_send(RemovalMsg::Work(8)),
-        Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "removable"
+        &not_running,
+        TrySendError::NotRunning { actor_id , .. } if actor_id == "removable"
     ));
+    assert!(matches!(not_running.into_message(), RemovalMsg::Work(8)));
 
     // There is no public Draining state. An awaited send observes the closed
     // incarnation and waits for its terminal membership disposition.

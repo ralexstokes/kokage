@@ -256,7 +256,7 @@ impl Router {
     async fn forward(
         actor: &ActorRef<SessionMsg>,
         input: PendingInput,
-    ) -> Result<(), kokage::SendError> {
+    ) -> Result<(), kokage::SendError<SessionMsg>> {
         actor
             .send(SessionMsg::UserMessage {
                 envelope: input.envelope,

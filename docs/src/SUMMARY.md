@@ -6,7 +6,7 @@
 
 - [Getting started](getting-started.md)
 - [Actor wiring](actor-trees.md)
-- [Bounded request/reply](request-reply.md)
+- [Delivery bounds and request/reply](request-reply.md)
 - [Bounded actor offloads](actor-offloads.md)
 - [Supervised actors](supervised-actors.md)
 - [Task children and supervision](supervision.md)

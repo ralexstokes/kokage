@@ -1,7 +1,7 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ExitResult, Restart, Shutdown, TrySendError,
+    ActorSpec, ExitResult, Restart, SendTimeoutError, Shutdown, TrySendError,
     host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
@@ -64,12 +64,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         other => println!("unexpected try_send result: {other:?}"),
     }
 
+    let recovered = match sink_ref
+        .send_timeout("second run".to_owned(), Duration::from_millis(50))
+        .await
+    {
+        Err(SendTimeoutError::Timeout {
+            actor_id, message, ..
+        }) => {
+            println!("bounded send to `{actor_id}` timed out; retrying `{message}`");
+            message
+        }
+        other => panic!("unexpected bounded send result: {other:?}"),
+    };
+
     let send_result = Arc::new(Mutex::new(None));
     let send_task = tokio::spawn({
         let sink_ref = sink_ref.clone();
         let send_result = Arc::clone(&send_result);
         async move {
-            let result = sink_ref.send("second run".to_owned()).await;
+            let result = sink_ref.send(recovered).await;
             *send_result.lock().await = Some(result);
         }
     });

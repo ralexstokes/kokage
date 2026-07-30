@@ -1,4 +1,51 @@
-# Bounded Request/Reply
+# Delivery bounds and request/reply
+
+Actor refs expose four delivery choices:
+
+- `send(message)` waits for binding and FIFO capacity. A terminal rejection
+  returns `SendError<M>`, whose `into_message()` recovers the message.
+- `try_send(message)` fails immediately when the actor is between
+  incarnations or its FIFO mailbox is full. Every `TrySendError<M>` variant
+  returns the rejected message through `into_message()`.
+- `send_timeout(message, bound)` waits through the same binding and capacity
+  conditions as `send`, but returns `SendTimeoutError<M>` with the unaccepted
+  message if the bound expires.
+- `call(bound, constructor)` bounds delivery plus request/reply. It constructs
+  the request around a `Reply`, so `CallError` intentionally stays
+  non-generic and does not return that internally constructed message.
+
+Use `send_timeout` when bounded delivery must preserve ownership. Wrapping the
+ordinary future in `tokio::time::timeout(bound, actor.send(message))` is
+**lossy**: timeout cancels and drops the `send` future, including the message
+it owns. That wrapper cannot be used to retry or reroute after expiry.
+
+Payload-bearing send errors implement `std::error::Error` without requiring
+the message to implement `Debug`, `Display`, or `Sync`; their formatting
+deliberately omits the payload. Converting `SendError<M>` itself into
+`host::BoxError` with bare `?` does require `M: Sync`, because `BoxError` is
+`Send + Sync`. For a `Send` but non-`Sync` message, discard only the payload
+before propagating the non-generic `SendRejection`:
+
+```rust,no_run
+use std::cell::Cell;
+use kokage::{ActorRef, SendError, host::BoxError};
+
+struct LocalMessage(Cell<u64>); // `Send`, but not `Sync`
+
+async fn forward(target: &ActorRef<LocalMessage>) -> Result<(), BoxError> {
+    target
+        .send(LocalMessage(Cell::new(1)))
+        .await
+        .map_err(SendError::discard)?;
+    Ok(())
+}
+```
+
+`discard()` preserves the actor id and rejection reason. Use it for an
+application error enum or generic error boundary; use `into_message()` when
+the caller will retry, reroute, or otherwise reclaim the payload.
+
+## Bounded request/reply
 
 `ActorRef::call` builds request/reply on the ordinary actor mailbox: it creates
 a one-shot `Reply<T>`, puts that reply handle in your message, sends the
@@ -61,7 +108,11 @@ The timeout deliberately includes mailbox backpressure and restart backoff.
 Choose one that covers the queueing delay your service is willing to tolerate:
 
 - Use `try_send` for fire-and-forget messages when failing fast on a full
-  mailbox beats waiting. There is no fail-fast variant of `call`.
+  mailbox beats waiting. Recover the rejected message from the error when it
+  should take another route. There is no fail-fast variant of `call`.
+- Use `send_timeout(message, bound)` when ordinary message delivery may wait
+  briefly for capacity or a restart, but the caller needs the unaccepted
+  message back after a firm bound.
 - Use `call(timeout, ...)` when the caller can wait for capacity or a short
   restart window, but needs a firm end-to-end bound.
 - Do not use `call` with a conflating mailbox. A newer value can replace the

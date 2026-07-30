@@ -2194,7 +2194,7 @@ mod runnable_actor {
         sink: ActorRef<u32>,
         started: mpsc::UnboundedSender<()>,
         release: Arc<Notify>,
-        outcomes: mpsc::UnboundedSender<Result<(), SendError>>,
+        outcomes: mpsc::UnboundedSender<Result<(), SendError<u32>>>,
     }
 
     impl Actor for DrainForwarder {

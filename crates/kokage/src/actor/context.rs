@@ -16,7 +16,7 @@ use crate::supervisor::{
 use tokio::{
     sync::{oneshot, watch},
     task::{AbortHandle, Id as TaskId, JoinError, JoinSet},
-    time::{Instant, MissedTickBehavior, timeout},
+    time::{Instant, MissedTickBehavior, sleep_until, timeout},
 };
 
 use crate::ScopeRef;
@@ -24,12 +24,14 @@ use crate::ScopeRef;
 use crate::actor::{
     binding::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, GatedSendOutcome,
-        MailboxReceiver, MailboxRef, MessageSizeObserver, SendGate, SendOutcome,
+        MailboxReceiver, MailboxRef, MessageSizeObserver, SendGate, SendOutcome, TimedSendOutcome,
     },
-    error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
+    error::{
+        BlockingCancelled, CallError, OffloadDeadline, SendError, SendTimeoutError, TrySendError,
+    },
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
-    observability::{MessageOperation, ScopeObservability, SendRejection, trace_actor_message},
+    observability::{MessageOperation, MessageRejection, ScopeObservability, trace_actor_message},
 };
 
 /// Cloneable, restart-stable, typed sender for an actor mailbox.
@@ -126,16 +128,10 @@ impl<M> ActorRef<M> {
         self.stats.snapshot(&self.actor_id, depth, capacity)
     }
 
-    fn current_mailbox(&self) -> Result<MailboxRef<M>, TrySendError> {
+    fn current_mailbox(&self) -> Result<MailboxRef<M>, ()> {
         match self.binding.borrow().clone() {
             BindingState::Bound(mailbox) => Ok(mailbox),
-            BindingState::Unbound if self.binding.has_changed().is_err() => {
-                Err(self.actor_try_send_terminated())
-            }
-            BindingState::Unbound => Err(TrySendError::NotRunning {
-                actor_id: self.actor_id.to_string(),
-            }),
-            BindingState::Terminated => Err(self.actor_try_send_terminated()),
+            BindingState::Unbound | BindingState::Terminated => Err(()),
         }
     }
 
@@ -146,9 +142,12 @@ impl<M> ActorRef<M> {
     /// actor is expected to rebind. Conflating mailboxes replace stale unread
     /// state immediately instead of waiting for capacity. This returns an
     /// error only when the actor has terminated with no restart scheduled, or
-    /// when the binding source has been dropped.
+    /// when the binding source has been dropped. The error returns the
+    /// unaccepted message through [`SendError::into_message`].
     ///
-    /// Cancelling this future while it is waiting drops the message.
+    /// Cancelling this future while it is waiting drops the message. Use
+    /// [`send_timeout`](Self::send_timeout) when a bounded wait must return an
+    /// unaccepted message.
     ///
     /// # Delivery contract
     ///
@@ -164,25 +163,132 @@ impl<M> ActorRef<M> {
     /// windows are restart and shutdown. Stronger guarantees
     /// (acknowledgements, redelivery) are user protocol built with
     /// [`call`](Self::call) and [`Reply`], not transport features.
-    pub async fn send(&self, message: M) -> Result<(), SendError> {
+    pub async fn send(&self, message: M) -> Result<(), SendError<M>> {
         self.send_to_incarnation(message).await.map(drop)
+    }
+
+    /// Sends a message, waiting at most `bound` for mailbox acceptance.
+    ///
+    /// Like [`send`](Self::send), this waits through restart windows and FIFO
+    /// mailbox capacity pressure. If the bound expires first, the message is
+    /// returned in [`SendTimeoutError::Timeout`]. If the target membership
+    /// terminates first, it is returned in [`SendTimeoutError::Terminated`].
+    /// An `Ok` result has the same at-most-once acceptance contract as `send`.
+    ///
+    /// This is a delivery primitive rather than a convenience wrapper around
+    /// [`tokio::time::timeout`]. Cancelling a `send` future drops the message
+    /// it owns, so `timeout(actor.send(message))` cannot recover the message
+    /// when its bound expires.
+    pub async fn send_timeout(
+        &self,
+        message: M,
+        bound: Duration,
+    ) -> Result<(), SendTimeoutError<M>> {
+        let deadline = deadline_after(bound);
+        let mut binding = self.binding.clone();
+        let mut message = message;
+
+        loop {
+            let mailbox = tokio::select! {
+                biased;
+                () = sleep_until(deadline) => {
+                    self.observe_send(
+                        MessageOperation::SendTimeout,
+                        Some(MessageRejection::Timeout),
+                    );
+                    self.stats.record_send(false);
+                    return Err(self.send_timed_out(message));
+                }
+                mailbox = self.wait_for_next_mailbox(&mut binding) => match mailbox {
+                    Ok(mailbox) => mailbox,
+                    Err(()) => {
+                        self.observe_send(
+                            MessageOperation::SendTimeout,
+                            Some(MessageRejection::ActorTerminated),
+                        );
+                        self.stats.record_send(false);
+                        return Err(self.actor_send_timeout_terminated(message));
+                    }
+                }
+            };
+            // Materialization installs the observer before binding the first
+            // mailbox. Read it only after resolving a live binding so a send
+            // polled while the declaration is configurable cannot miss sizing.
+            let message_size = self
+                .message_size
+                .get()
+                .map(|observer| observer.size_hint(&message));
+
+            match mailbox.send_retaining_until(message, deadline).await {
+                TimedSendOutcome::Accepted { conflated } => {
+                    self.observe_send(MessageOperation::SendTimeout, None);
+                    self.stats.record_send(true);
+                    self.stats.record_conflated(conflated);
+                    self.record_message_size(message_size);
+                    return Ok(());
+                }
+                TimedSendOutcome::Closed(returned) => {
+                    self.observe_send(
+                        MessageOperation::SendTimeout,
+                        Some(MessageRejection::MailboxClosed),
+                    );
+                    message = returned;
+                    let rebound = tokio::select! {
+                        biased;
+                        () = sleep_until(deadline) => {
+                            self.observe_send(
+                                MessageOperation::SendTimeout,
+                                Some(MessageRejection::Timeout),
+                            );
+                            self.stats.record_send(false);
+                            return Err(self.send_timed_out(message));
+                        }
+                        rebound = self.wait_for_rebind_or_termination(&mut binding, &mailbox) => {
+                            rebound
+                        }
+                    };
+                    if rebound.is_err() {
+                        self.observe_send(
+                            MessageOperation::SendTimeout,
+                            Some(MessageRejection::ActorTerminated),
+                        );
+                        self.stats.record_send(false);
+                        return Err(self.actor_send_timeout_terminated(message));
+                    }
+                }
+                TimedSendOutcome::Timeout(returned) => {
+                    self.observe_send(
+                        MessageOperation::SendTimeout,
+                        Some(MessageRejection::Timeout),
+                    );
+                    self.stats.record_send(false);
+                    return Err(self.send_timed_out(returned));
+                }
+            }
+        }
     }
 
     /// Sends a message and returns the incarnation mailbox that accepted it.
     ///
     /// This is used by runtime adapters that need to restore cumulative state
     /// after the target actor moves to a fresh incarnation.
-    pub(crate) async fn send_to_incarnation(&self, message: M) -> Result<MailboxRef<M>, SendError> {
+    pub(crate) async fn send_to_incarnation(
+        &self,
+        message: M,
+    ) -> Result<MailboxRef<M>, SendError<M>> {
         let mut binding = self.binding.clone();
         let mut message = message;
 
         loop {
             let mailbox = match self.wait_for_next_mailbox(&mut binding).await {
                 Ok(mailbox) => mailbox,
-                Err(error) => {
-                    self.observe_send(MessageOperation::Send, Some(send_rejection(&error)));
+                Err(()) => {
+                    self.observe_send(
+                        MessageOperation::Send,
+                        Some(MessageRejection::ActorTerminated),
+                    );
                     self.stats.record_send(false);
-                    return Err(error);
+                    return Err(self.actor_terminated(message));
                 }
             };
             // Materialization installs the observer before binding the first
@@ -202,15 +308,21 @@ impl<M> ActorRef<M> {
                     return Ok(mailbox);
                 }
                 SendOutcome::Closed(returned) => {
-                    self.observe_send(MessageOperation::Send, Some(SendRejection::MailboxClosed));
+                    self.observe_send(
+                        MessageOperation::Send,
+                        Some(MessageRejection::MailboxClosed),
+                    );
                     message = returned;
-                    if let Err(error) = self
+                    if let Err(()) = self
                         .wait_for_rebind_or_termination(&mut binding, &mailbox)
                         .await
                     {
-                        self.observe_send(MessageOperation::Send, Some(send_rejection(&error)));
+                        self.observe_send(
+                            MessageOperation::Send,
+                            Some(MessageRejection::ActorTerminated),
+                        );
                         self.stats.record_send(false);
-                        return Err(error);
+                        return Err(self.actor_terminated(message));
                     }
                 }
             }
@@ -232,7 +344,10 @@ impl<M> ActorRef<M> {
                 self.record_message_size(message_size);
             }
             GatedSendOutcome::Closed(_) => {
-                self.observe_send(MessageOperation::Send, Some(SendRejection::MailboxClosed));
+                self.observe_send(
+                    MessageOperation::Send,
+                    Some(MessageRejection::MailboxClosed),
+                );
                 self.stats.record_send(false);
             }
             GatedSendOutcome::Cancelled(_) => {}
@@ -243,10 +358,28 @@ impl<M> ActorRef<M> {
     ///
     /// A full FIFO queue returns [`TrySendError::Full`]. A conflating
     /// mailbox instead accepts the message and replaces stale unread state.
-    pub fn try_send(&self, message: M) -> Result<(), TrySendError> {
-        let mailbox = match self.current_mailbox() {
-            Ok(mailbox) => mailbox,
-            Err(error) => {
+    /// Every rejection returns the message through
+    /// [`TrySendError::into_message`].
+    pub fn try_send(&self, message: M) -> Result<(), TrySendError<M>> {
+        let mailbox = match self.binding.borrow().clone() {
+            BindingState::Bound(mailbox) => mailbox,
+            BindingState::Unbound if self.binding.has_changed().is_err() => {
+                let error = self.actor_try_send_terminated(message);
+                self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
+                self.stats.record_send(false);
+                return Err(error);
+            }
+            BindingState::Unbound => {
+                let error = TrySendError::NotRunning {
+                    actor_id: self.actor_id.to_string(),
+                    message,
+                };
+                self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
+                self.stats.record_send(false);
+                return Err(error);
+            }
+            BindingState::Terminated => {
+                let error = self.actor_try_send_terminated(message);
                 self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
                 self.stats.record_send(false);
                 return Err(error);
@@ -331,7 +464,9 @@ impl<M> ActorRef<M> {
     ) -> Result<T, CallError> {
         tokio::time::timeout(timeout, async {
             let (sender, receiver) = oneshot::channel();
-            self.send(message(Reply { sender })).await?;
+            self.send(message(Reply { sender }))
+                .await
+                .map_err(SendError::discard)?;
             receiver.await.map_err(|_| CallError::ReplyDropped {
                 actor_id: self.actor_id.to_string(),
             })
@@ -345,18 +480,15 @@ impl<M> ActorRef<M> {
     async fn wait_for_next_mailbox(
         &self,
         binding: &mut watch::Receiver<BindingState<M>>,
-    ) -> Result<MailboxRef<M>, SendError> {
+    ) -> Result<MailboxRef<M>, ()> {
         loop {
             match binding.borrow().clone() {
                 BindingState::Bound(mailbox) => return Ok(mailbox),
                 BindingState::Unbound => {}
-                BindingState::Terminated => return Err(self.actor_terminated()),
+                BindingState::Terminated => return Err(()),
             }
 
-            binding
-                .changed()
-                .await
-                .map_err(|_| self.actor_terminated())?;
+            binding.changed().await.map_err(drop)?;
         }
     }
 
@@ -381,34 +513,47 @@ impl<M> ActorRef<M> {
         &self,
         binding: &mut watch::Receiver<BindingState<M>>,
         stale: &MailboxRef<M>,
-    ) -> Result<(), SendError> {
+    ) -> Result<(), ()> {
         loop {
             match binding.borrow().clone() {
                 BindingState::Bound(current) if !current.same_channel(stale) => return Ok(()),
                 BindingState::Bound(_) | BindingState::Unbound => {}
-                BindingState::Terminated => return Err(self.actor_terminated()),
+                BindingState::Terminated => return Err(()),
             }
 
-            binding
-                .changed()
-                .await
-                .map_err(|_| self.actor_terminated())?;
+            binding.changed().await.map_err(drop)?;
         }
     }
 
-    fn actor_terminated(&self) -> SendError {
+    fn actor_terminated(&self, message: M) -> SendError<M> {
         SendError {
             actor_id: self.actor_id.to_string(),
+            message,
         }
     }
 
-    fn actor_try_send_terminated(&self) -> TrySendError {
+    fn actor_try_send_terminated(&self, message: M) -> TrySendError<M> {
         TrySendError::Terminated {
             actor_id: self.actor_id.to_string(),
+            message,
         }
     }
 
-    fn observe_send(&self, operation: MessageOperation, rejection: Option<SendRejection>) {
+    fn send_timed_out(&self, message: M) -> SendTimeoutError<M> {
+        SendTimeoutError::Timeout {
+            actor_id: self.actor_id.to_string(),
+            message,
+        }
+    }
+
+    fn actor_send_timeout_terminated(&self, message: M) -> SendTimeoutError<M> {
+        SendTimeoutError::Terminated {
+            actor_id: self.actor_id.to_string(),
+            message,
+        }
+    }
+
+    fn observe_send(&self, operation: MessageOperation, rejection: Option<MessageRejection>) {
         trace_actor_message(
             self.source_actor_id.as_deref(),
             &self.actor_id,
@@ -1834,14 +1979,10 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 }
 
-fn send_rejection(_: &SendError) -> SendRejection {
-    SendRejection::ActorTerminated
-}
-
-fn try_send_rejection(error: &TrySendError) -> SendRejection {
+fn try_send_rejection<M>(error: &TrySendError<M>) -> MessageRejection {
     match error {
-        TrySendError::NotRunning { .. } => SendRejection::NotRunning,
-        TrySendError::Terminated { .. } => SendRejection::ActorTerminated,
-        TrySendError::Full { .. } => SendRejection::MailboxFull,
+        TrySendError::NotRunning { .. } => MessageRejection::NotRunning,
+        TrySendError::Terminated { .. } => MessageRejection::ActorTerminated,
+        TrySendError::Full { .. } => MessageRejection::MailboxFull,
     }
 }

@@ -23,10 +23,11 @@ mod coverage_probe {
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, Backoff, BlockingCancelled, BuildError, CancellationToken, ControlError,
-            DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OffloadDeadline, Restart,
-            RestrictedScopeRef, RunningTree, ScopeRef, Shutdown, Strategy, SupervisorError,
-            TimerKey, TreeNode,
+            ActorFactory, Backoff, BlockingCancelled, BuildError, CallError, CancellationToken,
+            ControlError, DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent,
+            OffloadDeadline, Restart, RestrictedScopeRef, RunningTree, ScopeRef, SendError,
+            SendRejection, SendTimeoutError, Shutdown, Strategy, SupervisorError, TimerKey,
+            TreeNode, TrySendError,
         };
     }
 

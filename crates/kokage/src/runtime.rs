@@ -611,7 +611,9 @@ impl ScopeRef {
     /// accepted work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly return
     /// [`TrySendError::NotRunning`](crate::TrySendError::NotRunning), while an awaited
-    /// `send` waits and then returns [`SendError`](crate::SendError).
+    /// `send` waits and then returns [`SendError`](crate::SendError), retaining
+    /// the rejected message. `send_timeout` can instead bound that wait and
+    /// recover a message that was not accepted before the bound.
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
     ///

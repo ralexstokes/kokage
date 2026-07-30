@@ -45,8 +45,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // the binding exists would fail with `TrySendError::NotRunning`.
     worker.send("first").await?;
     match worker.try_send("second") {
-        Err(TrySendError::Full { actor_id, .. }) => {
-            println!("`{actor_id}` mailbox is full");
+        Err(error @ TrySendError::Full { .. }) => {
+            println!(
+                "mailbox is full; recovered `{}` for another route",
+                error.into_message()
+            );
         }
         Ok(()) => panic!("second send unexpectedly succeeded"),
         Err(other) => panic!("unexpected send error: {other}"),
