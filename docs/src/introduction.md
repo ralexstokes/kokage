@@ -31,12 +31,17 @@ If you know Erlang/OTP or Elixir, the concepts map directly:
 |---|---|
 | Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `host::ChildSpec` |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
-| `permanent` / `transient` / `temporary` | `RestartPolicy::Always` / `RestartPolicy::OnFailure` / `RestartPolicy::Never` |
-| Restart intensity (`MaxR`/`MaxT`) | `RestartConfig::new(max_restarts, within)` |
+| `permanent` / `transient` / `temporary` | `Restart::always()` / `Restart::on_failure()` / `Restart::never()` |
+| Restart intensity (`MaxR`/`MaxT`) | `Restart::on_failure().limit(max_restarts, within)` (or `.limit(...)` on either other mode) |
 | GenServer-like process with a mailbox | An `Actor` with stage-specific lifecycle contexts |
 | Registered process name | A typed `ActorRef<M>` passed during wiring; ids name scope-local children rather than global addresses |
 
 If you do not know OTP, the tutorial builds these pieces from scratch.
+
+One `Restart` value combines the exit mode, restart budget, backoff, and
+terminal-membership behavior. Call `limit` on whichever mode constructor fits
+the child; a child-level declaration replaces the enclosing scope's complete
+restart default.
 
 An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox
 policy, restart policy, shutdown policy, and incarnation factory. Calling
