@@ -13,7 +13,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use crate::actor::{
     error::TrySendError,
     monitor::{ActorMonitors, MonitorHub},
-    observability::{MessageSizeMetrics, ScopeObservability},
+    observability::{MessageSizeMetrics, ScopeObservability, SendRejection},
 };
 
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
@@ -443,6 +443,12 @@ pub(crate) enum GatedSendOutcome<M> {
 }
 
 #[derive(Debug)]
+pub(crate) struct TrySendFailure {
+    pub(crate) error: TrySendError,
+    pub(crate) rejection: SendRejection,
+}
+
+#[derive(Debug)]
 pub(crate) struct SendGate {
     cancellation: CancellationToken,
     state: Mutex<SendGateState>,
@@ -610,15 +616,18 @@ impl<M> MailboxRef<M> {
         }
     }
 
-    pub(crate) fn try_send(&self, message: M) -> Result<u64, TrySendError> {
+    pub(crate) fn try_send(&self, message: M) -> Result<u64, TrySendFailure> {
         match &self.sender {
             MailboxSender::Queue {
                 sender,
                 accepting_external,
             } => {
                 if !accepting_external.load(Ordering::Acquire) {
-                    return Err(TrySendError::NotRunning {
-                        actor_id: self.actor_id.to_string(),
+                    return Err(TrySendFailure {
+                        error: TrySendError::NotRunning {
+                            actor_id: self.actor_id.to_string(),
+                        },
+                        rejection: SendRejection::MailboxClosed,
                     });
                 }
                 match sender.try_reserve() {
@@ -626,20 +635,27 @@ impl<M> MailboxRef<M> {
                         permit.send(message);
                         Ok(0)
                     }
-                    Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => {
-                        Err(TrySendError::NotRunning {
+                    Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => Err(TrySendFailure {
+                        error: TrySendError::NotRunning {
                             actor_id: self.actor_id.to_string(),
-                        })
-                    }
-                    Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendError::Full {
-                        actor_id: self.actor_id.to_string(),
+                        },
+                        rejection: SendRejection::MailboxClosed,
+                    }),
+                    Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendFailure {
+                        error: TrySendError::Full {
+                            actor_id: self.actor_id.to_string(),
+                        },
+                        rejection: SendRejection::MailboxFull,
                     }),
                 }
             }
             MailboxSender::Conflating(sender) => match sender.send(message) {
                 SendOutcome::Accepted { conflated } => Ok(conflated),
-                SendOutcome::Closed(_) => Err(TrySendError::NotRunning {
-                    actor_id: self.actor_id.to_string(),
+                SendOutcome::Closed(_) => Err(TrySendFailure {
+                    error: TrySendError::NotRunning {
+                        actor_id: self.actor_id.to_string(),
+                    },
+                    rejection: SendRejection::MailboxClosed,
                 }),
             },
         }
@@ -1115,5 +1131,45 @@ impl<M> Drop for BindingGuard<M> {
         }
         self.observability
             .emit_mailbox_cleared(self.core.actor_id());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_mailbox_closed(failure: TrySendFailure) {
+        assert!(matches!(
+            failure.error,
+            TrySendError::NotRunning { actor_id } if actor_id == "worker"
+        ));
+        assert_eq!(failure.rejection, SendRejection::MailboxClosed);
+    }
+
+    #[test]
+    fn try_send_keeps_closed_queue_rejection_private() {
+        let (sender, mut receiver) = mailbox(&MailboxMode::queue(), 1);
+        receiver.close_external();
+        let mailbox = MailboxRef::new(Arc::from("worker"), sender);
+
+        assert_mailbox_closed(mailbox.try_send(()).expect_err("mailbox is closed"));
+    }
+
+    #[test]
+    fn try_send_keeps_dropped_queue_rejection_private() {
+        let (sender, receiver) = mailbox(&MailboxMode::queue(), 1);
+        drop(receiver);
+        let mailbox = MailboxRef::new(Arc::from("worker"), sender);
+
+        assert_mailbox_closed(mailbox.try_send(()).expect_err("mailbox is dropped"));
+    }
+
+    #[test]
+    fn try_send_keeps_dropped_conflating_rejection_private() {
+        let (sender, receiver) = mailbox(&MailboxMode::conflate(), 1);
+        drop(receiver);
+        let mailbox = MailboxRef::new(Arc::from("worker"), sender);
+
+        assert_mailbox_closed(mailbox.try_send(()).expect_err("mailbox is dropped"));
     }
 }

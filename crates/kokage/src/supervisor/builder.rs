@@ -117,8 +117,8 @@ impl OrderedSupervisorBuilder {
     /// Appends a task child to the supervisor. Declaration order determines
     /// sequential startup and group-restart order.
     #[must_use]
-    pub fn child(self, child: TaskSpec) -> Self {
-        self.child_spec(child.into_spec())
+    pub fn child(self, task: TaskSpec) -> Self {
+        self.child_spec(task.into_spec())
     }
 
     /// Appends any supervised child kind. This is the internal entry point

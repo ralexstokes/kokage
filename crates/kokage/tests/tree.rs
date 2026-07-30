@@ -1272,7 +1272,7 @@ mod runnable_actor {
     use tokio::{
         sync::{Notify, mpsc},
         task::JoinHandle,
-        time::{sleep, timeout},
+        time::timeout,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -1630,25 +1630,6 @@ mod runnable_actor {
         runtime.shutdown_and_wait().await.expect("clean shutdown");
     }
 
-    async fn wait_for_stale_mailbox(actor_ref: &ActorRef<String>) {
-        timeout(Duration::from_secs(1), async {
-            loop {
-                match actor_ref.try_send("probe".to_owned()) {
-                    Err(TrySendError::NotRunning { .. }) => break,
-                    Err(TrySendError::Terminated { .. }) => {
-                        panic!("binding terminated before stale mailbox was observed");
-                    }
-                    Ok(()) | Err(TrySendError::Full { .. }) => {
-                        sleep(Duration::from_millis(1)).await;
-                    }
-                    Err(_) => panic!("unexpected send error while observing stale mailbox"),
-                }
-            }
-        })
-        .await
-        .expect("stale mailbox observed in time");
-    }
-
     #[derive(Clone)]
     struct RebindActor {
         runs: Arc<AtomicUsize>,
@@ -1702,13 +1683,17 @@ mod runnable_actor {
             .await
             .expect("actor entered stale window")
             .expect("actor reported stale window");
-        wait_for_stale_mailbox(&actor_ref).await;
+        assert!(matches!(
+            actor_ref.try_send("probe".to_owned()),
+            Err(TrySendError::NotRunning { .. })
+        ));
 
-        // The stale mailbox is closed but still bound, so the first poll of
-        // a send deterministically traverses the closed-mailbox branch. It
-        // must park waiting for the binding to change: completing would mean
-        // delivery into a dead mailbox, and erroring would break restart
-        // ride-through.
+        // RebindActor reports this point after dropping RawContext while its
+        // run deliberately stays alive, so the current incarnation remains
+        // bound to a closed mailbox. The public try_send error intentionally
+        // projects that state to NotRunning. An awaited send must still park
+        // until the binding changes: completing would mean delivery into a
+        // dead mailbox, and erroring would break restart ride-through.
         let sending_ref = actor_ref.clone();
         let mut send = Box::pin(async move { sending_ref.send("held".to_owned()).await });
         let first_poll = poll_fn(|cx| Poll::Ready(send.as_mut().poll(cx))).await;

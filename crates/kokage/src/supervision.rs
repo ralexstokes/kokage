@@ -325,8 +325,8 @@ impl OrderedTree {
 
     /// Appends an arbitrary task node with its resolved policies.
     #[must_use]
-    pub fn task(mut self, child: TaskSpec) -> Self {
-        self.inner = self.inner.task(child);
+    pub fn task(mut self, task: TaskSpec) -> Self {
+        self.inner = self.inner.task(task);
         self
     }
 
@@ -461,11 +461,11 @@ impl TreeData<false> {
 
     /// Appends an arbitrary task node.
     ///
-    /// Explicit policies already set on `child` are preserved. Unset restart
+    /// Explicit policies already set on `task` are preserved. Unset restart
     /// and shutdown policies inherit this scope's defaults during lowering.
     #[must_use]
-    fn task(mut self, child: TaskSpec) -> Self {
-        self.children_mut().push(SupervisionChild::Task(child));
+    fn task(mut self, task: TaskSpec) -> Self {
+        self.children_mut().push(SupervisionChild::Task(task));
         self
     }
 
@@ -900,11 +900,11 @@ impl IdentityTree<false> {
 
     /// Appends an arbitrary task node with its resolved policies.
     ///
-    /// Explicit policies on `child` survive lowering; unset policies inherit
+    /// Explicit policies on `task` survive lowering; unset policies inherit
     /// the enclosing scope defaults. See [`OrderedTree::task`].
     #[must_use]
-    fn task(self, child: TaskSpec) -> Self {
-        self.map_tree(|tree| tree.task(child))
+    fn task(self, task: TaskSpec) -> Self {
+        self.map_tree(|tree| tree.task(task))
     }
 
     /// Appends a named nested scope that already owns a reservation.
