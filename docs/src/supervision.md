@@ -95,8 +95,10 @@ its parent.
 A [`Backoff`] can delay attempts with a fixed or exponential schedule. It is a
 data enum, so code that needs to inspect a declaration can match
 `Backoff::None`, `Backoff::Fixed(delay)`, or
-`Backoff::Exponential { base, factor, max, jitter }` directly. The convenience
-constructors remain the recommended spelling when declaring a policy.
+`Backoff::Exponential { base, factor, max, jitter }` directly. Because the enum
+is `#[non_exhaustive]`, downstream matches also need a catch-all arm. The
+convenience constructors remain the recommended spelling when declaring a
+policy.
 The exponential attempt count is tracked per child and resets after a run
 survives longer than the intensity window. Shutdown always wins over a pending
 restart delay.
@@ -198,12 +200,13 @@ overall budget.
 
 A supervised actor has one user-facing shutdown declaration. `Shutdown` is a
 data enum: `Drain { grace }`, `Discard { grace }`, or `Abort`; the abort variant
-carries no synthetic zero grace. The cooperative variants' grace bounds queued
-messages, outstanding offloads, and `on_stop`, and the variant decides whether
-queued messages are drained or discarded. Offload deadlines
-remain independent bounds on individual offloads; they do not extend the child
-grace. A host running an actor outside a tree passes the same `Shutdown` value
-to `RunnableActor::run_until`; a conventional standalone declaration is
+carries no synthetic zero grace. Because the enum is `#[non_exhaustive]`,
+downstream matches also need a catch-all arm. The cooperative variants' grace
+bounds queued messages, outstanding offloads, and `on_stop`, and the variant
+decides whether queued messages are drained or discarded. Offload deadlines
+remain independent bounds on individual offloads; they do not extend the
+child grace. A host running an actor outside a tree passes the same `Shutdown`
+value to `RunnableActor::run_until`; a conventional standalone declaration is
 `Shutdown::drain_for(`[`host::DEFAULT_SHUTDOWN_BOUND`]`)`.
 
 ### One shutdown clock per child

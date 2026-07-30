@@ -8,7 +8,8 @@ use crate::supervisor::error::BuildError;
 /// [`exponential`](Self::exponential) for a delay that grows after consecutive
 /// short-lived incarnations. The default restarts immediately. Match the enum
 /// directly when reading a declaration; the constructors remain the concise
-/// way to build one.
+/// way to build one. Downstream matches need a catch-all arm because the enum
+/// is non-exhaustive.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -97,16 +98,16 @@ impl Backoff {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Restart {
     mode: RestartMode,
-    pub(crate) max_restarts: usize,
-    pub(crate) within: Duration,
-    pub(crate) backoff: Backoff,
+    max_restarts: usize,
+    within: Duration,
+    backoff: Backoff,
     remove_when_done: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// Which child exits trigger a restart.
-pub enum RestartMode {
+pub(crate) enum RestartMode {
     /// Restart after every exit, including clean completion.
     Always,
     /// Restart after an error, panic, or abort, but not clean completion.
@@ -188,6 +189,18 @@ impl Restart {
 
     pub(crate) const fn remove_on_exit(self) -> bool {
         self.remove_when_done
+    }
+
+    pub(crate) const fn max_restarts(self) -> usize {
+        self.max_restarts
+    }
+
+    pub(crate) const fn within(self) -> Duration {
+        self.within
+    }
+
+    pub(crate) const fn backoff_policy(self) -> Backoff {
+        self.backoff
     }
 
     pub(crate) fn validate(self) -> Result<(), BuildError> {
