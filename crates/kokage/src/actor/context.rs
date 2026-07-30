@@ -833,9 +833,9 @@ impl<M: Send + 'static> RawContext<M> {
         let gate = Arc::new(SendGate::new());
         let task_gate = Arc::clone(&gate);
         let finished = CancellationToken::new();
-        let task_finished = finished.clone();
+        let finished_on_drop = CancelOnDrop::new(finished.clone());
         let abort = self.scope_waits.spawn(async move {
-            let _finished_on_drop = CancelOnDrop::new(task_finished);
+            let _finished_on_drop = finished_on_drop;
             let output = tokio::select! {
                 biased;
                 () = task_gate.cancelled() => return,
@@ -893,9 +893,9 @@ impl<M: Send + 'static> RawContext<M> {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = Arc::clone(&cancelled);
         let finished = CancellationToken::new();
-        let task_finished = finished.clone();
+        let finished_on_drop = CancelOnDrop::new(finished.clone());
         let abort = self.offloads.spawn(async move {
-            let _finished_on_drop = CancelOnDrop::new(task_finished);
+            let _finished_on_drop = finished_on_drop;
             OffloadCompletion {
                 message: continuation(timeout(deadline, future).await.map_err(|_| OffloadDeadline)),
                 cancelled: task_cancelled,
