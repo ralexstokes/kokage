@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use crate::supervisor::{
-    __private, BuildError, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart,
-    ScopeKind, Shutdown, Strategy, Supervisor,
+    __private, BuildError, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart, ScopeKind,
+    Shutdown, Strategy, Supervisor, TaskSpec,
 };
 
 use crate::{
@@ -49,7 +49,7 @@ enum ScopeNode {
 
 enum SupervisionChild {
     Actor(ActorNode),
-    Task(ChildSpec),
+    Task(TaskSpec),
     Scope {
         id: String,
         node: ScopeNode,
@@ -325,7 +325,7 @@ impl OrderedTree {
 
     /// Appends an arbitrary task node with its resolved policies.
     #[must_use]
-    pub fn task(mut self, child: ChildSpec) -> Self {
+    pub fn task(mut self, child: TaskSpec) -> Self {
         self.inner = self.inner.task(child);
         self
     }
@@ -464,7 +464,7 @@ impl TreeData<false> {
     /// Explicit policies already set on `child` are preserved. Unset restart
     /// and shutdown policies inherit this scope's defaults during lowering.
     #[must_use]
-    fn task(mut self, child: ChildSpec) -> Self {
+    fn task(mut self, child: TaskSpec) -> Self {
         self.children_mut().push(SupervisionChild::Task(child));
         self
     }
@@ -730,7 +730,7 @@ impl SupervisionChild {
                 shutdown,
             } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
-                let mut child = ChildSpec::supervisor(id, nested);
+                let mut child = TaskSpec::supervisor(id, nested);
                 if let Some(restart) = restart {
                     child = child.restart(restart);
                 }
@@ -908,7 +908,7 @@ impl IdentityTree<false> {
     /// Explicit policies on `child` survive lowering; unset policies inherit
     /// the enclosing scope defaults. See [`OrderedTree::task`].
     #[must_use]
-    fn task(self, child: ChildSpec) -> Self {
+    fn task(self, child: TaskSpec) -> Self {
         self.map_tree(|tree| tree.task(child))
     }
 

@@ -9,26 +9,29 @@ use std::{
 use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
 
-use crate::supervisor::{
-    builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder},
-    child::{ChildDefinition, ChildKind, ChildResult},
-    context::ChildContext,
-    error::SupervisorError,
-    handle::{
-        AttachedChildState, AttachedChildrenState, BoundIncarnation, NestedChannels, RootExtra,
-        StableSupervisorChannels, SupervisorCommand, SupervisorHandle, empty_nested_channels,
+use crate::{
+    actor::ActorResult,
+    supervisor::{
+        builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder},
+        child::{ChildDefinition, ChildKind},
+        context::TaskContext,
+        error::SupervisorError,
+        handle::{
+            AttachedChildState, AttachedChildrenState, BoundIncarnation, NestedChannels, RootExtra,
+            StableSupervisorChannels, SupervisorCommand, SupervisorHandle, empty_nested_channels,
+        },
+        lifecycle::{LifecycleHub, LifecycleTreeSink},
+        observability::{format_path, strategy_label, supervisor_name_for_path},
+        restart::Restart,
+        runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
+        scope::ScopeKind,
+        shutdown::Shutdown,
+        snapshot::{
+            ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotCell, SupervisorSnapshot,
+            SupervisorStateView,
+        },
+        strategy::Strategy,
     },
-    lifecycle::{LifecycleHub, LifecycleTreeSink},
-    observability::{format_path, strategy_label, supervisor_name_for_path},
-    restart::Restart,
-    runtime::{SupervisorRuntime, supervision::reconcile_stable_identities},
-    scope::ScopeKind,
-    shutdown::Shutdown,
-    snapshot::{
-        ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotCell, SupervisorSnapshot,
-        SupervisorStateView,
-    },
-    strategy::Strategy,
 };
 
 /// A single-use configured supervisor, ready to be spawned or nested as a
@@ -36,7 +39,7 @@ use crate::supervisor::{
 ///
 /// A `Supervisor` owns the stable identity behind [`handle`](Self::handle),
 /// reserved when its builder was created. Moving the declaration into
-/// [`spawn`](Self::spawn) or [`ChildSpec::supervisor`](crate::supervisor::ChildSpec::supervisor)
+/// [`spawn`](Self::spawn) or [`TaskSpec::supervisor`](crate::supervisor::TaskSpec::supervisor)
 /// transfers that identity. Clone the handle, not the declaration, when
 /// multiple observers or controllers need to address it.
 pub struct Supervisor {
@@ -251,13 +254,13 @@ impl Supervisor {
 
     pub(crate) async fn run_as_child(
         self,
-        ctx: ChildContext,
+        ctx: TaskContext,
         parent_link: ParentLink,
         channels: Arc<StableSupervisorChannels>,
         path: Vec<String>,
         revivable: bool,
         abort_cascades: Arc<AtomicBool>,
-    ) -> ChildResult {
+    ) -> ActorResult {
         let generation = ctx.generation();
         let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) =
             channels.take_initial_incarnation(generation).map_or_else(
@@ -395,7 +398,7 @@ impl Supervisor {
         nested_channels: NestedChannels,
         path: Vec<String>,
         parent_link: Option<ParentLink>,
-        startup_ready: Option<ChildContext>,
+        startup_ready: Option<TaskContext>,
         revivable: bool,
         own_handle: SupervisorHandle,
     ) -> Result<(), SupervisorError> {

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, Restart, SnapshotRecvError,
-    Supervisor,
+    CompletionError, CompletionOutcome, LifecycleEventKind, Restart, SnapshotRecvError, Supervisor,
+    TaskSpec,
 };
 use tokio::time::timeout;
 
@@ -11,13 +11,13 @@ const WAIT: Duration = Duration::from_secs(2);
 #[tokio::test]
 async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter() {
     let nested = Supervisor::ordered()
-        .child(ChildSpec::task("leaf", |ctx| async move {
+        .child(TaskSpec::new("leaf", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
         .build()
         .expect("nested supervisor builds");
-    let supervisor = Supervisor::ordered().child(ChildSpec::supervisor("nested", nested));
+    let supervisor = Supervisor::ordered().child(TaskSpec::supervisor("nested", nested));
     let handle = supervisor.handle();
     let mut recursive = handle.watch_lifecycle();
     let mut direct = handle.watch_lifecycle().direct_children();
@@ -63,7 +63,7 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
 
 #[tokio::test]
 async fn wait_for_child_accepts_snapshot_predicates() {
-    let supervisor = Supervisor::ordered().child(ChildSpec::task("worker", |ctx| async move {
+    let supervisor = Supervisor::ordered().child(TaskSpec::new("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -94,7 +94,7 @@ async fn wait_for_child_terminates_when_an_observed_membership_is_removed() {
         .dynamic()
         .expect("dynamic capability is present");
     dynamic
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -123,7 +123,7 @@ async fn wait_for_child_terminates_when_an_observed_membership_is_removed() {
 
 #[tokio::test]
 async fn static_completion_wait_rejects_unknown_children() {
-    let supervisor = Supervisor::ordered().child(ChildSpec::task("known", |_| async { Ok(()) }));
+    let supervisor = Supervisor::ordered().child(TaskSpec::new("known", |_| async { Ok(()) }));
     let handle = supervisor.handle();
 
     assert_eq!(
@@ -155,7 +155,7 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
         .handle()
         .dynamic()
         .expect("dynamic capability")
-        .add_child(ChildSpec::task("job", |_| async { Ok(()) }).restart(Restart::never()))
+        .add_child(TaskSpec::new("job", |_| async { Ok(()) }).restart(Restart::never()))
         .await
         .expect("future child is added");
 

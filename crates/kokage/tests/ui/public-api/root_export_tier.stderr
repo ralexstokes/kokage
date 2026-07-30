@@ -33,11 +33,11 @@ error[E0432]: unresolved import `kokage::BoxError`
 20 | use kokage::BoxError;
    |     ^^^^^^^^^^^^^^^^ no `BoxError` in the root
 
-error[E0432]: unresolved import `kokage::ChildContext`
+error[E0432]: unresolved import `kokage::TaskContext`
   --> tests/ui/public-api/root_export_tier.rs:21:5
    |
-21 | use kokage::ChildContext;
-   |     ^^^^^^^^^^^^^^^^^^^^ no `ChildContext` in the root
+21 | use kokage::TaskContext;
+   |     ^^^^^^^^^^^^^^^^^^^ no `TaskContext` in the root
 
 error[E0432]: unresolved import `kokage::ChildExitView`
   --> tests/ui/public-api/root_export_tier.rs:22:5
@@ -57,122 +57,116 @@ error[E0432]: unresolved import `kokage::ChildOutline`
 24 | use kokage::ChildOutline;
    |     ^^^^^^^^^^^^^^^^^^^^ no `ChildOutline` in the root
 
-error[E0432]: unresolved import `kokage::ChildResult`
+error[E0432]: unresolved import `kokage::ChildSnapshot`
   --> tests/ui/public-api/root_export_tier.rs:25:5
    |
-25 | use kokage::ChildResult;
-   |     ^^^^^^^^^^^^^^^^^^^ no `ChildResult` in the root
-
-error[E0432]: unresolved import `kokage::ChildSnapshot`
-  --> tests/ui/public-api/root_export_tier.rs:26:5
-   |
-26 | use kokage::ChildSnapshot;
+25 | use kokage::ChildSnapshot;
    |     ^^^^^^^^^^^^^^^^^^^^^ no `ChildSnapshot` in the root
 
-error[E0432]: unresolved import `kokage::ChildSpec`
-  --> tests/ui/public-api/root_export_tier.rs:27:5
+error[E0432]: unresolved import `kokage::TaskSpec`
+  --> tests/ui/public-api/root_export_tier.rs:26:5
    |
-27 | use kokage::ChildSpec;
-   |     ^^^^^^^^^^^^^^^^^ no `ChildSpec` in the root
+26 | use kokage::TaskSpec;
+   |     ^^^^^^^^^^^^^^^^ no `TaskSpec` in the root
 
 error[E0432]: unresolved import `kokage::ChildStateView`
-  --> tests/ui/public-api/root_export_tier.rs:28:5
+  --> tests/ui/public-api/root_export_tier.rs:27:5
    |
-28 | use kokage::ChildStateView;
+27 | use kokage::ChildStateView;
    |     ^^^^^^^^^^^^^^^^^^^^^^ no `ChildStateView` in the root
 
 error[E0432]: unresolved import `kokage::CompletionError`
-  --> tests/ui/public-api/root_export_tier.rs:29:5
+  --> tests/ui/public-api/root_export_tier.rs:28:5
    |
-29 | use kokage::CompletionError;
+28 | use kokage::CompletionError;
    |     ^^^^^^^^^^^^^^^^^^^^^^^ no `CompletionError` in the root
 
 error[E0432]: unresolved import `kokage::CompletionOutcome`
-  --> tests/ui/public-api/root_export_tier.rs:30:5
+  --> tests/ui/public-api/root_export_tier.rs:29:5
    |
-30 | use kokage::CompletionOutcome;
+29 | use kokage::CompletionOutcome;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `CompletionOutcome` in the root
 
 error[E0432]: unresolved import `kokage::DEFAULT_SHUTDOWN_BOUND`
-  --> tests/ui/public-api/root_export_tier.rs:31:5
+  --> tests/ui/public-api/root_export_tier.rs:30:5
    |
-31 | use kokage::DEFAULT_SHUTDOWN_BOUND;
+30 | use kokage::DEFAULT_SHUTDOWN_BOUND;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `DEFAULT_SHUTDOWN_BOUND` in the root
 
 error[E0432]: unresolved import `kokage::LifecycleEvent`
-  --> tests/ui/public-api/root_export_tier.rs:32:5
+  --> tests/ui/public-api/root_export_tier.rs:31:5
    |
-32 | use kokage::LifecycleEvent;
+31 | use kokage::LifecycleEvent;
    |     ^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleEvent` in the root
 
 error[E0432]: unresolved import `kokage::LifecycleEventKind`
-  --> tests/ui/public-api/root_export_tier.rs:33:5
+  --> tests/ui/public-api/root_export_tier.rs:32:5
    |
-33 | use kokage::LifecycleEventKind;
+32 | use kokage::LifecycleEventKind;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleEventKind` in the root
 
 error[E0432]: unresolved import `kokage::LifecyclePathSegment`
-  --> tests/ui/public-api/root_export_tier.rs:34:5
+  --> tests/ui/public-api/root_export_tier.rs:33:5
    |
-34 | use kokage::LifecyclePathSegment;
+33 | use kokage::LifecyclePathSegment;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `LifecyclePathSegment` in the root
 
 error[E0432]: unresolved import `kokage::LifecycleWatch`
-  --> tests/ui/public-api/root_export_tier.rs:35:5
+  --> tests/ui/public-api/root_export_tier.rs:34:5
    |
-35 | use kokage::LifecycleWatch;
+34 | use kokage::LifecycleWatch;
    |     ^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleWatch` in the root
 
 error[E0432]: unresolved import `kokage::RawActor`
-  --> tests/ui/public-api/root_export_tier.rs:36:5
+  --> tests/ui/public-api/root_export_tier.rs:35:5
    |
-36 | use kokage::RawActor;
+35 | use kokage::RawActor;
    |     ^^^^^^^^^^^^^^^^ no `RawActor` in the root
 
 error[E0432]: unresolved import `kokage::RunnableActor`
-  --> tests/ui/public-api/root_export_tier.rs:37:5
+  --> tests/ui/public-api/root_export_tier.rs:36:5
    |
-37 | use kokage::RunnableActor;
+36 | use kokage::RunnableActor;
    |     ^^^^^^^^^^^^^^^^^^^^^ no `RunnableActor` in the root
 
 error[E0432]: unresolved import `kokage::ScopeKind`
-  --> tests/ui/public-api/root_export_tier.rs:38:5
+  --> tests/ui/public-api/root_export_tier.rs:37:5
    |
-38 | use kokage::ScopeKind;
+37 | use kokage::ScopeKind;
    |     ^^^^^^^^^^^^^^^^^ no `ScopeKind` in the root
 
 error[E0432]: unresolved import `kokage::SnapshotRecvError`
-  --> tests/ui/public-api/root_export_tier.rs:39:5
+  --> tests/ui/public-api/root_export_tier.rs:38:5
    |
-39 | use kokage::SnapshotRecvError;
+38 | use kokage::SnapshotRecvError;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `SnapshotRecvError` in the root
 
 error[E0432]: unresolved import `kokage::SupervisionOutline`
-  --> tests/ui/public-api/root_export_tier.rs:40:5
+  --> tests/ui/public-api/root_export_tier.rs:39:5
    |
-40 | use kokage::SupervisionOutline;
+39 | use kokage::SupervisionOutline;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisionOutline` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorPathSegment`
-  --> tests/ui/public-api/root_export_tier.rs:41:5
+  --> tests/ui/public-api/root_export_tier.rs:40:5
    |
-41 | use kokage::SupervisorPathSegment;
+40 | use kokage::SupervisorPathSegment;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorPathSegment` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorSnapshot`
-  --> tests/ui/public-api/root_export_tier.rs:42:5
+  --> tests/ui/public-api/root_export_tier.rs:41:5
    |
-42 | use kokage::SupervisorSnapshot;
+41 | use kokage::SupervisorSnapshot;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorSnapshot` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorSnapshotReceiver`
-  --> tests/ui/public-api/root_export_tier.rs:43:5
+  --> tests/ui/public-api/root_export_tier.rs:42:5
    |
-43 | use kokage::SupervisorSnapshotReceiver;
+42 | use kokage::SupervisorSnapshotReceiver;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorSnapshotReceiver` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorStateView`
-  --> tests/ui/public-api/root_export_tier.rs:44:5
+  --> tests/ui/public-api/root_export_tier.rs:43:5
    |
-44 | use kokage::SupervisorStateView;
+43 | use kokage::SupervisorStateView;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorStateView` in the root

@@ -1,5 +1,5 @@
 #[cfg(feature = "metrics")]
-use kokage::{OrderedTree, host::ChildSpec};
+use kokage::{OrderedTree, host::TaskSpec};
 #[cfg(feature = "metrics")]
 use metrics_exporter_prometheus::PrometheusBuilder;
 #[cfg(feature = "metrics")]
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let running = OrderedTree::new()
-        .task(ChildSpec::task("flaky", move |ctx| {
+        .task(TaskSpec::new("flaky", move |ctx| {
             let attempts = Arc::clone(&attempts);
             async move {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {

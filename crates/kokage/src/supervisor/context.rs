@@ -35,12 +35,12 @@ impl ReadySignal {
     }
 }
 
-/// Runtime context passed to a child function on each (re)start.
+/// Runtime context passed to a supervised task on each (re)start.
 ///
-/// The child should select on [`shutdown_token`](Self::shutdown_token) to
-/// detect when the supervisor asks it to stop.
+/// The task should select on [`shutdown_token`](Self::shutdown_token) to
+/// detect when its scope asks it to stop.
 #[derive(Clone, Debug)]
-pub struct ChildContext {
+pub struct TaskContext {
     id: String,
     generation: u64,
     token: CancellationToken,
@@ -49,7 +49,7 @@ pub struct ChildContext {
     ready: Option<ReadySignal>,
 }
 
-impl ChildContext {
+impl TaskContext {
     pub(crate) fn new(
         id: String,
         generation: u64,
@@ -68,7 +68,7 @@ impl ChildContext {
         }
     }
 
-    /// Returns the child's unique identifier within its supervisor.
+    /// Returns the task's unique identifier within its scope.
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -78,22 +78,22 @@ impl ChildContext {
         self.generation
     }
 
-    /// Returns the cancellation token for this specific child instance.
+    /// Returns the cancellation token for this specific task instance.
     ///
-    /// The supervisor cancels it when the child should stop. Child code can
+    /// The supervisor cancels it when the task should stop. Task code can
     /// clone it or derive child tokens for its own cancellation tree.
     pub fn shutdown_token(&self) -> &CancellationToken {
         &self.token
     }
 
-    /// Returns the escalation token for this child instance.
+    /// Returns the escalation token for this task instance.
     ///
     /// With a cooperative shutdown policy the supervisor first triggers
-    /// [`shutdown_token`](Self::shutdown_token). If the child is still running
+    /// [`shutdown_token`](Self::shutdown_token). If the task is still running
     /// when its grace period expires, it triggers this token and records the
     /// exit as [`Aborted { after_grace: true, .. }`](crate::observe::ChildExitView::Aborted).
-    /// The child wrapper then has a short window to finish local accounting
-    /// before the supervisor hard-aborts the task: a tenth of this child's own
+    /// The task wrapper then has a short window to finish local accounting
+    /// before the supervisor hard-aborts the task: a tenth of this task's own
     /// grace, clamped to between 1 ms and 10 ms. Work that cannot finish in
     /// that window belongs before the grace expires, not after it.
     ///
@@ -107,11 +107,11 @@ impl ChildContext {
         self.scope.clone()
     }
 
-    /// Reports that this child has completed initialization.
+    /// Reports that this task has completed initialization.
     ///
-    /// The first call for an explicitly readiness-gated child transitions it
-    /// from starting to running. Further calls, and calls made by children
-    /// without [`ChildSpec::wait_for_ready`](crate::host::ChildSpec::wait_for_ready),
+    /// The first call for an explicitly readiness-gated task transitions it
+    /// from starting to running. Further calls, and calls made by tasks
+    /// without [`TaskSpec::wait_for_ready`](crate::host::TaskSpec::wait_for_ready),
     /// are harmless.
     pub fn mark_ready(&self) {
         if let Some(ready) = &self.ready {

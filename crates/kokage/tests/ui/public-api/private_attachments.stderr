@@ -7,10 +7,10 @@ error[E0432]: unresolved imports `kokage::AttachedChild`, `kokage::AttachedChild
   |     no `AttachedChild` in the root
 
 error[E0624]: method `attachment` is private
- --> tests/ui/public-api/private_attachments.rs:7:24
+ --> tests/ui/public-api/private_attachments.rs:7:23
   |
-7 |       let _ = ChildSpec::attachment::<()>;
-  |                          ^^^^^^^^^^ private method
+7 |       let _ = TaskSpec::attachment::<()>;
+  |                         ^^^^^^^^^^ private method
   |
  ::: src/supervisor/child.rs
   |

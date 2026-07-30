@@ -1,10 +1,10 @@
-use kokage::{CancellationToken, OrderedTree, host::ChildSpec};
+use kokage::{CancellationToken, OrderedTree, host::TaskSpec};
 use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = OrderedTree::new()
-        .task(ChildSpec::task("http-server", |ctx| async move {
+        .task(TaskSpec::new("http-server", |ctx| async move {
             println!("http-server started");
 
             loop {

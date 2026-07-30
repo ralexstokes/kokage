@@ -5,7 +5,7 @@ use std::sync::{
 
 use kokage::{
     OrderedTree, Restart, Strategy,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
 };
 use tokio::time::{Duration, sleep, timeout};
 
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let decode_attempts = Arc::new(AtomicUsize::new(0));
 
     let fetch = {
-        ChildSpec::task("fetch", move |ctx| async move {
+        TaskSpec::new("fetch", move |ctx| async move {
             println!("fetch started in generation {}", ctx.generation());
 
             loop {
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let decode = {
         let decode_attempts = Arc::clone(&decode_attempts);
-        ChildSpec::task("decode", move |ctx| {
+        TaskSpec::new("decode", move |ctx| {
             let decode_attempts = Arc::clone(&decode_attempts);
             async move {
                 println!("decode started in generation {}", ctx.generation());
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let sink = {
-        ChildSpec::task("sink", move |ctx| async move {
+        TaskSpec::new("sink", move |ctx| async move {
             println!("sink started in generation {}", ctx.generation());
 
             loop {

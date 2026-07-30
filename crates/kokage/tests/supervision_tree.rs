@@ -16,7 +16,7 @@ use tokio::{
 use kokage::{
     ActorSpec, Backoff, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy,
     TreeNode,
-    host::{ChildSpec, RawActor, RawContext},
+    host::{RawActor, RawContext, TaskSpec},
     observe::{ChildOutline, ScopeKind},
     prelude::*,
 };
@@ -68,7 +68,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
         .default_restart(Restart::always())
         .subtree("workers", OrderedTree::new().strategy(Strategy::OneForAll))
         .task(
-            ChildSpec::task("clock", |ctx| async move {
+            TaskSpec::new("clock", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
@@ -125,9 +125,9 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     let outline = OrderedTree::new()
         .default_restart(Restart::always())
         .default_shutdown(Shutdown::abort())
-        .task(ChildSpec::task("inherited", |_| async { Ok(()) }))
+        .task(TaskSpec::new("inherited", |_| async { Ok(()) }))
         .task(
-            ChildSpec::task("explicit", |_| async { Ok(()) })
+            TaskSpec::new("explicit", |_| async { Ok(()) })
                 .restart(Restart::never())
                 .shutdown(explicit_shutdown),
         )
@@ -159,7 +159,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         .subtree(
             "declared",
             TreeNode::from(
-                OrderedTree::new().task(ChildSpec::task("stubborn", |_| async {
+                OrderedTree::new().task(TaskSpec::new("stubborn", |_| async {
                     std::future::pending::<()>().await;
                     Ok(())
                 })),
@@ -199,7 +199,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         .add_subtree(
             "inserted",
             TreeNode::from(
-                OrderedTree::new().task(ChildSpec::task("stubborn", |_| async {
+                OrderedTree::new().task(TaskSpec::new("stubborn", |_| async {
                     std::future::pending::<()>().await;
                     Ok(())
                 })),
@@ -498,7 +498,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     let children = OrderedTree::new()
         .default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
         .task(
-            ChildSpec::task("fatal", move |_| {
+            TaskSpec::new("fatal", move |_| {
                 let fail = Arc::clone(&fail_child);
                 async move {
                     fail.notified().await;
@@ -575,7 +575,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
                 .default_restart(Restart::never())
                 .default_shutdown(Shutdown::abort()),
         )
-        .task(ChildSpec::task("clock", |_ctx| async { Ok(()) }))
+        .task(TaskSpec::new("clock", |_ctx| async { Ok(()) }))
         .outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     assert!(

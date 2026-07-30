@@ -6,7 +6,7 @@ use std::{sync::Arc, time::Duration};
 
 use kokage::{
     ActorSpec, ActorStatus, DynamicTree, Restart, ScopeRef, Shutdown, SupervisorError,
-    host::{BoxError, ChildSpec, RawActor, RawContext},
+    host::{BoxError, RawActor, RawContext, TaskSpec},
     prelude::*,
 };
 use tokio::sync::{Mutex, Notify, mpsc, watch};
@@ -61,7 +61,7 @@ impl Actor for AddsChildOnStart {
         };
         let added_started = Arc::clone(&self.added_started);
         handle
-            .add_child(ChildSpec::task("added-from-on-start", move |ctx| {
+            .add_task(TaskSpec::new("added-from-on-start", move |ctx| {
                 let added_started = Arc::clone(&added_started);
                 async move {
                     added_started.notify_one();
@@ -79,7 +79,7 @@ impl Actor for AddsChildOnStart {
 }
 
 #[tokio::test]
-async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
+async fn actor_on_start_can_await_add_task_on_its_own_dynamic_supervisor() {
     let (handle_tx, handle_rx) = watch::channel::<Option<ScopeRef>>(None);
     let added_started = Arc::new(Notify::new());
     let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
@@ -99,7 +99,7 @@ async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
 
     tokio::time::timeout(Duration::from_secs(1), added_started.notified())
         .await
-        .expect("self-scope add_child should not deadlock actor startup");
+        .expect("self-scope add_task should not deadlock actor startup");
     handle.shutdown_and_wait().await.unwrap();
 }
 

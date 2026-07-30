@@ -1,6 +1,6 @@
 use kokage::{
     OrderedTree,
-    host::ChildSpec,
+    host::TaskSpec,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::time::{Duration, sleep};
@@ -8,7 +8,7 @@ use tokio::time::{Duration, sleep};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = OrderedTree::new()
-        .task(ChildSpec::task("worker", |ctx| async move {
+        .task(TaskSpec::new("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
             println!("worker shutting down");

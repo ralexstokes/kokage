@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
-    SupervisorError,
+    ControlError, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
+    SupervisorError, TaskSpec,
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -10,8 +10,8 @@ use super::common;
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn waiting_child(id: &str) -> ChildSpec {
-    ChildSpec::task(id, |ctx| async move {
+fn waiting_child(id: &str) -> TaskSpec {
+    TaskSpec::new(id, |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
@@ -189,7 +189,7 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
         parent
             .dynamic()
             .expect("dynamic supervisor")
-            .add_child(ChildSpec::supervisor("nested", nested))
+            .add_child(TaskSpec::supervisor("nested", nested))
             .await,
         Err(ControlError::Rejected(
             crate::supervisor::BuildError::DuplicateChildId(id)
@@ -214,7 +214,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
     let parent = parent_owner.handle();
     parent.wait_started().await.expect("dynamic parent starts");
     let (stopped_tx, mut stopped_rx) = mpsc::unbounded_channel();
-    let nested_builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {
+    let nested_builder = Supervisor::ordered().child(TaskSpec::new("worker", move |ctx| {
         let stopped_tx = stopped_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -227,7 +227,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
     parent
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::supervisor("nested", nested))
+        .add_child(TaskSpec::supervisor("nested", nested))
         .await
         .expect("nested scope inserts");
     retained.wait_started().await.expect("nested scope starts");

@@ -1,6 +1,6 @@
-use crate::supervisor::{
-    child::{BoxError, ChildResult},
-    event::ExitKind,
+use crate::{
+    actor::ActorResult,
+    supervisor::{child::BoxError, event::ExitKind},
 };
 
 /// Internal exit classification used by the runtime before public projection
@@ -15,7 +15,7 @@ pub(crate) enum ExitStatus {
 }
 
 impl ExitStatus {
-    pub(crate) fn from_child_result(result: ChildResult) -> Self {
+    pub(crate) fn from_child_result(result: ActorResult) -> Self {
         match result {
             Ok(()) => Self::Completed,
             Err(err) => Self::Failed(err),

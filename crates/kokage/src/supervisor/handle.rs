@@ -15,7 +15,7 @@ use tokio::{
 use crate::supervisor::{
     ScopeKind,
     attachment::{AttachedChild, AttachedChildIdentity},
-    child::{ChildKind, ChildSpec, OpaqueAttachment},
+    child::{ChildKind, OpaqueAttachment, TaskSpec},
     error::{ControlError, SupervisorError},
     lifecycle::{LifecycleHub, LifecycleWatch},
     snapshot::{
@@ -34,7 +34,7 @@ pub(crate) struct ControlEndpoint {
 }
 
 impl ControlEndpoint {
-    async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
+    async fn add_child(&self, child: TaskSpec) -> Result<u64, ControlError> {
         self.send(|reply| SupervisorCommand::AddChild { child, reply })
             .await
     }
@@ -160,23 +160,23 @@ enum WaitTarget {
 }
 
 pub(crate) struct PendingSupervisorChild {
-    child: Option<Box<ChildSpec>>,
+    child: Option<Box<TaskSpec>>,
 }
 
 impl PendingSupervisorChild {
-    fn new(child: ChildSpec) -> Self {
+    fn new(child: TaskSpec) -> Self {
         Self {
             child: Some(Box::new(child)),
         }
     }
 
-    pub(crate) fn spec_mut(&mut self) -> &mut ChildSpec {
+    pub(crate) fn spec_mut(&mut self) -> &mut TaskSpec {
         self.child
             .as_deref_mut()
             .expect("pending supervisor child was already accepted")
     }
 
-    pub(crate) fn accept(mut self) -> ChildSpec {
+    pub(crate) fn accept(mut self) -> TaskSpec {
         *self
             .child
             .take()
@@ -1189,7 +1189,7 @@ mod tests {
         let (command_tx, mut command_rx) = mpsc::channel(1);
         let endpoint = ControlEndpoint { command_tx };
         let mut adding = Box::pin(endpoint.add_nested(PendingSupervisorChild::new(
-            ChildSpec::supervisor("nested", child),
+            TaskSpec::supervisor("nested", child),
         )));
 
         let queued = tokio::select! {
@@ -1341,7 +1341,7 @@ pub(crate) fn empty_nested_channels() -> NestedChannels {
 
 pub(crate) enum SupervisorCommand {
     AddChild {
-        child: ChildSpec,
+        child: TaskSpec,
         reply: oneshot::Sender<Result<u64, ControlError>>,
     },
     RemoveChild {
@@ -1478,11 +1478,11 @@ impl DynamicSupervisorHandle {
     /// even if the same child id is later removed and reused. Success means the
     /// membership was inserted and its start was
     /// scheduled. This operation is supported only by dynamic supervisors,
-    /// which spawn it immediately. A [`ChildSpec::supervisor`] registers the
+    /// which spawn it immediately. A [`TaskSpec::supervisor`] registers the
     /// nested supervisor's restart-stable handle and attachment at insertion,
     /// before it is spawned. [`SupervisorHandle::wait_started`] is available
     /// when readiness is required.
-    pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
+    pub async fn add_child(&self, child: TaskSpec) -> Result<u64, ControlError> {
         let endpoint = self.handle.control_endpoint()?;
         if matches!(&child.inner.kind, ChildKind::Supervisor(_)) {
             endpoint
@@ -1653,7 +1653,7 @@ impl SupervisorHandle {
     /// Waits until every current child generation has completed startup.
     ///
     /// Explicitly gated children complete startup when they call
-    /// [`ChildContext::mark_ready`](crate::supervisor::ChildContext::mark_ready); ordinary
+    /// [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready); ordinary
     /// children are ready as soon as they are spawned. Readiness remains
     /// latched after a child exits, and resets when that child restarts. Nested
     /// supervisors report ready only after their own children are ready. An

@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorResult, ActorSpec, Context, DynamicTree, RunningTree, host::ChildSpec,
+    Actor, ActorResult, ActorSpec, Context, DynamicTree, RunningTree, host::TaskSpec,
     observe::ActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
@@ -65,7 +65,7 @@ async fn spawn_console_with_stats(
         .expect("test snapshot tree spawns");
     let snapshots_handle = snapshots.scope();
     snapshots_handle
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_task(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -440,7 +440,7 @@ async fn ws_streams_snapshot_updates() {
 
     snapshots
         .scope()
-        .add_child(ChildSpec::task("updated", |ctx| async move {
+        .add_task(TaskSpec::new("updated", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -475,7 +475,7 @@ async fn ws_streams_events() {
 
     lifecycle
         .scope()
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_task(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -509,7 +509,7 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .scope()
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_task(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

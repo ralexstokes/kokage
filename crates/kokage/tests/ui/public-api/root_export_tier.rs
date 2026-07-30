@@ -1,8 +1,8 @@
 #![allow(unused_imports)]
 
 use kokage::host::{
-    RawContext as _, ActorRunError as _, BoxError as _, ChildContext as _, ChildResult as _,
-    ChildSpec as _, RawActor as _, RunnableActor as _, DEFAULT_SHUTDOWN_BOUND as _,
+    RawContext as _, ActorRunError as _, BoxError as _, TaskContext as _, ActorResult as _,
+    TaskSpec as _, RawActor as _, RunnableActor as _, DEFAULT_SHUTDOWN_BOUND as _,
 };
 use kokage::observe::{
     ActorStats as _, ChildExitView as _, ChildMembershipView as _, ChildOutline as _,
@@ -18,13 +18,12 @@ use kokage::RawContext;
 use kokage::ActorRunError;
 use kokage::ActorStats;
 use kokage::BoxError;
-use kokage::ChildContext;
+use kokage::TaskContext;
 use kokage::ChildExitView;
 use kokage::ChildMembershipView;
 use kokage::ChildOutline;
-use kokage::ChildResult;
 use kokage::ChildSnapshot;
-use kokage::ChildSpec;
+use kokage::TaskSpec;
 use kokage::ChildStateView;
 use kokage::CompletionError;
 use kokage::CompletionOutcome;

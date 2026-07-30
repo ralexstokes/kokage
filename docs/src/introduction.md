@@ -28,7 +28,7 @@ If you know Erlang/OTP or Elixir, the concepts map directly:
 
 | OTP concept | kokage equivalent |
 |---|---|
-| Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `host::ChildSpec` |
+| Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `host::TaskSpec` |
 | `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
 | `permanent` / `transient` / `temporary` | `Restart::always()` / `Restart::on_failure()` / `Restart::never()` |
 | Restart intensity (`MaxR`/`MaxT`) | `Restart::on_failure().limit(max_restarts, within)` (or `.limit(...)` on either other mode) |

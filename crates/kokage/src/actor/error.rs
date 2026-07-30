@@ -45,7 +45,11 @@ mod tests {
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TrySendError {
-    /// The target actor is currently unbound and a restart is expected.
+    /// The target actor has no live incarnation right now.
+    ///
+    /// A retry may succeed if its membership remains and another incarnation
+    /// starts. This also covers the brief window while a closed incarnation's
+    /// final disposition is being resolved.
     #[error("actor `{actor_id}` is not currently running")]
     #[non_exhaustive]
     NotRunning {
@@ -56,14 +60,6 @@ pub enum TrySendError {
     #[error("mailbox for actor `{actor_id}` is full")]
     #[non_exhaustive]
     Full {
-        /// Stable id of the target actor.
-        actor_id: String,
-    },
-    /// The current incarnation's mailbox is closed while its membership
-    /// disposition is still being resolved.
-    #[error("mailbox for actor `{actor_id}` is closed")]
-    #[non_exhaustive]
-    Closed {
         /// Stable id of the target actor.
         actor_id: String,
     },

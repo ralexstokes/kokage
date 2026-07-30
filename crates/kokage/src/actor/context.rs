@@ -1676,13 +1676,10 @@ impl RestrictedScopeRef {
     /// # Errors
     ///
     /// Returns [`ControlError::NotDynamic`](crate::ControlError::NotDynamic)
-    /// when this scope has ordered membership. See [`ScopeRef::add_child`] for
+    /// when this scope has ordered membership. See [`ScopeRef::add_task`] for
     /// the remaining insertion errors.
-    pub async fn add_child(
-        &self,
-        child: crate::host::ChildSpec,
-    ) -> Result<u64, crate::ControlError> {
-        self.handle.add_child(child).await
+    pub async fn add_task(&self, task: crate::host::TaskSpec) -> Result<u64, crate::ControlError> {
+        self.handle.add_task(task).await
     }
 
     /// Inserts an identity-owning subtree and returns a restricted handle.
@@ -1791,6 +1788,5 @@ fn try_send_rejection(error: &TrySendError) -> SendRejection {
         TrySendError::NotRunning { .. } => SendRejection::NotRunning,
         TrySendError::Terminated { .. } => SendRejection::ActorTerminated,
         TrySendError::Full { .. } => SendRejection::MailboxFull,
-        TrySendError::Closed { .. } => SendRejection::MailboxClosed,
     }
 }

@@ -1,7 +1,7 @@
-use crate::supervisor::{__private, ChildSpec, Supervisor};
+use crate::supervisor::{__private, Supervisor, TaskSpec};
 
-fn waiting_child(id: &str) -> ChildSpec {
-    ChildSpec::task(id, |ctx| async move {
+fn waiting_child(id: &str) -> TaskSpec {
+    TaskSpec::new(id, |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
@@ -22,7 +22,7 @@ async fn attached_children_walk_direct_memberships_before_descendants() {
             "worker metadata".to_owned(),
         ))
         .child(__private::attach(
-            ChildSpec::supervisor("branch", nested),
+            TaskSpec::supervisor("branch", nested),
             "branch metadata".to_owned(),
         ))
         .build()

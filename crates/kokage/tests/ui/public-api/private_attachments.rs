@@ -1,8 +1,8 @@
 use kokage::{
     AttachedChild, AttachedChildIdentity,
-    host::ChildSpec,
+    host::TaskSpec,
 };
 
 fn main() {
-    let _ = ChildSpec::attachment::<()>;
+    let _ = TaskSpec::attachment::<()>;
 }

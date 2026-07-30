@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{Backoff, OrderedTree, Restart, host::ChildSpec};
+use kokage::{Backoff, OrderedTree, Restart, host::TaskSpec};
 use tokio::time::{Duration, sleep};
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let attempts = Arc::new(AtomicUsize::new(0));
     let nested_attempts = Arc::clone(&attempts);
     let nested = OrderedTree::new().task(
-        ChildSpec::task("leaf", move |ctx| {
+        TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&nested_attempts);
             async move {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let running = OrderedTree::new()
-        .task(ChildSpec::task("anchor", |ctx| async move {
+        .task(TaskSpec::new("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

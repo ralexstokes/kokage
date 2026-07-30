@@ -11,10 +11,10 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
+        BuildError, CancellationToken, CompletionOnDrop, CompletionWatch, ControlError,
         DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
         ScopeKind, Shutdown, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-        SupervisorSnapshotReceiver,
+        SupervisorSnapshotReceiver, TaskSpec,
     },
 };
 
@@ -491,7 +491,7 @@ impl ScopeRef {
         let id = id.into();
         let parts = tree.into().into_parts();
         let parts = parts.map_err(ControlError::Rejected)?;
-        let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
+        let mut child = TaskSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
             child = child.restart(restart);
         }
@@ -525,8 +525,8 @@ impl ScopeRef {
     ///
     /// Returns [`ControlError::NotDynamic`] when this scope has ordered
     /// membership. Other failures are reported by the dynamic supervisor.
-    pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.dynamic_supervisor()?.add_child(child).await
+    pub async fn add_task(&self, task: TaskSpec) -> Result<u64, ControlError> {
+        self.dynamic_supervisor()?.add_child(task).await
     }
 
     /// Adds one actor declaration and returns its stable typed ref.
@@ -610,7 +610,7 @@ impl ScopeRef {
     /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current),
     /// accepted work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly return
-    /// [`TrySendError::Closed`](crate::TrySendError::Closed), while an awaited
+    /// [`TrySendError::NotRunning`](crate::TrySendError::NotRunning), while an awaited
     /// `send` waits and then returns [`SendError`](crate::SendError).
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
@@ -668,7 +668,7 @@ pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     owner: &Arc<ActorRuntimeState>,
     options: ActorChildOptions,
-) -> ChildSpec {
+) -> TaskSpec {
     let ActorChildOptions { restart, shutdown } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
@@ -676,7 +676,7 @@ pub(crate) fn actor_child_spec(
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
     __private::attach(
-        ChildSpec::task(actor_id, move |ctx| {
+        TaskSpec::new(actor_id, move |ctx| {
             let actor = child_guard.actor.clone();
             let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
             async move {

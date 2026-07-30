@@ -1634,10 +1634,7 @@ mod runnable_actor {
         timeout(Duration::from_secs(1), async {
             loop {
                 match actor_ref.try_send("probe".to_owned()) {
-                    Err(TrySendError::Closed { .. }) => break,
-                    Err(TrySendError::NotRunning { .. }) => {
-                        panic!("binding cleared before stale mailbox was observed");
-                    }
+                    Err(TrySendError::NotRunning { .. }) => break,
                     Err(TrySendError::Terminated { .. }) => {
                         panic!("binding terminated before stale mailbox was observed");
                     }
@@ -1855,9 +1852,7 @@ mod runnable_actor {
                     match worker_ref.try_send(()) {
                         Err(error @ TrySendError::NotRunning { .. })
                         | Err(error @ TrySendError::Terminated { .. }) => break error,
-                        Ok(())
-                        | Err(TrySendError::Full { .. })
-                        | Err(TrySendError::Closed { .. }) => tokio::task::yield_now().await,
+                        Ok(()) | Err(TrySendError::Full { .. }) => tokio::task::yield_now().await,
                         Err(error) => panic!("unexpected send error after dropped run: {error}"),
                     }
                 }

@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::supervisor::{
-    child::{ChildDefinition, ChildSpec},
+    child::{ChildDefinition, TaskSpec},
     error::BuildError,
     handle::{StableSupervisorChannels, SupervisorHandle},
     owner::{
@@ -117,7 +117,7 @@ impl OrderedSupervisorBuilder {
     /// Appends a child to the supervisor. Declaration order determines
     /// sequential startup and group-restart order.
     #[must_use]
-    pub fn child(mut self, child: ChildSpec) -> Self {
+    pub fn child(mut self, child: TaskSpec) -> Self {
         self.children.push(child.inner);
         self.refresh_declaration();
         self
@@ -252,9 +252,9 @@ mod tests {
         let supervisor = Supervisor::ordered()
             .default_restart(Restart::always())
             .default_shutdown(inherited_shutdown)
-            .child(ChildSpec::task("inherited", |_| async { Ok(()) }))
+            .child(TaskSpec::new("inherited", |_| async { Ok(()) }))
             .child(
-                ChildSpec::task("explicit", |_| async { Ok(()) })
+                TaskSpec::new("explicit", |_| async { Ok(()) })
                     .restart(Restart::never())
                     .shutdown(explicit_shutdown),
             )
@@ -280,7 +280,7 @@ mod tests {
         let supervisor = Supervisor::ordered()
             .default_restart(Restart::always())
             .default_shutdown(inherited_shutdown)
-            .child(ChildSpec::supervisor("nested", nested))
+            .child(TaskSpec::supervisor("nested", nested))
             .build()
             .expect("valid parent supervisor");
 

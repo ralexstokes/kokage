@@ -5,7 +5,7 @@ use std::sync::{
 
 use kokage::{
     Backoff, OrderedTree, Restart,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
 };
 use tokio::time::{Duration, sleep, timeout};
 
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Intensity uses a sliding timestamp window. Backoff attempts are tracked
     // separately as consecutive restarts and reset only after an incarnation
     // runs longer than `within`.
-    let warm_cache = ChildSpec::task("warm-cache", move |ctx| {
+    let warm_cache = TaskSpec::new("warm-cache", move |ctx| {
         let warm_cache_attempts = Arc::clone(&warm_cache_attempts);
         async move {
             let attempt = warm_cache_attempts.fetch_add(1, Ordering::SeqCst);
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(warm_cache_restart);
 
-    let metrics = ChildSpec::task("metrics", |ctx| async move {
+    let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
         ctx.shutdown_token().cancelled().await;
         println!("metrics observed shutdown");

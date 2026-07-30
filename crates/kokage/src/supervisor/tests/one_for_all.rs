@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::supervisor::{Backoff, ChildSpec, Restart, Shutdown, Strategy, Supervisor};
+use crate::supervisor::{Backoff, Restart, Shutdown, Strategy, Supervisor, TaskSpec};
 use tokio::{
     sync::{Barrier, Notify, mpsc},
     time::{Duration, timeout},
@@ -23,7 +23,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
     let (tail_started_tx, mut tail_started_rx) = mpsc::unbounded_channel();
 
     let trigger_fail = Arc::clone(&fail);
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let fail = Arc::clone(&trigger_fail);
         async move {
             if ctx.generation() == 0 {
@@ -38,7 +38,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
     let middle_cancelled_tx = cancelled_tx.clone();
     let middle_release = Arc::clone(&release_middle);
     let middle_ready = Arc::clone(&release_middle_ready);
-    let middle = ChildSpec::task("middle", move |ctx| {
+    let middle = TaskSpec::new("middle", move |ctx| {
         let cancelled_tx = middle_cancelled_tx.clone();
         let release_middle = Arc::clone(&middle_release);
         let release_middle_ready = Arc::clone(&middle_ready);
@@ -59,7 +59,7 @@ async fn group_restart_drains_in_reverse_then_respawns_through_readiness_gates()
     })
     .wait_for_ready();
     let tail_release = Arc::clone(&release_tail);
-    let tail = ChildSpec::task("tail", move |ctx| {
+    let tail = TaskSpec::new("tail", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         let release_tail = Arc::clone(&tail_release);
         let tail_started_tx = tail_started_tx.clone();
@@ -123,7 +123,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
 
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
         async move {
@@ -139,7 +139,7 @@ async fn restartable_child_failure_restarts_the_whole_group() {
         }
     });
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -177,7 +177,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let temporary = ChildSpec::task("temporary", move |ctx| {
+    let temporary = TaskSpec::new("temporary", move |ctx| {
         let temporary_tx = temporary_tx.clone();
         async move {
             temporary_tx
@@ -189,7 +189,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     .restart(Restart::never());
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
@@ -208,7 +208,7 @@ async fn completed_temporary_child_is_not_respawned_during_group_restart() {
     })
     .restart(Restart::on_failure());
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -253,7 +253,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
         async move {
@@ -270,7 +270,7 @@ async fn one_for_all_does_not_overlap_old_and_new_generations() {
     })
     .restart(Restart::on_failure());
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let live_instances = live_instances.clone();
         let peer_tx = peer_tx.clone();
         async move {
@@ -315,7 +315,7 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         async move {
@@ -332,7 +332,7 @@ async fn one_for_all_escalates_a_stubborn_cooperative_peer_and_restarts() {
     .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
 
     let peer_live_flag_for_child = peer_live_flag.clone();
-    let peer = ChildSpec::task("stubborn-peer", move |ctx| {
+    let peer = TaskSpec::new("stubborn-peer", move |ctx| {
         let peer_live_flag = peer_live_flag_for_child.clone();
         let peer_tx = peer_tx.clone();
         async move {
@@ -384,7 +384,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let cooperative = ChildSpec::task("stubborn-cooperative", |ctx| async move {
+    let cooperative = TaskSpec::new("stubborn-cooperative", |ctx| async move {
         if ctx.generation() == 0 {
             std::future::pending::<()>().await;
         } else {
@@ -396,7 +396,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     .shutdown(Shutdown::drain_for(Duration::from_millis(200)));
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         async move {
@@ -412,7 +412,7 @@ async fn group_restart_survives_an_abort_mode_child_that_joins_late() {
     .restart(Restart::on_failure());
 
     // Blocks between polls, so its abort cannot land inside the cursor window.
-    let late_peer = ChildSpec::task("late-abort-peer", move |ctx| {
+    let late_peer = TaskSpec::new("late-abort-peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -461,7 +461,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
 
     let release_failure_for_child = release_failure.clone();
     let finish_generation_one_for_trigger = finish_generation_one.clone();
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let finish_generation_one = finish_generation_one_for_trigger.clone();
         let trigger_attempts = trigger_attempts.clone();
@@ -482,7 +482,7 @@ async fn superseded_group_failure_leaves_latest_child_exits_completed() {
     .restart(Restart::on_failure());
 
     let finish_generation_one_for_peer = finish_generation_one.clone();
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let finish_generation_one = finish_generation_one_for_peer.clone();
         let peer_attempts = peer_attempts.clone();
         let peer_tx = peer_tx.clone();
@@ -552,7 +552,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
     let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
 
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         let trigger_tx = trigger_tx.clone();
         async move {
@@ -569,7 +569,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
     })
     .restart(Restart::on_failure().limit(1, Duration::from_secs(1)));
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -603,7 +603,7 @@ async fn group_restart_uses_the_failing_child_restart_intensity() {
 async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
 
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let trigger_attempts = trigger_attempts.clone();
         async move {
             if trigger_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -615,7 +615,7 @@ async fn triggering_child_restart_scheduled_precedes_child_restart_events() {
         }
     });
 
-    let peer = ChildSpec::task("peer", |ctx| async move {
+    let peer = TaskSpec::new("peer", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
@@ -741,7 +741,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     let peer_attempts = Arc::new(AtomicUsize::new(0));
 
     let release_trigger_failure_for_child = release_trigger_failure.clone();
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let release_trigger_failure = release_trigger_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         async move {
@@ -756,7 +756,7 @@ async fn rapid_failures_during_group_restart_do_not_schedule_a_second_group_rest
     })
     .restart(Restart::on_failure());
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let peer_attempts = peer_attempts.clone();
         async move {
             if peer_attempts.fetch_add(1, Ordering::SeqCst) == 0 {

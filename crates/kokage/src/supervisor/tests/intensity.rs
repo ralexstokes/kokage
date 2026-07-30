@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::supervisor::{Backoff, ChildSpec, Restart, Supervisor, SupervisorError};
+use crate::supervisor::{Backoff, Restart, Supervisor, SupervisorError, TaskSpec};
 use tokio::{
     sync::{Notify, mpsc},
     time::sleep,
@@ -19,7 +19,7 @@ use common::ObservedEvent;
 async fn repeated_failures_can_exceed_restart_intensity() {
     let supervisor = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(1, Duration::from_secs(1)))
-        .child(ChildSpec::task("flaky", |_| async {
+        .child(TaskSpec::new("flaky", |_| async {
             Err(common::test_error("boom"))
         }))
         .build()
@@ -43,7 +43,7 @@ async fn configured_backoff_delays_restart_attempts() {
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(75)),
         ))
-        .child(ChildSpec::task("flaky", |_| async {
+        .child(TaskSpec::new("flaky", |_| async {
             Err(common::test_error("boom"))
         }))
         .build()
@@ -76,7 +76,7 @@ async fn jittered_exponential_backoff_delays_restart_attempts() {
                 Duration::from_millis(500),
             ),
         ))
-        .child(ChildSpec::task("flaky", |_| async {
+        .child(TaskSpec::new("flaky", |_| async {
             Err(common::test_error("boom"))
         }))
         .build()
@@ -107,7 +107,7 @@ async fn exponential_backoff_delays_restart_attempts_by_expected_steps() {
             Duration::from_secs(1),
             Backoff::exponential(Duration::from_millis(40), 2, Duration::from_millis(200)),
         ))
-        .child(ChildSpec::task("flaky", move |ctx| {
+        .child(TaskSpec::new("flaky", move |ctx| {
             let starts_tx = starts_tx.clone();
             async move {
                 starts_tx
@@ -154,7 +154,7 @@ async fn backoff_attempts_survive_window_eviction_and_reset_after_a_long_run() {
             Duration::from_millis(200),
             Backoff::exponential(Duration::from_millis(50), 4, Duration::from_secs(2)),
         ))
-        .child(ChildSpec::task("flaky", move |ctx| {
+        .child(TaskSpec::new("flaky", move |ctx| {
             let release = release_for_child.clone();
             async move {
                 match ctx.generation() {
@@ -217,7 +217,7 @@ async fn child_restart_intensity_override_controls_backoff() {
     let supervisor = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
         .child(
-            ChildSpec::task("flaky", |_| async { Err(common::test_error("boom")) }).restart(
+            TaskSpec::new("flaky", |_| async { Err(common::test_error("boom")) }).restart(
                 common::restart_with_backoff(
                     1,
                     Duration::from_secs(1),
@@ -250,7 +250,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
     let (alpha_tx, mut alpha_rx) = mpsc::unbounded_channel();
     let (beta_tx, mut beta_rx) = mpsc::unbounded_channel();
 
-    let alpha = ChildSpec::task("alpha", move |ctx| {
+    let alpha = TaskSpec::new("alpha", move |ctx| {
         let alpha_attempts = alpha_attempts.clone();
         let alpha_tx = alpha_tx.clone();
         async move {
@@ -266,7 +266,7 @@ async fn restart_intensity_is_tracked_per_child_for_one_for_one() {
         }
     });
 
-    let beta = ChildSpec::task("beta", move |ctx| {
+    let beta = TaskSpec::new("beta", move |ctx| {
         let beta_attempts = beta_attempts.clone();
         let beta_tx = beta_tx.clone();
         async move {
@@ -305,7 +305,7 @@ async fn child_restart_intensity_override_is_enforced() {
     let running = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(10, Duration::from_secs(1)))
         .child(
-            ChildSpec::task("flaky", move |ctx| {
+            TaskSpec::new("flaky", move |ctx| {
                 let starts_tx = starts_tx.clone();
                 async move {
                     starts_tx
@@ -340,7 +340,7 @@ async fn restart_budget_recovers_after_failures_age_out_of_window() {
     let release_second_failure_for_child = release_second_failure.clone();
     let running = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(1, Duration::from_millis(100)))
-        .child(ChildSpec::task("flaky", move |ctx| {
+        .child(TaskSpec::new("flaky", move |ctx| {
             let release_second_failure = release_second_failure_for_child.clone();
             let starts_tx = starts_tx.clone();
             async move {
@@ -386,7 +386,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     let (beta_tx, mut beta_rx) = mpsc::unbounded_channel();
 
     let release_alpha_for_child = release_alpha.clone();
-    let alpha = ChildSpec::task("alpha", move |ctx| {
+    let alpha = TaskSpec::new("alpha", move |ctx| {
         let release_alpha = release_alpha_for_child.clone();
         let alpha_tx = alpha_tx.clone();
         async move {
@@ -404,7 +404,7 @@ async fn restart_intensity_is_tracked_per_failing_child_for_one_for_all() {
     });
 
     let release_beta_for_child = release_beta.clone();
-    let beta = ChildSpec::task("beta", move |ctx| {
+    let beta = TaskSpec::new("beta", move |ctx| {
         let release_beta = release_beta_for_child.clone();
         let beta_tx = beta_tx.clone();
         async move {

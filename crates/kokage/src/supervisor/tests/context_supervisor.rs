@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use crate::supervisor::{ChildSpec, Supervisor};
+use crate::supervisor::{Supervisor, TaskSpec};
 use tokio::{sync::mpsc, time::timeout};
 
 #[tokio::test]
 async fn raw_child_context_exposes_its_scope_and_preserves_kind_gating() {
     let (result_tx, mut result_rx) = mpsc::unbounded_channel();
-    let child = ChildSpec::task("leader", move |ctx| {
+    let child = TaskSpec::new("leader", move |ctx| {
         let result_tx = result_tx.clone();
         async move {
             let result = ctx.supervisor().dynamic().is_none();
@@ -44,14 +44,14 @@ async fn raw_child_can_await_a_supported_operation_on_its_own_scope() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("leader", move |ctx| {
+        .add_child(TaskSpec::new("leader", move |ctx| {
             let result_tx = result_tx.clone();
             async move {
                 let result = ctx
                     .supervisor()
                     .dynamic()
                     .expect("dynamic supervisor")
-                    .add_child(ChildSpec::task("sibling", |ctx| async move {
+                    .add_child(TaskSpec::new("sibling", |ctx| async move {
                         ctx.shutdown_token().cancelled().await;
                         Ok(())
                     }))

@@ -16,7 +16,7 @@ use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context,
     ControlError, DynamicTree, OrderedTree, Reply, Restart, ScopeRef, SendError, Shutdown,
     Strategy, SupervisorError,
-    host::{BoxError, ChildSpec, RawActor, RawContext},
+    host::{BoxError, RawActor, RawContext, TaskSpec},
     observe::{
         CompletionOutcome, LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView,
     },
@@ -321,7 +321,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
         .subtree("raw-members")
         .expect("dynamic raw-members subtree");
     raw_members
-        .add_child(ChildSpec::task("raw", |ctx| async move {
+        .add_task(TaskSpec::new("raw", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -458,8 +458,8 @@ async fn subtree_validation_phases_report_rejected() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
 
     let invalid = OrderedTree::new()
-        .task(ChildSpec::task("duplicate", |_| async { Ok(()) }))
-        .task(ChildSpec::task("duplicate", |_| async { Ok(()) }));
+        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }))
+        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     assert_eq!(
         support::dynamic_root(&root)
             .add_subtree("invalid", invalid)
@@ -571,7 +571,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .await
         .expect("tracked actor removed through runtime handle");
     support::dynamic_root(&handle)
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_task(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -679,7 +679,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     sampler.await.expect("restart-window sampler completed");
 
     dynamic
-        .add_child(ChildSpec::task("dynamic-worker", |ctx| async move {
+        .add_task(TaskSpec::new("dynamic-worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -1017,7 +1017,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
     let graph = builder.build();
     let sidecar_started = Arc::new(Notify::new());
 
-    let sidecar = ChildSpec::task("sidecar", {
+    let sidecar = TaskSpec::new("sidecar", {
         let sidecar_started = sidecar_started.clone();
         move |ctx| {
             let sidecar_started = sidecar_started.clone();

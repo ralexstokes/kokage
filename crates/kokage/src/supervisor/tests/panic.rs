@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::supervisor::{ChildSpec, Restart, Shutdown, Strategy, Supervisor};
+use crate::supervisor::{Restart, Shutdown, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Notify, mpsc};
 
 use super::common;
@@ -15,7 +15,7 @@ async fn transient_child_panic_causes_restart() {
 
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("panic-worker", move |ctx| {
+            TaskSpec::new("panic-worker", move |ctx| {
                 let attempts = attempts.clone();
                 let starts_tx = starts_tx.clone();
                 async move {
@@ -59,7 +59,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     let trigger_attempts = Arc::new(AtomicUsize::new(0));
     let (peer_starts_tx, mut peer_starts_rx) = mpsc::unbounded_channel();
 
-    let peer = ChildSpec::task("abort-peer", move |ctx| {
+    let peer = TaskSpec::new("abort-peer", move |ctx| {
         let peer_starts_tx = peer_starts_tx.clone();
         async move {
             peer_starts_tx
@@ -73,7 +73,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     .shutdown(Shutdown::abort());
 
     let trigger_failure_for_child = Arc::clone(&trigger_failure);
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let trigger_failure = Arc::clone(&trigger_failure_for_child);
         let trigger_attempts = Arc::clone(&trigger_attempts);
         async move {
@@ -121,7 +121,7 @@ async fn transient_factory_panic_causes_restart() {
 
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("panic-worker", move |ctx| {
+            TaskSpec::new("panic-worker", move |ctx| {
                 starts_tx
                     .send(ctx.generation())
                     .expect("test receiver dropped");
@@ -154,7 +154,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let panic_child = ChildSpec::task("panic-worker", move |ctx| {
+    let panic_child = TaskSpec::new("panic-worker", move |ctx| {
         let attempts = attempts.clone();
         let panic_tx = panic_tx.clone();
         async move {
@@ -171,7 +171,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
     })
     .restart(Restart::on_failure());
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -206,7 +206,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let panic_child = ChildSpec::task("panic-worker", move |ctx| {
+    let panic_child = TaskSpec::new("panic-worker", move |ctx| {
         panic_tx
             .send(ctx.generation())
             .expect("test receiver dropped");
@@ -221,7 +221,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
     })
     .restart(Restart::on_failure());
 
-    let peer = ChildSpec::task("peer", move |ctx| {
+    let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx

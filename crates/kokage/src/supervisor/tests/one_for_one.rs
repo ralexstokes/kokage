@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::supervisor::{Backoff, ChildSpec, Restart, Strategy, Supervisor};
+use crate::supervisor::{Backoff, Restart, Strategy, Supervisor, TaskSpec};
 use tokio::{
     sync::{Notify, mpsc},
     time::{Duration, sleep, timeout},
@@ -19,7 +19,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
     let (slow_tx, mut slow_rx) = mpsc::unbounded_channel();
     let (fast_tx, mut fast_rx) = mpsc::unbounded_channel();
 
-    let slow = ChildSpec::task("slow", {
+    let slow = TaskSpec::new("slow", {
         let slow_failure = Arc::clone(&slow_failure);
         move |ctx| {
             let slow_failure = Arc::clone(&slow_failure);
@@ -43,7 +43,7 @@ async fn sibling_restart_dispatches_during_another_childs_backoff() {
         Duration::from_secs(2),
         Backoff::fixed(Duration::from_secs(30)),
     ));
-    let fast = ChildSpec::task("fast", {
+    let fast = TaskSpec::new("fast", {
         let fast_failure = Arc::clone(&fast_failure);
         move |ctx| {
             let fast_failure = Arc::clone(&fast_failure);
@@ -108,7 +108,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
     let attempts = Arc::new(AtomicUsize::new(0));
 
     let flaky_attempts = attempts.clone();
-    let flaky = ChildSpec::task("flaky", move |ctx| {
+    let flaky = TaskSpec::new("flaky", move |ctx| {
         let flaky_attempts = flaky_attempts.clone();
         let flaky_tx = flaky_tx.clone();
         async move {
@@ -126,7 +126,7 @@ async fn failed_transient_child_restarts_and_sibling_keeps_running() {
     .restart(Restart::on_failure());
 
     let sibling_ticks_for_child = sibling_ticks.clone();
-    let sibling = ChildSpec::task("sibling", move |ctx| {
+    let sibling = TaskSpec::new("sibling", move |ctx| {
         let sibling_ticks_for_child = sibling_ticks_for_child.clone();
         let sibling_tx = sibling_tx.clone();
         async move {
@@ -177,7 +177,7 @@ async fn permanent_child_restarts_after_completion() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let child = ChildSpec::task("permanent", move |ctx| {
+    let child = TaskSpec::new("permanent", move |ctx| {
         let attempts = attempts.clone();
         let starts_tx = starts_tx.clone();
         async move {
@@ -216,7 +216,7 @@ async fn temporary_child_does_not_restart() {
 
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("temporary", move |ctx| {
+            TaskSpec::new("temporary", move |ctx| {
                 let starts_tx = starts_tx.clone();
                 async move {
                     starts_tx
@@ -273,7 +273,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
     let child_a_attempts = Arc::new(AtomicUsize::new(0));
     let child_b_attempts = Arc::new(AtomicUsize::new(0));
 
-    let child_a = ChildSpec::task("child-a", move |ctx| {
+    let child_a = TaskSpec::new("child-a", move |ctx| {
         let child_a_attempts = child_a_attempts.clone();
         let child_a_tx = child_a_tx.clone();
         async move {
@@ -290,7 +290,7 @@ async fn child_restart_intensity_is_isolated_per_child() {
     })
     .restart(child_restart_intensity);
 
-    let child_b = ChildSpec::task("child-b", move |ctx| {
+    let child_b = TaskSpec::new("child-b", move |ctx| {
         let child_b_attempts = child_b_attempts.clone();
         let child_b_tx = child_b_tx.clone();
         async move {
@@ -337,7 +337,7 @@ async fn restart_events_follow_exit_schedule_start_restart_order() {
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(40)),
         ))
-        .child(ChildSpec::task("flaky", move |ctx| {
+        .child(TaskSpec::new("flaky", move |ctx| {
             let attempts = attempts.clone();
             async move {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {

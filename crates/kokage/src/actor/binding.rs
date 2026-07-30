@@ -617,7 +617,7 @@ impl<M> MailboxRef<M> {
                 accepting_external,
             } => {
                 if !accepting_external.load(Ordering::Acquire) {
-                    return Err(TrySendError::Closed {
+                    return Err(TrySendError::NotRunning {
                         actor_id: self.actor_id.to_string(),
                     });
                 }
@@ -627,7 +627,7 @@ impl<M> MailboxRef<M> {
                         Ok(0)
                     }
                     Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => {
-                        Err(TrySendError::Closed {
+                        Err(TrySendError::NotRunning {
                             actor_id: self.actor_id.to_string(),
                         })
                     }
@@ -638,7 +638,7 @@ impl<M> MailboxRef<M> {
             }
             MailboxSender::Conflating(sender) => match sender.send(message) {
                 SendOutcome::Accepted { conflated } => Ok(conflated),
-                SendOutcome::Closed(_) => Err(TrySendError::Closed {
+                SendOutcome::Closed(_) => Err(TrySendError::NotRunning {
                     actor_id: self.actor_id.to_string(),
                 }),
             },

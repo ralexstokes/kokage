@@ -1,4 +1,7 @@
-use kokage::{Actor as ActorTrait, ActorResult, ActorSpec, Context, OrderedTree, RunningTree, host::ChildSpec};
+use kokage::{
+    Actor as ActorTrait, ActorResult, ActorSpec, Context, OrderedTree, RunningTree,
+    host::TaskSpec,
+};
 
 struct Actor;
 
@@ -22,7 +25,7 @@ async fn scope_operations_require_scope_ref(running: &RunningTree) {
         .add_actor(ActorSpec::new("actor", || Actor))
         .await;
     let _ = running
-        .add_child(ChildSpec::task("task", |_| async { Ok(()) }))
+        .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
         .await;
     let _ = running.add_subtree("tree", OrderedTree::new()).await;
     let _ = running.remove_child("child").await;

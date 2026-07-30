@@ -26,7 +26,7 @@ use std::{error::Error, io, time::Duration};
 use kokage::{
     Actor, ActorRef, ActorResult, ActorSpec, Backoff, Context, DynamicTree, OrderedTree, Restart,
     Strategy,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
 use tokio::time::sleep;
@@ -81,12 +81,12 @@ fn pipeline_runtime() -> OrderedTree {
     let transform_restart = Restart::on_failure()
         .limit(60, Duration::from_secs(60))
         .backoff(Backoff::fixed(Duration::from_secs(2)));
-    let source = ChildSpec::task("source", |ctx| async move {
+    let source = TaskSpec::new("source", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
 
-    let transform = ChildSpec::task("transform", |ctx| async move {
+    let transform = TaskSpec::new("transform", |ctx| async move {
         tokio::select! {
             _ = ctx.shutdown_token().cancelled() => Ok(()),
             _ = sleep(Duration::from_secs(9)) => {
@@ -109,7 +109,7 @@ fn pipeline_runtime() -> OrderedTree {
 fn telemetry_runtime() -> OrderedTree {
     // `Always` restarts even after a clean exit, so this child completes and
     // comes back every 7 seconds.
-    let heartbeat = ChildSpec::task("heartbeat", |ctx| async move {
+    let heartbeat = TaskSpec::new("heartbeat", |ctx| async move {
         tokio::select! {
             _ = ctx.shutdown_token().cancelled() => {}
             _ = sleep(Duration::from_secs(7)) => {}
@@ -119,12 +119,12 @@ fn telemetry_runtime() -> OrderedTree {
 
     // `Never` runs at most once: this child completes after 3 seconds and
     // stays Stopped for the rest of the run.
-    let migration = ChildSpec::task("schema-migration", |_ctx| async move {
+    let migration = TaskSpec::new("schema-migration", |_ctx| async move {
         sleep(Duration::from_secs(3)).await;
         Ok(())
     });
 
-    let exporter = ChildSpec::task("stdout-exporter", |ctx| async move {
+    let exporter = TaskSpec::new("stdout-exporter", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
