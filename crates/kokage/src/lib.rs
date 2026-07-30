@@ -266,7 +266,8 @@ pub mod observe {
 /// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, OrderedTree, Reply, StopContext,
+        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, OrderedTree, Reply,
+        StopContext,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -276,10 +277,9 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
-    BlockingCancelled, CallError, CancellationHandle, DownReason, DynamicRestrictedScope,
-    Context, MailboxMode, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot,
-    SealedActorSpec, SendError, StopContext,
-    TaskHandle, TimerKey, TrySendError,
+    BlockingCancelled, CallError, CancellationHandle, Context, DownReason, DynamicRestrictedScope,
+    MailboxMode, MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot,
+    SealedActorSpec, SendError, StopContext, TaskHandle, TimerKey, TrySendError,
 };
 pub use kokage_supervisor::{
     Backoff, BackoffParts, CancellationToken, ControlError, Restart, RestartMode, ScopeKind,
