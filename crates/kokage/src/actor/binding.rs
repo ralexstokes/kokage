@@ -8,12 +8,15 @@ use std::{
 };
 
 use crate::supervisor::{CancellationToken, Restart};
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::{
+    sync::{Notify, mpsc, watch},
+    time::{Instant, sleep_until},
+};
 
 use crate::actor::{
     error::TrySendError,
     monitor::{ActorMonitors, MonitorHub},
-    observability::{MessageSizeMetrics, ScopeObservability, SendRejection},
+    observability::{MessageRejection, MessageSizeMetrics, ScopeObservability},
 };
 
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
@@ -59,8 +62,9 @@ pub struct ActorStats {
     /// [`messages_accepted`](Self::messages_accepted): accepted messages may be
     /// conflated before receipt or discarded when an incarnation stops.
     pub messages_received: u64,
-    /// Messages accepted into the mailbox by `send` or `try_send`, including
-    /// mapped lifecycle-wait results delivered through the ordinary mailbox.
+    /// Messages accepted into the mailbox by `send`, `send_timeout`, or
+    /// `try_send`, including mapped lifecycle-wait results delivered through
+    /// the ordinary mailbox.
     ///
     /// Acceptance does not mean the actor handled the message. In particular,
     /// a conflating mailbox counts every successful send here and separately
@@ -79,9 +83,9 @@ pub struct ActorStats {
     pub message_bytes_accepted: Option<u64>,
     /// Mailbox sends rejected before acceptance.
     ///
-    /// This includes `send` or `try_send` calls that returned an error and a
-    /// mapped lifecycle-wait result rejected because its captured incarnation
-    /// mailbox had closed.
+    /// This includes `send`, `send_timeout`, or `try_send` calls that returned
+    /// an error and a mapped lifecycle-wait result rejected because its
+    /// captured incarnation mailbox had closed.
     pub sends_rejected: u64,
     /// Offloads currently owned by this actor incarnation.
     ///
@@ -436,6 +440,12 @@ pub(crate) enum SendOutcome<M> {
     Closed(M),
 }
 
+pub(crate) enum TimedSendOutcome<M> {
+    Accepted { conflated: u64 },
+    Closed(M),
+    Timeout(M),
+}
+
 pub(crate) enum GatedSendOutcome<M> {
     Accepted { conflated: u64 },
     Closed(M),
@@ -443,9 +453,15 @@ pub(crate) enum GatedSendOutcome<M> {
 }
 
 #[derive(Debug)]
-pub(crate) struct TrySendFailure {
-    pub(crate) error: TrySendError,
-    pub(crate) rejection: SendRejection,
+pub(crate) struct TrySendFailure<M> {
+    pub(crate) error: TrySendError<M>,
+    /// Exact mailbox-level rejection for telemetry.
+    ///
+    /// A public `NotRunning` error can mean there is no live actor binding or
+    /// that a mailbox resolved just before it closed. Keeping the telemetry
+    /// reason alongside it preserves that distinction without exposing it in
+    /// the delivery API.
+    pub(crate) rejection: MessageRejection,
 }
 
 #[derive(Debug)]
@@ -574,6 +590,50 @@ impl<M> MailboxRef<M> {
         }
     }
 
+    /// Sends before `deadline`, retaining the message when capacity or a
+    /// cooperative yield does not complete in time.
+    pub(crate) async fn send_retaining_until(
+        &self,
+        message: M,
+        deadline: Instant,
+    ) -> TimedSendOutcome<M> {
+        match &self.sender {
+            MailboxSender::Queue {
+                sender,
+                accepting_external,
+            } => {
+                if !accepting_external.load(Ordering::Acquire) {
+                    return TimedSendOutcome::Closed(message);
+                }
+                let reserved = tokio::select! {
+                    biased;
+                    () = sleep_until(deadline) => return TimedSendOutcome::Timeout(message),
+                    reserved = sender.reserve() => reserved,
+                };
+                match reserved {
+                    Ok(_) if !accepting_external.load(Ordering::Acquire) => {
+                        TimedSendOutcome::Closed(message)
+                    }
+                    Ok(_) if Instant::now() >= deadline => TimedSendOutcome::Timeout(message),
+                    Ok(permit) => {
+                        permit.send(message);
+                        TimedSendOutcome::Accepted { conflated: 0 }
+                    }
+                    Err(_) => TimedSendOutcome::Closed(message),
+                }
+            }
+            MailboxSender::Conflating(sender) => {
+                tokio::select! {
+                    biased;
+                    () = sleep_until(deadline) => TimedSendOutcome::Timeout(message),
+                    () = tokio::task::coop::consume_budget() => {
+                        sender.send_until(message, deadline)
+                    },
+                }
+            }
+        }
+    }
+
     /// Sends only if `gate` has not been cancelled at the acceptance point.
     pub(crate) async fn send_retaining_gated(
         &self,
@@ -616,7 +676,7 @@ impl<M> MailboxRef<M> {
         }
     }
 
-    pub(crate) fn try_send(&self, message: M) -> Result<u64, TrySendFailure> {
+    pub(crate) fn try_send(&self, message: M) -> Result<u64, TrySendFailure<M>> {
         match &self.sender {
             MailboxSender::Queue {
                 sender,
@@ -626,8 +686,9 @@ impl<M> MailboxRef<M> {
                     return Err(TrySendFailure {
                         error: TrySendError::NotRunning {
                             actor_id: self.actor_id.to_string(),
+                            message,
                         },
-                        rejection: SendRejection::MailboxClosed,
+                        rejection: MessageRejection::MailboxClosed,
                     });
                 }
                 match sender.try_reserve() {
@@ -638,24 +699,27 @@ impl<M> MailboxRef<M> {
                     Ok(_) | Err(mpsc::error::TrySendError::Closed(_)) => Err(TrySendFailure {
                         error: TrySendError::NotRunning {
                             actor_id: self.actor_id.to_string(),
+                            message,
                         },
-                        rejection: SendRejection::MailboxClosed,
+                        rejection: MessageRejection::MailboxClosed,
                     }),
                     Err(mpsc::error::TrySendError::Full(_)) => Err(TrySendFailure {
                         error: TrySendError::Full {
                             actor_id: self.actor_id.to_string(),
+                            message,
                         },
-                        rejection: SendRejection::MailboxFull,
+                        rejection: MessageRejection::MailboxFull,
                     }),
                 }
             }
             MailboxSender::Conflating(sender) => match sender.send(message) {
                 SendOutcome::Accepted { conflated } => Ok(conflated),
-                SendOutcome::Closed(_) => Err(TrySendFailure {
+                SendOutcome::Closed(message) => Err(TrySendFailure {
                     error: TrySendError::NotRunning {
                         actor_id: self.actor_id.to_string(),
+                        message,
                     },
-                    rejection: SendRejection::MailboxClosed,
+                    rejection: MessageRejection::MailboxClosed,
                 }),
             },
         }
@@ -774,6 +838,54 @@ impl<M> ConflatingSender<M> {
         drop(state);
         self.shared.notify.notify_one();
         SendOutcome::Accepted { conflated }
+    }
+
+    fn send_until(&self, message: M, deadline: Instant) -> TimedSendOutcome<M> {
+        let mut state = self.shared.lock();
+        if state.receiver_closed || !state.accepting_external {
+            return TimedSendOutcome::Closed(message);
+        }
+        if Instant::now() >= deadline {
+            return TimedSendOutcome::Timeout(message);
+        }
+
+        // Key matching is user code and can run for an arbitrary amount of
+        // time. Compute the stable position under the lock, then recheck the
+        // acceptance conditions immediately before mutating the queue.
+        let matched = state.key_matches.as_ref().and_then(|key_matches| {
+            state
+                .messages
+                .iter()
+                .position(|queued| key_matches(queued, &message))
+        });
+        let keyed = state.key_matches.is_some();
+        if state.receiver_closed || !state.accepting_external {
+            return TimedSendOutcome::Closed(message);
+        }
+        if Instant::now() >= deadline {
+            return TimedSendOutcome::Timeout(message);
+        }
+
+        let conflated = if let Some(index) = matched {
+            state.messages[index] = message;
+            1
+        } else if keyed {
+            let evicted = u64::from(state.messages.len() == state.capacity);
+            if evicted == 1 {
+                state.messages.pop_front();
+            }
+            state.messages.push_back(message);
+            evicted
+        } else if state.messages.is_empty() {
+            state.messages.push_back(message);
+            0
+        } else {
+            state.messages[0] = message;
+            1
+        };
+        drop(state);
+        self.shared.notify.notify_one();
+        TimedSendOutcome::Accepted { conflated }
     }
 
     fn send_gated(&self, message: M, gate: &SendGate) -> GatedSendOutcome<M> {
@@ -1138,12 +1250,12 @@ impl<M> Drop for BindingGuard<M> {
 mod tests {
     use super::*;
 
-    fn assert_mailbox_closed(failure: TrySendFailure) {
+    fn assert_mailbox_closed<M>(failure: TrySendFailure<M>) {
         assert!(matches!(
             failure.error,
-            TrySendError::NotRunning { actor_id } if actor_id == "worker"
+            TrySendError::NotRunning { actor_id, .. } if actor_id == "worker"
         ));
-        assert_eq!(failure.rejection, SendRejection::MailboxClosed);
+        assert_eq!(failure.rejection, MessageRejection::MailboxClosed);
     }
 
     #[test]

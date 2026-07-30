@@ -39,7 +39,7 @@ cargo run -p <crate> --example <name>
 | `directory` | A typed, userland name-directory actor (registry replacement pattern). |
 | `drain_policy` | Draining queued actor messages within one shutdown bound. |
 | `ref_rebind` | Stable typed actor refs across supervised restarts. |
-| `send_vs_try_send` | Waiting `send` vs fail-fast `try_send` across a restart window. |
+| `send_vs_try_send` | Waiting, fail-fast, and bounded sends across a restart window. |
 | `mailbox_backpressure` | Bounded mailbox back-pressure. |
 | `graph_failures` | Supervisor policy around actor failures. |
 | `builder_validation` | Tree validation errors reported at spawn. |

@@ -116,7 +116,7 @@ pub(crate) fn trace_actor_message(
     source_actor_id: Option<&str>,
     target_actor_id: &Arc<str>,
     operation: MessageOperation,
-    rejection: Option<SendRejection>,
+    rejection: Option<MessageRejection>,
 ) {
     match (source_actor_id, rejection) {
         (Some(source_actor_id), Some(rejection)) => trace!(
@@ -226,6 +226,7 @@ impl ActorExitStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MessageOperation {
     Send,
+    SendTimeout,
     TrySend,
 }
 
@@ -233,26 +234,29 @@ impl MessageOperation {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Send => "send",
+            Self::SendTimeout => "send_timeout",
             Self::TrySend => "try_send",
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SendRejection {
+pub(crate) enum MessageRejection {
     MailboxFull,
     MailboxClosed,
     NotRunning,
     ActorTerminated,
+    Timeout,
 }
 
-impl SendRejection {
+impl MessageRejection {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::MailboxFull => "mailbox_full",
             Self::MailboxClosed => "mailbox_closed",
             Self::NotRunning => "not_running",
             Self::ActorTerminated => "actor_terminated",
+            Self::Timeout => "timeout",
         }
     }
 }

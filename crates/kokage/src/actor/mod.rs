@@ -21,7 +21,10 @@ pub use builder::{ActorSlot, ActorSpec};
 pub use context::{
     ActorRef, ActorStatus, Context, RawContext, Reply, RestrictedScopeRef, StopContext, TimerKey,
 };
-pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError};
+pub use error::{
+    BlockingCancelled, CallError, OffloadDeadline, SendError, SendRejection, SendTimeoutError,
+    TrySendError,
+};
 pub use factory::ActorFactory;
 pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActorBuilder};

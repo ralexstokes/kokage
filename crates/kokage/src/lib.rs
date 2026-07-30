@@ -83,7 +83,11 @@
 //! therefore **at-most-once**, with loss windows at restart and shutdown.
 //! Stronger guarantees are user protocols built on [`ActorRef::call`] and
 //! [`Reply`]. [`ActorRef::send`] rides through restart windows when a
-//! rebind is expected.
+//! rebind is expected, and a terminal [`SendError`] returns the unaccepted
+//! message. [`ActorRef::try_send`] returns every fail-fast rejection with its
+//! message; [`ActorRef::send_timeout`] does the same after a bounded capacity
+//! or restart wait. Applying [`tokio::time::timeout`] to `send` is lossy
+//! because cancelling that future drops its message.
 //!
 //! [`host::RawContext::recv`] returns `None` as soon as shutdown is
 //! requested. [`Actor`]'s framework-owned loop defaults to
@@ -286,7 +290,8 @@ pub use kokage_derive::ActorFactory;
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
     Context, DownReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply,
-    RestrictedScopeRef, SendError, StopContext, TimerKey, TrySendError,
+    RestrictedScopeRef, SendError, SendRejection, SendTimeoutError, StopContext, TimerKey,
+    TrySendError,
 };
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
