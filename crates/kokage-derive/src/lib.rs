@@ -25,7 +25,7 @@ use syn::{Data, DeriveInput, Field, Fields, parse_macro_input, spanned::Spanned}
 ///
 /// ```
 /// # use std::collections::VecDeque;
-/// # use kokage::{Actor, ActorSpec, Context, ActorResult};
+/// # use kokage::{Actor, ActorSpec, Context, ExitResult};
 /// # struct Job;
 /// # struct Client;
 /// # impl Clone for Client { fn clone(&self) -> Self { Self } }
@@ -37,7 +37,7 @@ use syn::{Data, DeriveInput, Field, Fields, parse_macro_input, spanned::Spanned}
 /// }
 /// # impl Actor for Worker {
 /// #     type Msg = ();
-/// #     async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ActorResult {
+/// #     async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult {
 /// #         let _ = (&self.client, &self.pending);
 /// #         Ok(())
 /// #     }

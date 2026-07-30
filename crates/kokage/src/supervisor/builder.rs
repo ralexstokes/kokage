@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::supervisor::{
-    child::{ChildDefinition, TaskSpec},
+    child::{ChildDefinition, ChildSpec, TaskSpec},
     error::BuildError,
     handle::{StableSupervisorChannels, SupervisorHandle},
     owner::{
@@ -114,10 +114,17 @@ impl OrderedSupervisorBuilder {
         self
     }
 
-    /// Appends a child to the supervisor. Declaration order determines
+    /// Appends a task child to the supervisor. Declaration order determines
     /// sequential startup and group-restart order.
     #[must_use]
-    pub fn child(mut self, child: TaskSpec) -> Self {
+    pub fn child(self, child: TaskSpec) -> Self {
+        self.child_spec(child.into_spec())
+    }
+
+    /// Appends any supervised child kind. This is the internal entry point
+    /// used for nested supervisors and actor hosts.
+    #[must_use]
+    pub(crate) fn child_spec(mut self, child: ChildSpec) -> Self {
         self.children.push(child.inner);
         self.refresh_declaration();
         self
@@ -280,7 +287,7 @@ mod tests {
         let supervisor = Supervisor::ordered()
             .default_restart(Restart::always())
             .default_shutdown(inherited_shutdown)
-            .child(TaskSpec::supervisor("nested", nested))
+            .child_spec(ChildSpec::supervisor("nested", nested))
             .build()
             .expect("valid parent supervisor");
 

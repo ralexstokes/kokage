@@ -21,7 +21,7 @@ struct Probe {
 impl Actor for Probe {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.order.lock().await.push(self.name);
         if let Some(release) = &self.release {
             release.notified().await;
@@ -32,7 +32,7 @@ impl Actor for Probe {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.order.lock().await.push(message);
         Ok(())
     }
@@ -47,7 +47,7 @@ struct AddsChildOnStart {
 impl Actor for AddsChildOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         let handle = {
             let ready = self
                 .handle_rx
@@ -73,7 +73,7 @@ impl Actor for AddsChildOnStart {
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }
@@ -160,11 +160,11 @@ struct FailsOnStart;
 impl Actor for FailsOnStart {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         Err(std::io::Error::other("actor init failed").into())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }
@@ -210,7 +210,7 @@ struct DrainContinuation {
 impl Actor for DrainContinuation {
     type Msg = &'static str;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.handled.lock().await.push(message);
         if message == "hold" || message == "hold-and-continue" {
             if message == "hold-and-continue" {
@@ -300,7 +300,7 @@ struct DrainPhaseProbe {
 impl Actor for DrainPhaseProbe {
     type Msg = &'static str;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.observed.lock().await.push((
             message,
             ctx.status(),
@@ -416,7 +416,7 @@ struct OverlappingStopProbe {
 impl Actor for OverlappingStopProbe {
     type Msg = &'static str;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             "hold" => {
                 self.observed.send(ctx.status()).unwrap();
@@ -470,7 +470,7 @@ struct StopsOnStart {
 impl Actor for StopsOnStart {
     type Msg = &'static str;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         assert_eq!(ctx.status(), ActorStatus::Running);
         ctx.continue_with("continuation");
         self.started.notify_one();
@@ -480,7 +480,7 @@ impl Actor for StopsOnStart {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.events.lock().await.push(message);
         Ok(())
     }
@@ -585,7 +585,7 @@ struct PromptRaw;
 impl RawActor for PromptRaw {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ExitResult {
         Ok(())
     }
 }
@@ -623,7 +623,7 @@ struct DefaultPolicy {
 impl Actor for DefaultPolicy {
     type Msg = &'static str;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.handled.lock().await.push(message);
         if message == "hold" {
             self.started.notify_one();

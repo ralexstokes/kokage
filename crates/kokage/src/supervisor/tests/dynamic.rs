@@ -1,8 +1,8 @@
 use std::{ops::Deref, sync::Arc, time::Duration};
 
 use crate::supervisor::{
-    BuildError, ControlError, DynamicSupervisorBuilder, Restart, RunningSupervisor, ScopeKind,
-    Shutdown, Supervisor, SupervisorError, SupervisorHandle, TaskSpec,
+    BuildError, ChildSpec, ControlError, DynamicSupervisorBuilder, Restart, RunningSupervisor,
+    ScopeKind, Shutdown, Supervisor, SupervisorError, SupervisorHandle, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -977,7 +977,7 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
         handle
             .dynamic()
             .expect("dynamic supervisor")
-            .add_child(TaskSpec::supervisor(
+            .add_child_spec(ChildSpec::supervisor(
                 "replacement",
                 Supervisor::dynamic().build().expect("empty supervisor"),
             )),

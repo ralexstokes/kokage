@@ -12,7 +12,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree, Guard, OrderedTree, Restart,
+    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, OrderedTree, Restart,
     RunningTree, ScopeRef,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
@@ -35,7 +35,7 @@ struct Sink {
 impl Actor for Sink {
     type Msg = SinkMsg;
 
-    async fn handle(&mut self, message: SinkMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: SinkMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             SinkMsg::Lifecycle(event) => self
                 .observed
@@ -55,7 +55,7 @@ struct Crasher;
 impl Actor for Crasher {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Err(io::Error::other("crash requested").into())
     }
 }
@@ -72,7 +72,7 @@ struct RestrictedSink {
 impl Actor for RestrictedSink {
     type Msg = RestrictedSinkMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.watch = Some(
             ctx.supervisor()
                 .watch_lifecycle_to(&ctx.myself(), RestrictedSinkMsg::Lifecycle),
@@ -80,7 +80,7 @@ impl Actor for RestrictedSink {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         let RestrictedSinkMsg::Lifecycle(event) = message;
         self.observed
             .send(event)

@@ -12,7 +12,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, ScopeRef,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, Restart, ScopeRef,
     observe::SupervisorSnapshotReceiver,
 };
 
@@ -54,12 +54,12 @@ struct DerivedActor {
 impl Actor for DerivedActor {
     type Msg = ProbeMsg;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.incarnation = self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             ProbeMsg::Increment(reply) => {
                 self.local += 1;

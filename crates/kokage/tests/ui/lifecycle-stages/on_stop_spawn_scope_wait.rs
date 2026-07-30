@@ -1,13 +1,13 @@
 //! Shutdown-stage code cannot start actor-owned lifecycle waits.
 
-use kokage::{Actor, ActorResult, Context, StopContext, host::BoxError};
+use kokage::{Actor, ExitResult, Context, StopContext, host::BoxError};
 
 struct Worker;
 
 impl Actor for Worker {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 

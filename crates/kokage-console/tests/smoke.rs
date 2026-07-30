@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorResult, ActorSpec, Context, DynamicTree, RunningTree, host::TaskSpec,
+    Actor, ActorSpec, Context, DynamicTree, ExitResult, RunningTree, host::TaskSpec,
     observe::ActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
@@ -33,7 +33,7 @@ struct IdleActor;
 impl Actor for IdleActor {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }

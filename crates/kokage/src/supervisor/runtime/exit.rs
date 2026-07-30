@@ -1,5 +1,5 @@
 use crate::{
-    actor::ActorResult,
+    actor::ExitResult,
     supervisor::{child::BoxError, event::ExitKind},
 };
 
@@ -15,7 +15,7 @@ pub(crate) enum ExitStatus {
 }
 
 impl ExitStatus {
-    pub(crate) fn from_child_result(result: ActorResult) -> Self {
+    pub(crate) fn from_child_result(result: ExitResult) -> Self {
         match result {
             Ok(()) => Self::Completed,
             Err(err) => Self::Failed(err),

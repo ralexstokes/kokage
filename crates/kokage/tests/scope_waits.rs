@@ -14,7 +14,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSlot, ActorStatus, Context, Guard, Restart, Shutdown, StopContext,
+    Actor, ActorSlot, ActorStatus, Context, ExitResult, Guard, Restart, Shutdown, StopContext,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -34,7 +34,7 @@ struct CancelBeforePoll {
 impl Actor for CancelBeforePoll {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         let guard = ctx.spawn_scope_wait(
             &scope,
@@ -77,7 +77,7 @@ struct ReadyReporter {
 impl Actor for ReadyReporter {
     type Msg = ReadyMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         ctx.spawn_scope_wait(
             &scope,
@@ -88,7 +88,7 @@ impl Actor for ReadyReporter {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         let ReadyMsg::ScopeStarted(result) = message;
         self.report.send(result.is_ok()).expect("receiver open");
         Ok(())
@@ -133,7 +133,7 @@ struct PendingWait {
 impl Actor for PendingWait {
     type Msg = PendingMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         let started = self.started.clone();
         let dropped = self.dropped.clone();
@@ -150,7 +150,7 @@ impl Actor for PendingWait {
         Ok(())
     }
 
-    async fn handle(&mut self, _message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         panic!("a pending scope wait must not complete")
     }
 }
@@ -204,7 +204,7 @@ struct CancellableWait {
 impl Actor for CancellableWait {
     type Msg = CancelMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             CancelMsg::Start => {
                 let scope = ctx.supervisor();
@@ -329,7 +329,7 @@ struct BackpressureWait {
 impl Actor for BackpressureWait {
     type Msg = BackpressureMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         let wait_gate = Arc::clone(&self.wait_gate);
         let wait_started = self.wait_started.clone();
@@ -349,7 +349,7 @@ impl Actor for BackpressureWait {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             BackpressureMsg::Block => {
                 self.handler_started.send(()).expect("receiver open");
@@ -513,7 +513,7 @@ struct RestartProbe {
 impl Actor for RestartProbe {
     type Msg = RestartMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.starts
             .send(self.incarnation)
             .expect("start receiver open");
@@ -536,7 +536,7 @@ impl Actor for RestartProbe {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             RestartMsg::Crash => Err(io::Error::other("scripted restart").into()),
             RestartMsg::OldWaitCompleted => {
@@ -616,7 +616,7 @@ struct CompletionRaceProbe {
 impl Actor for CompletionRaceProbe {
     type Msg = CompletionRaceMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.starts
             .send(self.incarnation)
             .expect("start receiver open");
@@ -650,7 +650,7 @@ impl Actor for CompletionRaceProbe {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             CompletionRaceMsg::Crash => {
                 self.mapped.notified().await;
@@ -726,7 +726,7 @@ struct PanicOnce {
 impl Actor for PanicOnce {
     type Msg = Infallible;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         match self.panic_site {
             Some(PanicSite::Future) => {
@@ -754,7 +754,7 @@ impl Actor for PanicOnce {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {}
     }
 }
@@ -811,7 +811,7 @@ struct CompletedPanicDuringDrain {
 impl Actor for CompletedPanicDuringDrain {
     type Msg = Infallible;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         let handle = ctx.spawn_scope_wait(
             &scope,
@@ -827,11 +827,11 @@ impl Actor for CompletedPanicDuringDrain {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {}
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ActorResult {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ExitResult {
         self.stopped.send(()).expect("receiver open");
         Ok(())
     }
@@ -872,7 +872,7 @@ struct MixedDrain {
 impl Actor for MixedDrain {
     type Msg = MixedDrainMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         let scope_started = self.scope_started.clone();
         let scope_release = Arc::clone(&self.scope_release);
@@ -892,7 +892,7 @@ impl Actor for MixedDrain {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             MixedDrainMsg::Begin => {
                 let offload_started = self.offload_started.clone();
@@ -925,7 +925,7 @@ impl Actor for MixedDrain {
         Ok(())
     }
 
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ActorResult {
+    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> ExitResult {
         self.observed.send("stop").expect("receiver open");
         Ok(())
     }

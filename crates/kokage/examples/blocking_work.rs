@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorResult, ActorSpec, Context};
+use kokage::{Actor, ActorSpec, Context, ExitResult};
 use tokio::sync::mpsc;
 
 mod support;
@@ -18,7 +18,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = WorkMsg;
 
-    async fn handle(&mut self, message: WorkMsg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: WorkMsg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             WorkMsg::Process(input) => {
                 let output = ctx

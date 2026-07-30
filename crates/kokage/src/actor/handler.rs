@@ -2,7 +2,7 @@ use std::future::Future;
 
 use crate::actor::{
     context::{Context, RawContext, StopContext, TimerWake},
-    raw::{ActorResult, BoxError, RawActor},
+    raw::{BoxError, ExitResult, RawActor},
 };
 
 enum LoopEvent<M> {
@@ -56,7 +56,7 @@ pub trait Actor: Send + 'static {
         &mut self,
         message: Self::Msg,
         ctx: &mut Context<'_, Self>,
-    ) -> impl Future<Output = ActorResult> + Send;
+    ) -> impl Future<Output = ExitResult> + Send;
 
     /// Runs once before the first message of each actor run.
     ///
@@ -74,7 +74,7 @@ pub trait Actor: Send + 'static {
     fn on_start(
         &mut self,
         _ctx: &mut Context<'_, Self>,
-    ) -> impl Future<Output = ActorResult> + Send {
+    ) -> impl Future<Output = ExitResult> + Send {
         async { Ok(()) }
     }
 
@@ -107,7 +107,7 @@ impl<H: Actor> RawActor for H {
         true
     }
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         self.on_start(&mut Context::new(&mut ctx)).await?;
         ctx.mark_ready();
 

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorRef, ActorResult, ActorSpec, Context, DynamicTree};
+use kokage::{Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -16,7 +16,7 @@ enum FrontendMsg {
 impl Actor for Frontend {
     type Msg = FrontendMsg;
 
-    async fn handle(&mut self, message: FrontendMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: FrontendMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             FrontendMsg::SetRushPress(rush) => self.rush = Some(rush),
             FrontendMsg::Order(order) => {
@@ -39,7 +39,7 @@ struct RushPress {
 impl Actor for RushPress {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.observed.send(order).expect("receiver alive");
         Ok(())
     }

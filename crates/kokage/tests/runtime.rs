@@ -13,9 +13,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context,
-    ControlError, DynamicTree, OrderedTree, Reply, Restart, ScopeRef, SendError, Shutdown,
-    Strategy, SupervisorError,
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BuildError, Context, ControlError,
+    DynamicTree, ExitResult, OrderedTree, Reply, Restart, ScopeRef, SendError, Shutdown, Strategy,
+    SupervisorError,
     host::{BoxError, RawActor, RawContext, TaskSpec},
     observe::{
         CompletionOutcome, LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView,
@@ -43,7 +43,7 @@ impl<M> Clone for Drain<M> {
 impl<M: Send + 'static> RawActor for Drain<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: RawContext<M>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -57,7 +57,7 @@ struct Observe {
 impl RawActor for Observe {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -73,7 +73,7 @@ struct ObserveOnce {
 impl RawActor for ObserveOnce {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
         let message = ctx.recv().await.expect("message received before shutdown");
         self.observed.send(message).expect("receiver alive");
         Ok(())
@@ -821,7 +821,7 @@ struct FailAfterObserve {
 impl RawActor for FailAfterObserve {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
         match ctx.recv().await {
             Some(message) => {
                 self.observed.send(message).expect("receiver alive");
@@ -1094,7 +1094,7 @@ struct FailOnMessage;
 impl RawActor for FailOnMessage {
     type Msg = ();
 
-    async fn run(&mut self, mut ctx: RawContext<()>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<()>) -> ExitResult {
         if ctx.recv().await.is_some() {
             return Err::<_, BoxError>(Box::new(io::Error::other("boom")));
         }
@@ -1148,7 +1148,7 @@ struct AlwaysFails;
 impl RawActor for AlwaysFails {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
         Err::<_, BoxError>(Box::new(io::Error::other("boom")))
     }
 }
@@ -1194,12 +1194,12 @@ struct ResettingCounter {
 impl Actor for ResettingCounter {
     type Msg = CounterMsg;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.on_starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&mut self, message: CounterMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: CounterMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             CounterMsg::Add(n) => {
                 self.total += n;
@@ -1337,7 +1337,7 @@ struct StuckDrainActor {
 impl Actor for StuckDrainActor {
     type Msg = StuckDrainMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             StuckDrainMsg::Gate => {
                 self.handling_gate.notify_one();
@@ -1403,7 +1403,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
 impl RawActor for PendingActor {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
         self.started.notify_one();
         std::future::pending().await
     }

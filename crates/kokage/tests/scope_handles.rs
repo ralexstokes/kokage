@@ -11,7 +11,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, BuildError, Context, ControlError, DynamicTree, Guard,
+    Actor, ActorSpec, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
     OrderedTree, Restart, RestrictedScopeRef, ScopeRef, StopContext, Strategy,
     host::{BoxError, TaskSpec},
     observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
@@ -25,7 +25,7 @@ struct Idle;
 impl Actor for Idle {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }
@@ -48,7 +48,7 @@ struct ScopeProbe {
 impl Actor for ScopeProbe {
     type Msg = LeaderMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         let Some(children_id) = self.children_id else {
             let supervisor = ctx.supervisor();
@@ -102,7 +102,7 @@ impl Actor for ScopeProbe {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             LeaderMsg::AddFromHandler => {
                 let children = ctx
@@ -143,7 +143,7 @@ struct StopProbe(Arc<AtomicBool>);
 impl Actor for StopProbe {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 
@@ -161,7 +161,7 @@ struct BuilderHandleOwner {
 impl Actor for BuilderHandleOwner {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.mount
             .add_actor(ActorSpec::new("owned", || Idle))
             .await?;
@@ -169,7 +169,7 @@ impl Actor for BuilderHandleOwner {
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }
@@ -187,7 +187,7 @@ struct DynamicCompletionLeader {
 impl Actor for DynamicCompletionLeader {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let dynamic = ctx.supervisor();
         self.completion = Some(
             dynamic
@@ -207,7 +207,7 @@ impl Actor for DynamicCompletionLeader {
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 
@@ -220,7 +220,7 @@ impl Actor for DynamicCompletionLeader {
 impl Actor for RestrictedTaskAdder {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
         let children = ctx
             .supervisor()
             .subtree("children")
@@ -466,7 +466,7 @@ struct OrderedRestrictedProbe {
 impl Actor for OrderedRestrictedProbe {
     type Msg = ();
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.supervisor();
         assert!(matches!(
             scope.add_actor(ActorSpec::new("actor", || Idle)).await,
@@ -490,7 +490,7 @@ impl Actor for OrderedRestrictedProbe {
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }
@@ -996,12 +996,12 @@ struct RestartProbe {
 impl Actor for RestartProbe {
     type Msg = LeaderMsg;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         if matches!(message, LeaderMsg::Crash) {
             panic!("scripted crash");
         }

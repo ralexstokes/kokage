@@ -90,7 +90,7 @@ impl Reconciler {
 impl Actor for Reconciler {
     type Msg = ReconcilerMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         for (venue, exchange) in &self.sessions {
             assert!(
                 exchange.feed_sessions(venue) >= 1,
@@ -107,7 +107,7 @@ impl Actor for Reconciler {
         Ok(())
     }
 
-    async fn handle(&mut self, message: ReconcilerMsg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: ReconcilerMsg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             ReconcilerMsg::Market(snapshot) => {
                 let venue = snapshot.venue;

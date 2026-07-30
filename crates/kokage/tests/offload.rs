@@ -56,7 +56,7 @@ struct CancelBeforePoll {
 impl Actor for CancelBeforePoll {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
         let guard = ctx.offload(
             TEST_TIMEOUT,
             poll_fn(|_| -> Poll<()> { panic!("cancelled offload was polled") }),
@@ -103,7 +103,7 @@ struct Outcomes {
 impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success)
             .detach();
         ctx.offload(
@@ -123,7 +123,7 @@ impl Actor for Outcomes {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.observed.send(message).unwrap();
         Ok(())
     }
@@ -224,7 +224,7 @@ impl Drop for ReleaseOnDrop {
 impl Actor for StaleActor {
     type Msg = StaleMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             StaleMsg::Start => {
                 assert_eq!(self.incarnation, 0);
@@ -325,7 +325,7 @@ struct AbortActor {
 impl Actor for AbortActor {
     type Msg = AbortMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             AbortMsg::Start => {
                 let handle =
@@ -450,7 +450,7 @@ struct ReadyAbortActor {
 impl Actor for ReadyAbortActor {
     type Msg = ReadyAbortMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             ReadyAbortMsg::Start => {
                 let handle = ctx.offload(Duration::from_secs(1), async {}, |_| ReadyAbortMsg::Done);
@@ -536,7 +536,7 @@ struct DrainAbortActor {
 impl Actor for DrainAbortActor {
     type Msg = DrainAbortMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             DrainAbortMsg::Start => {
                 let shutdown = ctx.shutdown_token().clone();
@@ -605,7 +605,7 @@ struct ShutdownActor {
 impl Actor for ShutdownActor {
     type Msg = DrainMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             DrainMsg::Start => {
                 let release = self.release.clone();
@@ -709,7 +709,7 @@ struct BackpressureActor {
 impl Actor for BackpressureActor {
     type Msg = BackpressureMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             BackpressureMsg::Start => {
                 let release = self.offload_release.clone();
@@ -835,7 +835,7 @@ struct DeadlineDrainActor {
 impl Actor for DeadlineDrainActor {
     type Msg = DeadlineDrainMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             DeadlineDrainMsg::Start => {
                 ctx.offload(
@@ -890,7 +890,7 @@ struct RawCompletion {
 impl RawActor for RawCompletion {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         ctx.offload(Duration::from_secs(1), async {}, |_| "done")
             .detach();
         let message = ctx.recv().await.expect("offload completion");
@@ -925,7 +925,7 @@ struct PanicActor;
 impl Actor for PanicActor {
     type Msg = PanicMsg;
 
-    async fn handle(&mut self, _message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.offload(
             Duration::from_secs(1),
             async { panic!("offload panic") },

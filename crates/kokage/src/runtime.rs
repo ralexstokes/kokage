@@ -11,7 +11,7 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, CompletionOnDrop, CompletionWatch, ControlError,
+        BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
         DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
         ScopeKind, Shutdown, SupervisorError, SupervisorHandle, SupervisorSnapshot,
         SupervisorSnapshotReceiver, TaskSpec,
@@ -491,7 +491,7 @@ impl ScopeRef {
         let id = id.into();
         let parts = tree.into().into_parts();
         let parts = parts.map_err(ControlError::Rejected)?;
-        let mut child = TaskSpec::supervisor(id.clone(), parts.supervisor);
+        let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
             child = child.restart(restart);
         }
@@ -499,10 +499,10 @@ impl ScopeRef {
             child = child.shutdown(shutdown);
         }
         let lineage = dynamic
-            .add_child(__private::attach(
-                child,
-                RuntimeAttachment::subtree(&self.actors, Arc::clone(&parts.actors)),
-            ))
+            .add_child_spec(child.attachment(RuntimeAttachment::subtree(
+                &self.actors,
+                Arc::clone(&parts.actors),
+            )))
             .await?;
         runtime_subtree_membership(
             __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic),
@@ -587,7 +587,7 @@ impl ScopeRef {
             &self.actors,
             ActorChildOptions::new(options.restart, options.shutdown),
         );
-        dynamic.add_child(child).await?;
+        dynamic.add_child_spec(child).await?;
 
         Ok(actor_ref)
     }
@@ -668,33 +668,32 @@ pub(crate) fn actor_child_spec(
     actor: RunnableActor,
     owner: &Arc<ActorRuntimeState>,
     options: ActorChildOptions,
-) -> TaskSpec {
+) -> ChildSpec {
     let ActorChildOptions { restart, shutdown } = options;
     let actor_id = actor.label().to_owned();
     let attachment = RuntimeAttachment::actor(owner, actor.clone());
     let guard = Arc::new(TerminateBindingOnDrop::new(actor));
     let child_guard = Arc::clone(&guard);
     let actor_owner = Arc::clone(owner);
-    __private::attach(
-        TaskSpec::new(actor_id, move |ctx| {
-            let actor = child_guard.actor.clone();
-            let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
-            async move {
-                actor
-                    .run_until_ready(
-                        ctx.shutdown_token().cancelled(),
-                        ctx.abort_token().cancelled(),
-                        restart,
-                        matches!(shutdown, Shutdown::Drain { .. }),
-                        supervisor,
-                        || ctx.mark_ready(),
-                    )
-                    .await
-                    .map_err(Into::into)
-            }
-        }),
-        attachment,
-    )
+    TaskSpec::new(actor_id, move |ctx| {
+        let actor = child_guard.actor.clone();
+        let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
+        async move {
+            actor
+                .run_until_ready(
+                    ctx.shutdown_token().cancelled(),
+                    ctx.abort_token().cancelled(),
+                    restart,
+                    matches!(shutdown, Shutdown::Drain { .. }),
+                    supervisor,
+                    || ctx.mark_ready(),
+                )
+                .await
+                .map_err(Into::into)
+        }
+    })
+    .into_spec()
+    .attachment(attachment)
     .wait_for_ready()
     .restart(restart)
     .shutdown(shutdown)
@@ -711,7 +710,7 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorResult, ActorSpec, BuildError, Context, DynamicTree, OrderedTree, Restart,
+        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, OrderedTree, Restart,
         RunningTree, ScopeRef,
     };
 
@@ -730,7 +729,7 @@ mod tests {
     impl Actor for FailsOnMessage {
         type Msg = ();
 
-        async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+        async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
             Err(std::io::Error::other("expected test failure").into())
         }
     }

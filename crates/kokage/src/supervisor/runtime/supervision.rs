@@ -50,7 +50,7 @@ pub(crate) type ChildKey = usize;
 /// Message returned by a child task through the `JoinSet`. Task identity is
 /// correlated through `task_map`, including for successful joins.
 pub(crate) struct ChildEnvelope {
-    pub(crate) result: crate::actor::ActorResult,
+    pub(crate) result: crate::actor::ExitResult,
 }
 
 /// Metadata stored alongside a Tokio task ID so every join result can be
@@ -953,7 +953,7 @@ impl SupervisorRuntime {
         }
     }
 
-    fn add_child(&mut self, mut child: crate::supervisor::child::TaskSpec) -> CommandResult<u64> {
+    fn add_child(&mut self, mut child: crate::supervisor::child::ChildSpec) -> CommandResult<u64> {
         self.assert_dynamic_membership();
 
         ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
@@ -2108,7 +2108,7 @@ fn event_child_id(event: &RuntimeEvent) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::supervisor::{
-        Supervisor, TaskSpec,
+        ChildSpec, Supervisor, TaskSpec,
         handle::{attached_children_state, empty_nested_channels},
         owner::initial_snapshot,
     };
@@ -2172,7 +2172,7 @@ mod tests {
     fn ordered_runtime_rejects_internal_dynamic_membership_commands() {
         let mut runtime = runtime_with_child("static");
 
-        let _ = runtime.add_child(TaskSpec::new("dynamic", |_| async { Ok(()) }));
+        let _ = runtime.add_child(TaskSpec::new("dynamic", |_| async { Ok(()) }).into_spec());
     }
 
     #[tokio::test]
@@ -2250,7 +2250,7 @@ mod tests {
         let (reply, _reply_rx) = oneshot::channel();
         command_tx
             .try_send(SupervisorCommand::AddChild {
-                child: TaskSpec::new("late", |_| async { Ok(()) }),
+                child: TaskSpec::new("late", |_| async { Ok(()) }).into_spec(),
                 reply,
             })
             .expect("command channel should have capacity");
@@ -2517,6 +2517,7 @@ mod tests {
                         ctx.shutdown_token().cancelled().await;
                         Ok(())
                     })
+                    .into_spec()
                     .attachment("old attachment".to_owned()),
                 )
                 .is_ok(),
@@ -2557,7 +2558,7 @@ mod tests {
     #[test]
     fn displaced_parent_cannot_retire_reconciled_nested_identity() {
         let supervisor = Supervisor::ordered()
-            .child(TaskSpec::supervisor("nested", empty_supervisor()))
+            .child_spec(ChildSpec::supervisor("nested", empty_supervisor()))
             .build()
             .expect("supervisor builds");
         let channels = supervisor.stable_channels(false);
@@ -2642,8 +2643,8 @@ mod tests {
     #[test]
     fn stable_identity_reconciliation_reuses_static_and_closes_stale_channels() {
         let config = Supervisor::ordered()
-            .child(TaskSpec::supervisor("reused", empty_supervisor()))
-            .child(TaskSpec::supervisor("collision", empty_supervisor()))
+            .child_spec(ChildSpec::supervisor("reused", empty_supervisor()))
+            .child_spec(ChildSpec::supervisor("collision", empty_supervisor()))
             .build()
             .expect("valid supervisor config")
             .config

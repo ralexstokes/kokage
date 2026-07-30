@@ -9,7 +9,7 @@ whether a navigated scope has dynamic membership.
 ## Standalone dynamic scope
 
 ```rust
-use kokage::{Actor, ActorResult, ActorSpec, DynamicTree, Context};
+use kokage::{Actor, ExitResult, ActorSpec, DynamicTree, Context};
 
 struct Worker;
 
@@ -20,7 +20,7 @@ impl Actor for Worker {
         &mut self,
         message: String,
         _ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         println!("{message}");
         Ok(())
     }
@@ -90,7 +90,7 @@ message-size settings:
 ```rust
 # use kokage::{ActorSpec, MailboxMode, Restart};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(32)
     .mailbox(MailboxMode::queue())
@@ -109,7 +109,7 @@ id:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let tree = OrderedTree::new().subtree("sessions", DynamicTree::new());
@@ -142,7 +142,7 @@ future dynamic scopes directly:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
 # struct Router(kokage::ScopeRef);
-# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = DynamicTree::new();
 let sessions_handle = sessions.scope();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
@@ -185,7 +185,7 @@ Declare a leader-owned scope explicitly:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy};
 # struct Leader;
-# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let session = OrderedTree::new().subtree(
     "session-runtime",
     OrderedTree::new()

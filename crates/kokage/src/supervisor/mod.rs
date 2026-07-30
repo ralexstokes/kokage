@@ -27,18 +27,7 @@ pub mod __private {
     use std::any::Any;
 
     pub use crate::supervisor::attachment::{AttachedChild, AttachedChildIdentity};
-    use crate::supervisor::{
-        CancellationToken, DynamicSupervisorHandle, Guard, Restart, Shutdown, SupervisorHandle,
-        TaskSpec,
-    };
-
-    /// Adds process-local metadata to a child specification.
-    pub fn attach<T>(child: TaskSpec, attachment: T) -> TaskSpec
-    where
-        T: Any + Send + Sync,
-    {
-        child.attachment(attachment)
-    }
+    use crate::supervisor::{CancellationToken, DynamicSupervisorHandle, Guard, SupervisorHandle};
 
     /// Returns process-local metadata from the current supervision tree.
     pub fn attached_children<T>(handle: &SupervisorHandle) -> Vec<AttachedChild<T>>
@@ -54,15 +43,6 @@ pub mod __private {
         T: Any + Send + Sync,
     {
         handle.attached_children()
-    }
-
-    /// Resolves one child's explicit policy overrides against scope defaults.
-    pub fn child_policies(
-        child: &TaskSpec,
-        default_restart: Restart,
-        default_shutdown: Shutdown,
-    ) -> (Restart, Shutdown) {
-        child.resolved_policies(default_restart, default_shutdown)
     }
 
     /// Builds a guard around cancellation and completion tokens for the actor layer.
@@ -86,6 +66,7 @@ pub mod __private {
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
+pub(crate) use child::ChildSpec;
 pub use child::{BoxError, TaskSpec};
 pub use completion::{CompletionError, CompletionOutcome, CompletionWatch};
 pub use context::TaskContext;

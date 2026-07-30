@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ControlError, Restart, ScopeKind, Shutdown, Supervisor, SupervisorError,
+    Backoff, ChildSpec, ControlError, Restart, ScopeKind, Shutdown, Supervisor, SupervisorError,
     SupervisorStateView, TaskSpec,
 };
 use tokio::{
@@ -26,7 +26,7 @@ async fn nested_supervisor_completes_as_a_clean_child_exit() {
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
         .build()
         .expect("valid outer supervisor");
 
@@ -82,7 +82,7 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::on_failure()))
         .build()
         .expect("valid outer supervisor");
 
@@ -136,7 +136,7 @@ async fn parent_shutdown_propagates_into_nested_supervisor() {
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested))
+        .child_spec(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor");
 
@@ -180,7 +180,7 @@ async fn dynamically_added_nested_supervisor_can_be_removed() {
     let lineage = handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::supervisor("nested", nested))
+        .add_child_spec(ChildSpec::supervisor("nested", nested))
         .await
         .expect("dynamic nested child should be accepted");
     assert_eq!(
@@ -270,7 +270,7 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::supervisor("nested", nested))
+        .add_child_spec(ChildSpec::supervisor("nested", nested))
         .await
         .expect("dynamic nested child should be accepted");
 
@@ -373,7 +373,7 @@ async fn parent_event_stream_includes_forwarded_nested_events() {
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
         .build()
         .expect("valid outer supervisor");
 
@@ -444,12 +444,12 @@ async fn nested_events_preserve_the_full_tree_path() {
         .expect("valid deepest supervisor");
 
     let middle = Supervisor::ordered()
-        .child(TaskSpec::supervisor("middle", deepest).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("middle", deepest).restart(Restart::never()))
         .build()
         .expect("valid middle supervisor");
 
     let outer = Supervisor::ordered()
-        .child(TaskSpec::supervisor("outer", middle).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("outer", middle).restart(Restart::never()))
         .build()
         .expect("valid outer supervisor");
 
@@ -494,7 +494,7 @@ async fn removing_nested_supervisor_unregisters_its_control_endpoint() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::supervisor("nested", nested))
+        .add_child_spec(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested child should be accepted");
     let nested_handle = handle
@@ -574,7 +574,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
         .expect("valid nested supervisor");
 
     let handle_owner = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested))
+        .child_spec(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -654,7 +654,7 @@ async fn abort_mode_hard_cascades_through_a_nested_supervisor() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::supervisor("nested", nested).shutdown(Shutdown::abort()))
+        .add_child_spec(ChildSpec::supervisor("nested", nested).shutdown(Shutdown::abort()))
         .await
         .expect("nested child should be accepted");
     common::recv_event(&mut started_rx).await;
@@ -709,8 +709,8 @@ async fn control_is_unavailable_between_nested_incarnations() {
         .expect("valid nested supervisor");
 
     let handle_owner = Supervisor::ordered()
-        .child(
-            TaskSpec::supervisor("nested", nested).restart(common::restart_with_backoff(
+        .child_spec(
+            ChildSpec::supervisor("nested", nested).restart(common::restart_with_backoff(
                 5,
                 Duration::from_secs(30),
                 Backoff::fixed(Duration::from_millis(500)),
@@ -789,12 +789,12 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
             })
             .shutdown(Shutdown::abort()),
         )
-        .child(TaskSpec::supervisor("leafsup", leafsup))
+        .child_spec(ChildSpec::supervisor("leafsup", leafsup))
         .build()
         .expect("valid middle supervisor");
 
     let handle_owner = Supervisor::ordered()
-        .child(TaskSpec::supervisor("mid", mid))
+        .child_spec(ChildSpec::supervisor("mid", mid))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -866,7 +866,7 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .build()
         .expect("valid nested supervisor");
     let root = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested))
+        .child_spec(ChildSpec::supervisor("nested", nested))
         .child(
             TaskSpec::new("fatal", |_| async { Err(common::test_error("fatal")) })
                 .restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
@@ -901,7 +901,7 @@ async fn nested_supervisor_view_reaches_the_parent_without_diverging_from_its_ba
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested))
+        .child_spec(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor");
 

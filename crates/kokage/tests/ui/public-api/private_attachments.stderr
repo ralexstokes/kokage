@@ -6,15 +6,8 @@ error[E0432]: unresolved imports `kokage::AttachedChild`, `kokage::AttachedChild
   |     |
   |     no `AttachedChild` in the root
 
-error[E0624]: method `attachment` is private
+error[E0599]: no associated function or constant named `attachment` found for struct `TaskSpec` in the current scope
  --> tests/ui/public-api/private_attachments.rs:7:23
   |
-7 |       let _ = TaskSpec::attachment::<()>;
-  |                         ^^^^^^^^^^ private method
-  |
- ::: src/supervisor/child.rs
-  |
-  | /     pub(crate) fn attachment<T>(self, attachment: T) -> Self
-  | |     where
-  | |         T: Any + Send + Sync,
-  | |_____________________________- private method defined here
+7 |     let _ = TaskSpec::attachment::<()>;
+  |                       ^^^^^^^^^^ associated function or constant not found in `TaskSpec`

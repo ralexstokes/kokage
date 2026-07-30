@@ -13,8 +13,8 @@ For acyclic dependencies, obtain a ref from a spec before moving it:
 # use kokage::{ActorSpec, OrderedTree};
 # struct Press;
 # struct FrontDesk(kokage::ActorRef<()>);
-# impl kokage::Actor for Press { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
-# impl kokage::Actor for FrontDesk { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Press { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
+# impl kokage::Actor for FrontDesk { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let press_actor = ActorSpec::new("press", || Press);
 let press = press_actor.actor_ref();
 let front_desk_actor = ActorSpec::new("front-desk", {
@@ -43,8 +43,8 @@ partially defined declaration structurally impossible:
 # use kokage::{ActorSlot, OrderedTree};
 # struct Left(kokage::ActorRef<()>);
 # struct Right(kokage::ActorRef<()>);
-# impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
-# impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
+# impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let left_slot = ActorSlot::<()>::new("left");
 let left = left_slot.actor_ref();
 let right_slot = ActorSlot::<()>::new("right");
@@ -89,7 +89,7 @@ struct Worker {
     #[factory(default)]
     pending: Vec<String>,
 }
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 ```
 
 Fallible or asynchronous initialization belongs in `Actor::on_start`, where
@@ -102,7 +102,7 @@ Configure an individual declaration before placement:
 ```rust
 # use kokage::{ActorSpec, MailboxMode, Restart};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = String; async fn handle(&mut self, _: String, _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let worker = ActorSpec::new("worker", || Worker)
     .mailbox_capacity(128)
     .mailbox(MailboxMode::queue())

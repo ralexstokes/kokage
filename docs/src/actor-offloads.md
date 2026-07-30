@@ -111,7 +111,7 @@ impl Actor for Router {
         &mut self,
         message: RouterMsg,
         ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         match message {
             RouterMsg::Submit { venue, order, reply } => {
                 // Validate and record intent on the handle loop...

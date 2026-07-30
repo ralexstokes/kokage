@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    CompletionError, CompletionOutcome, LifecycleEventKind, Restart, SnapshotRecvError, Supervisor,
-    TaskSpec,
+    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, Restart, SnapshotRecvError,
+    Supervisor, TaskSpec,
 };
 use tokio::time::timeout;
 
@@ -17,7 +17,7 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
         }))
         .build()
         .expect("nested supervisor builds");
-    let supervisor = Supervisor::ordered().child(TaskSpec::supervisor("nested", nested));
+    let supervisor = Supervisor::ordered().child_spec(ChildSpec::supervisor("nested", nested));
     let handle = supervisor.handle();
     let mut recursive = handle.watch_lifecycle();
     let mut direct = handle.watch_lifecycle().direct_children();

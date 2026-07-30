@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSpec, CancellationToken, Context, Guard, Restart, TimerKey,
+    Actor, ActorRef, ActorSpec, CancellationToken, Context, ExitResult, Guard, Restart, TimerKey,
 };
 use tokio::time::Instant;
 
@@ -64,7 +64,7 @@ pub struct Session {
 }
 
 impl Session {
-    async fn append(&self, entry: JournalEntry) -> ActorResult {
+    async fn append(&self, entry: JournalEntry) -> ExitResult {
         self.journal
             .call(PHASE_TIMEOUT, |reply| JournalMsg::Append {
                 chat: self.chat,
@@ -86,7 +86,7 @@ impl Session {
         attempt: u64,
         input: PendingInput,
         ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         ctx.clear_timeout(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
             self.heartbeat = Some(ctx.interval(
@@ -157,7 +157,7 @@ impl Session {
         &mut self,
         input: PendingInput,
         ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         let task = self.task_sequence.fetch_add(1, Ordering::Relaxed) + 1;
         self.start_run(task, Role::Planner, 0, input, ctx).await
     }
@@ -167,7 +167,7 @@ impl Session {
         task: TaskId,
         approved: bool,
         ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         let text = format!(
             "task {task} complete (approved={approved}, prior-context={})",
             self.transcript_len.saturating_sub(1)
@@ -198,7 +198,7 @@ impl Session {
 impl Actor for Session {
     type Msg = SessionMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let mut proof = self.proof.lock().expect("proof lock poisoned");
         proof.session_ready_at.insert(self.chat, Instant::now());
         proof.session_generations.insert(self.chat, self.generation);
@@ -207,7 +207,7 @@ impl Actor for Session {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             SessionMsg::Rehydrate => {
                 let replay = self

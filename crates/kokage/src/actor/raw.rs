@@ -11,7 +11,7 @@ pub(crate) use crate::supervisor::BoxError;
 /// owns its receive loop, so returning `Ok(())` simply completes that actor
 /// cleanly. A [`TaskSpec`](crate::host::TaskSpec) factory uses the same result:
 /// `Ok(())` is a clean task exit, while `Err` is a supervised failure.
-pub type ActorResult = Result<(), BoxError>;
+pub type ExitResult = Result<(), BoxError>;
 
 /// Async actor interface with a typed mailbox.
 ///
@@ -30,7 +30,7 @@ pub type ActorResult = Result<(), BoxError>;
 /// available on `RawContext` itself.
 ///
 /// Implementors can use
-/// `async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ActorResult` in
+/// `async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult` in
 /// their trait impls. Registration takes a reusable
 /// [`ActorFactory`](crate::ActorFactory), so each run owns fresh
 /// incarnation-local state, including non-[`Clone`] fields. Custom raw actors
@@ -57,5 +57,5 @@ pub trait RawActor: Send + 'static {
     }
 
     /// Runs the actor until it finishes or shutdown is requested.
-    fn run(&mut self, ctx: RawContext<Self::Msg>) -> impl Future<Output = ActorResult> + Send;
+    fn run(&mut self, ctx: RawContext<Self::Msg>) -> impl Future<Output = ExitResult> + Send;
 }
