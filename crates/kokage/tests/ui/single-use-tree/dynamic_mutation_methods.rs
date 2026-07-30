@@ -1,10 +1,10 @@
-use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy, host::ChildSpec};
+use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy, host::TaskSpec};
 
 fn actor() -> ActorSpec<()> {
     loop {}
 }
 
-fn task() -> ChildSpec {
+fn task() -> TaskSpec {
     loop {}
 }
 

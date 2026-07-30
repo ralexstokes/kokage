@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, Restart, ScopeKind,
-    Supervisor, SupervisorSnapshot, SupervisorStateView,
+    Backoff, ChildMembershipView, ChildSnapshot, ChildStateView, Restart, ScopeKind, Supervisor,
+    SupervisorSnapshot, SupervisorStateView, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -22,11 +22,11 @@ use common::{ObservedEvent, wait_for_snapshot};
 #[tokio::test]
 async fn initial_snapshot_is_immediately_available_and_preserves_child_order() {
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("alpha", |ctx| async move {
+        .child(TaskSpec::new("alpha", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .child(ChildSpec::task("beta", |ctx| async move {
+        .child(TaskSpec::new("beta", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -67,7 +67,7 @@ async fn nested_supervisors_allocate_lineages_independently() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("anchor", |ctx| async move {
+        .add_child(TaskSpec::new("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -76,7 +76,7 @@ async fn nested_supervisors_allocate_lineages_independently() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::supervisor("nested", nested))
+        .add_child(TaskSpec::supervisor("nested", nested))
         .await
         .expect("nested supervisor added");
     let nested_handle = handle
@@ -85,7 +85,7 @@ async fn nested_supervisors_allocate_lineages_independently() {
     nested_handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("seed", |ctx| async move {
+        .add_child(TaskSpec::new("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -94,7 +94,7 @@ async fn nested_supervisors_allocate_lineages_independently() {
     nested_handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("late", |ctx| async move {
+        .add_child(TaskSpec::new("late", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -134,7 +134,7 @@ async fn snapshot_shows_restart_state_and_last_exit() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
-    let flaky_child = ChildSpec::task("flaky", move |ctx| {
+    let flaky_child = TaskSpec::new("flaky", move |ctx| {
         let attempts = attempts.clone();
         let starts_tx = starts_tx.clone();
         async move {
@@ -225,7 +225,7 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
     let release = Arc::new(Notify::new());
 
     let release_for_child = release.clone();
-    let removable = ChildSpec::task("removable", move |ctx| {
+    let removable = TaskSpec::new("removable", move |ctx| {
         let started_tx = started_tx.clone();
         let cancelled_tx = cancelled_tx.clone();
         let release = release_for_child.clone();
@@ -252,7 +252,7 @@ async fn snapshot_shows_removing_membership_during_child_removal() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("keeper", |ctx| async move {
+        .add_child(TaskSpec::new("keeper", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -304,7 +304,7 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .child(ChildSpec::task("leaf", move |ctx| {
+        .child(TaskSpec::new("leaf", move |ctx| {
             let leaf_started_tx = leaf_started_tx.clone();
             async move {
                 leaf_started_tx.send(()).expect("test receiver dropped");
@@ -316,11 +316,11 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child(ChildSpec::task("anchor", |ctx| async move {
+        .child(TaskSpec::new("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .child(ChildSpec::supervisor("nested", nested))
+        .child(TaskSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor");
 
@@ -358,7 +358,7 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
 #[tokio::test]
 async fn stopped_snapshot_remains_available_after_shutdown() {
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("worker", |ctx| async move {
+        .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -393,7 +393,7 @@ async fn snapshot_reports_stopping_while_shutdown_drains_children() {
     let release = Arc::new(Notify::new());
     let release_for_child = Arc::clone(&release);
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("worker", move |ctx| {
+        .child(TaskSpec::new("worker", move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             let release = Arc::clone(&release_for_child);
             async move {
@@ -429,7 +429,7 @@ async fn snapshot_reports_stopping_while_shutdown_drains_children() {
 #[tokio::test]
 async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("temporary", |_ctx| async move { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("temporary", |_ctx| async move { Ok(()) }).restart(Restart::never()))
         .build()
         .expect("valid supervisor");
 
@@ -460,7 +460,7 @@ async fn completed_children_leave_the_supervisor_idle_until_shutdown() {
 #[tokio::test]
 async fn events_observe_already_published_snapshot_state() {
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("worker", |ctx| async move {
+        .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

@@ -152,7 +152,7 @@ for a successful terminal exit with no pending restart.
 obtain the scope before spawning to avoid racing a fast child, and retain the
 guard.
 
-Use `OrderedTree::task` to mix an arbitrary non-actor `host::ChildSpec` into the
+Use `OrderedTree::task` to mix an arbitrary non-actor `host::TaskSpec` into the
 same sequence. Policy configured on the child spec is preserved, while unset
 restart and shutdown settings inherit the tree defaults. Task children appear
 in snapshots and lifecycle watches but not actor stats.

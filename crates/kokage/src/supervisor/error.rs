@@ -56,15 +56,12 @@ pub enum ControlError {
     /// the nested build error does not uniquely identify a phase.
     #[error("control operation rejected: {0}")]
     Rejected(#[from] BuildError),
-    /// The supervisor is in the process of shutting down and is no longer
-    /// accepting commands.
-    #[error("supervisor is stopping")]
-    SupervisorStopping,
-    /// The operation failed because the supervisor encountered a fatal error.
+    /// The operation failed with a fatal supervisor error whose details remain
+    /// actionable to the caller, such as a child-removal shutdown timeout.
     #[error("supervisor operation failed: {0}")]
     Failed(#[from] SupervisorError),
-    /// The supervisor task has already exited and the control channel is
-    /// closed.
+    /// The supervisor is stopping, has exited, or otherwise cannot accept
+    /// control operations.
     #[error("supervisor control plane is unavailable")]
     Unavailable,
 }

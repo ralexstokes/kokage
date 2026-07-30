@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildSpec, ControlError, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart,
-    Shutdown, Supervisor, SupervisorError,
+    Backoff, ControlError, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart, Shutdown,
+    Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{
     sync::{Barrier, Notify, mpsc},
@@ -31,7 +31,7 @@ async fn external_shutdown_stops_all_children() {
 
     let make_child = |id: &'static str, exits: Arc<AtomicUsize>| {
         let started_tx = started_tx.clone();
-        ChildSpec::task(id, move |ctx| {
+        TaskSpec::new(id, move |ctx| {
             let exits = exits.clone();
             let started_tx = started_tx.clone();
             async move {
@@ -64,7 +64,7 @@ async fn external_shutdown_stops_all_children() {
 #[tokio::test]
 async fn shutdown_is_idempotent_across_handle_clones() {
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("worker", |ctx| async move {
+        .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -92,7 +92,7 @@ async fn dropping_every_handle_leaves_the_owned_supervisor_running() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
 
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("worker", move |ctx| {
+        .child(TaskSpec::new("worker", move |ctx| {
             let lifecycle_tx = lifecycle_tx.clone();
             async move {
                 lifecycle_tx.send("started").expect("test receiver dropped");
@@ -132,7 +132,7 @@ async fn dropping_every_handle_leaves_the_owned_supervisor_running() {
 async fn dropping_the_running_supervisor_requests_graceful_shutdown() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
     let running = Supervisor::ordered()
-        .child(ChildSpec::task("worker", move |ctx| {
+        .child(TaskSpec::new("worker", move |ctx| {
             let lifecycle_tx = lifecycle_tx.clone();
             async move {
                 lifecycle_tx.send("started").expect("test receiver dropped");
@@ -160,7 +160,7 @@ async fn dropping_the_running_supervisor_requests_graceful_shutdown() {
 #[tokio::test]
 async fn fire_and_forget_spawn_shuts_down_immediately() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {
+    let builder = Supervisor::ordered().child(TaskSpec::new("worker", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -202,7 +202,7 @@ async fn cooperative_child_observes_cancellation_before_shutdown_finishes() {
 
     let saw_cancel_for_child = saw_cancel.clone();
     let supervisor = Supervisor::ordered()
-        .child(ChildSpec::task("worker", move |ctx| {
+        .child(TaskSpec::new("worker", move |ctx| {
             let saw_cancel = saw_cancel_for_child.clone();
             async move {
                 ctx.shutdown_token().cancelled().await;
@@ -232,7 +232,7 @@ async fn stubborn_child_is_aborted_and_reported_in_cooperative_mode() {
     let live_flag_for_child = live_flag.clone();
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("stubborn", move |_ctx| {
+            TaskSpec::new("stubborn", move |_ctx| {
                 let saw_cancel = saw_cancel_for_child.clone();
                 let live_flag = live_flag_for_child.clone();
                 async move {
@@ -270,7 +270,7 @@ async fn ordered_shutdown_does_not_wait_unboundedly_for_an_aborted_task_to_join(
     let release_blocking_poll = Arc::new(ThreadBarrier::new(2));
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("non-yielding", {
+            TaskSpec::new("non-yielding", {
                 let release_blocking_poll = Arc::clone(&release_blocking_poll);
                 move |ctx| {
                     let started_tx = started_tx.clone();
@@ -310,7 +310,7 @@ async fn cooperative_shutdown_times_out_with_stuck_child_name() {
     let live_flag_for_child = live_flag.clone();
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("stubborn", move |_ctx| {
+            TaskSpec::new("stubborn", move |_ctx| {
                 let live_flag = live_flag_for_child.clone();
                 async move {
                     let _guard = live_flag.guard();
@@ -354,7 +354,7 @@ async fn mixed_cooperative_shutdown_reports_every_timed_out_child() {
     let cooperative_live_flag_for_child = cooperative_live_flag.clone();
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("cooperative-peer", move |_ctx| {
+            TaskSpec::new("cooperative-peer", move |_ctx| {
                 let started_tx = started_tx_for_aborting.clone();
                 let live_flag = aborting_live_flag_for_child.clone();
                 async move {
@@ -368,7 +368,7 @@ async fn mixed_cooperative_shutdown_reports_every_timed_out_child() {
             .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .child(
-            ChildSpec::task("cooperative", move |_ctx| {
+            TaskSpec::new("cooperative", move |_ctx| {
                 let started_tx = started_tx_for_cooperative.clone();
                 let live_flag = cooperative_live_flag_for_child.clone();
                 async move {
@@ -416,7 +416,7 @@ async fn a_wrapper_that_overruns_the_tidy_beat_is_hard_aborted() {
     let live = live_flag.clone();
     let running = Supervisor::ordered()
         .child(
-            ChildSpec::task("slow-wrapper", move |ctx| {
+            TaskSpec::new("slow-wrapper", move |ctx| {
                 let started_tx = started_tx.clone();
                 let live = live.clone();
                 async move {
@@ -472,7 +472,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(
-            ChildSpec::task("short", move |ctx| {
+            TaskSpec::new("short", move |ctx| {
                 let started_tx = short_started_tx.clone();
                 let short_escalated_tx = short_escalated_tx.clone();
                 async move {
@@ -490,7 +490,7 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(
-            ChildSpec::task("long", move |ctx| {
+            TaskSpec::new("long", move |ctx| {
                 let started_tx = started_tx.clone();
                 async move {
                     started_tx.send(()).expect("test receiver dropped");
@@ -541,7 +541,7 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(
-            ChildSpec::task("stubborn", move |_ctx| {
+            TaskSpec::new("stubborn", move |_ctx| {
                 let started_tx = started_tx.clone();
                 let live_flag = live_flag_for_child.clone();
                 async move {
@@ -559,7 +559,7 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("keeper", |ctx| async move {
+        .add_child(TaskSpec::new("keeper", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -608,7 +608,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
     let live_flag_for_child = live_flag.clone();
     let supervisor = Supervisor::ordered()
         .child(
-            ChildSpec::task("stubborn", move |_ctx| {
+            TaskSpec::new("stubborn", move |_ctx| {
                 let started_tx = started_tx.clone();
                 let live_flag = live_flag_for_child.clone();
                 async move {
@@ -643,7 +643,7 @@ async fn wait_only_resolves_after_child_lifetimes_end() {
 async fn shutdown_preempts_zero_delay_restart() {
     let supervisor = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(8, Duration::from_secs(1)))
-        .child(ChildSpec::task("flaky", |_ctx| async move {
+        .child(TaskSpec::new("flaky", |_ctx| async move {
             Err(common::test_error("restart immediately"))
         }))
         .build()
@@ -696,11 +696,11 @@ async fn shutdown_preempts_delayed_restart_in_cooperative_mode() {
             Duration::from_secs(1),
             Backoff::fixed(Duration::from_millis(200)),
         ))
-        .child(ChildSpec::task("flaky", |_ctx| async move {
+        .child(TaskSpec::new("flaky", |_ctx| async move {
             Err(common::test_error("restart later"))
         }))
         .child(
-            ChildSpec::task("keeper", move |ctx| {
+            TaskSpec::new("keeper", move |ctx| {
                 let saw_cancel = saw_cancel_for_keeper.clone();
                 async move {
                     ctx.shutdown_token().cancelled().await;
@@ -764,7 +764,7 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
     let third_release = Arc::new(Notify::new());
     let child = |id: &'static str, release: Arc<Notify>| {
         let cancelled_tx = cancelled_tx.clone();
-        ChildSpec::task(id, move |ctx| {
+        TaskSpec::new(id, move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             let release = Arc::clone(&release);
             async move {
@@ -832,7 +832,7 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
 async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_advancing() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let stubborn_live = common::LiveFlag::new();
-    let stubborn = ChildSpec::task("stubborn", {
+    let stubborn = TaskSpec::new("stubborn", {
         let stubborn_live = stubborn_live.clone();
         let cancelled_tx = cancelled_tx.clone();
         move |ctx| {
@@ -850,7 +850,7 @@ async fn ordered_grace_expiry_aborts_and_joins_only_the_cursor_child_before_adva
         }
     })
     .shutdown(Shutdown::drain_for(common::SHORT_GRACE));
-    let dependency = ChildSpec::task("dependency", move |ctx| {
+    let dependency = TaskSpec::new("dependency", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -895,7 +895,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
     let (tail_cancelled_tx, mut tail_cancelled_rx) = mpsc::unbounded_channel();
     let nested_child = |id: &'static str, live: common::LiveFlag, report: bool| {
         let tail_cancelled_tx = tail_cancelled_tx.clone();
-        ChildSpec::task(id, move |ctx| {
+        TaskSpec::new(id, move |ctx| {
             let guard = live.guard();
             let tail_cancelled_tx = tail_cancelled_tx.clone();
             async move {
@@ -917,7 +917,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .expect("nested ordered supervisor builds");
     let handle_owner = Supervisor::ordered()
         .child(
-            crate::supervisor::ChildSpec::supervisor("nested", nested)
+            crate::supervisor::TaskSpec::supervisor("nested", nested)
                 .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
@@ -957,7 +957,7 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
 #[tokio::test]
 async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
     let leaf_live = common::LiveFlag::new();
-    let leaf = ChildSpec::task("leaf", {
+    let leaf = TaskSpec::new("leaf", {
         let leaf_live = leaf_live.clone();
         move |ctx| {
             let guard = leaf_live.guard();
@@ -976,14 +976,14 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .expect("inner supervisor builds");
     let middle = Supervisor::ordered()
         .child(
-            crate::supervisor::ChildSpec::supervisor("inner", inner)
+            crate::supervisor::TaskSpec::supervisor("inner", inner)
                 .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
         )
         .build()
         .expect("middle supervisor builds");
     let handle_owner = Supervisor::ordered()
         .child(
-            crate::supervisor::ChildSpec::supervisor("middle", middle)
+            crate::supervisor::TaskSpec::supervisor("middle", middle)
                 .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
@@ -1015,7 +1015,7 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
 async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently() {
     const GRACE: Duration = Duration::from_millis(40);
     let stubborn = |id: &'static str| {
-        ChildSpec::task(id, |ctx| async move {
+        TaskSpec::new(id, |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             std::future::pending::<()>().await;
             Ok(())
@@ -1060,7 +1060,7 @@ async fn ordered_shutdown_graces_sum_while_dynamic_child_clocks_run_concurrently
             .dynamic()
             .expect("dynamic supervisor")
             .add_child(
-                ChildSpec::task(id, move |ctx| {
+                TaskSpec::new(id, move |ctx| {
                     let cancelled_tx = cancelled_tx.clone();
                     let release = Arc::clone(&release);
                     async move {

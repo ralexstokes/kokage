@@ -11,9 +11,9 @@ use std::{
 };
 
 use crate::supervisor::{
-    BoxError, ChildExitView, ChildSnapshot, ChildSpec, LifecycleEvent, LifecycleEventKind,
-    LifecycleWatch, Restart, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-    SupervisorSnapshotReceiver,
+    BoxError, ChildExitView, ChildSnapshot, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
+    Restart, SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+    TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -350,8 +350,8 @@ pub fn fail_on_generations(
     id: &'static str,
     trigger_failure: Arc<Notify>,
     generations_to_fail: u64,
-) -> ChildSpec {
-    ChildSpec::task(id, move |ctx| {
+) -> TaskSpec {
+    TaskSpec::new(id, move |ctx| {
         let trigger_failure = trigger_failure.clone();
         async move {
             if ctx.generation() < generations_to_fail {
@@ -370,9 +370,9 @@ pub fn failing_child(
     id: &'static str,
     trigger_failure: &Arc<Notify>,
     error: &'static str,
-) -> ChildSpec {
+) -> TaskSpec {
     let trigger_failure = trigger_failure.clone();
-    ChildSpec::task(id, move |_ctx| {
+    TaskSpec::new(id, move |_ctx| {
         let trigger_failure = trigger_failure.clone();
         async move {
             trigger_failure.notified().await;

@@ -8,8 +8,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildSpec, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart,
-    Shutdown, Strategy, Supervisor, SupervisorError,
+    Backoff, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart, Shutdown,
+    Strategy, Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -54,7 +54,7 @@ async fn assert_stays_open(watch: &mut LifecycleWatch, phase: &str) {
 
 #[tokio::test]
 async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() {
-    let builder = Supervisor::ordered().child(ChildSpec::task("worker", |ctx| async move {
+    let builder = Supervisor::ordered().child(TaskSpec::new("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -101,7 +101,7 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
         .limit(3, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(50)));
     let builder = Supervisor::ordered().child(
-        ChildSpec::task("flaky", move |ctx| {
+        TaskSpec::new("flaky", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -188,7 +188,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let child_attempts = Arc::clone(&attempts);
     let nested = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
-        .child(ChildSpec::task("leaf", move |ctx| {
+        .child(TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -202,7 +202,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
         .expect("nested supervisor builds");
     let builder = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(3, Duration::from_secs(1)))
-        .child(ChildSpec::supervisor("nested", nested));
+        .child(TaskSpec::supervisor("nested", nested));
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle();
     let running = builder.build().expect("supervisor builds").spawn();
@@ -242,7 +242,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let fatal_crash = Arc::clone(&crash_fatal);
     let middle = Supervisor::ordered()
         .child(
-            ChildSpec::task("worker", move |ctx| {
+            TaskSpec::new("worker", move |ctx| {
                 let crash = Arc::clone(&worker_crash);
                 async move {
                     if ctx.generation() == 0 {
@@ -257,7 +257,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
             .shutdown(Shutdown::abort()),
         )
         .child(
-            ChildSpec::task("fatal", move |_| {
+            TaskSpec::new("fatal", move |_| {
                 let crash = Arc::clone(&fatal_crash);
                 async move {
                     crash.notified().await;
@@ -271,7 +271,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
         .expect("middle supervisor builds");
     let running = Supervisor::ordered()
         .child(
-            ChildSpec::supervisor("middle", middle)
+            TaskSpec::supervisor("middle", middle)
                 .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
@@ -360,7 +360,7 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         .handle()
         .dynamic()
         .expect("dynamic capability")
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -426,7 +426,7 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
     let release = Arc::new(Notify::new());
     let child_release = Arc::clone(&release);
     let builder = Supervisor::ordered().child(
-        ChildSpec::task("worker", move |ctx| {
+        TaskSpec::new("worker", move |ctx| {
             let release = Arc::clone(&child_release);
             async move {
                 release.notified().await;
@@ -480,7 +480,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
     let dynamic = handle.dynamic().expect("scope is dynamic");
     dynamic
         .add_child(
-            ChildSpec::task("worker", |ctx| async move {
+            TaskSpec::new("worker", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
@@ -516,7 +516,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
 async fn restart_intensity_failure_is_an_in_band_scope_event() {
     let builder = Supervisor::ordered()
         .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
-        .child(ChildSpec::task("always-fails", |_| async {
+        .child(TaskSpec::new("always-fails", |_| async {
             Err(failure("no restart budget"))
         }));
     let handle = builder.handle();
@@ -542,7 +542,7 @@ async fn restart_intensity_failure_is_an_in_band_scope_event() {
 async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
     let mut builder = Supervisor::ordered();
     for id in ["first", "second", "third"] {
-        builder = builder.child(ChildSpec::task(id, |ctx| async move {
+        builder = builder.child(TaskSpec::new(id, |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -592,7 +592,7 @@ async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
             .handle()
             .dynamic()
             .expect("dynamic capability")
-            .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+            .add_child(TaskSpec::new(id.clone(), |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
@@ -657,7 +657,7 @@ async fn nested_churn_cannot_overflow_a_direct_child_watch() {
     let mut direct = running.handle().watch_lifecycle().direct_children();
     let root_dynamic = running.handle().dynamic().expect("root is a dynamic scope");
     root_dynamic
-        .add_child(ChildSpec::supervisor("nested", nested))
+        .add_child(TaskSpec::supervisor("nested", nested))
         .await
         .expect("nested scope is added");
     nested_handle
@@ -669,7 +669,7 @@ async fn nested_churn_cannot_overflow_a_direct_child_watch() {
     for index in 0..80 {
         let id = format!("nested-{index}");
         nested_dynamic
-            .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+            .add_child(TaskSpec::new(id.clone(), |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
@@ -682,7 +682,7 @@ async fn nested_churn_cannot_overflow_a_direct_child_watch() {
     }
 
     root_dynamic
-        .add_child(ChildSpec::task("root-peer", |ctx| async move {
+        .add_child(TaskSpec::new("root-peer", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -729,7 +729,7 @@ async fn lifecycle_sequences_are_gap_free_under_concurrent_dynamic_churn() {
         churn.spawn(async move {
             let id = format!("child-{index}");
             dynamic
-                .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+                .add_child(TaskSpec::new(id.clone(), |ctx| async move {
                     ctx.shutdown_token().cancelled().await;
                     Ok(())
                 }))
@@ -769,14 +769,14 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
     let dynamic = root.dynamic().expect("root is dynamic");
     let mut root_watch = root.watch_lifecycle();
 
-    let first_builder = Supervisor::ordered().child(ChildSpec::task("leaf", |ctx| async move {
+    let first_builder = Supervisor::ordered().child(TaskSpec::new("leaf", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
     let first_handle = first_builder.handle();
     let mut first_watch = first_handle.watch_lifecycle();
     dynamic
-        .add_child(ChildSpec::supervisor(
+        .add_child(TaskSpec::supervisor(
             "nested",
             first_builder.build().expect("first nested scope builds"),
         ))
@@ -799,12 +799,12 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
         .await
         .expect("removed nested identity closes its watch");
 
-    let second_builder = Supervisor::ordered().child(ChildSpec::task("leaf", |ctx| async move {
+    let second_builder = Supervisor::ordered().child(TaskSpec::new("leaf", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
     dynamic
-        .add_child(ChildSpec::supervisor(
+        .add_child(TaskSpec::supervisor(
             "nested",
             second_builder.build().expect("second nested scope builds"),
         ))
@@ -829,7 +829,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let crash_sibling = Arc::new(Notify::new());
     let leaf_complete = Arc::clone(&complete_leaf);
     let leaf_builder = Supervisor::ordered().child(
-        ChildSpec::task("worker", move |_| {
+        TaskSpec::new("worker", move |_| {
             let complete = Arc::clone(&leaf_complete);
             async move {
                 complete.notified().await;
@@ -847,9 +847,9 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let sibling_crash = Arc::clone(&crash_sibling);
     let running = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .child(ChildSpec::supervisor("leaf", leaf).restart(Restart::on_failure()))
+        .child(TaskSpec::supervisor("leaf", leaf).restart(Restart::on_failure()))
         .child(
-            ChildSpec::task("sibling", move |_| {
+            TaskSpec::new("sibling", move |_| {
                 let crash = Arc::clone(&sibling_crash);
                 async move {
                     crash.notified().await;
@@ -912,7 +912,7 @@ async fn never_policy_nested_stop_closes_its_watch() {
     let child_crash = Arc::clone(&crash);
     let nested = Supervisor::ordered()
         .child(
-            ChildSpec::task("worker", move |_| {
+            TaskSpec::new("worker", move |_| {
                 let crash = Arc::clone(&child_crash);
                 async move {
                     crash.notified().await;
@@ -924,7 +924,7 @@ async fn never_policy_nested_stop_closes_its_watch() {
         .build()
         .expect("nested supervisor builds");
     let running = Supervisor::ordered()
-        .child(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child(TaskSpec::supervisor("nested", nested).restart(Restart::never()))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -949,7 +949,7 @@ async fn never_policy_nested_stop_closes_its_watch() {
 #[tokio::test]
 async fn parent_stop_closes_nested_watch_while_handle_is_retained() {
     let running = Supervisor::ordered()
-        .child(ChildSpec::supervisor("nested", idle_supervisor()))
+        .child(TaskSpec::supervisor("nested", idle_supervisor()))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -969,7 +969,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
     let crash_middle = Arc::new(Notify::new());
     let running = Supervisor::ordered()
         .child(
-            ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
+            TaskSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
                 .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
@@ -1044,7 +1044,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
         .expect("dynamic middle supervisor builds");
     let running = Supervisor::ordered()
         .child(
-            ChildSpec::supervisor("middle", middle)
+            TaskSpec::supervisor("middle", middle)
                 .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
@@ -1058,7 +1058,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
     let dynamic = middle.dynamic().expect("middle is dynamic");
     dynamic
         .add_child(
-            ChildSpec::task("bomb", move |_| {
+            TaskSpec::new("bomb", move |_| {
                 let crash = Arc::clone(&bomb_crash);
                 async move {
                     crash.notified().await;
@@ -1070,7 +1070,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
         .await
         .expect("bomb is added");
     dynamic
-        .add_child(ChildSpec::supervisor("orphan", idle_supervisor()))
+        .add_child(TaskSpec::supervisor("orphan", idle_supervisor()))
         .await
         .expect("orphan is added");
     let orphan = middle.supervisor("orphan").expect("orphan handle exists");
@@ -1104,8 +1104,8 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
     let running = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
-        .child(ChildSpec::supervisor("head", head_supervisor).restart(Restart::on_failure()))
-        .child(ChildSpec::supervisor("tail", tail_supervisor).restart(Restart::on_failure()))
+        .child(TaskSpec::supervisor("head", head_supervisor).restart(Restart::on_failure()))
+        .child(TaskSpec::supervisor("tail", tail_supervisor).restart(Restart::on_failure()))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -1154,7 +1154,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
 
 fn idle_supervisor() -> crate::supervisor::Supervisor {
     Supervisor::ordered()
-        .child(ChildSpec::task("worker", |ctx| async move {
+        .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -1169,7 +1169,7 @@ fn middle_supervisor(
     let leaf_crash = Arc::clone(crash_leaf);
     let leaf = Supervisor::ordered()
         .child(
-            ChildSpec::task("worker", move |_| {
+            TaskSpec::new("worker", move |_| {
                 let crash = Arc::clone(&leaf_crash);
                 async move {
                     crash.notified().await;
@@ -1183,9 +1183,9 @@ fn middle_supervisor(
         .expect("leaf supervisor builds");
     let middle_crash = Arc::clone(crash_middle);
     Supervisor::ordered()
-        .child(ChildSpec::supervisor("leaf", leaf).restart(Restart::never()))
+        .child(TaskSpec::supervisor("leaf", leaf).restart(Restart::never()))
         .child(
-            ChildSpec::task("bomb", move |_| {
+            TaskSpec::new("bomb", move |_| {
                 let crash = Arc::clone(&middle_crash);
                 async move {
                     crash.notified().await;
@@ -1202,7 +1202,7 @@ fn middle_supervisor(
 fn completing_supervisor(complete: &Arc<Notify>) -> (crate::supervisor::Supervisor, Guard) {
     let complete = Arc::clone(complete);
     let builder = Supervisor::ordered().child(
-        ChildSpec::task("worker", move |_| {
+        TaskSpec::new("worker", move |_| {
             let complete = Arc::clone(&complete);
             async move {
                 complete.notified().await;
@@ -1221,13 +1221,13 @@ fn completing_supervisor(complete: &Arc<Notify>) -> (crate::supervisor::Supervis
 #[tokio::test]
 async fn direct_children_is_a_depth_filter_on_the_recursive_vocabulary() {
     let nested = Supervisor::ordered()
-        .child(ChildSpec::task("leaf", |ctx| async move {
+        .child(TaskSpec::new("leaf", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
         .build()
         .expect("nested supervisor builds");
-    let builder = Supervisor::ordered().child(ChildSpec::supervisor("nested", nested));
+    let builder = Supervisor::ordered().child(TaskSpec::supervisor("nested", nested));
     let handle = builder.handle();
     let mut tree = handle.watch_lifecycle();
     let mut direct = handle.watch_lifecycle().direct_children();

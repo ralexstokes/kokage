@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::Ordering};
 use crate::supervisor::{
     CancellationToken,
     child::{ChildKind, ChildReadiness},
-    context::{ChildContext, ChildReady, ReadySignal},
+    context::{ChildReady, ReadySignal, TaskContext},
     error::SupervisorError,
     event::RuntimeEvent,
     handle::StableSupervisorChannels,
@@ -21,7 +21,7 @@ struct SpawnPlan {
     generation: u64,
     old_generation: Option<u64>,
     kind: ChildKind,
-    ctx: ChildContext,
+    ctx: TaskContext,
     lineage: u64,
     snapshot_state: Option<NestedSnapshotState>,
     nested_channels: Option<Arc<StableSupervisorChannels>>,
@@ -89,7 +89,7 @@ impl SupervisorRuntime {
             };
 
             let child_id = entry.id.clone();
-            let ctx = ChildContext::new(
+            let ctx = TaskContext::new(
                 child_id.clone(),
                 generation,
                 child_token,

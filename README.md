@@ -13,7 +13,7 @@ restart the ones that fail.
 Kokage needs one dependency. Its prelude covers the day-one actor
 surface; hosting and observation APIs are grouped under `kokage::host` and
 `kokage::observe`, while advanced actor APIs remain at the crate root. Actor
-applications can place raw task children with `kokage::host::ChildSpec`:
+applications can place raw task children with `kokage::host::TaskSpec`:
 
 ```toml
 [dependencies]

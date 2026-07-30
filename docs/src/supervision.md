@@ -1,7 +1,7 @@
 # Task children and supervision
 
 Actors are the usual unit of a kokage application, but a supervision tree can
-also host plain async tasks. Define those tasks with [`host::ChildSpec`], place
+also host plain async tasks. Define those tasks with [`host::TaskSpec`], place
 them in an [`OrderedTree`] or [`DynamicTree`], and control the result through
 the same [`RunningTree`] and [`ScopeRef`] used for actor trees.
 
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use kokage::{
     Backoff, OrderedTree, Restart, Shutdown,
-    host::ChildSpec,
+    host::TaskSpec,
 };
 
 #[tokio::main]
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .backoff(Backoff::fixed(Duration::from_millis(100)));
 
     // A press that jams shortly after starting.
-    let press = ChildSpec::task("press", |ctx| async move {
+    let press = TaskSpec::new("press", |ctx| async move {
         println!("press starting (generation {})", ctx.generation());
         tokio::time::sleep(Duration::from_millis(200)).await;
         Err("paper jam".into())
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .shutdown(Shutdown::drain_for(Duration::from_secs(1)));
 
     // A front desk that runs until its tree asks it to stop.
-    let front_desk = ChildSpec::task("front-desk", |ctx| async move {
+    let front_desk = TaskSpec::new("front-desk", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     })
@@ -104,7 +104,7 @@ survives longer than the intensity window. Shutdown always wins over a pending
 restart delay.
 
 Call `OrderedTree::default_restart` or `DynamicTree::default_restart` to set a
-scope-wide declaration, and `ChildSpec::restart` when one task needs its own
+scope-wide declaration, and `TaskSpec::restart` when one task needs its own
 mode, budget, backoff, or terminal-removal behavior. To configure the parent
 edge of a nested scope, wrap it with
 `TreeNode::from(subtree).restart(policy).shutdown(policy)` before passing it to
@@ -117,7 +117,7 @@ tree's own defaults still configure its children independently.
 readiness gate holds later siblings until it calls `mark_ready`:
 
 ```rust,ignore
-let database = ChildSpec::task("database", |ctx| async move {
+let database = TaskSpec::new("database", |ctx| async move {
     connect_and_migrate().await?;
     ctx.mark_ready();
     ctx.shutdown_token().cancelled().await;
@@ -299,19 +299,19 @@ that shape.
 ## Dynamic task children
 
 `DynamicTree` starts empty. Obtain its scope before spawn or from the runtime
-afterward, then add and remove `ChildSpec` tasks:
+afterward, then add and remove `TaskSpec` tasks:
 
 ```rust,ignore
 let runtime = DynamicTree::new().spawn()?;
 let dynamic = runtime.scope();
 
 let lineage = dynamic
-    .add_child(ChildSpec::task("night-shift-press", factory))
+    .add_task(TaskSpec::new("night-shift-press", factory))
     .await?;
 dynamic.remove_child("night-shift-press").await?;
 ```
 
-`add_child` returns the lineage allocated to that membership. The value is
+`add_task` returns the lineage allocated to that membership. The value is
 also published in snapshots and distinguishes a removed child from a later
 same-id replacement. Task children remain visible through runtime snapshots
 and lifecycle watches, but do not appear in actor message statistics.
@@ -319,7 +319,7 @@ and lifecycle watches, but do not appear in actor message statistics.
 For dynamic actor construction and actor-owned scopes, continue to [Dynamic
 actors](dynamic-actors.md).
 
-[`host::ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
+[`host::TaskSpec`]: https://stokes.io/kokage/api/kokage/host/struct.TaskSpec.html
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html

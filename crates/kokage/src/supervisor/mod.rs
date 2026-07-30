@@ -28,12 +28,12 @@ pub mod __private {
 
     pub use crate::supervisor::attachment::{AttachedChild, AttachedChildIdentity};
     use crate::supervisor::{
-        CancellationToken, ChildSpec, DynamicSupervisorHandle, Guard, Restart, Shutdown,
-        SupervisorHandle,
+        CancellationToken, DynamicSupervisorHandle, Guard, Restart, Shutdown, SupervisorHandle,
+        TaskSpec,
     };
 
     /// Adds process-local metadata to a child specification.
-    pub fn attach<T>(child: ChildSpec, attachment: T) -> ChildSpec
+    pub fn attach<T>(child: TaskSpec, attachment: T) -> TaskSpec
     where
         T: Any + Send + Sync,
     {
@@ -58,7 +58,7 @@ pub mod __private {
 
     /// Resolves one child's explicit policy overrides against scope defaults.
     pub fn child_policies(
-        child: &ChildSpec,
+        child: &TaskSpec,
         default_restart: Restart,
         default_shutdown: Shutdown,
     ) -> (Restart, Shutdown) {
@@ -86,9 +86,9 @@ pub mod __private {
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
-pub use child::{BoxError, ChildResult, ChildSpec};
+pub use child::{BoxError, TaskSpec};
 pub use completion::{CompletionError, CompletionOutcome, CompletionWatch};
-pub use context::ChildContext;
+pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};

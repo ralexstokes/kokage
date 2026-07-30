@@ -1,23 +1,17 @@
 use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 
-use crate::supervisor::{
-    context::ChildContext, owner::Supervisor, restart::Restart, shutdown::Shutdown,
+use crate::{
+    actor::ActorResult,
+    supervisor::{context::TaskContext, owner::Supervisor, restart::Restart, shutdown::Shutdown},
 };
 
 /// A type-erased, thread-safe error type used as the `Err` half of
-/// [`ChildResult`].
+/// [`ActorResult`](crate::ActorResult).
 ///
-/// This is re-exported as `kokage::host::BoxError` by the actor layer.
+/// This is re-exported as `kokage::host::BoxError`.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// The result type returned by every supervised child function.
-///
-/// Returning `Ok(())` signals a clean exit. Returning an error signals a
-/// failure, which may trigger a restart depending on the child's
-/// [`Restart`].
-pub type ChildResult = Result<(), BoxError>;
-
-pub(crate) type ChildFuture = Pin<Box<dyn Future<Output = ChildResult> + Send + 'static>>;
+pub(crate) type ChildFuture = Pin<Box<dyn Future<Output = ActorResult> + Send + 'static>>;
 pub(crate) type OpaqueAttachment = Arc<dyn Any + Send + Sync>;
 
 #[derive(Clone)]
@@ -44,17 +38,16 @@ pub(crate) enum ChildKind {
     Supervisor(Supervisor),
 }
 
-/// Specification for a supervised child task.
+/// Specification for a supervised task.
 ///
-/// Construct one with [`task`](Self::task), then apply restart and shutdown
+/// Construct one with [`new`](Self::new), then apply restart and shutdown
 /// policies. Nested scopes are built through Kokage's tree APIs.
-///
-pub struct ChildSpec {
+pub struct TaskSpec {
     pub(crate) inner: Arc<ChildDefinition>,
 }
 
 pub(crate) trait ChildFactory: Send + Sync + 'static {
-    fn make(&self, ctx: ChildContext) -> ChildFuture;
+    fn make(&self, ctx: TaskContext) -> ChildFuture;
 }
 
 struct ClosureFactory<F> {
@@ -63,23 +56,23 @@ struct ClosureFactory<F> {
 
 impl<F, Fut> ChildFactory for ClosureFactory<F>
 where
-    F: Fn(ChildContext) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ChildResult> + Send + 'static,
+    F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ActorResult> + Send + 'static,
 {
-    fn make(&self, ctx: ChildContext) -> ChildFuture {
+    fn make(&self, ctx: TaskContext) -> ChildFuture {
         Box::pin((self.f)(ctx))
     }
 }
 
 fn make_child_factory<F, Fut>(f: F) -> Arc<dyn ChildFactory>
 where
-    F: Fn(ChildContext) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = ChildResult> + Send + 'static,
+    F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ActorResult> + Send + 'static,
 {
     Arc::new(ClosureFactory { f })
 }
 
-impl ChildSpec {
+impl TaskSpec {
     fn map_inner(mut self, update: impl FnOnce(&mut ChildDefinition)) -> Self {
         let inner = ChildDefinition::make_mut_preserving_supervisor_identity(&mut self.inner);
         update(inner);
@@ -88,15 +81,15 @@ impl ChildSpec {
 
     /// Creates a supervised task specification.
     ///
-    /// `id` must be unique among siblings within the same supervisor.
+    /// `id` must be unique among siblings within the same scope.
     ///
-    /// `f` is an async factory that is invoked each time the child is
-    /// (re)started. It receives a [`ChildContext`] and should return
-    /// `Ok(())` for a clean exit or an error for a failure.
-    pub fn task<F, Fut>(id: impl Into<String>, f: F) -> Self
+    /// `f` is an async factory that is invoked each time the task is
+    /// (re)started. It receives a [`TaskContext`] and should return
+    /// [`ActorResult`]: `Ok(())` for a clean exit or an error for a failure.
+    pub fn new<F, Fut>(id: impl Into<String>, f: F) -> Self
     where
-        F: Fn(ChildContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ChildResult> + Send + 'static,
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ActorResult> + Send + 'static,
     {
         Self {
             inner: Arc::new(ChildDefinition {
@@ -130,11 +123,11 @@ impl ChildSpec {
         }
     }
 
-    /// Sets this child's complete restart declaration. See [`Restart`] for
+    /// Sets this task's complete restart declaration. See [`Restart`] for
     /// options.
     ///
     /// This replaces the inherited mode, budget, backoff, and terminal-removal
-    /// behavior. Restate any scope-level values this child should retain.
+    /// behavior. Restate any scope-level values this task should retain.
     #[must_use]
     pub fn restart(self, restart: Restart) -> Self {
         self.map_inner(|inner| {
@@ -143,7 +136,7 @@ impl ChildSpec {
         })
     }
 
-    /// Sets the shutdown policy for this child. See [`Shutdown`] for
+    /// Sets the shutdown policy for this task. See [`Shutdown`] for
     /// options.
     #[must_use]
     pub fn shutdown(self, policy: Shutdown) -> Self {
@@ -166,24 +159,24 @@ impl ChildSpec {
         self.map_inner(|inner| inner.attachment = Some(Arc::new(attachment)))
     }
 
-    /// Requires the child to call [`ChildContext::mark_ready`](crate::supervisor::ChildContext::mark_ready)
+    /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
     /// before it is considered started.
     ///
     /// An ordered supervisor waits for this signal before starting its next
-    /// declared child.
-    /// If the child exits before reporting readiness, its ordinary restart
+    /// declared task.
+    /// If the task exits before reporting readiness, its ordinary restart
     /// policy applies. The sequence waits through a scheduled restart; if the
-    /// exit is terminal, the child is marked startup-aborted and the sequence
+    /// exit is terminal, the task is marked startup-aborted and the sequence
     /// skips it. There is no built-in readiness timeout; use a timeout inside
-    /// the child when initialization must be bounded. Shutdown and control
+    /// the task when initialization must be bounded. Shutdown and control
     /// commands remain responsive while a supervisor waits for readiness, so a
-    /// child may await a control operation before calling `mark_ready`.
+    /// task may await a control operation before calling `mark_ready`.
     #[must_use]
     pub fn wait_for_ready(self) -> Self {
         self.map_inner(|inner| inner.readiness = ChildReadiness::Explicit)
     }
 
-    /// Returns the child's unique identifier.
+    /// Returns the task's unique identifier.
     pub fn id(&self) -> &str {
         &self.inner.id
     }

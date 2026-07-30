@@ -14,8 +14,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    ChildSpec, ChildStateView, CompletionOutcome, Restart, Shutdown, Strategy, Supervisor,
-    SupervisorError,
+    ChildStateView, CompletionOutcome, Restart, Shutdown, Strategy, Supervisor, SupervisorError,
+    TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -37,8 +37,8 @@ impl Drop for NotifyOnDrop {
 async fn a_completed_child_stops_siblings_and_supervisor() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let builder = Supervisor::ordered()
-        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(Restart::never()))
-        .child(ChildSpec::task("sibling", move |ctx| {
+        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("sibling", move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             async move {
                 ctx.shutdown_token().cancelled().await;
@@ -89,7 +89,7 @@ async fn a_completion_set_waits_for_its_last_child() {
 
     let builder = Supervisor::ordered()
         .child(
-            ChildSpec::task("first", move |_| {
+            TaskSpec::new("first", move |_| {
                 let rx = first_rx.lock().expect("lock poisoned").take().unwrap();
                 async move {
                     rx.await.expect("gate dropped");
@@ -99,7 +99,7 @@ async fn a_completion_set_waits_for_its_last_child() {
             .restart(Restart::never()),
         )
         .child(
-            ChildSpec::task("second", move |_| {
+            TaskSpec::new("second", move |_| {
                 let rx = second_rx.lock().expect("lock poisoned").take().unwrap();
                 async move {
                     rx.await.expect("gate dropped");
@@ -132,7 +132,7 @@ async fn a_completion_set_waits_for_its_last_child() {
 async fn a_failure_restarts_before_a_clean_exit_completes() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let attempts_for_child = attempts.clone();
-    let builder = Supervisor::ordered().child(ChildSpec::task("trigger", move |_| {
+    let builder = Supervisor::ordered().child(TaskSpec::new("trigger", move |_| {
         let attempt = attempts_for_child.fetch_add(1, Ordering::SeqCst);
         async move {
             if attempt == 0 {
@@ -155,7 +155,7 @@ async fn a_failure_restarts_before_a_clean_exit_completes() {
 
 #[tokio::test]
 async fn wait_completed_reports_a_supervisor_that_stopped_first() {
-    let builder = Supervisor::ordered().child(ChildSpec::task("worker", |ctx| async move {
+    let builder = Supervisor::ordered().child(TaskSpec::new("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -178,7 +178,7 @@ async fn wait_completed_reports_a_supervisor_that_stopped_first() {
 
 #[tokio::test]
 async fn an_empty_completion_set_is_already_satisfied() {
-    let builder = Supervisor::ordered().child(ChildSpec::task("worker", |ctx| async move {
+    let builder = Supervisor::ordered().child(TaskSpec::new("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -203,7 +203,7 @@ async fn an_empty_completion_set_is_already_satisfied() {
 async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
     let handle_owner = Supervisor::ordered()
         .child(
-            ChildSpec::task("worker", |_| async { Ok(()) })
+            TaskSpec::new("worker", |_| async { Ok(()) })
                 .restart(Restart::never())
                 .wait_for_ready(),
         )
@@ -254,13 +254,13 @@ async fn dynamic_completion_realigns_after_real_lifecycle_overflow() {
     );
 
     dynamic
-        .add_child(ChildSpec::task("target", |_| async { Ok(()) }).restart(Restart::never()))
+        .add_child(TaskSpec::new("target", |_| async { Ok(()) }).restart(Restart::never()))
         .await
         .expect("target is added");
     for index in 0..70 {
         let id = format!("churn-{index}");
         dynamic
-            .add_child(ChildSpec::task(id.clone(), |ctx| async move {
+            .add_child(TaskSpec::new(id.clone(), |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
@@ -283,12 +283,12 @@ async fn dynamic_completion_realigns_after_real_lifecycle_overflow() {
 
 #[tokio::test]
 async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
-    let inner_builder = Supervisor::ordered().child(ChildSpec::task("done", |_| async { Ok(()) }));
+    let inner_builder = Supervisor::ordered().child(TaskSpec::new("done", |_| async { Ok(()) }));
     let _finished = inner_builder.handle().completions(["done"]).then_shutdown();
     let inner = inner_builder.build().expect("valid inner supervisor");
 
     let parent = Supervisor::ordered()
-        .child(ChildSpec::supervisor("job", inner).restart(Restart::on_failure()))
+        .child(TaskSpec::supervisor("job", inner).restart(Restart::on_failure()))
         .build()
         .expect("valid parent supervisor");
 
@@ -321,11 +321,11 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
 
 #[tokio::test]
 async fn a_completed_nested_scope_can_complete_its_parent() {
-    let inner_builder = Supervisor::ordered().child(ChildSpec::task("done", |_| async { Ok(()) }));
+    let inner_builder = Supervisor::ordered().child(TaskSpec::new("done", |_| async { Ok(()) }));
     let _inner_finished = inner_builder.handle().completions(["done"]).then_shutdown();
     let inner = inner_builder.build().expect("valid inner supervisor");
 
-    let parent_builder = Supervisor::ordered().child(ChildSpec::supervisor("job", inner));
+    let parent_builder = Supervisor::ordered().child(TaskSpec::supervisor("job", inner));
     let _parent_finished = parent_builder.handle().completions(["job"]).then_shutdown();
 
     let running = parent_builder
@@ -360,13 +360,13 @@ async fn a_dynamic_scope_can_await_completion() {
     spawned
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("first", |_| async { Ok(()) }))
+        .add_child(TaskSpec::new("first", |_| async { Ok(()) }))
         .await
         .expect("first added");
     spawned
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(ChildSpec::task("second", {
+        .add_child(TaskSpec::new("second", {
             let gate = gate.clone();
             move |_| {
                 let gate = gate.clone();
@@ -396,10 +396,10 @@ async fn a_dynamic_scope_can_await_completion() {
 async fn a_failed_never_child_never_completes() {
     let builder = Supervisor::ordered()
         .child(
-            ChildSpec::task("failed", |_| async { Err(common::test_error("failed")) })
+            TaskSpec::new("failed", |_| async { Err(common::test_error("failed")) })
                 .restart(Restart::never()),
         )
-        .child(ChildSpec::task("completed", |_| async { Ok(()) }).restart(Restart::never()));
+        .child(TaskSpec::new("completed", |_| async { Ok(()) }).restart(Restart::never()));
     let _finished = builder
         .handle()
         .completions(["failed", "completed"])
@@ -425,7 +425,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
     let finish_b = Arc::new(Notify::new());
     let (restarted_tx, mut restarted_rx) = mpsc::unbounded_channel();
 
-    let a = ChildSpec::task("a", {
+    let a = TaskSpec::new("a", {
         let finish_a = finish_a.clone();
         let restarted_tx = restarted_tx.clone();
         move |ctx| {
@@ -441,7 +441,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
             }
         }
     });
-    let b = ChildSpec::task("b", {
+    let b = TaskSpec::new("b", {
         let finish_b = finish_b.clone();
         let restarted_tx = restarted_tx.clone();
         move |ctx| {
@@ -458,7 +458,7 @@ async fn a_group_restart_invalidates_a_stale_completion() {
             }
         }
     });
-    let failing = ChildSpec::task("failing", {
+    let failing = TaskSpec::new("failing", {
         let fail_group = fail_group.clone();
         move |ctx| {
             let fail_group = fail_group.clone();
@@ -506,7 +506,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
     let finish_restarted_for_child = finish_restarted.clone();
     let (restarted_tx, mut restarted_rx) = mpsc::unbounded_channel();
 
-    let natural = ChildSpec::task("natural", {
+    let natural = TaskSpec::new("natural", {
         let finish_natural = finish_natural.clone();
         move |_| {
             let finish_natural = finish_natural.clone();
@@ -519,7 +519,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
     .restart(Restart::never());
     // Returns `Ok(())` because the supervisor cancelled it, not because its
     // work finished. That must not satisfy the completion set.
-    let restarted = ChildSpec::task("restarted", move |ctx| {
+    let restarted = TaskSpec::new("restarted", move |ctx| {
         let finish_restarted = finish_restarted_for_child.clone();
         let restarted_tx = restarted_tx.clone();
         async move {
@@ -532,7 +532,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
             Ok(())
         }
     });
-    let failing = ChildSpec::task("failing", move |ctx| {
+    let failing = TaskSpec::new("failing", move |ctx| {
         let finish_natural = finish_natural.clone();
         async move {
             if ctx.generation() == 0 {
@@ -572,7 +572,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
 async fn natural_always_completion_during_group_drain_spawns_once() {
     let finish_always = Arc::new(Notify::new());
     let (restarted_tx, mut restarted_rx) = mpsc::unbounded_channel();
-    let always = ChildSpec::task("always", {
+    let always = TaskSpec::new("always", {
         let finish_always = finish_always.clone();
         move |ctx| {
             let finish_always = finish_always.clone();
@@ -591,7 +591,7 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
         }
     })
     .restart(Restart::always());
-    let failing = ChildSpec::task("failing", move |ctx| {
+    let failing = TaskSpec::new("failing", move |ctx| {
         let finish_always = finish_always.clone();
         async move {
             if ctx.generation() == 0 {
@@ -625,7 +625,7 @@ async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     let builder = Supervisor::ordered().child(
-        ChildSpec::task("service", move |ctx| {
+        TaskSpec::new("service", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
                 if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -663,8 +663,8 @@ async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
 #[tokio::test]
 async fn a_dropped_guard_leaves_the_supervisor_running() {
     let builder = Supervisor::ordered()
-        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(Restart::never()))
-        .child(ChildSpec::task("worker", |ctx| async move {
+        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -686,8 +686,8 @@ async fn a_dropped_guard_leaves_the_supervisor_running() {
 #[tokio::test]
 async fn a_detached_guard_preserves_completion_shutdown() {
     let builder = Supervisor::ordered()
-        .child(ChildSpec::task("trigger", |_| async { Ok(()) }).restart(Restart::never()))
-        .child(ChildSpec::task("worker", |ctx| async move {
+        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -707,7 +707,7 @@ async fn a_detached_guard_preserves_completion_shutdown() {
 #[tokio::test]
 async fn a_retained_guard_does_not_keep_a_root_alive() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let builder = Supervisor::ordered().child(ChildSpec::task("worker", move |ctx| {
+    let builder = Supervisor::ordered().child(TaskSpec::new("worker", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -727,7 +727,7 @@ async fn a_retained_guard_does_not_keep_a_root_alive() {
 async fn fatal_restart_during_abort_removal_stops_supervisor() {
     let fail = Arc::new(Notify::new());
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let removable = ChildSpec::task("removable", {
+    let removable = TaskSpec::new("removable", {
         let fail = fail.clone();
         let started_tx = started_tx.clone();
         move |_| {
@@ -742,7 +742,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
         }
     })
     .shutdown(Shutdown::abort());
-    let failing = ChildSpec::task("failing", move |_| {
+    let failing = TaskSpec::new("failing", move |_| {
         let fail = fail.clone();
         let started_tx = started_tx.clone();
         async move {

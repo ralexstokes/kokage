@@ -1,4 +1,4 @@
-use kokage::{DynamicTree, host::ChildSpec};
+use kokage::{DynamicTree, host::TaskSpec};
 use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::main]
@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut snapshots = running.subscribe_snapshots();
 
     running
-        .add_child(ChildSpec::task("api", |ctx| async move {
+        .add_task(TaskSpec::new("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
             println!("api shutting down");
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
 
     running
-        .add_child(ChildSpec::task("cache-warmer", |ctx| async move {
+        .add_task(TaskSpec::new("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
             loop {
@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     let mut nested_snapshots = nested.subscribe_snapshots();
     nested
-        .add_child(ChildSpec::task("seed", |ctx| async move {
+        .add_task(TaskSpec::new("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
             println!("nested seed shutting down");
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("nested supervisor added at runtime");
 
     nested
-        .add_child(ChildSpec::task("nested-cache", |ctx| async move {
+        .add_task(TaskSpec::new("nested-cache", |ctx| async move {
             println!("nested-cache started in generation {}", ctx.generation());
 
             loop {

@@ -18,7 +18,7 @@ use kokage::{
     Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context, ControlError,
     DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, RunningTree,
     ScopeRef, SendError, Shutdown, StopContext, SupervisorError, TrySendError,
-    host::{BoxError, ChildSpec, RawActor, RawContext},
+    host::{BoxError, RawActor, RawContext, TaskSpec},
     observe::ChildMembershipView,
 };
 use tokio::{
@@ -557,7 +557,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     assert!(snapshots.latest().child("removable").is_some());
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
-        Err(TrySendError::Closed { actor_id , .. }) if actor_id == "removable"
+        Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "removable"
     ));
 
     // There is no public Draining state. An awaited send observes the closed
@@ -661,7 +661,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
-        Err(TrySendError::Closed { actor_id , .. }) if actor_id == "discarding"
+        Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "discarding"
     ));
     assert!(!removal.is_finished(), "removal waits for on_stop");
     release_on_stop.notify_one();
@@ -1328,7 +1328,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 #[tokio::test]
 async fn ordered_tree_has_no_runtime_membership_capability() {
     let handle = OrderedTree::new()
-        .task(ChildSpec::task("seed", |ctx| async move {
+        .task(TaskSpec::new("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

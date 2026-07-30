@@ -12,7 +12,7 @@ use std::{
 
 use kokage::{
     DynamicTree, OrderedTree, Restart, Strategy,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
     observe::{LifecycleEventKind, LifecycleWatch},
 };
 use tokio::{
@@ -101,13 +101,10 @@ fn bench_async<F, Fut>(
 async fn spawn_shutdown_flow(children: usize) {
     let mut builder = OrderedTree::new();
     for index in 0..children {
-        builder = builder.task(ChildSpec::task(
-            format!("worker-{index}"),
-            |ctx| async move {
-                ctx.shutdown_token().cancelled().await;
-                Ok(())
-            },
-        ));
+        builder = builder.task(TaskSpec::new(format!("worker-{index}"), |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }));
     }
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
@@ -125,7 +122,7 @@ async fn one_for_one_restart_flow() {
     let trigger_failure = Arc::new(Notify::new());
     let flaky_attempts = Arc::clone(&attempts);
     let flaky_trigger = Arc::clone(&trigger_failure);
-    let flaky = ChildSpec::task("flaky", move |ctx| {
+    let flaky = TaskSpec::new("flaky", move |ctx| {
         let attempts = Arc::clone(&flaky_attempts);
         let trigger_failure = Arc::clone(&flaky_trigger);
         async move {
@@ -142,7 +139,7 @@ async fn one_for_one_restart_flow() {
 
     let mut builder = OrderedTree::new().strategy(Strategy::OneForOne).task(flaky);
     for index in 0..3 {
-        builder = builder.task(ChildSpec::task(format!("peer-{index}"), |ctx| async move {
+        builder = builder.task(TaskSpec::new(format!("peer-{index}"), |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -174,7 +171,7 @@ async fn one_for_one_restart_flow() {
 async fn one_for_all_restart_flow() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let trigger_attempts = Arc::clone(&attempts);
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let attempts = Arc::clone(&trigger_attempts);
         async move {
             if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -192,7 +189,7 @@ async fn one_for_all_restart_flow() {
         .task(trigger);
     for index in 0..3 {
         builder = builder.task(
-            ChildSpec::task(format!("peer-{index}"), |ctx| async move {
+            TaskSpec::new(format!("peer-{index}"), |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
@@ -218,7 +215,7 @@ async fn dynamic_add_remove_flow() {
     let mut events = handle.watch_lifecycle();
 
     handle
-        .add_child(ChildSpec::task("seed", |ctx| async move {
+        .add_task(TaskSpec::new("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -228,7 +225,7 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "seed").await;
 
     handle
-        .add_child(ChildSpec::task("dynamic", |ctx| async move {
+        .add_task(TaskSpec::new("dynamic", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

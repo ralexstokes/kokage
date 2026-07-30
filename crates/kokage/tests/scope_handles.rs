@@ -13,7 +13,7 @@ use std::{
 use kokage::{
     Actor, ActorResult, ActorSpec, BuildError, Context, ControlError, DynamicTree, Guard,
     OrderedTree, Restart, RestrictedScopeRef, ScopeRef, StopContext, Strategy,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
     observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -73,7 +73,7 @@ impl Actor for ScopeProbe {
         // Task insertion schedules startup rather than awaiting readiness, so
         // it remains available on the restricted startup-stage handle.
         let before_ready = children
-            .add_child(ChildSpec::task("too-early", |_| async { Ok(()) }))
+            .add_task(TaskSpec::new("too-early", |_| async { Ok(()) }))
             .await;
         assert!(matches!(before_ready, Err(ControlError::Unavailable)));
         self.reports
@@ -198,10 +198,10 @@ impl Actor for DynamicCompletionLeader {
         self.reports.send("armed").expect("test receiver open");
 
         dynamic
-            .add_child(ChildSpec::task("first", |_| async { Ok(()) }))
+            .add_task(TaskSpec::new("first", |_| async { Ok(()) }))
             .await?;
         dynamic
-            .add_child(ChildSpec::task("second", |_| async { Ok(()) }))
+            .add_task(TaskSpec::new("second", |_| async { Ok(()) }))
             .await?;
         self.reports.send("inserted").expect("test receiver open");
         Ok(())
@@ -226,7 +226,7 @@ impl Actor for RestrictedTaskAdder {
             .subtree("children")
             .expect("actor's declared child scope is registered");
         let lineage = children
-            .add_child(ChildSpec::task("task", |ctx| async move {
+            .add_task(TaskSpec::new("task", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
@@ -316,7 +316,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     let post_spawn = support::dynamic_root(&dynamic_root);
 
     pre_spawn
-        .add_child(ChildSpec::task("worker", |ctx| async move {
+        .add_task(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -361,7 +361,7 @@ async fn dynamic_completion_names_wait_for_future_members() {
     );
 
     dynamic
-        .add_child(ChildSpec::task("future", |_| async { Ok(()) }))
+        .add_task(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
         .expect("future member added");
     assert_eq!(
@@ -389,7 +389,7 @@ async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
     let runtime = tree.spawn().expect("dynamic root builds");
 
     dynamic
-        .add_child(ChildSpec::task("future", |_| async { Ok(()) }))
+        .add_task(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
         .expect("future member added");
     timeout(WAIT, runtime.wait())
@@ -415,7 +415,7 @@ async fn ordered_scope_rejects_future_member_completion_mode() {
 
 #[tokio::test]
 async fn pre_spawn_completion_shutdown_beats_a_fast_child() {
-    let tree = OrderedTree::new().task(ChildSpec::task("fast", |_| async { Ok(()) }));
+    let tree = OrderedTree::new().task(TaskSpec::new("fast", |_| async { Ok(()) }));
     let shutdown = tree.scope().completions(["fast"]).then_shutdown();
     assert!(!shutdown.is_finished());
 
@@ -440,7 +440,7 @@ async fn ordered_scope_membership_methods_return_not_dynamic() {
     assert!(matches!(
         runtime
             .scope()
-            .add_child(ChildSpec::task("task", |_| async { Ok(()) }))
+            .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
             .await,
         Err(ControlError::NotDynamic)
     ));
@@ -474,7 +474,7 @@ impl Actor for OrderedRestrictedProbe {
         ));
         assert!(matches!(
             scope
-                .add_child(ChildSpec::task("task", |_| async { Ok(()) }))
+                .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
                 .await,
             Err(ControlError::NotDynamic)
         ));
@@ -518,7 +518,7 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
     let tree = OrderedTree::new().subtree(
         "nested",
-        OrderedTree::new().task(ChildSpec::task("worker", move |ctx| {
+        OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
             let lifecycle_tx = lifecycle_tx.clone();
             async move {
                 lifecycle_tx.send("started").expect("test receiver open");
@@ -550,7 +550,7 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
 #[tokio::test]
 async fn dropping_runtime_requests_graceful_shutdown() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().task(ChildSpec::task("worker", move |ctx| {
+    let tree = OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
         let lifecycle_tx = lifecycle_tx.clone();
         async move {
             lifecycle_tx.send("started").expect("test receiver open");
@@ -571,7 +571,7 @@ async fn dropping_runtime_requests_graceful_shutdown() {
 #[tokio::test]
 async fn fire_and_forget_tree_spawn_shuts_down_observably() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().task(ChildSpec::task("worker", move |ctx| {
+    let tree = OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -591,7 +591,7 @@ async fn fire_and_forget_tree_spawn_shuts_down_observably() {
 
 #[tokio::test]
 async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
-    let tree = OrderedTree::new().task(ChildSpec::task("worker", |ctx| async move {
+    let tree = OrderedTree::new().task(TaskSpec::new("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -655,7 +655,7 @@ async fn trees_terminalize_handles_when_dropped() {
 #[test]
 fn tree_strategy_preserves_declared_pre_spawn_snapshot() {
     let tree = OrderedTree::new()
-        .task(ChildSpec::task("task", |_| async { Ok(()) }))
+        .task(TaskSpec::new("task", |_| async { Ok(()) }))
         .actor(ActorSpec::new("actor", || Idle));
     let handle = tree.scope();
     let declared_before = handle
@@ -684,8 +684,8 @@ fn tree_strategy_preserves_declared_pre_spawn_snapshot() {
 #[tokio::test]
 async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     let tree = OrderedTree::new()
-        .task(ChildSpec::task("duplicate", |_| async { Ok(()) }))
-        .task(ChildSpec::task("duplicate", |_| async { Ok(()) }));
+        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }))
+        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     let failed_ordered = tree.scope();
     let failed_ordered_snapshots = failed_ordered.subscribe_snapshots();
     assert!(tree.spawn().is_err());
@@ -871,7 +871,7 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
 }
 
 #[tokio::test]
-async fn restricted_scope_add_child_returns_the_inserted_lineage() {
+async fn restricted_scope_add_task_returns_the_inserted_lineage() {
     let (lineage_tx, mut lineage_rx) = mpsc::unbounded_channel();
     let (subtree_tx, mut subtree_rx) = mpsc::unbounded_channel();
     let adder_spec = ActorSpec::new("adder", move || RestrictedTaskAdder {

@@ -1,8 +1,8 @@
 error[E0382]: use of moved value: `spec`
- --> tests/ui/single-use-tree/child_spec_double_placement.rs:5:52
+ --> tests/ui/single-use-tree/task_spec_double_placement.rs:5:52
   |
-4 |     let spec = ChildSpec::task("task", |_| async { Ok(()) });
-  |         ---- move occurs because `spec` has type `ChildSpec`, which does not implement the `Copy` trait
+4 |     let spec = TaskSpec::new("task", |_| async { Ok(()) });
+  |         ---- move occurs because `spec` has type `TaskSpec`, which does not implement the `Copy` trait
 5 |     let _tree = OrderedTree::new().task(spec).task(spec);
   |                                         ----       ^^^^ value used here after move
   |                                         |

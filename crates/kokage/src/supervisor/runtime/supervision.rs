@@ -50,7 +50,7 @@ pub(crate) type ChildKey = usize;
 /// Message returned by a child task through the `JoinSet`. Task identity is
 /// correlated through `task_map`, including for successful joins.
 pub(crate) struct ChildEnvelope {
-    pub(crate) result: crate::supervisor::child::ChildResult,
+    pub(crate) result: crate::actor::ActorResult,
 }
 
 /// Metadata stored alongside a Tokio task ID so every join result can be
@@ -103,7 +103,7 @@ impl From<ControlError> for CommandFailure {
 impl From<ExitReason> for CommandFailure {
     fn from(exit: ExitReason) -> Self {
         let error = match &exit {
-            ExitReason::Shutdown => ControlError::SupervisorStopping,
+            ExitReason::Shutdown => ControlError::Unavailable,
             ExitReason::Failure(error) => ControlError::Failed(error.clone()),
         };
         Self {
@@ -201,7 +201,7 @@ struct StartSequence {
 }
 
 struct StartupGate {
-    ready: crate::supervisor::context::ChildContext,
+    ready: crate::supervisor::context::TaskContext,
     pending: Vec<(ChildKey, u64)>,
 }
 
@@ -484,7 +484,7 @@ impl SupervisorRuntime {
 
     pub(crate) async fn run(
         &mut self,
-        startup_ready: Option<crate::supervisor::context::ChildContext>,
+        startup_ready: Option<crate::supervisor::context::TaskContext>,
     ) -> Result<(), SupervisorError> {
         match self.run_until_exit(startup_ready).await {
             Ok(()) => {
@@ -532,7 +532,7 @@ impl SupervisorRuntime {
 
     async fn run_until_exit(
         &mut self,
-        startup_ready: Option<crate::supervisor::context::ChildContext>,
+        startup_ready: Option<crate::supervisor::context::TaskContext>,
     ) -> RuntimeResult<()> {
         self.publish_snapshot();
         self.send_event(RuntimeEvent::SupervisorStarted);
@@ -953,7 +953,7 @@ impl SupervisorRuntime {
         }
     }
 
-    fn add_child(&mut self, mut child: crate::supervisor::child::ChildSpec) -> CommandResult<u64> {
+    fn add_child(&mut self, mut child: crate::supervisor::child::TaskSpec) -> CommandResult<u64> {
         self.assert_dynamic_membership();
 
         ChildDefinition::make_mut_preserving_supervisor_identity(&mut child.inner)
@@ -1315,7 +1315,7 @@ impl SupervisorRuntime {
             Some(id),
         );
         if failure.is_some() {
-            Err(ControlError::SupervisorStopping)
+            Err(ControlError::Unavailable)
         } else if grace_expired {
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(
                 id.to_owned(),
@@ -2108,7 +2108,7 @@ fn event_child_id(event: &RuntimeEvent) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::supervisor::{
-        ChildSpec, Supervisor,
+        Supervisor, TaskSpec,
         handle::{attached_children_state, empty_nested_channels},
         owner::initial_snapshot,
     };
@@ -2123,7 +2123,7 @@ mod tests {
 
     fn runtime_with_child(id: &'static str) -> SupervisorRuntime {
         let supervisor = Supervisor::ordered()
-            .child(ChildSpec::task(id, |_| async { Ok(()) }))
+            .child(TaskSpec::new(id, |_| async { Ok(()) }))
             .build()
             .expect("valid supervisor config");
         let own_handle = supervisor.handle();
@@ -2172,7 +2172,7 @@ mod tests {
     fn ordered_runtime_rejects_internal_dynamic_membership_commands() {
         let mut runtime = runtime_with_child("static");
 
-        let _ = runtime.add_child(ChildSpec::task("dynamic", |_| async { Ok(()) }));
+        let _ = runtime.add_child(TaskSpec::new("dynamic", |_| async { Ok(()) }));
     }
 
     #[tokio::test]
@@ -2250,7 +2250,7 @@ mod tests {
         let (reply, _reply_rx) = oneshot::channel();
         command_tx
             .try_send(SupervisorCommand::AddChild {
-                child: ChildSpec::task("late", |_| async { Ok(()) }),
+                child: TaskSpec::new("late", |_| async { Ok(()) }),
                 reply,
             })
             .expect("command channel should have capacity");
@@ -2308,14 +2308,11 @@ mod tests {
             "stuck-sibling".to_owned(),
         )));
 
-        assert_eq!(
-            reply_rx.try_recv(),
-            Ok(Err(ControlError::SupervisorStopping))
-        );
+        assert_eq!(reply_rx.try_recv(), Ok(Err(ControlError::Unavailable)));
     }
 
     #[test]
-    fn pending_removal_group_failure_before_own_grace_reports_stopping() {
+    fn pending_removal_group_failure_before_own_grace_reports_unavailable() {
         let mut runtime = runtime_with_child("removable");
         let key = runtime.child_order[0];
         let (reply, mut reply_rx) = oneshot::channel();
@@ -2332,10 +2329,7 @@ mod tests {
             "stuck-sibling".to_owned(),
         )));
 
-        assert_eq!(
-            reply_rx.try_recv(),
-            Ok(Err(ControlError::SupervisorStopping))
-        );
+        assert_eq!(reply_rx.try_recv(), Ok(Err(ControlError::Unavailable)));
     }
 
     #[cfg(feature = "metrics")]
@@ -2363,7 +2357,7 @@ mod tests {
             )
         });
 
-        assert_eq!(result, Err(ControlError::SupervisorStopping));
+        assert_eq!(result, Err(ControlError::Unavailable));
         assert!(
             !snapshotter
                 .snapshot()
@@ -2378,7 +2372,7 @@ mod tests {
     async fn gated_group_restarts_emit_started_only_after_readiness() {
         let supervisor = Supervisor::ordered()
             .child(
-                ChildSpec::task("gated", |ctx| async move {
+                TaskSpec::new("gated", |ctx| async move {
                     ctx.shutdown_token().cancelled().await;
                     Ok(())
                 })
@@ -2519,7 +2513,7 @@ mod tests {
         assert!(
             old_runtime
                 .add_child(
-                    ChildSpec::task("dynamic-worker", |ctx| async move {
+                    TaskSpec::new("dynamic-worker", |ctx| async move {
                         ctx.shutdown_token().cancelled().await;
                         Ok(())
                     })
@@ -2563,7 +2557,7 @@ mod tests {
     #[test]
     fn displaced_parent_cannot_retire_reconciled_nested_identity() {
         let supervisor = Supervisor::ordered()
-            .child(ChildSpec::supervisor("nested", empty_supervisor()))
+            .child(TaskSpec::supervisor("nested", empty_supervisor()))
             .build()
             .expect("supervisor builds");
         let channels = supervisor.stable_channels(false);
@@ -2648,8 +2642,8 @@ mod tests {
     #[test]
     fn stable_identity_reconciliation_reuses_static_and_closes_stale_channels() {
         let config = Supervisor::ordered()
-            .child(ChildSpec::supervisor("reused", empty_supervisor()))
-            .child(ChildSpec::supervisor("collision", empty_supervisor()))
+            .child(TaskSpec::supervisor("reused", empty_supervisor()))
+            .child(TaskSpec::supervisor("collision", empty_supervisor()))
             .build()
             .expect("valid supervisor config")
             .config

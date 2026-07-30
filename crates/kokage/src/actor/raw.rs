@@ -3,13 +3,14 @@ use std::future::Future;
 use crate::actor::context::RawContext;
 pub(crate) use crate::supervisor::BoxError;
 
-/// The result type returned by actor run, startup, and message functions.
+/// The result type returned by actor callbacks and supervised task factories.
 ///
 /// `Ok(())` keeps a handler-style actor running after startup or one handled
 /// message. Call [`Context::stop`](crate::Context::stop) before
 /// returning successfully to request a clean self-stop. A custom [`RawActor`]
 /// owns its receive loop, so returning `Ok(())` simply completes that actor
-/// cleanly.
+/// cleanly. A [`TaskSpec`](crate::host::TaskSpec) factory uses the same result:
+/// `Ok(())` is a clean task exit, while `Err` is a supervised failure.
 pub type ActorResult = Result<(), BoxError>;
 
 /// Async actor interface with a typed mailbox.

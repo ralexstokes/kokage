@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{ChildSpec, Restart, Shutdown, Strategy, Supervisor};
+use crate::supervisor::{Restart, Shutdown, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Notify, mpsc};
 
 use super::common;
@@ -21,7 +21,7 @@ async fn middle_failure_restarts_only_the_downstream_suffix_in_order() {
 
     let release_failure_for_child = release_failure.clone();
     let middle_started_tx = started_tx.clone();
-    let middle = ChildSpec::task("middle", move |ctx| {
+    let middle = TaskSpec::new("middle", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let middle_attempts = middle_attempts.clone();
         let started_tx = middle_started_tx.clone();
@@ -74,7 +74,7 @@ async fn last_child_failure_restarts_only_itself() {
     let first = reporting_child("first", started_tx.clone());
     let middle = reporting_child("middle", started_tx.clone());
     let release_failure_for_child = release_failure.clone();
-    let last = ChildSpec::task("last", move |ctx| {
+    let last = TaskSpec::new("last", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let last_attempts = last_attempts.clone();
         let started_tx = started_tx.clone();
@@ -121,7 +121,7 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
     let release_failure_for_child = release_failure.clone();
-    let trigger = ChildSpec::task("trigger", move |ctx| {
+    let trigger = TaskSpec::new("trigger", move |ctx| {
         let release_failure = release_failure_for_child.clone();
         let trigger_attempts = trigger_attempts.clone();
         let started_tx = started_tx.clone();
@@ -140,7 +140,7 @@ async fn rest_for_one_escalates_a_stubborn_cooperative_suffix_and_restarts() {
     .restart(Restart::on_failure());
 
     let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
-    let peer = ChildSpec::task("stubborn-peer", move |ctx| {
+    let peer = TaskSpec::new("stubborn-peer", move |ctx| {
         let peer_tx = peer_tx.clone();
         async move {
             peer_tx
@@ -187,7 +187,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
 
     let fail_upstream_for_child = fail_upstream.clone();
-    let upstream = ChildSpec::task("upstream", {
+    let upstream = TaskSpec::new("upstream", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let fail_upstream = fail_upstream_for_child.clone();
@@ -209,7 +209,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
     .restart(Restart::on_failure());
 
     let fail_middle_for_child = fail_middle.clone();
-    let middle = ChildSpec::task("middle", {
+    let middle = TaskSpec::new("middle", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let fail_middle = fail_middle_for_child.clone();
@@ -230,7 +230,7 @@ async fn upstream_failure_during_suffix_drain_is_dispatched_after_the_restart() 
     })
     .restart(Restart::on_failure());
 
-    let slow = ChildSpec::task("slow", {
+    let slow = TaskSpec::new("slow", {
         let started_tx = started_tx.clone();
         let slow_cancelled = slow_cancelled.clone();
         let release_slow = release_slow.clone();
@@ -297,7 +297,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
     let (never_drained_tx, mut never_drained_rx) = mpsc::unbounded_channel();
 
     let fail_trigger_for_child = fail_trigger.clone();
-    let trigger = ChildSpec::task("trigger", {
+    let trigger = TaskSpec::new("trigger", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let fail_trigger = fail_trigger_for_child.clone();
@@ -318,7 +318,7 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
     })
     .restart(Restart::on_failure());
 
-    let never = ChildSpec::task("never", {
+    let never = TaskSpec::new("never", {
         let started_tx = started_tx.clone();
         move |ctx| {
             let started_tx = started_tx.clone();
@@ -365,8 +365,8 @@ async fn never_child_in_suffix_is_drained_but_not_restarted() {
 fn reporting_child(
     id: &'static str,
     started_tx: mpsc::UnboundedSender<(&'static str, u64)>,
-) -> ChildSpec {
-    ChildSpec::task(id, move |ctx| {
+) -> TaskSpec {
+    TaskSpec::new(id, move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx
@@ -397,7 +397,7 @@ async fn two_upstream_failures_during_suffix_drain_all_recover() {
     let b = failing_once_child("b", fail_b.clone(), started_tx.clone());
     let trigger = failing_once_child("trigger", fail_trigger.clone(), started_tx.clone());
 
-    let slow = ChildSpec::task("slow", {
+    let slow = TaskSpec::new("slow", {
         let started_tx = started_tx.clone();
         let slow_cancelled = slow_cancelled.clone();
         let release_slow = release_slow.clone();
@@ -474,9 +474,9 @@ fn failing_once_child(
     id: &'static str,
     fail: Arc<Notify>,
     started_tx: mpsc::UnboundedSender<(&'static str, u64)>,
-) -> ChildSpec {
+) -> TaskSpec {
     let attempts = Arc::new(AtomicUsize::new(0));
-    ChildSpec::task(id, move |ctx| {
+    TaskSpec::new(id, move |ctx| {
         let fail = fail.clone();
         let attempts = attempts.clone();
         let started_tx = started_tx.clone();

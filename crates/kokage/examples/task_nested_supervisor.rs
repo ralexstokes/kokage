@@ -5,7 +5,7 @@ use std::sync::{
 
 use kokage::{
     DynamicTree, OrderedTree, Restart,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
 };
 use tokio::time::{Duration, sleep, timeout};
 
@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let nested_worker = {
         let nested_attempts = Arc::clone(&nested_attempts);
-        ChildSpec::task("nested-worker", move |ctx| {
+        TaskSpec::new("nested-worker", move |ctx| {
             let nested_attempts = Arc::clone(&nested_attempts);
             async move {
                 println!("nested-worker started in generation {}", ctx.generation());
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let nested_tree = OrderedTree::new().task(nested_worker);
 
-    let metrics = ChildSpec::task("metrics", |ctx| async move {
+    let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
         ctx.shutdown_token().cancelled().await;
         println!("metrics observed shutdown");
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let running_owner = DynamicTree::new().spawn()?;
     let running = running_owner.scope();
-    running.add_child(metrics).await?;
+    running.add_task(metrics).await?;
     let nested_handle = running.add_subtree("nested-pipeline", nested_tree).await?;
     let mut nested_snapshots = nested_handle.subscribe_snapshots();
     timeout(

@@ -231,13 +231,15 @@ mod supervisor;
 /// This module contains the lower-level execution surface for custom receive
 /// loops, directly driven runnable actors, and arbitrary supervised tasks.
 /// For task children it re-exports every type needed to name a
-/// [`host::ChildSpec::task`] factory as a standalone function. Nested scopes are
+/// [`host::TaskSpec::new`] factory as a standalone function. Nested scopes are
 /// composed with [`OrderedTree::subtree`] or
 /// [`ScopeRef::add_subtree`].
 pub mod host {
     pub use crate::{
-        actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
-        supervisor::{BoxError, ChildContext, ChildResult, ChildSpec},
+        actor::{
+            ActorResult, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
+        },
+        supervisor::{BoxError, TaskContext, TaskSpec},
     };
 }
 

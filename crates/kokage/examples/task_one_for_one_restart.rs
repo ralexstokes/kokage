@@ -5,7 +5,7 @@ use std::sync::{
 
 use kokage::{
     OrderedTree,
-    host::{BoxError, ChildSpec},
+    host::{BoxError, TaskSpec},
 };
 use tokio::time::{Duration, sleep, timeout};
 
@@ -17,7 +17,7 @@ fn example_error(message: &'static str) -> BoxError {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let attempts = Arc::new(AtomicUsize::new(0));
 
-    let flaky = ChildSpec::task("flaky-worker", move |ctx| {
+    let flaky = TaskSpec::new("flaky-worker", move |ctx| {
         let attempts = Arc::clone(&attempts);
         async move {
             let attempt = attempts.fetch_add(1, Ordering::SeqCst);
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let metrics = ChildSpec::task("metrics", |ctx| async move {
+    let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
         ctx.shutdown_token().cancelled().await;
         println!("metrics observed shutdown");

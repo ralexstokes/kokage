@@ -1,6 +1,6 @@
 use kokage::{
     OrderedTree, Restart, TreeNode,
-    host::ChildSpec,
+    host::TaskSpec,
     observe::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError, SupervisorSnapshot,
         SupervisorStateView,
@@ -10,7 +10,7 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nested = OrderedTree::new().task(ChildSpec::task("leaf", |ctx| async move {
+    let nested = OrderedTree::new().task(TaskSpec::new("leaf", |ctx| async move {
         println!("leaf started");
         ctx.shutdown_token().cancelled().await;
         println!("leaf stopping");
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     let running = OrderedTree::new()
-        .task(ChildSpec::task("worker", |ctx| async move {
+        .task(TaskSpec::new("worker", |ctx| async move {
             println!("worker started");
             ctx.shutdown_token().cancelled().await;
             println!("worker stopping");

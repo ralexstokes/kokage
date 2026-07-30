@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use kokage::{
     ActorStatus, Restart, Strategy,
-    host::ChildSpec,
+    host::TaskSpec,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -32,8 +32,8 @@ mod coverage_probe {
 
     mod host {
         use kokage::host::{
-            ActorRunError, BoxError, ChildContext, ChildResult, ChildSpec, DEFAULT_SHUTDOWN_BOUND,
-            RawActor, RawContext, RunnableActor,
+            ActorResult, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext,
+            RunnableActor, TaskContext, TaskSpec,
         };
     }
 
@@ -63,14 +63,14 @@ fn prelude_constructs_acyclic_and_cyclic_actor_declarations() {
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
-async fn named_task(ctx: kokage::host::ChildContext) -> kokage::host::ChildResult {
+async fn named_task(ctx: kokage::host::TaskContext) -> kokage::host::ActorResult {
     ctx.shutdown_token().cancelled().await;
     Ok(())
 }
 
 #[test]
 fn host_task_surface_supports_a_named_factory_from_the_single_crate() {
-    let _child = kokage::host::ChildSpec::task("worker", named_task);
+    let _child = kokage::host::TaskSpec::new("worker", named_task);
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn task_policy_sets_remain_nameable_from_the_single_crate() {
 #[tokio::test]
 async fn prelude_observes_raw_task_events_and_snapshots() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().task(ChildSpec::task("worker", move |ctx| {
+    let tree = OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx
@@ -312,7 +312,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
 #[tokio::test]
 async fn prelude_snapshots_walk_nested_task_children() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
-    let nested = OrderedTree::new().task(ChildSpec::task("leaf", move |ctx| {
+    let nested = OrderedTree::new().task(TaskSpec::new("leaf", move |ctx| {
         let leaf_started_tx = leaf_started_tx.clone();
         async move {
             leaf_started_tx.send(()).expect("test receiver dropped");
@@ -321,7 +321,7 @@ async fn prelude_snapshots_walk_nested_task_children() {
         }
     }));
     let tree = OrderedTree::new()
-        .task(ChildSpec::task("anchor", |ctx| async move {
+        .task(TaskSpec::new("anchor", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
