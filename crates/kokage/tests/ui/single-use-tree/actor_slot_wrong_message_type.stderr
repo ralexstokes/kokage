@@ -6,11 +6,11 @@ error[E0271]: type mismatch resolving `<TextActor as RawActor>::Msg == u32`
    |                  |
    |                  required by a bound introduced by this call
    |
-note: required by a bound in `ActorSlot::<M, CONFIGURABLE>::define`
+note: required by a bound in `ActorSlot::<M>::define`
   --> src/actor/builder.rs
    |
-   |     pub fn define<F>(self, factory: F) -> ActorSpec<M, CONFIGURABLE>
+   |     pub fn define<F>(self, factory: F) -> ActorSpec<M>
    |            ------ required by a bound in this associated function
 ...
    |         F::Actor: RawActor<Msg = M>,
-   |                            ^^^^^^^ required by this bound in `ActorSlot::<M, CONFIGURABLE>::define`
+   |                            ^^^^^^^ required by this bound in `ActorSlot::<M>::define`

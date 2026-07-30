@@ -63,14 +63,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         processed: processed_tx.clone(),
     })
     .restart(Restart::on_failure().limit(2, Duration::from_secs(1)));
-    let (worker_spec, worker) = worker_spec.actor_ref();
+    let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
         move || Frontend {
             worker: worker.clone(),
         }
     });
-    let (frontend_spec, frontend) = frontend_spec.actor_ref();
+    let frontend = frontend_spec.actor_ref();
 
     let runtime = OrderedTree::new()
         .actor(frontend_spec)

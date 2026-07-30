@@ -49,7 +49,7 @@ use crate::actor::raw::RawActor;
 ///
 /// let ids = Arc::new(AtomicU64::new(0));
 /// let worker = ActorSpec::new("worker", WorkerFactory { ids: ids.clone() });
-/// let (worker, worker_ref) = worker.actor_ref();
+/// let worker_ref = worker.actor_ref();
 /// let tree = OrderedTree::new().actor(worker);
 /// assert_eq!(worker_ref.id(), "worker");
 /// # let _ = tree;

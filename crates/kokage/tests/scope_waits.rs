@@ -54,7 +54,7 @@ async fn cancelling_an_unpolled_scope_wait_finishes_its_guard() {
     let (finished, mut finishes) = mpsc::unbounded_channel();
     let mut tree = TreeBuilder::new();
     let slot = ActorSlot::new("cancel-before-poll");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     tree.define(slot, move || CancelBeforePoll {
         finished: finished.clone(),
     });
@@ -100,7 +100,7 @@ async fn detached_scope_wait_maps_completion_through_the_actor_mailbox() {
     let (report, mut reports) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("reporter");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, move || ReadyReporter {
         report: report.clone(),
     });
@@ -238,7 +238,7 @@ async fn dropping_scope_wait_guard_cancels_and_is_accounted() {
     let (completions, mut completion_rx) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("cancellable-wait");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, move || CancellableWait {
         started: started.clone(),
         dropped: dropped.clone(),
@@ -274,7 +274,7 @@ async fn incarnation_restart_finishes_scope_wait_without_cancelling_its_guard() 
     let (completions, _completion_rx) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("restarted-scope-wait");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, move || CancellableWait {
         started: started.clone(),
         dropped: dropped.clone(),
@@ -374,7 +374,7 @@ async fn scope_wait_completion_obeys_full_fifo_mailbox_backpressure() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("backpressured-wait");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let wait_gate = Arc::clone(&wait_gate);
         let handler_release = Arc::clone(&handler_release);
@@ -440,7 +440,7 @@ async fn handle_abort_wins_before_a_blocked_scope_wait_message_is_accepted() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("cancelled-backpressured-wait");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let wait_gate = Arc::clone(&wait_gate);
         let handler_release = Arc::clone(&handler_release);
@@ -559,7 +559,7 @@ async fn restart_cancels_pending_scope_wait_without_delivering_to_the_next_incar
     let wait_gate = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let slot = ActorSlot::new("restart-probe");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let incarnations = Arc::clone(&incarnations);
         let starts = starts.clone();
@@ -678,7 +678,7 @@ async fn completion_racing_restart_cannot_follow_the_ref_into_the_next_incarnati
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("completion-race");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let incarnations = Arc::clone(&incarnations);
         let wait_gate = Arc::clone(&wait_gate);
@@ -944,7 +944,7 @@ async fn drain_aborts_scope_waits_but_still_waits_for_offloads() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let slot = ActorSlot::new("mixed-drain");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     graph.define(slot, {
         let offload_release = Arc::clone(&offload_release);
         let scope_release = Arc::clone(&scope_release);

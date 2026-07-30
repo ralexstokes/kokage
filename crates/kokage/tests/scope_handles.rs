@@ -698,7 +698,7 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
             mutate_children_on_start: true,
         }
     });
-    let (leader_spec, leader) = leader_spec.actor_ref();
+    let leader = leader_spec.actor_ref();
     let handle = OrderedTree::new()
         .subtree(
             "owned",
@@ -759,7 +759,7 @@ async fn restricted_scope_add_child_returns_the_inserted_lineage() {
         lineage: lineage_tx.clone(),
         subtree: subtree_tx.clone(),
     });
-    let (adder_spec, adder) = adder_spec.actor_ref();
+    let adder = adder_spec.actor_ref();
     let handle = OrderedTree::new()
         .subtree(
             "owned",
@@ -911,14 +911,14 @@ async fn leader_owned_scope_uses_explicit_rest_for_one() {
             starts: Arc::clone(&starts),
         }
     });
-    let (leader_spec, leader) = leader_spec.actor_ref();
+    let leader = leader_spec.actor_ref();
     let worker_spec = ActorSpec::new("worker", {
         let starts = Arc::clone(&worker_starts);
         move || RestartProbe {
             starts: Arc::clone(&starts),
         }
     });
-    let (worker_spec, worker) = worker_spec.actor_ref();
+    let worker = worker_spec.actor_ref();
     let tree = OrderedTree::new().subtree(
         "owned",
         OrderedTree::new()
@@ -961,7 +961,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
             starts: Arc::clone(&starts),
         }
     });
-    let (worker_spec, worker) = worker_spec.actor_ref();
+    let worker = worker_spec.actor_ref();
     let inner = OrderedTree::new()
         .actor(worker_spec)
         .default_restart(Restart::on_failure().limit(1, Duration::from_secs(30)));

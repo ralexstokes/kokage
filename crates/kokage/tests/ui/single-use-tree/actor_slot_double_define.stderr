@@ -8,8 +8,8 @@ error[E0382]: use of moved value: `slot`
 16 |     let _second = slot.define(|| Idle);
    |                   ^^^^ value used here after move
    |
-note: `ActorSlot::<M, CONFIGURABLE>::define` takes ownership of the receiver `self`, which moves `slot`
+note: `ActorSlot::<M>::define` takes ownership of the receiver `self`, which moves `slot`
   --> src/actor/builder.rs
    |
-   |     pub fn define<F>(self, factory: F) -> ActorSpec<M, CONFIGURABLE>
+   |     pub fn define<F>(self, factory: F) -> ActorSpec<M>
    |                      ^^^^

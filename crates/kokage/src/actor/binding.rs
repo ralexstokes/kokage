@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     fmt,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -178,7 +178,8 @@ pub(crate) struct ActorStatsCounters {
     messages_accepted: AtomicU64,
     messages_conflated: AtomicU64,
     sends_rejected: AtomicU64,
-    message_bytes_accepted: Option<AtomicU64>,
+    message_bytes_accepted: AtomicU64,
+    observe_message_size: AtomicBool,
     outstanding_offloads: AtomicU64,
     outstanding_scope_waits: AtomicU64,
 }
@@ -190,7 +191,8 @@ impl ActorStatsCounters {
             messages_accepted: AtomicU64::new(0),
             messages_conflated: AtomicU64::new(0),
             sends_rejected: AtomicU64::new(0),
-            message_bytes_accepted: observe_message_size.then(|| AtomicU64::new(0)),
+            message_bytes_accepted: AtomicU64::new(0),
+            observe_message_size: AtomicBool::new(observe_message_size),
             outstanding_offloads: AtomicU64::new(0),
             outstanding_scope_waits: AtomicU64::new(0),
         }
@@ -216,9 +218,12 @@ impl ActorStatsCounters {
     }
 
     pub(crate) fn record_message_size(&self, size: usize) {
-        if let Some(total) = &self.message_bytes_accepted {
-            total.fetch_add(size as u64, Ordering::Relaxed);
-        }
+        self.message_bytes_accepted
+            .fetch_add(size as u64, Ordering::Relaxed);
+    }
+
+    pub(crate) fn enable_message_size(&self) {
+        self.observe_message_size.store(true, Ordering::Release);
     }
 
     pub(crate) fn set_outstanding_offloads(&self, outstanding: usize) {
@@ -245,9 +250,9 @@ impl ActorStatsCounters {
             messages_accepted: self.messages_accepted.load(Ordering::Relaxed),
             messages_conflated: self.messages_conflated.load(Ordering::Relaxed),
             message_bytes_accepted: self
-                .message_bytes_accepted
-                .as_ref()
-                .map(|total| total.load(Ordering::Relaxed)),
+                .observe_message_size
+                .load(Ordering::Acquire)
+                .then(|| self.message_bytes_accepted.load(Ordering::Relaxed)),
             sends_rejected: self.sends_rejected.load(Ordering::Relaxed),
             outstanding_offloads: self.outstanding_offloads.load(Ordering::Relaxed),
             outstanding_scope_waits: self.outstanding_scope_waits.load(Ordering::Relaxed),
@@ -938,7 +943,7 @@ pub(crate) struct BindingCore<M> {
     actor_id: Arc<str>,
     current: watch::Sender<BindingState<M>>,
     stats: Arc<ActorStatsCounters>,
-    message_size: Option<Arc<MessageSizeObserver<M>>>,
+    message_size: Arc<OnceLock<MessageSizeObserver<M>>>,
     monitors: Arc<MonitorHub>,
     outbound_monitors: Arc<ActorMonitors>,
 }
@@ -968,29 +973,22 @@ impl<M> BindingCore<M> {
             actor_id,
             current,
             stats: Arc::new(ActorStatsCounters::new(false)),
-            message_size: None,
+            message_size: Arc::new(OnceLock::new()),
             monitors,
             outbound_monitors,
         }
     }
 
-    pub(crate) fn with_message_size(actor_id: Arc<str>, size_hint: fn(&M) -> usize) -> Self {
-        let (current, _receiver) = watch::channel(BindingState::Unbound);
-        let monitors = Arc::new(MonitorHub::new(&actor_id));
-        let outbound_monitors = Arc::new(ActorMonitors::new());
-        let message_size = MessageSizeObserver {
+    pub(crate) fn set_message_size(&self, size_hint: fn(&M) -> usize) {
+        let observer = MessageSizeObserver {
             size_hint,
-            metrics: MessageSizeMetrics::new(&actor_id),
+            metrics: MessageSizeMetrics::new(&self.actor_id),
         };
-        Self {
-            identity: Arc::new(()),
-            actor_id,
-            current,
-            stats: Arc::new(ActorStatsCounters::new(true)),
-            message_size: Some(Arc::new(message_size)),
-            monitors,
-            outbound_monitors,
-        }
+        assert!(
+            self.message_size.set(observer).is_ok(),
+            "an actor binding's message-size hint is set only once"
+        );
+        self.stats.enable_message_size();
     }
 
     pub(crate) fn actor_id(&self) -> &Arc<str> {
@@ -1009,8 +1007,8 @@ impl<M> BindingCore<M> {
         Arc::clone(&self.stats)
     }
 
-    pub(crate) fn message_size(&self) -> Option<Arc<MessageSizeObserver<M>>> {
-        self.message_size.clone()
+    pub(crate) fn message_size(&self) -> Arc<OnceLock<MessageSizeObserver<M>>> {
+        Arc::clone(&self.message_size)
     }
 
     pub(crate) fn monitor_hub(&self) -> Arc<MonitorHub> {

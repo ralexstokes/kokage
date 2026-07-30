@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let worker_spec = ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
     });
-    let (worker_spec, worker) = worker_spec.actor_ref();
+    let worker = worker_spec.actor_ref();
 
     let handle = support::ActorTasks::start([worker_spec.into_runnable()]);
 

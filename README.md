@@ -58,11 +58,11 @@ impl Actor for FrontDesk {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Mint the typed ref before moving the declarations into the tree.
     let press_actor = ActorSpec::new("press", Press::default);
-    let (press_actor, press) = press_actor.actor_ref();
+    let press = press_actor.actor_ref();
     let orders_actor = ActorSpec::new("front-desk", move || FrontDesk {
         press: press.clone(),
     });
-    let (orders_actor, orders) = orders_actor.actor_ref();
+    let orders = orders_actor.actor_ref();
 
     // Compose the supervision tree, then run it.
     let runtime = OrderedTree::new()

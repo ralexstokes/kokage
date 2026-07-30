@@ -209,23 +209,23 @@ async fn build_app() -> Result<App, AnyError> {
 
     // Open every slot first so cyclic factories can capture the stable refs.
     let outbound_slot = gateway_slot::<OutboundMsg>("outbound");
-    let (outbound_slot, outbound) = outbound_slot.actor_ref();
+    let outbound = outbound_slot.actor_ref();
     let progress_slot = gateway_slot::<ProgressMsg>("progress").mailbox(
         MailboxMode::conflate_by_key(|message: &ProgressMsg| message.chat()),
     );
-    let (progress_slot, progress) = progress_slot.actor_ref();
+    let progress = progress_slot.actor_ref();
     let inbound_slot = gateway_slot::<InboundMsg>("inbound");
     let journal_slot =
         ActorSlot::<JournalMsg>::new("journal").message_size(messages::journal_message_size);
-    let (journal_slot, journal) = journal_slot.actor_ref();
+    let journal = journal_slot.actor_ref();
     let budget_slot = ActorSlot::<BudgetMsg>::new("budget");
-    let (budget_slot, budget) = budget_slot.actor_ref();
+    let budget = budget_slot.actor_ref();
     let guard_slot = ActorSlot::<GuardMsg>::new("guard");
-    let (guard_slot, guard) = guard_slot.actor_ref();
+    let guard = guard_slot.actor_ref();
     let tool_host_slot = ActorSlot::<ToolHostMsg>::new("tool_host");
-    let (tool_host_slot, tool_host) = tool_host_slot.actor_ref();
+    let tool_host = tool_host_slot.actor_ref();
     let router_slot = ActorSlot::<RouterMsg>::new("router");
-    let (router_slot, router) = router_slot.actor_ref();
+    let router = router_slot.actor_ref();
 
     let budget_actor = budget_slot.define({
         let guard = guard.clone();

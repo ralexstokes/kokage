@@ -811,7 +811,7 @@ async fn detached_interval_keeps_delivering() {
 async fn target_termination_finishes_interval_without_cancelling_it() {
     let (guard_tx, mut guard_rx) = mpsc::unbounded_channel();
     let target_slot = ActorSlot::new("terminated-target");
-    let (target_slot, target) = target_slot.actor_ref();
+    let target = target_slot.actor_ref();
     drop(target_slot);
     let mut builder = TreeBuilder::new();
     builder.actor(ActorSpec::new("scheduler", {

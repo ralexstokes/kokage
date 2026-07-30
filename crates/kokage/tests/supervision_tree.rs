@@ -239,9 +239,9 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
 #[tokio::test]
 async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
     let ingest_actor = ActorSpec::new("ingest", || Worker);
-    let (ingest_actor, ingest) = ingest_actor.actor_ref();
+    let ingest = ingest_actor.actor_ref();
     let parse_actor = ActorSpec::new("parse", || Worker);
-    let (parse_actor, parse) = parse_actor.actor_ref();
+    let parse = parse_actor.actor_ref();
     let handle = OrderedTree::new()
         .actor(ingest_actor)
         .subtree(
@@ -310,9 +310,9 @@ fn tree_placement_rejects_zero_scope_mailbox_capacity() {
 #[tokio::test]
 async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
     let first = ActorSpec::new("first", || Worker);
-    let (first, first_actor) = first.actor_ref();
+    let first_actor = first.actor_ref();
     let direct = ActorSpec::new("direct-actor", || Worker);
-    let (direct, direct_actor) = direct.actor_ref();
+    let direct_actor = direct.actor_ref();
     let runtime = OrderedTree::new()
         .mailbox_capacity(9)
         .actor(first)
@@ -329,7 +329,7 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
 #[tokio::test]
 async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     let nested = ActorSpec::new("nested", || Worker);
-    let (nested, nested_ref) = nested.actor_ref();
+    let nested_ref = nested.actor_ref();
     let runtime = OrderedTree::new()
         .mailbox_capacity(9)
         .subtree("nested", OrderedTree::new().actor(nested))
@@ -344,9 +344,9 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
 #[tokio::test]
 async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let peer = ActorSpec::new("peer", || Worker);
-    let (peer, peer_ref) = peer.actor_ref();
+    let peer_ref = peer.actor_ref();
     let leader = ActorSpec::new("leader", || Worker);
-    let (leader, leader_ref) = leader.actor_ref();
+    let leader_ref = leader.actor_ref();
     let runtime = OrderedTree::new()
         .actor(peer)
         .subtree(
@@ -395,7 +395,7 @@ async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() 
     let spec = ActorSpec::new("buffered", || Parked)
         .mailbox(MailboxMode::conflate())
         .message_size(|message: &Vec<u8>| message.len());
-    let (spec, actor) = spec.actor_ref();
+    let actor = spec.actor_ref();
     let runtime = OrderedTree::new().actor(spec).spawn().expect("tree builds");
     runtime.handle().wait_started().await.expect("actor starts");
 
@@ -418,7 +418,7 @@ async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() 
 #[tokio::test]
 async fn static_tree_actor_can_remove_itself_when_done() {
     let spec = ActorSpec::new("finite", || Finite).restart(Restart::never().remove_when_done());
-    let (spec, actor) = spec.actor_ref();
+    let actor = spec.actor_ref();
     let tree = OrderedTree::new().actor(spec);
     let mut snapshots = tree.handle().subscribe_snapshots();
     let runtime = tree.spawn().expect("tree builds");

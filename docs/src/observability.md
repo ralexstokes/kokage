@@ -248,11 +248,14 @@ fn upload_size(message: &Upload) -> usize {
     message.payload.len()
 }
 
-let uploads = ActorSpec::new("uploads", UploadActor::new)
-    .message_size(upload_size);
-let (uploads, uploads_ref) = uploads.actor_ref();
+let uploads = ActorSpec::new("uploads", UploadActor::new);
+let uploads_ref = uploads.actor_ref();
+let uploads = uploads.message_size(upload_size);
 let tree = OrderedTree::new().actor(uploads);
 ```
+
+The sizing observer is applied when the declaration is materialized, so refs
+minted before `message_size` is configured report the same accepted-byte total.
 
 The same declaration configures a dynamic actor before insertion:
 `ActorSpec::new("uploads", UploadActor::new).mailbox(MailboxMode::conflate()).message_size(upload_size)`.

@@ -52,7 +52,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         handled: handled_tx.clone(),
     })
     .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
-    let (worker_spec, worker) = worker_spec.actor_ref();
+    let worker = worker_spec.actor_ref();
 
     let runtime = OrderedTree::new().actor(worker_spec).spawn()?;
     worker.send(Msg::Hold).await?;

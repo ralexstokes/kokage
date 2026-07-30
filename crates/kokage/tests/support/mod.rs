@@ -2,7 +2,6 @@
 
 use kokage::{
     ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicRuntimeHandle, OrderedTree, Runtime,
-    SealedActorSpec,
     host::{RawActor, RunnableActor},
 };
 
@@ -31,26 +30,17 @@ impl RunnableBuilder {
         Self { actors: Vec::new() }
     }
 
-    pub(crate) fn actor<M: Send + 'static>(
-        &mut self,
-        spec: impl Into<SealedActorSpec<M>>,
-    ) -> ActorRef<M> {
-        let spec = spec.into();
+    pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
         let actor_ref = spec.actor_ref();
         self.actors.push(spec.into_runnable());
         actor_ref
     }
 
-    pub(crate) fn define<M, F, const CONFIGURABLE: bool>(
-        &mut self,
-        slot: ActorSlot<M, CONFIGURABLE>,
-        factory: F,
-    ) -> ActorRef<M>
+    pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
     where
         M: Send + 'static,
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
-        ActorSpec<M, CONFIGURABLE>: Into<SealedActorSpec<M>>,
     {
         self.actor(slot.define(factory))
     }
@@ -87,11 +77,7 @@ impl TreeBuilder {
         }
     }
 
-    pub(crate) fn actor<M: Send + 'static>(
-        &mut self,
-        spec: impl Into<SealedActorSpec<M>>,
-    ) -> ActorRef<M> {
-        let spec = spec.into();
+    pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
         let actor_ref = spec.actor_ref();
         self.tree = Some(
             self.tree
@@ -102,16 +88,11 @@ impl TreeBuilder {
         actor_ref
     }
 
-    pub(crate) fn define<M, F, const CONFIGURABLE: bool>(
-        &mut self,
-        slot: ActorSlot<M, CONFIGURABLE>,
-        factory: F,
-    ) -> ActorRef<M>
+    pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
     where
         M: Send + 'static,
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
-        ActorSpec<M, CONFIGURABLE>: Into<SealedActorSpec<M>>,
     {
         self.actor(slot.define(factory))
     }

@@ -65,7 +65,7 @@ impl RawActor for ReplyImmediately {
 #[tokio::test(start_paused = true)]
 async fn timeout_before_mailbox_binding_drops_the_request() {
     let spec = ActorSpec::new("rpc", || ReplyImmediately);
-    let (spec, rpc) = spec.actor_ref();
+    let rpc = spec.actor_ref();
     let actor = spec.into_runnable();
 
     assert!(matches!(
@@ -132,7 +132,7 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
         }
     })
     .mailbox_capacity(1);
-    let (spec, rpc) = spec.actor_ref();
+    let rpc = spec.actor_ref();
     let (stop_token, task) = start(spec.into_runnable());
     started_rx.recv().await.expect("actor started");
 
@@ -198,7 +198,7 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
             replied: replied_tx.clone(),
         }
     });
-    let (spec, rpc) = spec.actor_ref();
+    let rpc = spec.actor_ref();
     let (stop_token, task) = start(spec.into_runnable());
 
     let call = tokio::spawn({
@@ -251,7 +251,7 @@ async fn accepted_unread_request_lost_with_incarnation_reports_reply_dropped() {
             exit: exit.clone(),
         }
     });
-    let (spec, rpc) = spec.actor_ref();
+    let rpc = spec.actor_ref();
     let (_stop_token, task) = start(spec.into_runnable());
     started_rx.recv().await.expect("actor started");
 

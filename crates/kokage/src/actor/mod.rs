@@ -17,7 +17,7 @@ mod raw;
 
 pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
-pub use builder::{ActorSlot, ActorSpec, SealedActorSlot, SealedActorSpec};
+pub use builder::{ActorSlot, ActorSpec};
 pub use context::{
     ActorRef, ActorStatus, Context, DynamicRestrictedScope, RawContext, Reply, RestrictedScope,
     StopContext, TimerKey,

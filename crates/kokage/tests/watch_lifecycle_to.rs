@@ -114,7 +114,7 @@ async fn runtime_with_watched_subtree() -> (
         .expect("sink added");
     let mut graph = TreeBuilder::new();
     let crasher_slot = ActorSlot::new("crasher");
-    let (crasher_slot, crasher) = crasher_slot.actor_ref();
+    let crasher = crasher_slot.actor_ref();
     graph.define(crasher_slot, || Crasher);
     let watched = support::dynamic_root(&runtime)
         .add_subtree(

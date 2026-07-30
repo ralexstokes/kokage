@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let spec = ActorSpec::new("OneMessageSink", move || OneMessageSink {
         observed: observed_tx.clone(),
     });
-    let (spec, sink_ref) = spec.actor_ref();
+    let sink_ref = spec.actor_ref();
     let sink = spec.into_runnable();
 
     let first_run = tokio::spawn({

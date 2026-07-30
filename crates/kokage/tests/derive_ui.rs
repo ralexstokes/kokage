@@ -18,9 +18,9 @@ fn derive_ui() {
     // a nested scope declaration.
     t.compile_fail("tests/ui/single-use-tree/*.rs");
 
-    // Minting a stable ref seals mailbox configuration so options that shape
-    // the binding cannot fail later through an ordering panic.
-    t.compile_fail("tests/ui/declaration-sealing/*.rs");
+    // Minting a stable ref borrows the declaration. Mailbox options remain
+    // configurable until the spec or slot is consumed by placement/define.
+    t.pass("tests/ui/declaration-unsealed/*.rs");
 
     // Public API tiers are intentionally disjoint: observation and raw-hosting
     // types live outside the crate root and day-one prelude, while the

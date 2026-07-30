@@ -26,8 +26,8 @@ mod coverage_probe {
             ActorFactory, Backoff, BackoffParts, BlockingCancelled, BuildError, CancellationToken,
             ControlError, DownReason, DynamicRestrictedScope, DynamicRuntimeHandle, DynamicTree,
             Guard, MailboxMode, MonitorEvent, OffloadDeadline, Restart, RestartMode,
-            RestrictedScope, Runtime, RuntimeHandle, SealedActorSlot, SealedActorSpec, Shutdown,
-            ShutdownMode, Strategy, SupervisorError, TimerKey, TreeNode,
+            RestrictedScope, Runtime, RuntimeHandle, Shutdown, ShutdownMode, Strategy,
+            SupervisorError, TimerKey, TreeNode,
         };
     }
 
@@ -54,7 +54,7 @@ fn prelude_constructs_acyclic_and_cyclic_actor_declarations() {
         observed: mpsc::unbounded_channel().0,
     });
     let slot = ActorSlot::new("cyclic");
-    let (slot, _cyclic_ref) = slot.actor_ref();
+    let _cyclic_ref = slot.actor_ref();
     let cyclic = slot.define(|| BlockingWorker {
         observed: mpsc::unbounded_channel().0,
     });
