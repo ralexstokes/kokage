@@ -11,13 +11,11 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, Context, ControlError, DynamicRuntimeHandle, DynamicTree,
+    Actor, ActorResult, ActorSpec, Context, ControlError, DynamicRuntimeHandle, DynamicTree, Guard,
     OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext, Strategy,
     SupervisorBuildError,
     host::{BoxError, ChildSpec},
-    observe::{
-        ChildStateView, CompletionGuard, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver,
-    },
+    observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -188,7 +186,7 @@ struct RestrictedTaskAdder {
 }
 
 struct DynamicCompletionLeader {
-    completion: Option<CompletionGuard>,
+    completion: Option<Guard>,
     reports: mpsc::UnboundedSender<&'static str>,
 }
 
