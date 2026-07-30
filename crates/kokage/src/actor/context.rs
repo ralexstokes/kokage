@@ -1635,7 +1635,9 @@ macro_rules! restricted_scope_forwards {
         /// The returned guard must be retained; dropping it cancels the watch
         /// and leaves the scope running. See
         /// [`RuntimeHandle::shutdown_on_completion`] for child-id and runtime
-        /// requirements.
+        /// requirements. An unknown id is rejected;
+        /// [`DynamicRestrictedScope::shutdown_on_completion`] instead treats
+        /// absent ids as future dynamic membership.
         pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::observe::CompletionGuard
         where
             I: IntoIterator<Item = S>,
