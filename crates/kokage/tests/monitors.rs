@@ -389,13 +389,21 @@ async fn cancelled_watch_suppresses_delivery() {
     let mut fixture = fixture(WatchMode::Cancel);
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
-        peer.run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
-            .await
+        peer.run_until(
+            pending::<()>(),
+            Restart::never(),
+            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     let observer = fixture.observer.clone();
     let observer_task = tokio::spawn(async move {
         observer
-            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .run_until(
+                pending::<()>(),
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.peer_started).await;
@@ -527,8 +535,12 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
     let mut fixture = fixture(WatchMode::Retain);
     let peer = fixture.peer.clone();
     let peer_task = tokio::spawn(async move {
-        peer.run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
-            .await
+        peer.run_until(
+            pending::<()>(),
+            Restart::never(),
+            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     started(&mut fixture.peer_started).await;
 
@@ -538,7 +550,7 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
             .run_until(
                 pending::<()>(),
                 Restart::on_failure(),
-                DEFAULT_SHUTDOWN_BOUND,
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
     });
@@ -559,7 +571,11 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
     let second_observer = fixture.observer.clone();
     let second_task = tokio::spawn(async move {
         second_observer
-            .run_until(pending::<()>(), Restart::never(), DEFAULT_SHUTDOWN_BOUND)
+            .run_until(
+                pending::<()>(),
+                Restart::never(),
+                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     started(&mut fixture.observer_started).await;
