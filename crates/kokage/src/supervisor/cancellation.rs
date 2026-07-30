@@ -100,6 +100,25 @@ impl Drop for CancelOnDrop {
     }
 }
 
+pub(crate) struct CompletionOnDrop(CancellationToken);
+
+impl CompletionOnDrop {
+    /// Mints a completion token and the drop guard that signals it.
+    ///
+    /// Arm the guard before spawning: a future dropped before its first poll
+    /// must still signal completion.
+    pub(crate) fn armed() -> (CancellationToken, Self) {
+        let finished = CancellationToken::new();
+        (finished.clone(), Self(finished))
+    }
+}
+
+impl Drop for CompletionOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -110,7 +129,7 @@ mod tests {
         time::Duration,
     };
 
-    use super::CancellationToken;
+    use super::{CancellationToken, CompletionOnDrop};
     use tokio::sync::oneshot;
 
     struct DropSignal(Option<oneshot::Sender<()>>);
@@ -121,6 +140,17 @@ mod tests {
                 let _ = dropped.send(());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn completion_on_drop_signals_its_token() {
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
+        assert!(!finished.is_cancelled());
+
+        drop(finished_on_drop);
+
+        finished.cancelled().await;
+        assert!(finished.is_cancelled());
     }
 
     #[tokio::test]

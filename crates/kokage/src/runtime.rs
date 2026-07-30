@@ -11,10 +11,10 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancelOnDrop, CancellationToken, ChildSpec, CompletionError, CompletionOutcome,
-        ControlError, DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart,
-        RunningSupervisor, Shutdown, ShutdownMode, SupervisorError, SupervisorHandle,
-        SupervisorSnapshot, SupervisorSnapshotReceiver,
+        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOnDrop,
+        CompletionOutcome, ControlError, DynamicSupervisorHandle, Guard, LifecycleEvent,
+        LifecycleWatch, Restart, RunningSupervisor, Shutdown, ShutdownMode, SupervisorError,
+        SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
     },
 };
 
@@ -130,11 +130,10 @@ where
     F: FnMut(LifecycleEvent) -> M + Send + 'static,
 {
     let cancellation = CancellationToken::new();
-    let finished = CancellationToken::new();
+    let (finished, finished_on_drop) = CompletionOnDrop::armed();
     let task_cancellation = cancellation.clone();
-    let task_finished = finished.clone();
     let task = tokio::spawn(async move {
-        let _finished_on_drop = CancelOnDrop::new(task_finished);
+        let _finished_on_drop = finished_on_drop;
         loop {
             let Some(event) = (tokio::select! {
                 biased;

@@ -11,7 +11,7 @@ use std::{
 
 use crate::supervisor::{
     __private::{guard_from_tokens, guard_from_tokens_with_cancel},
-    CancelOnDrop, CancellationToken, Guard,
+    CancelOnDrop, CancellationToken, CompletionOnDrop, Guard,
 };
 use tokio::{
     sync::{oneshot, watch},
@@ -832,8 +832,7 @@ impl<M: Send + 'static> RawContext<M> {
             .expect("a live actor context must have a bound mailbox");
         let gate = Arc::new(SendGate::new());
         let task_gate = Arc::clone(&gate);
-        let finished = CancellationToken::new();
-        let finished_on_drop = CancelOnDrop::new(finished.clone());
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let abort = self.scope_waits.spawn(async move {
             let _finished_on_drop = finished_on_drop;
             let output = tokio::select! {
@@ -892,8 +891,7 @@ impl<M: Send + 'static> RawContext<M> {
     {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = Arc::clone(&cancelled);
-        let finished = CancellationToken::new();
-        let finished_on_drop = CancelOnDrop::new(finished.clone());
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let abort = self.offloads.spawn(async move {
             let _finished_on_drop = finished_on_drop;
             OffloadCompletion {
@@ -979,14 +977,13 @@ impl<M: Send + 'static> RawContext<M> {
         delay: Duration,
     ) -> Guard {
         let cancellation = CancellationToken::new();
-        let finished = CancellationToken::new();
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let task_cancellation = cancellation.clone();
-        let task_finished = finished.clone();
         let lifetime = self.lifetime.token();
         let target = target.clone();
 
         let task = tokio::spawn(async move {
-            let _finished_on_drop = CancelOnDrop::new(task_finished);
+            let _finished_on_drop = finished_on_drop;
             tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => {}
@@ -1027,12 +1024,11 @@ impl<M: Send + 'static> RawContext<M> {
         }
 
         let task_cancellation = cancellation.clone();
-        let finished = CancellationToken::new();
-        let task_finished = finished.clone();
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let lifetime = self.lifetime.token();
         let target = target.clone();
         let task = tokio::spawn(async move {
-            let _finished_on_drop = CancelOnDrop::new(task_finished);
+            let _finished_on_drop = finished_on_drop;
             let start = deadline_after(period);
             let mut interval = tokio::time::interval_at(start, period);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);

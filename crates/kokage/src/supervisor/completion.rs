@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::supervisor::{
-    CancelOnDrop, CancellationToken, ChildExitView, Guard, LifecycleEvent, LifecycleEventKind,
+    CancellationToken, ChildExitView, CompletionOnDrop, Guard, LifecycleEvent, LifecycleEventKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
@@ -119,11 +119,10 @@ impl SupervisorHandle {
         let set = CompletionSet::new(ids);
         let handle = self.clone();
         let cancellation = CancellationToken::new();
-        let finished = CancellationToken::new();
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let task_cancellation = cancellation.clone();
-        let task_finished = finished.clone();
         let task = tokio::spawn(async move {
-            let _finished_on_drop = CancelOnDrop::new(task_finished);
+            let _finished_on_drop = finished_on_drop;
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
@@ -156,11 +155,10 @@ impl SupervisorHandle {
         let set = CompletionSet::new(ids);
         let handle = self.clone();
         let cancellation = CancellationToken::new();
-        let finished = CancellationToken::new();
+        let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let task_cancellation = cancellation.clone();
-        let task_finished = finished.clone();
         let task = tokio::spawn(async move {
-            let _finished_on_drop = CancelOnDrop::new(task_finished);
+            let _finished_on_drop = finished_on_drop;
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
