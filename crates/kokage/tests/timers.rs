@@ -36,6 +36,40 @@ struct OneShot {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
+struct SelfSendAfter {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl Actor for SelfSendAfter {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.send_after("self", Duration::from_millis(20)).detach();
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn self_send_after_delivers_through_the_actor_mailbox() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, actor_ref) = build_runtime(move || SelfSendAfter {
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert_eq!(observed_rx.recv().await, Some("self"));
+    let stats = actor_ref.stats();
+    assert_eq!(stats.messages_accepted, 1);
+    assert_eq!(stats.messages_received, 1);
+
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
 const ONE_SHOT: TimerKey = TimerKey::new("one-shot");
 
 impl Actor for OneShot {
@@ -322,7 +356,7 @@ impl Actor for FarFutureTimers {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(FAR_FUTURE_TIMEOUT, "never-timeout", Duration::MAX);
         self.timers
-            .push(ctx.interval(&ctx.myself(), "never-interval", Duration::MAX));
+            .push(ctx.interval("never-interval", Duration::MAX));
         Ok(())
     }
 
@@ -363,7 +397,7 @@ impl Actor for IntervalActor {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.timer = Some(ctx.interval(&ctx.myself(), (), Duration::from_millis(10)));
+        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
         Ok(())
     }
 
@@ -413,7 +447,7 @@ impl Actor for SlowInterval {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.started = Some(Instant::now());
-        self.timer = Some(ctx.interval(&ctx.myself(), (), Duration::from_millis(10)));
+        self.timer = Some(ctx.interval((), Duration::from_millis(10)));
         Ok(())
     }
 
@@ -549,7 +583,7 @@ impl Actor for CrossScheduler {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.send_after(&self.target, "cross", Duration::from_millis(20))
+        ctx.send_after_to(&self.target, "cross", Duration::from_millis(20))
             .detach();
         Ok(())
     }
@@ -567,7 +601,7 @@ impl Actor for DroppedCrossScheduler {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        drop(ctx.send_after(&self.target, "dropped", Duration::from_millis(20)));
+        drop(ctx.send_after_to(&self.target, "dropped", Duration::from_millis(20)));
         Ok(())
     }
 
@@ -584,18 +618,20 @@ impl RawActor for RawCrossScheduler {
     type Msg = ();
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
-        let timer = ctx.send_after(&self.target, "raw-cross", Duration::from_millis(20));
+        let timer = ctx.send_after_to(&self.target, "raw-cross", Duration::from_millis(20));
+        let interval = ctx.interval_to(&self.target, "raw-cross-tick", Duration::from_millis(30));
         assert!(
             !timer.is_finished(),
             "a pending delay has not finished before it elapses"
         );
         while ctx.recv().await.is_some() {}
+        drop(interval);
         Ok(())
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn raw_context_can_schedule_cross_actor_timer() {
+async fn raw_context_can_schedule_cross_actor_timers() {
     let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
         move || RawCrossScheduler {
             target: target.clone(),
@@ -604,6 +640,38 @@ async fn raw_context_can_schedule_cross_actor_timer() {
     let handle = runtime.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("raw-cross"));
+    assert_eq!(observed_rx.recv().await, Some("raw-cross-tick"));
+    handle.shutdown_and_wait().await.expect("clean shutdown");
+}
+
+struct RawSelfScheduler {
+    observed: mpsc::UnboundedSender<&'static str>,
+}
+
+impl RawActor for RawSelfScheduler {
+    type Msg = &'static str;
+
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
+        let one_shot = ctx.send_after("raw-self", Duration::from_millis(20));
+        let interval = ctx.interval("raw-self-tick", Duration::from_millis(30));
+        while let Some(message) = ctx.recv().await {
+            self.observed.send(message).expect("observer alive");
+        }
+        drop((one_shot, interval));
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn raw_context_can_schedule_self_timers() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let (runtime, _) = build_runtime(move || RawSelfScheduler {
+        observed: observed_tx.clone(),
+    });
+    let handle = runtime.spawn().expect("runtime builds");
+
+    assert_eq!(observed_rx.recv().await, Some("raw-self"));
+    assert_eq!(observed_rx.recv().await, Some("raw-self-tick"));
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
 
@@ -656,11 +724,11 @@ impl Actor for RestartingCrossScheduler {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
-            ctx.send_after(&self.target, "old", Duration::from_millis(150))
+            ctx.send_after_to(&self.target, "old", Duration::from_millis(150))
                 .detach();
             ctx.continue_with(());
         } else {
-            ctx.send_after(&self.target, "new", Duration::from_millis(10))
+            ctx.send_after_to(&self.target, "new", Duration::from_millis(10))
                 .detach();
         }
         Ok(())
@@ -716,7 +784,7 @@ impl Actor for DroppedCrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        drop(ctx.interval(&self.target, "dropped-tick", Duration::from_millis(10)));
+        drop(ctx.interval_to(&self.target, "dropped-tick", Duration::from_millis(10)));
         Ok(())
     }
 
@@ -729,7 +797,7 @@ impl Actor for DetachedCrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.interval(&self.target, "detached-tick", Duration::from_millis(10))
+        ctx.interval_to(&self.target, "detached-tick", Duration::from_millis(10))
             .detach();
         Ok(())
     }
@@ -743,7 +811,7 @@ impl Actor for ReportedCrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        let guard = ctx.interval(&self.target, "tick", self.period);
+        let guard = ctx.interval_to(&self.target, "tick", self.period);
         self.guards.send(guard).expect("guard receiver alive");
         Ok(())
     }
@@ -757,7 +825,7 @@ impl Actor for CrossInterval {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.timer = Some(ctx.interval(&self.target, "tick", Duration::from_millis(10)));
+        self.timer = Some(ctx.interval_to(&self.target, "tick", Duration::from_millis(10)));
         Ok(())
     }
 

@@ -89,7 +89,7 @@ impl Session {
     ) -> ExitResult {
         ctx.clear_timeout(IDLE_SWEEP_TIMER);
         if self.heartbeat.is_none() {
-            self.heartbeat = Some(ctx.interval(
+            self.heartbeat = Some(ctx.interval_to(
                 &self.progress,
                 ProgressMsg::Typing { chat: self.chat },
                 TYPING_PERIOD,
