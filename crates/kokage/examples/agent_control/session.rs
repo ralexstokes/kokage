@@ -107,8 +107,6 @@ impl Session {
             .subtree("children")
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
-            .dynamic()
-            .expect("the session child scope is declared dynamic")
             .add_actor(
                 ActorSpec::new(
                     id.clone(),

@@ -16,7 +16,7 @@ use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
 use crate::{
-    RuntimeHandle,
+    ScopeRef,
     actor::{
         binding::{
             ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
@@ -42,7 +42,7 @@ pub(crate) struct RunnerStart {
     pub(crate) restart_policy: Restart,
     pub(crate) drain_messages: bool,
     pub(crate) ready: oneshot::Sender<()>,
-    pub(crate) supervisor: RuntimeHandle,
+    pub(crate) supervisor: ScopeRef,
 }
 
 /// Type-erased actor runner.
@@ -290,7 +290,7 @@ impl RunnableActor {
     /// policy that left the binding waiting to rebind.
     ///
     /// Actors run through this unsupervised entry point receive a terminal
-    /// [`RuntimeHandle`] from [`RawContext::supervisor`](crate::host::RawContext::supervisor):
+    /// [`ScopeRef`] from [`RawContext::supervisor`](crate::host::RawContext::supervisor):
     /// control operations return `ControlError::Unavailable` and observation
     /// streams are closed.
     pub async fn run_until<F>(
@@ -320,7 +320,7 @@ impl RunnableActor {
             abort,
             restart,
             shutdown_policy.mode() == ShutdownMode::Drain,
-            RuntimeHandle::unavailable(),
+            ScopeRef::unavailable(),
             || {},
         )
         .await
@@ -332,7 +332,7 @@ impl RunnableActor {
         abort: A,
         restart: Restart,
         drain_messages: bool,
-        supervisor: RuntimeHandle,
+        supervisor: ScopeRef,
         ready: R,
     ) -> Result<(), ActorRunError>
     where

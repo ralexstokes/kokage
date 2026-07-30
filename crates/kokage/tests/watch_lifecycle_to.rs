@@ -13,7 +13,7 @@ use std::{
 
 use kokage::{
     Actor, ActorResult, ActorSlot, ActorSpec, Context, DynamicTree, Guard, OrderedTree, Restart,
-    Runtime, RuntimeHandle,
+    RunningTree, ScopeRef,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
@@ -90,8 +90,8 @@ impl Actor for RestrictedSink {
 }
 
 async fn runtime_with_watched_subtree() -> (
-    Runtime,
-    RuntimeHandle,
+    RunningTree,
+    ScopeRef,
     kokage::ActorRef<SinkMsg>,
     kokage::ActorRef<()>,
     mpsc::UnboundedReceiver<(u64, LifecycleEvent)>,
@@ -125,7 +125,7 @@ async fn runtime_with_watched_subtree() -> (
         )
         .await
         .expect("watched subtree added");
-    timeout(Duration::from_secs(2), runtime.handle().wait_started())
+    timeout(Duration::from_secs(2), runtime.scope().wait_started())
         .await
         .expect("runtime startup timed out")
         .expect("runtime starts");
@@ -141,7 +141,7 @@ async fn recv_event(
         .expect("observer remains live")
 }
 
-async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) {
+async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
     let mut snapshots = handle.subscribe_snapshots();
     timeout(Duration::from_secs(2), async {
         loop {
@@ -162,7 +162,7 @@ async fn wait_for_generation(handle: &RuntimeHandle, id: &str, generation: u64) 
     .expect("child reaches expected generation");
 }
 
-async fn shutdown_runtime(handle: &RuntimeHandle, phase: &str) {
+async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
     timeout(Duration::from_secs(2), handle.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -238,7 +238,7 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
     sink.send(SinkMsg::Crash)
         .await
         .expect("sink crash request delivered");
-    wait_for_generation(&handle.handle(), "sink", 1).await;
+    wait_for_generation(&handle.scope(), "sink", 1).await;
 
     let second = crash_and_receive_events(&crasher, &mut observed).await;
     assert_eq!(second[0].0, 1);
@@ -257,7 +257,7 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
     )
     .await;
 
-    shutdown_runtime(&handle.handle(), "lifecycle replay test shutdown").await;
+    shutdown_runtime(&handle.scope(), "lifecycle replay test shutdown").await;
 }
 
 #[tokio::test]
@@ -296,7 +296,7 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     .await;
     guard.cancel();
 
-    shutdown_runtime(&handle.handle(), "lifecycle guard test shutdown").await;
+    shutdown_runtime(&handle.scope(), "lifecycle guard test shutdown").await;
 }
 
 #[tokio::test]
@@ -304,9 +304,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
     let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+        .scope()
         .remove_child("watched")
         .await
         .expect("watched subtree removed");
@@ -324,17 +322,13 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     );
 
     let replacement = handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+        .scope()
         .add_subtree("replacement", OrderedTree::new())
         .await
         .expect("replacement subtree added");
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
     handle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+        .scope()
         .remove_child("sink")
         .await
         .expect("target removed");
@@ -346,7 +340,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         "normal completion is not cancellation"
     );
 
-    shutdown_runtime(&handle.handle(), "lifecycle terminality test shutdown").await;
+    shutdown_runtime(&handle.scope(), "lifecycle terminality test shutdown").await;
 }
 
 #[tokio::test]
@@ -365,7 +359,7 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         .await
         .expect("crasher added");
     runtime
-        .handle()
+        .scope()
         .wait_started()
         .await
         .expect("runtime starts");
@@ -389,6 +383,6 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         LifecycleEventKind::ChildRestartScheduled { ref child_id, .. } if child_id == "crasher"
     ));
 
-    let handle = runtime.handle();
+    let handle = runtime.scope();
     shutdown_runtime(&handle, "restricted-scope lifecycle pump shutdown").await;
 }

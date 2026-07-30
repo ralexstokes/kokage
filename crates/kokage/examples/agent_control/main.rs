@@ -3,7 +3,7 @@
 //! The example is an assertion-driven acceptance script for dynamic actor
 //! lifecycles and the runtime surfaces not covered by `trading_engine`:
 //! per-conversation subtrees added and removed at runtime via
-//! `DynamicRuntimeHandle::add_subtree`, never-restarted transient children observed
+//! `ScopeRef::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
 //! a readiness-gated `RawActor` bridge, and an explicitly wired supervision
 //! tree with a real budget ↔ guard cycle.
@@ -132,7 +132,7 @@ use std::{
 
 use kokage::{
     ActorSlot, DownReason, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent,
-    RuntimeHandle, Strategy, prelude::*,
+    ScopeRef, Strategy, prelude::*,
 };
 use tokio::time::Instant;
 
@@ -157,10 +157,10 @@ fn gateway_slot<M: Send + 'static>(label: &str) -> ActorSlot<M> {
 }
 
 struct App {
-    runtime: kokage::Runtime,
-    gateway: RuntimeHandle,
-    core: RuntimeHandle,
-    sessions: kokage::DynamicRuntimeHandle,
+    runtime: kokage::RunningTree,
+    gateway: ScopeRef,
+    core: ScopeRef,
+    sessions: kokage::ScopeRef,
     chat: ChatSim,
     model: ScriptedModel,
     router: ActorRef<RouterMsg>,
@@ -204,7 +204,7 @@ async fn build_app() -> Result<App, AnyError> {
     // reach the mount and would re-mint ids that still exist. Both are durable
     // RouterFactory fields instead.
     let sessions_runtime = DynamicTree::new();
-    let sessions_mount = sessions_runtime.handle();
+    let sessions_mount = sessions_runtime.scope();
     let session_epoch = Arc::new(AtomicU64::new(0));
 
     // Open every slot first so cyclic factories can capture the stable refs.
@@ -240,7 +240,7 @@ async fn build_app() -> Result<App, AnyError> {
     });
     let tool_host_actor = tool_host_slot.define(ToolHost::default);
     let router_actor = router_slot.define(RouterFactory {
-        mount: sessions_mount.clone().into_runtime_handle(),
+        mount: sessions_mount.clone(),
         journal: journal.clone(),
         budget: budget.clone(),
         tool_host: tool_host.clone(),
@@ -287,16 +287,16 @@ async fn build_app() -> Result<App, AnyError> {
         .subtree("core", core_tree);
     let runtime = tree.spawn()?;
     let gateway = runtime
-        .handle()
+        .scope()
         .subtree("gateway")
         .expect("gateway runtime subtree");
     let core = runtime
-        .handle()
+        .scope()
         .subtree("core")
         .expect("core runtime subtree");
     // `sessions_mount` was issued before the root existed and addresses the
-    // same identity the post-spawn `runtime.subtree("sessions")` lookup would
-    // return, so the phases below drive it directly.
+    // same identity the post-spawn `runtime.scope().subtree("sessions")`
+    // lookup would return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, move |event| {
@@ -327,7 +327,7 @@ async fn build_app() -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.handle().wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.scope().wait_started()).await??;
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
@@ -372,9 +372,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.acks(), 1);
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
-    println!(
-        "PHASE 1 OK — DynamicRuntimeHandle::add_subtree per conversation; continue_with; interval"
-    );
+    println!("PHASE 1 OK — ScopeRef::add_subtree per conversation; continue_with; interval");
     Ok(())
 }
 
@@ -747,9 +745,9 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
             .message_bytes_accepted
             .is_some_and(|bytes| bytes > 0)
     );
-    let recursive_stats = app.runtime.handle().actor_stats();
+    let recursive_stats = app.runtime.scope().actor_stats();
     let session_stats = app.sessions.actor_stats();
-    let final_snapshot = app.runtime.handle().snapshot();
+    let final_snapshot = app.runtime.scope().snapshot();
     drop(app.lifecycle_watch);
     tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
     let latency = latency.snapshot();
@@ -798,7 +796,7 @@ fn all_assigned_tasks_terminal(report: &JournalReport) -> bool {
     assigned.is_subset(&terminal)
 }
 
-fn has_session(handle: &RuntimeHandle, chat: ChatId) -> bool {
+fn has_session(handle: &ScopeRef, chat: ChatId) -> bool {
     let prefix = format!("session:{chat}#");
     handle
         .snapshot()

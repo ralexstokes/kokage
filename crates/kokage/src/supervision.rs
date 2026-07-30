@@ -11,7 +11,7 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorSpec, DynamicRuntimeHandle, Runtime, RuntimeHandle,
+    ActorSpec, RunningTree, ScopeRef,
     actor::{ActorNode, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -85,14 +85,14 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// A single-use, identity-owning ordered supervision tree.
 ///
 /// The tree reserves its stable runtime identity when it is created, so
-/// [`handle`](Self::handle) is available before spawn. Moving a tree into a
+/// [`scope`](Self::scope) is available before spawn. Moving a tree into a
 /// parent transfers that same identity. Dropping an unspawned tree makes all
 /// handles issued from it terminal.
 ///
 /// Ordered scopes contain a declared child sequence. Declaration order controls
 /// readiness-gated startup, reverse-order shutdown, and the suffix restarted
 /// by [`Strategy::RestForOne`]. Use [`DynamicTree`] for an empty leaf whose
-/// membership is written through a [`DynamicRuntimeHandle`] obtained before or
+/// membership is written through a [`ScopeRef`] obtained before or
 /// after spawn.
 ///
 /// Actor declarations can be placed directly at different scope levels while
@@ -144,8 +144,8 @@ pub struct OrderedTree {
 /// A single-use, identity-owning dynamic supervision tree.
 ///
 /// Dynamic trees begin empty and accept runtime membership through the
-/// [`DynamicRuntimeHandle`] returned by [`handle`](Self::handle) before spawn
-/// or by calling [`RuntimeHandle::dynamic`] on the spawned runtime's handle.
+/// [`ScopeRef`] returned by [`scope`](Self::scope) before spawn or by calling
+/// [`RunningTree::scope`] on the spawned tree.
 pub struct DynamicTree {
     inner: IdentityTree<true>,
 }
@@ -293,8 +293,8 @@ impl Default for OrderedTree {
 impl OrderedTree {
     tree_common_methods!();
 
-    /// Returns the stable actor-aware handle reserved for this root scope.
-    pub fn handle(&self) -> RuntimeHandle {
+    /// Returns the stable actor-aware reference reserved for this root scope.
+    pub fn scope(&self) -> ScopeRef {
         self.inner.handle()
     }
 
@@ -355,8 +355,9 @@ impl OrderedTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`Runtime`] for as long as the runtime should remain
-    /// alive. Dropping it requests graceful shutdown; its handles are non-owning.
+    /// Retain the returned [`RunningTree`] for as long as the runtime should
+    /// remain alive. Dropping it requests graceful shutdown; [`ScopeRef`]
+    /// values obtained from it are non-owning.
     ///
     /// # Errors
     ///
@@ -364,9 +365,9 @@ impl OrderedTree {
     /// their corresponding build error. A failed spawn consumes the tree and
     /// makes every handle issued from it terminal. Having no children is
     /// valid and does not return an error.
-    pub fn spawn(self) -> Result<Runtime, BuildError> {
+    pub fn spawn(self) -> Result<RunningTree, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(Runtime::new(supervisor.spawn(), actors))
+        Ok(RunningTree::new(supervisor.spawn(), actors))
     }
 }
 
@@ -379,16 +380,16 @@ impl Default for DynamicTree {
 impl DynamicTree {
     tree_common_methods!();
 
-    /// Returns the stable, dynamic-membership-capable handle reserved for this
+    /// Returns the stable, dynamic-membership-capable reference reserved for this
     /// root scope.
-    pub fn handle(&self) -> DynamicRuntimeHandle {
-        DynamicRuntimeHandle::new(self.inner.handle())
+    pub fn scope(&self) -> ScopeRef {
+        self.inner.handle()
     }
 
     /// Creates an empty dynamic scope with standard runtime defaults.
     ///
     /// The spawned scope remains idle until actors, tasks, or subtrees are
-    /// inserted through its dynamic handle.
+    /// inserted through its dynamic [`ScopeRef`].
     pub fn new() -> Self {
         Self {
             inner: TreeData::dynamic().with_identity(),
@@ -397,10 +398,10 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`Runtime`] for as long as the runtime should remain
-    /// alive. Dropping it requests graceful shutdown; its handles are
-    /// non-owning. Recover the root's dynamic capability after spawn with
-    /// [`RuntimeHandle::dynamic`].
+    /// Retain the returned [`RunningTree`] for as long as the runtime should
+    /// remain alive. Dropping it requests graceful shutdown; [`ScopeRef`]
+    /// values are non-owning. Access the root scope after spawn with
+    /// [`RunningTree::scope`].
     ///
     /// # Errors
     ///
@@ -408,9 +409,9 @@ impl DynamicTree {
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal. An empty dynamic
     /// scope is valid and stays available for later insertion.
-    pub fn spawn(self) -> Result<Runtime, BuildError> {
+    pub fn spawn(self) -> Result<RunningTree, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(Runtime::new(supervisor.spawn(), actors))
+        Ok(RunningTree::new(supervisor.spawn(), actors))
     }
 }
 
@@ -840,8 +841,8 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
         self
     }
 
-    /// Returns the stable actor-aware handle reserved for this root scope.
-    fn handle(&self) -> crate::RuntimeHandle {
+    /// Returns the stable actor-aware reference reserved for this root scope.
+    fn handle(&self) -> crate::ScopeRef {
         let reservation = self.root_reservation();
         let supervisor = match &reservation.builder {
             ReservedScopeBuilder::Ordered(Some(builder)) => builder.handle(),
@@ -850,7 +851,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
                 unreachable!("live reservation owns its scope builder")
             }
         };
-        crate::RuntimeHandle::new(supervisor, Arc::clone(&reservation.actors))
+        crate::ScopeRef::new(supervisor, Arc::clone(&reservation.actors))
     }
 
     /// Sets the restart policy inherited by actor nodes.

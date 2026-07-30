@@ -24,10 +24,9 @@ mod coverage_probe {
     mod advanced_root {
         use kokage::{
             ActorFactory, Backoff, BackoffParts, BlockingCancelled, BuildError, CancellationToken,
-            ControlError, DownReason, DynamicRestrictedScope, DynamicRuntimeHandle, DynamicTree,
-            Guard, MailboxMode, MonitorEvent, OffloadDeadline, Restart, RestartMode,
-            RestrictedScope, Runtime, RuntimeHandle, Shutdown, ShutdownMode, Strategy,
-            SupervisorError, TimerKey, TreeNode,
+            ControlError, DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent,
+            OffloadDeadline, Restart, RestartMode, RestrictedScopeRef, RunningTree, ScopeRef,
+            Shutdown, ShutdownMode, Strategy, SupervisorError, TimerKey, TreeNode,
         };
     }
 
@@ -188,7 +187,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.handle().watch_lifecycle();
+    let mut events = handle.scope().watch_lifecycle();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -228,7 +227,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         } if child_id == "worker"
     ));
 
-    let snapshot = handle.handle().snapshot();
+    let snapshot = handle.scope().snapshot();
     assert!(
         snapshot
             .child("worker")
@@ -277,7 +276,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             Ok(())
         }
     }));
-    let handle = tree.handle();
+    let handle = tree.scope();
     let mut events = handle.watch_lifecycle();
     let runtime = tree.spawn().expect("task tree spawns");
 
@@ -337,7 +336,7 @@ async fn prelude_snapshots_walk_nested_task_children() {
             Ok(())
         }))
         .subtree("nested", nested);
-    let handle = tree.handle();
+    let handle = tree.scope();
     let runtime = tree.spawn().expect("nested task tree spawns");
 
     timeout(EVENT_TIMEOUT, leaf_started_rx.recv())

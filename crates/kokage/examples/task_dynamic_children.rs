@@ -4,12 +4,10 @@ use tokio::time::{Duration, sleep, timeout};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_owner = DynamicTree::new().spawn()?;
-    let running = running_owner.handle();
+    let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();
 
     running
-        .dynamic()
-        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -25,8 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
 
     running
-        .dynamic()
-        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
@@ -54,11 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    running
-        .dynamic()
-        .expect("dynamic supervisor")
-        .remove_child("cache-warmer")
-        .await?;
+    running.remove_child("cache-warmer").await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
@@ -66,11 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("cache-warmer removed at runtime");
 
-    let nested = running
-        .dynamic()
-        .expect("dynamic supervisor")
-        .add_subtree("nested", DynamicTree::new())
-        .await?;
+    let nested = running.add_subtree("nested", DynamicTree::new()).await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("nested", |child| child.state.is_running()),
@@ -78,8 +66,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     let mut nested_snapshots = nested.subscribe_snapshots();
     nested
-        .dynamic()
-        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -95,8 +81,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("nested supervisor added at runtime");
 
     nested
-        .dynamic()
-        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("nested-cache", |ctx| async move {
             println!("nested-cache started in generation {}", ctx.generation());
 
@@ -124,11 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    nested
-        .dynamic()
-        .expect("dynamic supervisor")
-        .remove_child("nested-cache")
-        .await?;
+    nested.remove_child("nested-cache").await?;
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for(|snapshot| snapshot.child("nested-cache").is_none()),

@@ -58,8 +58,8 @@ The important boundaries are:
 - `ActorSpec<M>` and trees are single-use declarations with one runtime owner;
 - actor ids are unique only within their immediate scope.
 
-`spawn()` returns the owning `Runtime`. Dropping it requests graceful
-shutdown, so do not discard it with `let _ = ...`. Use `runtime.handle()`
+`spawn()` returns the owning `RunningTree`. Dropping it requests graceful
+shutdown, so do not discard it with `let _ = ...`. Use `runtime.scope()`
 for non-owning control and observation.
 
 ## Supervision vocabulary

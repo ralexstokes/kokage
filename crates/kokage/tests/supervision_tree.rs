@@ -178,11 +178,11 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
 
     let declared = declared.spawn().expect("declared tree builds");
     declared
-        .handle()
+        .scope()
         .wait_started()
         .await
         .expect("declared subtree starts");
-    let declared_snapshot = declared.handle().snapshot();
+    let declared_snapshot = declared.scope().snapshot();
     let declared_child = declared_snapshot
         .child("declared")
         .expect("declared subtree is present");
@@ -194,9 +194,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
 
     let dynamic = DynamicTree::new().spawn().expect("dynamic tree builds");
     let inserted = dynamic
-        .handle()
-        .dynamic()
-        .expect("root is dynamic")
+        .scope()
         .add_subtree(
             "inserted",
             TreeNode::from(
@@ -214,18 +212,14 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         .wait_started()
         .await
         .expect("inserted subtree starts");
-    let dynamic_snapshot = dynamic.handle().snapshot();
+    let dynamic_snapshot = dynamic.scope().snapshot();
     let inserted = dynamic_snapshot
         .child("inserted")
         .expect("inserted subtree is present");
     assert_eq!(inserted.restart_policy, Restart::never());
     timeout(
         Duration::from_millis(250),
-        dynamic
-            .handle()
-            .dynamic()
-            .expect("root is dynamic")
-            .remove_child("inserted"),
+        dynamic.scope().remove_child("inserted"),
     )
     .await
     .expect("subtree abort policy bounds dynamic removal")
@@ -268,7 +262,7 @@ async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
         7
     );
     let mut labels: Vec<_> = handle
-        .handle()
+        .scope()
         .actor_stats()
         .into_iter()
         .map(|stats| stats.actor_id.to_string())
@@ -319,7 +313,7 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
         .actor(direct)
         .spawn()
         .expect("tree builds");
-    runtime.handle().wait_started().await.expect("actors start");
+    runtime.scope().wait_started().await.expect("actors start");
 
     assert_eq!(first_actor.stats().mailbox_capacity, 9);
     assert_eq!(direct_actor.stats().mailbox_capacity, 9);
@@ -335,7 +329,7 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
         .subtree("nested", OrderedTree::new().actor(nested))
         .spawn()
         .expect("tree builds");
-    runtime.handle().wait_started().await.expect("actors start");
+    runtime.scope().wait_started().await.expect("actors start");
 
     assert_eq!(nested_ref.stats().mailbox_capacity, 64);
     runtime.shutdown_and_wait().await.expect("clean shutdown");
@@ -359,7 +353,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
         )
         .spawn()
         .expect("tree builds");
-    runtime.handle().wait_started().await.expect("actors start");
+    runtime.scope().wait_started().await.expect("actors start");
 
     assert_eq!(peer_ref.stats().mailbox_capacity, 64);
     assert_eq!(leader_ref.stats().mailbox_capacity, 9);
@@ -372,7 +366,7 @@ fn pre_spawn_projection_preserves_declared_restart_policies() {
         .default_restart(Restart::always())
         .actor(ActorSpec::new("explicit", || Worker).restart(Restart::never()))
         .actor(ActorSpec::new("inherited", || Worker));
-    let snapshot = tree.handle().snapshot();
+    let snapshot = tree.scope().snapshot();
 
     assert_eq!(
         snapshot
@@ -396,7 +390,7 @@ async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() 
     let actor = spec.actor_ref();
     let spec = spec.message_size(|message: &Vec<u8>| message.len());
     let runtime = OrderedTree::new().actor(spec).spawn().expect("tree builds");
-    runtime.handle().wait_started().await.expect("actor starts");
+    runtime.scope().wait_started().await.expect("actor starts");
 
     actor
         .try_send(vec![0; 4])
@@ -419,7 +413,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
     let spec = ActorSpec::new("finite", || Finite).restart(Restart::never().remove_when_done());
     let actor = spec.actor_ref();
     let tree = OrderedTree::new().actor(spec);
-    let mut snapshots = tree.handle().subscribe_snapshots();
+    let mut snapshots = tree.scope().subscribe_snapshots();
     let runtime = tree.spawn().expect("tree builds");
 
     tokio::time::timeout(
@@ -472,11 +466,11 @@ async fn leader_owned_scope_is_an_explicit_subtree() {
 
     let handle = tree.spawn().expect("leader-owned scope lowers");
     handle
-        .handle()
+        .scope()
         .wait_started()
         .await
         .expect("generated scope starts");
-    let snapshot = handle.handle().snapshot();
+    let snapshot = handle.scope().snapshot();
     let owned = snapshot
         .child("owned")
         .and_then(|child| child.supervisor.as_ref())
@@ -524,14 +518,14 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
         .spawn()
         .expect("leader-owned scope builds");
     handle
-        .handle()
+        .scope()
         .wait_started()
         .await
         .expect("generated scope starts");
 
     fail.notify_one();
     handle
-        .handle()
+        .scope()
         .subscribe_snapshots()
         .wait_for(|snapshot| {
             snapshot
@@ -553,7 +547,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     // Give that zero-delay transition room to occur before inspecting the
     // stable state promised by the inherited `Never` policy.
     sleep(Duration::from_millis(50)).await;
-    let snapshot = handle.handle().snapshot();
+    let snapshot = handle.scope().snapshot();
     let owned_edge = snapshot.child("owned").expect("owned edge remains visible");
     assert!(owned_edge.state.is_running());
     let children_edge = owned_edge

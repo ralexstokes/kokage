@@ -12,11 +12,11 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, RuntimeHandle,
+    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, ScopeRef,
     observe::SupervisorSnapshotReceiver,
 };
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
     let snapshots = handle.subscribe_snapshots();
     let child = handle
         .snapshot()
@@ -106,7 +106,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
         (0, 2)
     );
 
-    let (lifecycle, baseline) = restart_observer(&handle.handle(), "derived");
+    let (lifecycle, baseline) = restart_observer(&handle.scope(), "derived");
     actor_ref
         .send(ProbeMsg::Crash)
         .await

@@ -48,10 +48,10 @@ capture a future scope without a global cell:
 
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
-# struct Router(kokage::DynamicRuntimeHandle);
+# struct Router(kokage::ScopeRef);
 # impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let sessions = DynamicTree::new();
-let sessions_handle = sessions.handle();
+let sessions_handle = sessions.scope();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
 
 let app = OrderedTree::new()
@@ -59,7 +59,7 @@ let app = OrderedTree::new()
     // it first also makes it ready before the dependent router starts.
     .subtree("sessions", sessions)
     .actor(router);
-let handle = app.handle();
+let handle = app.scope();
 # let _ = handle;
 ```
 
@@ -90,7 +90,7 @@ consumes the tree and returns its owning runtime. Dropping an unspawned tree or
 failing to spawn it makes issued handles terminal.
 
 Dropping a non-owning handle does not stop a runtime. Dropping the owning
-`Runtime` requests graceful shutdown, so `let _ = tree.spawn()?;` is a footgun:
+`RunningTree` requests graceful shutdown, so `let _ = tree.spawn()?;` is a footgun:
 the temporary owner is dropped at the end of the statement.
 
 ## Inspect the declaration
@@ -134,8 +134,8 @@ let sessions = OrderedTree::new().subtree(
 Inside the leader, resolve the declared scope explicitly with
 `ctx.supervisor().subtree("children")`. The lookup works during
 `on_start`, before the child scope has started, and returns a
-`RestrictedScope`. Call `dynamic()` on it to insert actor specs without
-exposing lifecycle waits that could deadlock an actor callback.
+`RestrictedScopeRef`. Check `kind()` when the tree shape is not already known;
+membership operations return `ControlError::NotDynamic` on an ordered scope.
 
 The containing strategy states the fate-sharing relationship. For example,
 `OneForAll` restarts the leader when a restartable worker failure exhausts
@@ -143,9 +143,8 @@ the inner scope, while `RestForOne` respects declaration order.
 
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
-[`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
-[`DynamicRuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.DynamicRuntimeHandle.html
+[`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
 [`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html
-[`ScopeKind`]: https://stokes.io/kokage/api/kokage/enum.ScopeKind.html
+[`ScopeKind`]: https://stokes.io/kokage/api/kokage/observe/enum.ScopeKind.html
 [`observe::SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html

@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }))
         .subtree("nested", TreeNode::from(nested).restart(Restart::never()))
         .spawn()?;
-    let handle = running.handle();
+    let handle = running.scope();
     let mut snapshots = handle.subscribe_snapshots();
 
     println!("initial snapshot:");

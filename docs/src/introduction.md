@@ -51,9 +51,10 @@ membership can change at runtime. Moving a declaration into a tree establishes
 exactly one owner, and `spawn()` validates the complete tree before starting
 it.
 
-A `Runtime` owns the spawned root. Keep it alive for the application's
-lifetime; clone `RuntimeHandle` values for non-owning control and
-observation.
+A `RunningTree` owns the spawned tree. Keep it alive for the application's
+lifetime; use `running.scope()` and nested lookups to obtain cheaply cloned
+`ScopeRef` values for non-owning control and observation. Dropping the owner
+requests graceful shutdown; dropping a scope reference does not.
 
 ## The running example
 

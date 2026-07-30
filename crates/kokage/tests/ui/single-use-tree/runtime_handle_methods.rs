@@ -1,7 +1,7 @@
-use kokage::Runtime;
+use kokage::RunningTree;
 
-fn use_handle_methods(runtime: &Runtime) {
-    let _snapshot = runtime.snapshot();
+fn use_handle_methods(runtime: &RunningTree) {
+    let _handle = runtime.handle();
 }
 
 fn main() {}

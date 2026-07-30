@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .actor(press_actor)
         .actor(orders_actor)
         .spawn()?;
-    let handle = runtime.handle();
+    let handle = runtime.scope();
 
     orders.send("business cards x100".into()).await?;
     let baseline = handle.snapshot().child("press").expect("press exists").generation;
@@ -144,12 +144,13 @@ default is applied where it is declared. Per-actor settings stay on
 
 `Actor::on_start` is the actor's readiness boundary. An ordered scope does not
 start the next declared child until that hook succeeds, and outside code can
-await `RuntimeHandle::wait_started`. The readiness latch resets on restart.
+await `ScopeRef::wait_started`. The readiness latch resets on restart.
 
-Finite work stays on the same handle. `wait_completed(["importer"])` waits for
-a successful terminal exit with no pending restart.
-`shutdown_on_completion(["importer"])` arms shutdown at that boundary; obtain
-the handle before spawning to avoid racing a fast child, and retain the guard.
+Finite work stays on the same scope. `completions(["importer"]).wait()` waits
+for a successful terminal exit with no pending restart.
+`completions(["importer"]).then_shutdown()` arms shutdown at that boundary;
+obtain the scope before spawning to avoid racing a fast child, and retain the
+guard.
 
 Use `OrderedTree::task` to mix an arbitrary non-actor `host::ChildSpec` into the
 same sequence. Policy configured on the child spec is preserved, while unset
@@ -164,7 +165,8 @@ relationships. Wiring does not choose topology.
 
 ## Dynamic membership
 
-A `DynamicTree` is an initially empty one-for-one scope. Its handle accepts
+A `DynamicTree` is an initially empty one-for-one scope. Its `ScopeRef` accepts
 `ActorSpec` values and nested trees at runtime. Static and dynamic scopes
-share runtime handles, snapshots, lifecycle streams, and shutdown behavior;
+share the same reference type, snapshots, lifecycle streams, and shutdown
+behavior;
 only their membership capability differs.

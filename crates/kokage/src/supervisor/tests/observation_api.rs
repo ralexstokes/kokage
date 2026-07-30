@@ -127,7 +127,7 @@ async fn static_completion_wait_rejects_unknown_children() {
     let handle = supervisor.handle();
 
     assert_eq!(
-        handle.wait_completed(["missing"]).await,
+        handle.completions(["missing"]).wait().await,
         Err(CompletionError::UnknownChild {
             child_id: "missing".to_owned(),
         })
@@ -142,7 +142,13 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
         .spawn();
     let waiter = tokio::spawn({
         let handle = running.handle();
-        async move { handle.wait_completed_dynamic(["job"]).await }
+        async move {
+            handle
+                .completions(["job"])
+                .allow_future_members()
+                .wait()
+                .await
+        }
     });
 
     running
@@ -158,7 +164,7 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
             .await
             .expect("completion wait finishes")
             .expect("completion task joins"),
-        CompletionOutcome::Completed
+        Ok(CompletionOutcome::Completed)
     );
     running.shutdown_and_wait().await.expect("clean shutdown");
 }

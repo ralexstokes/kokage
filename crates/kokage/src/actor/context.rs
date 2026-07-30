@@ -19,7 +19,7 @@ use tokio::{
     time::{Instant, MissedTickBehavior, timeout},
 };
 
-use crate::RuntimeHandle;
+use crate::ScopeRef;
 
 use crate::actor::{
     binding::{
@@ -673,7 +673,7 @@ pub struct RawContext<M> {
     pub(crate) offloads: JoinSet<OffloadCompletion<M>>,
     pub(crate) scope_waits: JoinSet<()>,
     pub(crate) scope_wait_gates: HashMap<TaskId, Arc<SendGate>>,
-    pub(crate) supervisor: RuntimeHandle,
+    pub(crate) supervisor: ScopeRef,
 }
 
 impl<M: Send + 'static> RawContext<M> {
@@ -826,12 +826,12 @@ impl<M: Send + 'static> RawContext<M> {
 
     fn spawn_scope_wait<W, F, T, Map>(
         &mut self,
-        scope: &RestrictedScope,
+        scope: &RestrictedScopeRef,
         wait: W,
         map: Map,
     ) -> Guard
     where
-        W: FnOnce(RuntimeHandle) -> F + Send + 'static,
+        W: FnOnce(ScopeRef) -> F + Send + 'static,
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
         Map: FnOnce(T) -> M + Send + 'static,
@@ -955,8 +955,8 @@ impl<M: Send + 'static> RawContext<M> {
     /// operations return
     /// [`ControlError::Unavailable`](crate::ControlError::Unavailable) and its
     /// observation streams are closed.
-    pub fn supervisor(&self) -> RestrictedScope {
-        RestrictedScope::new(self.supervisor.clone())
+    pub fn supervisor(&self) -> RestrictedScopeRef {
+        RestrictedScopeRef::new(self.supervisor.clone())
     }
 
     fn live_status(&self) -> ActorStatus {
@@ -1342,7 +1342,7 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     ///
     /// Use [`spawn_scope_wait`](Self::spawn_scope_wait) when lifecycle progress
     /// must be awaited without blocking the actor callback that enables it.
-    pub fn supervisor(&self) -> RestrictedScope {
+    pub fn supervisor(&self) -> RestrictedScopeRef {
         self.cx.supervisor()
     }
 
@@ -1445,8 +1445,8 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Runs a lifecycle wait outside the actor task and maps its result back
     /// into the actor's ordinary mailbox.
     ///
-    /// The `wait` closure receives the full handle for `scope`, so it may use
-    /// lifecycle operations intentionally withheld from [`RestrictedScope`].
+    /// The `wait` closure receives the full [`ScopeRef`] for `scope`, so it may use
+    /// lifecycle operations intentionally withheld from [`RestrictedScopeRef`].
     /// It runs outside the actor task, allowing the current hook to return and
     /// avoiding a deadlock when progress depends on that return.
     ///
@@ -1473,12 +1473,12 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// then be discarded with the ending incarnation.
     pub fn spawn_scope_wait<W, F, T, Map>(
         &mut self,
-        scope: &RestrictedScope,
+        scope: &RestrictedScopeRef,
         wait: W,
         map: Map,
     ) -> Guard
     where
-        W: FnOnce(RuntimeHandle) -> F + Send + 'static,
+        W: FnOnce(ScopeRef) -> F + Send + 'static,
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
         Map: FnOnce(T) -> A::Msg + Send + 'static,
@@ -1537,26 +1537,31 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     }
 }
 
-/// A lifecycle-restricted scope handle for advanced actor orchestration.
+/// A lifecycle-restricted, non-owning scope reference for advanced actor
+/// orchestration.
 ///
 /// It is available in every [`Actor`] lifecycle stage and directly from
 /// [`RawActor`](crate::host::RawActor) code.
 ///
-/// This is a [`RuntimeHandle`] with the lifecycle-awaiting operations withheld.
+/// This is a [`ScopeRef`] with scope-wide readiness and termination waits
+/// withheld.
 /// An actor cannot report ready until its `on_start` returns, so awaiting any
-/// operation that blocks on another child's lifecycle — the scope starting, a
-/// child completing, the scope shutting down — deadlocks the actor against
-/// itself. Those methods are absent here rather than documented as forbidden.
+/// operation that blocks on another child's lifecycle can deadlock the actor
+/// against itself. `wait`, `wait_started`, and `shutdown_and_wait` are absent
+/// here rather than documented as forbidden. A completion watch can be armed
+/// with `then_shutdown`, but does not expose `wait`. Use
+/// [`Context::spawn_scope_wait`] to create and await an unrestricted completion
+/// watch outside the lifecycle callback.
 ///
 /// The restriction is closed under navigation: [`subtree`](Self::subtree)
-/// hands back another `RestrictedScope`. During startup, a sibling scope
+/// hands back another `RestrictedScopeRef`. During startup, a sibling scope
 /// declared after this actor starts after it reports ready. During shutdown, a
 /// nested scope's shutdown is sequenced with this one's. No method on
-/// `RestrictedScope` exposes the full [`RuntimeHandle`] directly.
+/// `RestrictedScopeRef` exposes the full [`ScopeRef`] directly.
 /// [`Context::spawn_scope_wait`] is the explicit escape hatch: its closure
-/// receives a full handle, but runs in a separate incarnation-owned task rather
+/// receives a full `ScopeRef`, but runs in a separate incarnation-owned task rather
 /// than inside the actor callback. Code in that closure can still export the
-/// handle if it deliberately chooses to do so.
+/// reference if it deliberately chooses to do so.
 ///
 /// During ordinary message handling or a raw receive loop, lifecycle waits can
 /// likewise depend on the current actor draining work or returning from the
@@ -1576,17 +1581,8 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
 /// run a lifecycle wait safely with [`Context::spawn_scope_wait`]; the
 /// shutdown stage cannot start future work.
 #[derive(Clone, Debug)]
-pub struct RestrictedScope {
-    handle: RuntimeHandle,
-}
-
-/// Runtime-membership capability for a dynamic restricted actor scope.
-///
-/// This wrapper preserves [`RestrictedScope`]'s lifecycle closure: insertion
-/// never exposes a full [`RuntimeHandle`] to an actor callback.
-#[derive(Clone, Debug)]
-pub struct DynamicRestrictedScope {
-    dynamic: crate::DynamicRuntimeHandle,
+pub struct RestrictedScopeRef {
+    handle: ScopeRef,
 }
 
 macro_rules! restricted_scope_forwards {
@@ -1612,11 +1608,9 @@ macro_rules! restricted_scope_forwards {
             self.handle.subtree(id).map(Self::new)
         }
 
-        /// Returns this scope's dynamic-membership capability.
-        pub fn dynamic(&self) -> Option<DynamicRestrictedScope> {
-            self.handle
-                .dynamic()
-                .map(|dynamic| DynamicRestrictedScope { dynamic })
+        /// Returns whether this scope has ordered or dynamic membership.
+        pub fn kind(&self) -> crate::observe::ScopeKind {
+            self.handle.kind()
         }
 
         /// Observes lifecycle transitions of this scope and its descendants.
@@ -1630,7 +1624,7 @@ macro_rules! restricted_scope_forwards {
         /// The pump runs in a detached task, so starting it from a lifecycle
         /// hook does not block that hook. Retain the returned guard for as long
         /// as delivery is wanted; dropping or cancelling it stops the pump.
-        /// See [`RuntimeHandle::watch_lifecycle_to`].
+        /// See [`ScopeRef::watch_lifecycle_to`].
         pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> crate::Guard
         where
             M: Send + 'static,
@@ -1639,20 +1633,17 @@ macro_rules! restricted_scope_forwards {
             self.handle.watch_lifecycle_to(target, map)
         }
 
-        /// Shuts this scope down once every named child has completed.
+        /// Creates a non-awaitable completion watch for direct children.
         ///
-        /// The returned guard must be retained; dropping it cancels the watch
-        /// and leaves the scope running. See
-        /// [`RuntimeHandle::shutdown_on_completion`] for child-id and runtime
-        /// requirements. An unknown id is rejected;
-        /// [`DynamicRestrictedScope::shutdown_on_completion`] instead treats
-        /// absent ids as future dynamic membership.
-        pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::Guard
+        /// The watch can be configured with `allow_future_members` and armed
+        /// with `then_shutdown`. Use [`Context::spawn_scope_wait`] when the
+        /// completion outcome must be awaited.
+        pub fn completions<I, S>(&self, ids: I) -> crate::observe::CompletionWatch<false>
         where
             I: IntoIterator<Item = S>,
             S: Into<String>,
         {
-            self.handle.shutdown_on_completion(ids)
+            self.handle.restricted_completions(ids)
         }
 
         /// Requests shutdown of this scope without waiting for it.
@@ -1662,30 +1653,12 @@ macro_rules! restricted_scope_forwards {
     };
 }
 
-impl RestrictedScope {
-    fn new(handle: RuntimeHandle) -> Self {
+impl RestrictedScopeRef {
+    fn new(handle: ScopeRef) -> Self {
         Self { handle }
     }
 
     restricted_scope_forwards!();
-}
-
-impl DynamicRestrictedScope {
-    /// Shuts this dynamic scope down once every named child has completed.
-    ///
-    /// Absent ids are treated as future membership, so the watch can remain
-    /// pending indefinitely until those children are inserted and complete.
-    /// This differs from [`RestrictedScope::shutdown_on_completion`] on the
-    /// same scope, which validates ids against current or declared membership
-    /// and rejects an unknown child. The returned guard must be retained;
-    /// dropping it cancels the watch and leaves the scope running.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::Guard
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.dynamic.shutdown_on_completion(ids)
-    }
 
     /// Inserts one actor declaration into this scope.
     ///
@@ -1695,7 +1668,7 @@ impl DynamicRestrictedScope {
         &self,
         spec: crate::ActorSpec<M>,
     ) -> Result<ActorRef<M>, crate::ControlError> {
-        self.dynamic.add_actor(spec).await
+        self.handle.add_actor(spec).await
     }
 
     /// Inserts an arbitrary supervised task child into this scope.
@@ -1703,7 +1676,7 @@ impl DynamicRestrictedScope {
         &self,
         child: crate::host::ChildSpec,
     ) -> Result<u64, crate::ControlError> {
-        self.dynamic.add_child(child).await
+        self.handle.add_child(child).await
     }
 
     /// Inserts an identity-owning subtree and returns a restricted handle.
@@ -1711,11 +1684,11 @@ impl DynamicRestrictedScope {
         &self,
         id: impl Into<String>,
         tree: impl Into<crate::TreeNode>,
-    ) -> Result<RestrictedScope, crate::ControlError> {
-        self.dynamic
+    ) -> Result<RestrictedScopeRef, crate::ControlError> {
+        self.handle
             .add_subtree(id, tree)
             .await
-            .map(RestrictedScope::new)
+            .map(RestrictedScopeRef::new)
     }
 
     /// Removes a child after applying its shutdown policy.
@@ -1723,7 +1696,7 @@ impl DynamicRestrictedScope {
     /// Awaiting removal of the current actor from one of its own lifecycle
     /// callbacks can deadlock until the shutdown grace period expires.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), crate::ControlError> {
-        self.dynamic.remove_child(id).await
+        self.handle.remove_child(id).await
     }
 }
 
@@ -1737,8 +1710,9 @@ impl DynamicRestrictedScope {
 /// handles, and [`run_blocking`](StopContext::run_blocking) for synchronous
 /// teardown.
 ///
-/// The scope handles are narrowed to [`RestrictedScope`], which withholds the
-/// lifecycle waits that would block on a detach this hook is itself holding up.
+/// The scope references are narrowed to [`RestrictedScopeRef`], which withholds
+/// scope-wide readiness and termination waits that would block on a detach
+/// this hook is itself holding up.
 ///
 /// The parameter is the actor, not its message: a hook signature writes
 /// `&mut StopContext<'_, Self>` and the message type is projected from
@@ -1785,7 +1759,7 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 
     /// Returns this actor's enclosing scope, restricted for shutdown.
-    pub fn supervisor(&self) -> RestrictedScope {
+    pub fn supervisor(&self) -> RestrictedScopeRef {
         self.cx.supervisor()
     }
 }

@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::supervisor::{
     CancellationToken, ChildExitView, CompletionOnDrop, Guard, LifecycleEvent, LifecycleEventKind,
+    ScopeKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
@@ -31,6 +32,9 @@ pub enum CompletionOutcome {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CompletionError {
+    /// Future-member mode was requested for an ordered scope.
+    #[error("scope has ordered membership")]
+    NotDynamic,
     /// The child id is not present in the scope's declared/current membership.
     #[error("unknown child `{child_id}`")]
     UnknownChild {
@@ -39,65 +43,66 @@ pub enum CompletionError {
     },
 }
 
-impl SupervisorHandle {
-    /// Waits until every child in `ids` is simultaneously in a completed
-    /// state.
-    ///
-    /// A child counts as completed once its current generation has exited with
-    /// [`ChildExitView::Completed`] and no restart is pending for it. Any
-    /// later start un-completes it, so a child that is restarted — including by
-    /// a sibling-driven group restart — must complete again. Failed exits never
-    /// count, matching the rule that failures follow the restart policy rather
-    /// than signalling finished work. A child configured with
-    /// [`Restart::always()`](crate::Restart::always()) never counts as
-    /// completed while it remains a member, even between its clean exit and
-    /// replacement. A child whose membership is removed drops out of the set:
-    /// its work is not coming back.
-    ///
-    /// Awaiting an empty set returns [`CompletionOutcome::Completed`]
-    /// immediately. An id absent from the current (including projected
-    /// pre-spawn) membership returns [`CompletionError::UnknownChild`]. Use
-    /// [`wait_completed_dynamic`](Self::wait_completed_dynamic) when waiting
-    /// for membership that may be added later.
-    ///
-    /// The wait is gap-free from the moment it is called: it aligns a
-    /// lifecycle watch against a snapshot, so children that completed earlier
-    /// are still counted, and it realigns from a fresh snapshot if the watch
-    /// reports [`LifecycleEventKind::Lagged`]. Calling it on a pre-spawn
-    /// handle is well defined — statically configured children are projected
-    /// before the scope starts.
-    pub async fn wait_completed<I, S>(&self, ids: I) -> Result<CompletionOutcome, CompletionError>
+/// A configurable watch for direct children of one scope to complete.
+///
+/// Create a watch with [`ScopeRef::completions`](crate::ScopeRef::completions). It is
+/// strict by default: every id must name current or projected pre-spawn
+/// membership. [`allow_future_members`](Self::allow_future_members) opts a
+/// dynamic scope into waiting for later insertion, and
+/// [`then_shutdown`](Self::then_shutdown) arms shutdown without awaiting the
+/// result directly. Watches obtained from a
+/// [`RestrictedScopeRef`](crate::RestrictedScopeRef) have `AWAITABLE` set to `false`:
+/// they retain the non-blocking configuration and shutdown operations, but do
+/// not expose [`wait`](CompletionWatch::wait).
+#[must_use = "a completion watch must be awaited or armed"]
+pub struct CompletionWatch<const AWAITABLE: bool = true> {
+    handle: SupervisorHandle,
+    kind: ScopeKind,
+    set: CompletionSet,
+    allow_future_members: bool,
+    error: Option<CompletionError>,
+}
+
+impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
+    pub(crate) fn new<I, S>(handle: SupervisorHandle, kind: ScopeKind, ids: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let set = CompletionSet::new(ids);
-        let snapshot = self.snapshot();
-        if let Some(child_id) = set.awaited.iter().find(|id| snapshot.child(id).is_none()) {
-            return Err(CompletionError::UnknownChild {
-                child_id: child_id.clone(),
-            });
+        Self {
+            handle,
+            kind,
+            set: CompletionSet::new(ids),
+            allow_future_members: false,
+            error: None,
         }
-        Ok(wait_completed(self, set).await)
     }
 
-    /// Waits for named children to appear and then complete.
+    /// Treats absent ids as membership that may be inserted later.
     ///
-    /// Unlike [`wait_completed`](Self::wait_completed), this variant treats
-    /// absent ids as future dynamic membership and may therefore wait
-    /// indefinitely while the supervisor remains running.
-    pub async fn wait_completed_dynamic<I, S>(&self, ids: I) -> CompletionOutcome
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        wait_completed(self, CompletionSet::new(ids)).await
+    /// This mode is valid only for a dynamic scope. On an ordered scope,
+    /// awaiting an awaitable watch returns [`CompletionError::NotDynamic`]
+    /// and an armed shutdown watch completes without requesting shutdown.
+    pub fn allow_future_members(mut self) -> Self {
+        if self.kind == ScopeKind::Dynamic {
+            self.allow_future_members = true;
+        } else {
+            self.error = Some(CompletionError::NotDynamic);
+        }
+        self
     }
 
-    /// Shuts this supervisor down once every child in `ids` has completed.
+    async fn outcome(self) -> Result<CompletionOutcome, CompletionError> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        reduce_completion(&self.handle, self.set, self.allow_future_members).await
+    }
+
+    /// Shuts this scope down once every named child has completed.
     ///
     /// This is the fire-and-forget form of
-    /// [`wait_completed`](Self::wait_completed), and the usual way to express
+    /// [`wait`](CompletionWatch::wait), and the usual way to express
     /// a subtree whose lifetime is bounded by finite work. Set it up before
     /// spawning, from a pre-spawn handle, so a child that finishes immediately
     /// is still observed.
@@ -111,13 +116,8 @@ impl SupervisorHandle {
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> Guard
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let set = CompletionSet::new(ids);
-        let handle = self.clone();
+    pub fn then_shutdown(self) -> Guard {
+        let handle = self.handle.clone();
         let cancellation = CancellationToken::new();
         let (finished, finished_on_drop) = CompletionOnDrop::armed();
         let task_cancellation = cancellation.clone();
@@ -126,7 +126,7 @@ impl SupervisorHandle {
             let outcome = tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => return,
-                outcome = handle.wait_completed(set.awaited) => outcome,
+                outcome = self.outcome() => outcome,
             };
             if outcome == Ok(CompletionOutcome::Completed) {
                 handle.shutdown();
@@ -136,50 +136,60 @@ impl SupervisorHandle {
         std::mem::drop(task);
         Guard::from_tokens(cancellation, finished)
     }
+}
 
-    /// Shuts this supervisor down once children that may be added later have
-    /// all completed.
+impl CompletionWatch<true> {
+    /// Waits until every named child is simultaneously completed.
     ///
-    /// This is the fire-and-forget counterpart to
-    /// [`wait_completed_dynamic`](Self::wait_completed_dynamic). Use it for a
-    /// dynamic scope when the named memberships do not exist yet.
+    /// A child counts as completed once its current generation has exited with
+    /// [`ChildExitView::Completed`] and no restart is pending for it. Any
+    /// later start un-completes it, so a child that is restarted — including by
+    /// a sibling-driven group restart — must complete again. Failed exits never
+    /// count, matching the rule that failures follow the restart policy rather
+    /// than signalling finished work. A child configured with
+    /// [`Restart::always()`](crate::Restart::always()) never counts as
+    /// completed while it remains a member, even between its clean exit and
+    /// replacement. A child whose membership is removed drops out of the set:
+    /// its work is not coming back.
     ///
-    /// # Panics
+    /// Awaiting an empty set returns [`CompletionOutcome::Completed`]
+    /// immediately. In the default strict mode, an id absent from the current
+    /// (including projected pre-spawn) membership returns
+    /// [`CompletionError::UnknownChild`].
     ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_dynamic_completion<I, S>(&self, ids: I) -> Guard
+    /// The wait is gap-free from the moment it is called: it installs a
+    /// lifecycle watch before taking the single snapshot used for both strict
+    /// validation and state alignment. Children that completed earlier are
+    /// still counted, and the reducer realigns from a fresh snapshot if the
+    /// watch reports [`LifecycleEventKind::Lagged`]. Calling it on a pre-spawn
+    /// handle is well defined — statically configured children are projected
+    /// before the scope starts.
+    pub async fn wait(self) -> Result<CompletionOutcome, CompletionError> {
+        self.outcome().await
+    }
+}
+
+impl SupervisorHandle {
+    pub(crate) fn completions<I, S>(&self, ids: I) -> CompletionWatch
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let set = CompletionSet::new(ids);
-        let handle = self.clone();
-        let cancellation = CancellationToken::new();
-        let (finished, finished_on_drop) = CompletionOnDrop::armed();
-        let task_cancellation = cancellation.clone();
-        let task = tokio::spawn(async move {
-            let _finished_on_drop = finished_on_drop;
-            let outcome = tokio::select! {
-                biased;
-                () = task_cancellation.cancelled() => return,
-                outcome = handle.wait_completed_dynamic(set.awaited) => outcome,
-            };
-            if outcome == CompletionOutcome::Completed {
-                handle.shutdown();
-            }
-        });
-
-        std::mem::drop(task);
-        Guard::from_tokens(cancellation, finished)
+        CompletionWatch::new(self.clone(), self.snapshot().kind, ids)
     }
 }
 
-async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> CompletionOutcome {
+async fn reduce_completion(
+    handle: &SupervisorHandle,
+    mut set: CompletionSet,
+    allow_future_members: bool,
+) -> Result<CompletionOutcome, CompletionError> {
     // The watch is created before the snapshot is read so no transition can
     // fall between them; events the snapshot already reflects are then
     // discarded by sequence.
     let mut watch = handle.watch_lifecycle().direct_children();
-    let mut baseline = set.realign(&handle.snapshot());
+    let snapshot = handle.snapshot();
+    let mut baseline = set.initialize(&snapshot, allow_future_members)?;
 
     loop {
         if set.is_complete() {
@@ -189,11 +199,11 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
             // finished work.
             baseline = set.realign(&handle.snapshot());
             if set.is_complete() {
-                return CompletionOutcome::Completed;
+                return Ok(CompletionOutcome::Completed);
             }
         }
         let Some(event) = watch.next().await else {
-            return CompletionOutcome::Closed;
+            return Ok(CompletionOutcome::Closed);
         };
         if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
             // A dropped prefix may have contained transitions for awaited
@@ -217,7 +227,7 @@ async fn wait_completed(handle: &SupervisorHandle, mut set: CompletionSet) -> Co
     }
 }
 
-/// The reduction behind [`SupervisorHandle::wait_completed`].
+/// The reduction behind [`CompletionWatch::wait`].
 struct CompletionSet {
     /// The children being awaited, in the order the caller named them.
     awaited: Vec<String>,
@@ -261,6 +271,22 @@ impl CompletionSet {
 
     fn awaits(&self, id: &str) -> bool {
         self.awaited.iter().any(|awaited| awaited == id)
+    }
+
+    /// Validates strict membership and aligns state from one snapshot.
+    fn initialize(
+        &mut self,
+        snapshot: &SupervisorSnapshot,
+        allow_future_members: bool,
+    ) -> Result<u64, CompletionError> {
+        if !allow_future_members
+            && let Some(child_id) = self.awaited.iter().find(|id| snapshot.child(id).is_none())
+        {
+            return Err(CompletionError::UnknownChild {
+                child_id: child_id.clone(),
+            });
+        }
+        Ok(self.realign(snapshot))
     }
 
     fn apply(&mut self, event: &LifecycleEvent) {
@@ -471,6 +497,46 @@ mod tests {
     #[test]
     fn an_empty_set_is_complete() {
         assert!(CompletionSet::new(Vec::<String>::new()).is_complete());
+    }
+
+    #[test]
+    fn strict_initialization_validates_every_id_against_one_snapshot() {
+        let mut set = CompletionSet::new(["source", "missing"]);
+        let baseline = snapshot(vec![ChildSnapshot::new(
+            "source",
+            0,
+            ChildStateView::Running {
+                previous_exit: None,
+            },
+        )]);
+
+        assert_eq!(
+            set.initialize(&baseline, false),
+            Err(CompletionError::UnknownChild {
+                child_id: "missing".to_owned(),
+            })
+        );
+        assert!(
+            set.seen.is_empty(),
+            "strict validation happens before the same snapshot realigns state"
+        );
+    }
+
+    #[test]
+    fn future_member_initialization_realigns_from_its_validation_snapshot() {
+        let mut set = CompletionSet::new(["source", "future"]);
+        let mut baseline = snapshot(vec![ChildSnapshot::new(
+            "source",
+            0,
+            ChildStateView::Running {
+                previous_exit: None,
+            },
+        )]);
+        baseline.lifecycle_seq = 17;
+
+        assert_eq!(set.initialize(&baseline, true), Ok(17));
+        assert!(set.seen.contains("source"));
+        assert!(!set.seen.contains("future"));
     }
 
     #[test]

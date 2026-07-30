@@ -177,7 +177,7 @@ impl<M> Default for ActorOptions<M> {
 /// all per-actor configuration. It is intentionally not [`Clone`]. Obtain a
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
 /// the declaration through [`crate::OrderedTree::actor`] or
-/// [`crate::DynamicRuntimeHandle::add_actor`].
+/// [`crate::ScopeRef::add_actor`].
 pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_id: Arc<str>,
     pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,

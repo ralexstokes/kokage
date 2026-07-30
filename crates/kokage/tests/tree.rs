@@ -1616,7 +1616,7 @@ mod runnable_actor {
             .await
             .expect("dynamic actor added");
         runtime
-            .handle()
+            .scope()
             .wait_started()
             .await
             .expect("dynamic actor started");

@@ -11,10 +11,10 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOnDrop,
-        CompletionOutcome, ControlError, DynamicSupervisorHandle, Guard, LifecycleEvent,
-        LifecycleWatch, Restart, RunningSupervisor, Shutdown, ShutdownMode, SupervisorError,
-        SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
+        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
+        ScopeKind, Shutdown, ShutdownMode, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+        SupervisorSnapshotReceiver,
     },
 };
 
@@ -169,27 +169,29 @@ where
     guard_from_tokens(cancellation, finished)
 }
 
-/// Owns a spawned actor runtime.
+/// Owns a spawned supervision tree.
 ///
-/// Dropping this value requests graceful shutdown. Handles cloned from it are
-/// non-owning and may be dropped without affecting runtime lifetime.
-/// Use [`handle`](Self::handle) to make the transition from the owning runtime
-/// to a non-owning [`RuntimeHandle`] explicit.
-#[must_use = "dropping the runtime requests graceful shutdown"]
-pub struct Runtime {
+/// `RunningTree` exposes only owner-lifecycle operations. Use
+/// [`scope`](Self::scope) to obtain the cheaply cloneable, non-owning
+/// [`ScopeRef`] used for root or nested control and observation. Dropping a
+/// `ScopeRef` is inert and it does not keep this owner alive; dropping this
+/// owner requests graceful shutdown. Bind `let root = running.scope();` when
+/// performing repeated root operations.
+#[must_use = "dropping the running tree requests graceful shutdown"]
+pub struct RunningTree {
     supervisor: RunningSupervisor,
-    handle: RuntimeHandle,
+    scope: ScopeRef,
 }
 
-impl Runtime {
+impl RunningTree {
     pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
-        let handle = RuntimeHandle::new(supervisor.handle(), actors);
-        Self { supervisor, handle }
+        let scope = ScopeRef::new(supervisor.handle(), actors);
+        Self { supervisor, scope }
     }
 
-    /// Returns a non-owning runtime control and observation handle.
-    pub fn handle(&self) -> RuntimeHandle {
-        self.handle.clone()
+    /// Returns the running tree's non-owning root scope reference.
+    pub fn scope(&self) -> ScopeRef {
+        self.scope.clone()
     }
 
     /// Requests graceful shutdown without waiting for completion.
@@ -202,47 +204,39 @@ impl Runtime {
         self.supervisor.shutdown_and_wait().await
     }
 
-    /// Waits for the runtime to stop.
+    /// Waits for the running tree to stop.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
     }
 }
 
-impl std::fmt::Debug for Runtime {
+impl std::fmt::Debug for RunningTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Runtime").finish_non_exhaustive()
+        f.debug_struct("RunningTree").finish_non_exhaustive()
     }
 }
 
-/// Cheaply cloneable, non-owning runtime control and observation surface.
+/// A cheaply cloneable, non-owning reference and control capability for a
+/// supervision scope.
 ///
-/// Dropping any root or nested handle leaves the runtime running. A spawned
-/// root remains alive until its owning [`Runtime`] is shut down or dropped.
+/// As an [`ActorRef`](crate::ActorRef) addresses an actor without owning its
+/// runtime, a `ScopeRef` addresses one supervision scope for control,
+/// observation, and runtime-checked membership operations. Dropping any root
+/// or nested reference leaves the runtime running. A spawned root remains alive
+/// until its owning [`RunningTree`] is shut down or dropped.
 #[derive(Clone)]
-pub struct RuntimeHandle {
+pub struct ScopeRef {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
 }
 
-/// Non-owning runtime handle for a statically known dynamic actor scope.
-///
-/// [`DynamicTree::handle`](crate::DynamicTree::handle) returns this type before
-/// spawn. After spawn, recover the capability with [`RuntimeHandle::dynamic`].
-/// The same method is used for scopes reached by runtime navigation, because
-/// the nested scope's kind is not statically known.
-#[derive(Clone, Debug)]
-pub struct DynamicRuntimeHandle {
-    handle: RuntimeHandle,
-    supervisor: DynamicSupervisorHandle,
-}
-
-impl RuntimeHandle {
+impl ScopeRef {
     pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
         Self { supervisor, actors }
     }
 
     pub(crate) fn unavailable() -> Self {
-        static UNAVAILABLE: OnceLock<RuntimeHandle> = OnceLock::new();
+        static UNAVAILABLE: OnceLock<ScopeRef> = OnceLock::new();
 
         UNAVAILABLE
             .get_or_init(|| {
@@ -271,27 +265,19 @@ impl RuntimeHandle {
         self.supervisor.shutdown_and_wait().await
     }
 
-    /// Returns this scope's dynamic-membership capability.
-    ///
-    /// Ordered root and subtree handles return `None`; dynamic scopes return
-    /// `Some` before and after spawn.
-    pub fn dynamic(&self) -> Option<DynamicRuntimeHandle> {
-        self.supervisor
-            .dynamic()
-            .map(|supervisor| DynamicRuntimeHandle {
-                handle: self.clone(),
-                supervisor,
-            })
+    /// Returns whether this scope has ordered or dynamic membership.
+    pub fn kind(&self) -> ScopeKind {
+        self.supervisor.snapshot().kind
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
     ///
     /// `None` means that this runtime has no registered subtree with `id`.
-    pub fn subtree(&self, id: &str) -> Option<RuntimeHandle> {
+    pub fn subtree(&self, id: &str) -> Option<ScopeRef> {
         self.subtree_membership(id, None)
     }
 
-    fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<RuntimeHandle> {
+    fn subtree_membership(&self, id: &str, lineage: Option<u64>) -> Option<ScopeRef> {
         runtime_subtree_membership(
             __private::attached_children::<RuntimeAttachment>(&self.supervisor),
             &self.actors,
@@ -310,44 +296,26 @@ impl RuntimeHandle {
         self.supervisor.wait_started().await
     }
 
-    /// Waits until every named child is simultaneously completed.
+    /// Creates a completion watch for direct children of this scope.
     ///
-    /// Direct children are addressed by their one scope-local id. Use a
-    /// [`subtree`](Self::subtree) handle for children of a nested scope. An
-    /// unknown child returns [`CompletionError::UnknownChild`]. See
-    /// [`CompletionOutcome`] for the distinction between completion and the
-    /// supervisor stopping first.
-    ///
-    /// On a dynamic scope, use [`DynamicRuntimeHandle::wait_completed`] when
-    /// ids may be added later instead of validating them immediately.
-    pub async fn wait_completed<I, S>(&self, ids: I) -> Result<CompletionOutcome, CompletionError>
+    /// The watch validates ids when [`CompletionWatch::wait`] begins. Call
+    /// [`CompletionWatch::allow_future_members`] when ids may be inserted into
+    /// a dynamic scope later, or [`CompletionWatch::then_shutdown`] to arm
+    /// scope shutdown at the completion boundary.
+    pub fn completions<I, S>(&self, ids: I) -> CompletionWatch
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.supervisor.wait_completed(ids).await
+        self.supervisor.completions(ids)
     }
 
-    /// Shuts this runtime down once every named child has completed.
-    ///
-    /// Child ids follow the same rules as [`wait_completed`](Self::wait_completed).
-    /// On a dynamic scope, use
-    /// [`DynamicRuntimeHandle::shutdown_on_completion`] when ids may be added
-    /// later.
-    ///
-    /// Arm this from a pre-spawn handle when fast children could complete
-    /// immediately. The returned guard must be retained; dropping it cancels
-    /// the completion watch and leaves the runtime running.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> Guard
+    pub(crate) fn restricted_completions<I, S>(&self, ids: I) -> CompletionWatch<false>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.supervisor.shutdown_on_completion(ids)
+        CompletionWatch::new(self.supervisor.clone(), self.kind(), ids)
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
@@ -454,7 +422,7 @@ fn runtime_subtree_membership(
     actors: &Arc<ActorRuntimeState>,
     id: &str,
     lineage: Option<u64>,
-) -> Option<RuntimeHandle> {
+) -> Option<ScopeRef> {
     attached_children.into_iter().find_map(|attached| {
         let [identity] = attached.path() else {
             return None;
@@ -468,76 +436,22 @@ fn runtime_subtree_membership(
         let RuntimeAttachmentKind::Subtree(subtree_actors) = &attached.attachment().kind else {
             return None;
         };
-        Some(RuntimeHandle::new(
+        Some(ScopeRef::new(
             attached.supervisor()?.clone(),
             Arc::clone(subtree_actors),
         ))
     })
 }
 
-impl DynamicRuntimeHandle {
-    pub(crate) fn new(handle: RuntimeHandle) -> Self {
-        let supervisor = handle
-            .supervisor
-            .dynamic()
-            .expect("dynamic runtime handle must refer to a dynamic scope");
-        Self { handle, supervisor }
-    }
-
-    /// Erases the statically known dynamic capability from this handle.
-    pub fn into_runtime_handle(self) -> RuntimeHandle {
-        self.handle
-    }
-
-    /// Waits for named children to appear and then complete.
-    ///
-    /// Absent ids are treated as future dynamic membership. The wait may
-    /// therefore remain pending indefinitely while this runtime is still
-    /// running. Once present, a child follows the same completion rules as
-    /// [`RuntimeHandle::wait_completed`].
-    ///
-    /// This inherent method intentionally shadows the same-named
-    /// [`RuntimeHandle`] method reached through [`Deref`](std::ops::Deref).
-    /// Call `RuntimeHandle::wait_completed(&handle, ids)` or first use
-    /// [`into_runtime_handle`](Self::into_runtime_handle) to validate ids
-    /// immediately and receive [`CompletionError::UnknownChild`] for an absent
-    /// membership.
-    pub async fn wait_completed<I, S>(&self, ids: I) -> CompletionOutcome
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.handle.supervisor.wait_completed_dynamic(ids).await
-    }
-
-    /// Shuts this runtime down once named children appear and all complete.
-    ///
-    /// This is the fire-and-forget counterpart to
-    /// [`wait_completed`](Self::wait_completed). The returned guard must be
-    /// retained; dropping it cancels the completion watch and leaves the
-    /// runtime running.
-    ///
-    /// This inherent method intentionally shadows the same-named
-    /// [`RuntimeHandle`] method reached through [`Deref`](std::ops::Deref).
-    /// Call `RuntimeHandle::shutdown_on_completion(&handle, ids)` or first use
-    /// [`into_runtime_handle`](Self::into_runtime_handle) to validate ids
-    /// immediately instead of waiting for future membership.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> Guard
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.handle.supervisor.shutdown_on_dynamic_completion(ids)
+impl ScopeRef {
+    fn dynamic_supervisor(&self) -> Result<DynamicSupervisorHandle, ControlError> {
+        self.supervisor.dynamic().ok_or(ControlError::NotDynamic)
     }
 
     /// Builds and adds an actor-aware runtime subtree dynamically.
     ///
     /// The returned handle can add actors or further subtrees, and recursive
-    /// [`RuntimeHandle::actor_stats`] include the new subtree. Removing the
+    /// [`ScopeRef::actor_stats`] include the new subtree. Removing the
     /// child detaches its actor metadata with the supervisor membership;
     /// retained subtree handles then fail control operations with
     /// [`ControlError::Unavailable`].
@@ -550,7 +464,7 @@ impl DynamicRuntimeHandle {
     /// Restart intensity remains tracked per child across this boundary.
     /// Dynamic additions start immediately and dynamic siblings stop
     /// concurrently under one shared maximum-grace deadline. Use
-    /// [`RuntimeHandle::wait_started`] when readiness is needed.
+    /// [`ScopeRef::wait_started`] when readiness is needed.
     /// Wrap the supplied tree with [`TreeNode::restart`](crate::TreeNode::restart)
     /// or [`TreeNode::shutdown`](crate::TreeNode::shutdown) to override the
     /// subtree edge's policies in this dynamic parent.
@@ -568,7 +482,8 @@ impl DynamicRuntimeHandle {
         &self,
         id: impl Into<String>,
         tree: impl Into<crate::TreeNode>,
-    ) -> Result<RuntimeHandle, ControlError> {
+    ) -> Result<ScopeRef, ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
         let id = id.into();
         let parts = tree.into().into_parts();
         let parts = parts.map_err(ControlError::Rejected)?;
@@ -579,16 +494,15 @@ impl DynamicRuntimeHandle {
         if let Some(shutdown) = parts.shutdown {
             child = child.shutdown(shutdown);
         }
-        let lineage = self
-            .supervisor
+        let lineage = dynamic
             .add_child(__private::attach(
                 child,
-                RuntimeAttachment::subtree(&self.handle.actors, Arc::clone(&parts.actors)),
+                RuntimeAttachment::subtree(&self.actors, Arc::clone(&parts.actors)),
             ))
             .await?;
         runtime_subtree_membership(
-            __private::dynamic_attached_children::<RuntimeAttachment>(&self.supervisor),
-            &self.handle.actors,
+            __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic),
+            &self.actors,
             &id,
             Some(lineage),
         )
@@ -600,10 +514,10 @@ impl DynamicRuntimeHandle {
     /// This is the task-level counterpart to adding an actor. Success means
     /// the membership was inserted and startup was scheduled, and returns the
     /// lineage assigned to that membership. Task children do not appear in
-    /// [`RuntimeHandle::actor_stats`], but remain visible through snapshots and
+    /// [`ScopeRef::actor_stats`], but remain visible through snapshots and
     /// lifecycle watches.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
-        self.supervisor.add_child(child).await
+        self.dynamic_supervisor()?.add_child(child).await
     }
 
     /// Adds one actor declaration and returns its stable typed ref.
@@ -612,7 +526,7 @@ impl DynamicRuntimeHandle {
     /// later through the dynamic capability. See [`crate::ActorFactory`] for
     /// the incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
-    /// can be used immediately, while [`RuntimeHandle::wait_started`] retains
+    /// can be used immediately, while [`ScopeRef::wait_started`] retains
     /// the stronger readiness contract. A zero
     /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity) is rejected with
     /// [`ControlError::Rejected`].
@@ -620,19 +534,21 @@ impl DynamicRuntimeHandle {
         &self,
         spec: ActorSpec<M>,
     ) -> Result<ActorRef<M>, ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
         let actor_ref = spec.actor_ref();
         spec.actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
                 ControlError::Rejected(BuildError::InvalidConfig(error.message()))
             })?;
-        let (default_restart, default_shutdown) = self.handle.actors.actor_defaults();
+        let (default_restart, default_shutdown) = self.actors.actor_defaults();
         let dynamic_options = DynamicChildOptions {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
         };
-        let actor = self.handle.actors.make_actor(spec);
+        let actor = self.actors.make_actor(spec);
         self.add_constructed_actor(
+            &dynamic,
             (
                 actor
                     .actor
@@ -646,15 +562,16 @@ impl DynamicRuntimeHandle {
 
     async fn add_constructed_actor<M>(
         &self,
+        dynamic: &DynamicSupervisorHandle,
         (actor, actor_ref): (RunnableActor, ActorRef<M>),
         options: DynamicChildOptions,
     ) -> Result<ActorRef<M>, ControlError> {
         let child = actor_child_spec(
             actor.clone(),
-            &self.handle.actors,
+            &self.actors,
             ActorChildOptions::new(options.restart, options.shutdown),
         );
-        self.supervisor.add_child(child).await?;
+        dynamic.add_child(child).await?;
 
         Ok(actor_ref)
     }
@@ -682,21 +599,13 @@ impl DynamicRuntimeHandle {
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
-        self.supervisor.remove_child(id).await
+        self.dynamic_supervisor()?.remove_child(id).await
     }
 }
 
-impl std::ops::Deref for DynamicRuntimeHandle {
-    type Target = RuntimeHandle;
-
-    fn deref(&self) -> &Self::Target {
-        &self.handle
-    }
-}
-
-impl std::fmt::Debug for RuntimeHandle {
+impl std::fmt::Debug for ScopeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RuntimeHandle").finish_non_exhaustive()
+        f.debug_struct("ScopeRef").finish_non_exhaustive()
     }
 }
 
@@ -747,7 +656,7 @@ pub(crate) fn actor_child_spec(
     __private::attach(
         ChildSpec::task(actor_id, move |ctx| {
             let actor = child_guard.actor.clone();
-            let supervisor = RuntimeHandle::new(ctx.supervisor(), Arc::clone(&actor_owner));
+            let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
             async move {
                 actor
                     .run_until_ready(
@@ -780,18 +689,18 @@ fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSe
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorResult, ActorSpec, BuildError, Context, DynamicRuntimeHandle, DynamicTree,
-        OrderedTree, Restart, Runtime, RuntimeHandle,
+        Actor, ActorResult, ActorSpec, BuildError, Context, DynamicTree, OrderedTree, Restart,
+        RunningTree, ScopeRef,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
-        let ordered_spawn: fn(OrderedTree) -> Result<Runtime, BuildError> = OrderedTree::spawn;
-        let ordered_handle: fn(&OrderedTree) -> RuntimeHandle = OrderedTree::handle;
-        let dynamic_spawn: fn(DynamicTree) -> Result<Runtime, BuildError> = DynamicTree::spawn;
-        let dynamic_handle: fn(&DynamicTree) -> DynamicRuntimeHandle = DynamicTree::handle;
+        let ordered_spawn: fn(OrderedTree) -> Result<RunningTree, BuildError> = OrderedTree::spawn;
+        let ordered_scope: fn(&OrderedTree) -> ScopeRef = OrderedTree::scope;
+        let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree, BuildError> = DynamicTree::spawn;
+        let dynamic_scope: fn(&DynamicTree) -> ScopeRef = DynamicTree::scope;
 
-        let _ = (ordered_spawn, ordered_handle, dynamic_spawn, dynamic_handle);
+        let _ = (ordered_spawn, ordered_scope, dynamic_spawn, dynamic_scope);
     }
 
     struct FailsOnMessage;
@@ -806,8 +715,8 @@ mod tests {
 
     #[test]
     fn unavailable_runtime_handle_is_cached() {
-        let first = super::RuntimeHandle::unavailable();
-        let second = super::RuntimeHandle::unavailable();
+        let first = super::ScopeRef::unavailable();
+        let second = super::ScopeRef::unavailable();
 
         assert!(std::sync::Arc::ptr_eq(&first.actors, &second.actors));
     }
@@ -821,11 +730,11 @@ mod tests {
             .spawn()
             .expect("static runtime builds");
         static_runtime
-            .handle()
+            .scope()
             .wait_started()
             .await
             .expect("static actor starts");
-        let mut static_snapshots = static_runtime.handle().subscribe_snapshots();
+        let mut static_snapshots = static_runtime.scope().subscribe_snapshots();
         static_ref.send(()).await.expect("static message accepted");
         static_snapshots
             .wait_for(|snapshot| {
@@ -841,20 +750,17 @@ mod tests {
             .expect("static runtime shuts down");
 
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        let dynamic = dynamic_runtime
-            .handle()
-            .dynamic()
-            .expect("dynamic root exposes membership capability");
+        let dynamic = dynamic_runtime.scope();
         let dynamic_ref = dynamic
             .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(Restart::never()))
             .await
             .expect("dynamic actor is inserted");
         dynamic_runtime
-            .handle()
+            .scope()
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut dynamic_snapshots = dynamic_runtime.handle().subscribe_snapshots();
+        let mut dynamic_snapshots = dynamic_runtime.scope().subscribe_snapshots();
         dynamic_ref
             .send(())
             .await
@@ -876,10 +782,7 @@ mod tests {
     #[tokio::test]
     async fn dynamic_membership_removal_is_explicit() {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        let dynamic = runtime
-            .handle()
-            .dynamic()
-            .expect("dynamic root exposes membership capability");
+        let dynamic = runtime.scope();
         let actor_ref = dynamic
             .add_actor(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
@@ -888,11 +791,11 @@ mod tests {
             .await
             .expect("dynamic actor is inserted");
         runtime
-            .handle()
+            .scope()
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut snapshots = runtime.handle().subscribe_snapshots();
+        let mut snapshots = runtime.scope().subscribe_snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots
@@ -908,16 +811,13 @@ mod tests {
     #[tokio::test]
     async fn subtree_membership_lookup_rejects_a_same_id_replacement() {
         let root = DynamicTree::new().spawn().expect("runtime builds");
-        let dynamic = root
-            .handle()
-            .dynamic()
-            .expect("dynamic root exposes membership capability");
+        let dynamic = root.scope();
         dynamic
             .add_subtree("workers", OrderedTree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
-            .handle()
+            .scope()
             .snapshot()
             .child("workers")
             .expect("first membership is visible")
@@ -932,7 +832,7 @@ mod tests {
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root
-            .handle()
+            .scope()
             .snapshot()
             .child("workers")
             .expect("replacement membership is visible")
@@ -940,13 +840,13 @@ mod tests {
 
         assert_ne!(first_lineage, replacement_lineage);
         assert!(
-            root.handle()
+            root.scope()
                 .subtree_membership("workers", Some(first_lineage))
                 .is_none(),
             "a lookup bound to the completed add must not return a same-id replacement"
         );
         assert!(
-            root.handle()
+            root.scope()
                 .subtree_membership("workers", Some(replacement_lineage))
                 .is_some()
         );

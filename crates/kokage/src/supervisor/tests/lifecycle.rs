@@ -839,7 +839,10 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
         .restart(Restart::on_failure())
         .shutdown(Shutdown::abort()),
     );
-    let _leaf_finished = leaf_builder.handle().shutdown_on_completion(["worker"]);
+    let _leaf_finished = leaf_builder
+        .handle()
+        .completions(["worker"])
+        .then_shutdown();
     let leaf = leaf_builder.build().expect("leaf supervisor builds");
     let sibling_crash = Arc::clone(&crash_sibling);
     let running = Supervisor::ordered()
@@ -1208,7 +1211,7 @@ fn completing_supervisor(complete: &Arc<Notify>) -> (crate::supervisor::Supervis
         })
         .restart(Restart::on_failure()),
     );
-    let finished = builder.handle().shutdown_on_completion(["worker"]);
+    let finished = builder.handle().completions(["worker"]).then_shutdown();
     (
         builder.build().expect("completing supervisor builds"),
         finished,

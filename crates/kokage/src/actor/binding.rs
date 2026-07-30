@@ -19,7 +19,7 @@ use crate::actor::{
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
 ///
 /// Sample these stats either through [`ActorRef::stats`](crate::ActorRef::stats)
-/// or [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
+/// or [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
 /// Message counters accumulate for the lifetime of the actor binding and
 /// therefore survive restarts. Outstanding-work gauges and mailbox fields
 /// describe the currently bound incarnation and are zero while no mailbox is
@@ -32,7 +32,7 @@ pub struct ActorStats {
     /// Actor id used to correlate these stats with supervisor snapshots.
     pub actor_id: String,
     /// Identity path of the supervisors containing this actor when sampled
-    /// through [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
+    /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
     ///
     /// A direct child of the sampled runtime has an empty path. Each nested
     /// segment includes the supervisor child's lineage and generation
@@ -43,7 +43,7 @@ pub struct ActorStats {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub supervisor_path: Option<Vec<SupervisorPathSegment>>,
     /// Identity of the actor's current supervisor membership, when sampled
-    /// through [`RuntimeHandle::actor_stats`](crate::RuntimeHandle::actor_stats).
+    /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
     ///
     /// Pair this with [`actor_id`](Self::actor_id) and
     /// [`supervisor_path`](Self::supervisor_path) to distinguish a removed

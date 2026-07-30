@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .subtree("dynamic", DynamicTree::new())
         .spawn()?;
 
-    let console = ConsoleBuilder::for_runtime(&runtime.handle())
+    let console = ConsoleBuilder::for_runtime(&runtime.scope())
         .bind(([127, 0, 0, 1], 0))
         .spawn()
         .await;
@@ -180,9 +180,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Periodically add a dynamic actor, feed it, and remove it again, so the
     // console shows children joining and leaving the tree.
     let dynamic = runtime
-        .handle()
+        .scope()
         .subtree("dynamic")
-        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic scope");
     tokio::spawn(async move {
         loop {

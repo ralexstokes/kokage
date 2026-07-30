@@ -14,7 +14,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, Guard, MailboxMode, OffloadDeadline, Restart, RuntimeHandle, Shutdown,
+    ActorSlot, Guard, MailboxMode, OffloadDeadline, Restart, ScopeRef, Shutdown,
     host::{RawActor, RawContext},
     prelude::*,
 };
@@ -22,14 +22,14 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
-async fn wait_runtime_started(runtime: &RuntimeHandle, phase: &str) {
+async fn wait_runtime_started(runtime: &ScopeRef, phase: &str) {
     tokio::time::timeout(TEST_TIMEOUT, runtime.wait_started())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_runtime(runtime: &RuntimeHandle, phase: &str) {
+async fn shutdown_runtime(runtime: &ScopeRef, phase: &str) {
     tokio::time::timeout(TEST_TIMEOUT, runtime.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -84,7 +84,7 @@ async fn cancelling_an_unpolled_offload_finishes_its_guard() {
     actor.send(()).await.expect("actor accepts cancellation");
     recv_test_event(&mut finishes, "unpolled offload cancellation").await;
 
-    shutdown_runtime(&runtime.handle(), "unpolled offload runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "unpolled offload runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -138,7 +138,7 @@ async fn offload_continuations_deliver_total_and_fallback_outcomes() {
         observed: observed.clone(),
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "offload outcome runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "offload outcome runtime startup").await;
 
     let mut observed = Vec::new();
     for _ in 0..4 {
@@ -169,7 +169,7 @@ async fn offload_continuations_deliver_total_and_fallback_outcomes() {
             .iter()
             .any(|message| matches!(message, OutcomeMsg::OrFallback(7)))
     );
-    shutdown_runtime(&runtime.handle(), "offload outcome runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "offload outcome runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -281,7 +281,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
         .default_restart(Restart::on_failure())
         .spawn()
         .unwrap();
-    wait_runtime_started(&runtime.handle(), "stale-offload runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "stale-offload runtime startup").await;
     actor.send(StaleMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while constructed.load(Ordering::Relaxed) < 2 || !drop_started.load(Ordering::Acquire) {
@@ -306,7 +306,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
         .expect("fresh incarnation should process the post-abort probe")
         .expect("fresh incarnation should keep the probe sender alive");
     assert_eq!(done.load(Ordering::Relaxed), 0);
-    shutdown_runtime(&runtime.handle(), "stale-offload runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "stale-offload runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -357,7 +357,7 @@ async fn dropping_offload_guard_cancels_and_updates_the_outstanding_gauge() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "abort-handle runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "abort-handle runtime startup").await;
     actor.send(AbortMsg::Start).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         while actor.stats().outstanding_offloads != 1 {
@@ -376,7 +376,7 @@ async fn dropping_offload_guard_cancels_and_updates_the_outstanding_gauge() {
     .await
     .unwrap();
     assert_eq!(done.load(Ordering::Relaxed), 0);
-    shutdown_runtime(&runtime.handle(), "abort-handle runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "abort-handle runtime shutdown").await;
 }
 
 #[tokio::test]
@@ -399,7 +399,7 @@ async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
         .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");
-    wait_runtime_started(&runtime.handle(), "offload restart runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "offload restart runtime startup").await;
     actor
         .send(AbortMsg::Start)
         .await
@@ -432,7 +432,7 @@ async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
     );
     assert_eq!(done.load(Ordering::Relaxed), 0);
 
-    shutdown_runtime(&runtime.handle(), "offload restart runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "offload restart runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -480,7 +480,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "ready-abort runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "ready-abort runtime startup").await;
     actor.send(ReadyAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "ready-abort offload handle").await;
     tokio::time::timeout(TEST_TIMEOUT, offload.finished())
@@ -493,7 +493,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
             .await
             .is_err()
     );
-    shutdown_runtime(&runtime.handle(), "ready-abort runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "ready-abort runtime shutdown").await;
 }
 
 #[tokio::test]
@@ -513,14 +513,14 @@ async fn detached_offload_guard_preserves_completion_delivery() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "detached-offload runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "detached-offload runtime startup").await;
     actor.send(ReadyAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "detached offload guard").await;
     offload.detach();
     release.notify_one();
 
     recv_test_event(&mut observed_rx, "detached offload completion").await;
-    shutdown_runtime(&runtime.handle(), "detached-offload runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "detached-offload runtime shutdown").await;
 }
 
 enum DrainAbortMsg {
@@ -573,7 +573,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "drain-abort runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "drain-abort runtime startup").await;
     actor.send(DrainAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "drain-abort offload handle").await;
     let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
@@ -650,7 +650,7 @@ async fn shutdown_case(policy: Shutdown) -> Vec<&'static str> {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "draining-offload runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "draining-offload runtime startup").await;
     actor.send(DrainMsg::Start).await.unwrap();
     wait_notification(&entered, "draining actor handler entry").await;
     actor.send(DrainMsg::Queued).await.unwrap();
@@ -751,7 +751,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "backpressure runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "backpressure runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(&offload_registered, "backpressure offload registration").await;
     actor.send(BackpressureMsg::Fill).await.unwrap();
@@ -770,7 +770,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
     ];
     received.sort_unstable();
     assert_eq!(received, ["done", "fill"]);
-    shutdown_runtime(&runtime.handle(), "backpressure runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "backpressure runtime shutdown").await;
 }
 
 #[tokio::test]
@@ -794,7 +794,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "conflating completion runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "conflating completion runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(
         &offload_registered,
@@ -817,7 +817,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
     received.sort_unstable();
     assert_eq!(received, ["done", "fill"]);
     assert!(receiver.try_recv().is_err());
-    shutdown_runtime(&runtime.handle(), "conflating completion runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "conflating completion runtime shutdown").await;
 }
 
 #[derive(Debug)]
@@ -867,7 +867,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
         }
     });
     let runtime = graph.build().spawn().unwrap();
-    wait_runtime_started(&runtime.handle(), "deadline-drain runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "deadline-drain runtime startup").await;
     actor.send(DeadlineDrainMsg::Start).await.unwrap();
     wait_notification(&registered, "deadline-drain offload registration").await;
     let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
@@ -913,7 +913,7 @@ async fn raw_actor_recv_reaps_offload_completions() {
         recv_test_event(&mut receiver, "raw actor offload completion").await,
         "done"
     );
-    shutdown_runtime(&runtime.handle(), "raw-completion runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "raw-completion runtime shutdown").await;
 }
 
 enum PanicMsg {
@@ -954,7 +954,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
         .default_restart(Restart::on_failure())
         .spawn()
         .unwrap();
-    wait_runtime_started(&runtime.handle(), "offload-panic runtime startup").await;
+    wait_runtime_started(&runtime.scope(), "offload-panic runtime startup").await;
     actor.send(PanicMsg::Start).await.unwrap();
     tokio::time::timeout(TEST_TIMEOUT, async {
         while constructed.load(Ordering::Relaxed) < 2 {
@@ -963,5 +963,5 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
     })
     .await
     .expect("actor restarted after offload panic");
-    shutdown_runtime(&runtime.handle(), "offload-panic runtime shutdown").await;
+    shutdown_runtime(&runtime.scope(), "offload-panic runtime shutdown").await;
 }

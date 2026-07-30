@@ -13,7 +13,7 @@ are projections for diagnostics and dashboards.
 
 ## Snapshots: Current State
 
-`RuntimeHandle::snapshot()` returns the current tree state, and
+`ScopeRef::snapshot()` returns the current tree state, and
 `subscribe_snapshots()` returns a crate-owned `SupervisorSnapshotReceiver`
 that updates when it changes. Use `latest()` for an unobserved read,
 `take_latest()` to mark the current version observed, and `changed()` or
@@ -42,7 +42,7 @@ subtree's local lineage sequence may therefore begin at zero even if its
 predecessor used the same local lineages; the parent path distinguishes the
 two. The `u64` counter saturates at its maximum rather than changing supervisor
 control semantics in the practically unreachable overflow case. For
-dynamically added task children, `DynamicRuntimeHandle::add_child` returns the same
+dynamically added task children, `ScopeRef::add_child` returns the same
 lineage that the runtime assigned while inserting the child.
 Consumers that need to associate their own state with that exact membership
 should retain the returned value rather than performing a later id-based
@@ -105,7 +105,7 @@ event with `seq <= snapshot.lifecycle_seq`.
 `LifecycleEventKind::Lagged` has an empty path and applies to the whole watched
 tree. The gap still requires a fresh snapshot before processing later edges.
 
-A stable nested handle can be watched before that scope first spawns. Its
+A stable nested `ScopeRef` can be watched before that scope first spawns. Its
 initial snapshot already projects statically configured children as `Starting`,
 while the first later `Added` event records installation of that membership
 into the running supervisor incarnation and `Started` records readiness. An
@@ -258,12 +258,12 @@ minted before `message_size` is configured report the same accepted-byte total.
 
 The same declaration configures a dynamic actor before insertion:
 `ActorSpec::new("uploads", UploadActor::new).mailbox(MailboxMode::conflate()).message_size(upload_size)`.
-Pass it to `DynamicRuntimeHandle::add_actor`; use `actor_ref()` first when callers
+Pass it to `ScopeRef::add_actor`; use `actor_ref()` first when callers
 need its typed handle.
 
-`RuntimeHandle::actor_stats()` walks runtime subtrees recursively. A handle
-returned by `RuntimeHandle::subtree` provides the same view scoped to that
-subtree, including actors added dynamically through the scoped handle.
+`ScopeRef::actor_stats()` walks runtime subtrees recursively. A reference
+returned by `ScopeRef::subtree` provides the same view scoped to that
+subtree, including actors added dynamically through that reference.
 These runtime-scoped samples set `observe::ActorStats::lineage` from the
 membership identity retained when the actor was registered. They also carry
 `observe::ActorStats::supervisor_path`: each containing nested supervisor is identified
@@ -330,7 +330,7 @@ backed by the runtime's public snapshots, events, and actor stats:
 
 ```rust,ignore
 let runtime = tree.spawn()?;
-let console = kokage_console::ConsoleBuilder::for_runtime(&runtime.handle())
+let console = kokage_console::ConsoleBuilder::for_runtime(&runtime)
     .bind(([127, 0, 0, 1], 8080))
     .spawn()
     .await?;
@@ -355,7 +355,7 @@ Non-loopback binds require an access token. Add the externally visible host
 when it differs from the listener address:
 
 ```rust,ignore
-let console = kokage_console::ConsoleBuilder::for_runtime(&runtime.handle())
+let console = kokage_console::ConsoleBuilder::for_runtime(&runtime)
     .bind(([0, 0, 0, 0], 8080))
     .access_token("replace-with-a-random-url-safe-token")
     .allowed_host("console.internal:8080")

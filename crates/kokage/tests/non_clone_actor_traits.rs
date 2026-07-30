@@ -14,13 +14,13 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, RuntimeHandle, Shutdown,
+    Actor, ActorFactory, ActorResult, ActorSpec, Context, Reply, Restart, ScopeRef, Shutdown,
     host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
     observe::SupervisorSnapshotReceiver,
 };
 use tokio::sync::mpsc;
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
     let snapshots = handle.subscribe_snapshots();
     let child = handle
         .snapshot()
@@ -159,7 +159,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
             .expect("first incarnation replies"),
         (0, 1)
     );
-    let (lifecycle, baseline) = restart_observer(&handle.handle(), "handler");
+    let (lifecycle, baseline) = restart_observer(&handle.scope(), "handler");
     actor_ref
         .send(ProbeMsg::Crash)
         .await
@@ -227,7 +227,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
 
     actor_ref.send(false).await.expect("first message accepted");
     assert_eq!(observed_rx.recv().await, Some((0, 1)));
-    let (lifecycle, baseline) = restart_observer(&handle.handle(), "raw");
+    let (lifecycle, baseline) = restart_observer(&handle.scope(), "raw");
     actor_ref.send(true).await.expect("crash accepted");
     tokio::time::timeout(
         Duration::from_secs(1),
@@ -289,7 +289,7 @@ async fn default_constructor_path_is_an_actor_factory() {
     let actor_ref = builder.actor(ActorSpec::new("DefaultActor", DefaultActor::default));
     let handle = builder.build().spawn().expect("runtime builds");
 
-    handle.handle().wait_started().await.expect("actor starts");
+    handle.scope().wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }

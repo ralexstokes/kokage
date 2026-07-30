@@ -59,12 +59,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let directory = directory_spec.actor_ref();
     let dynamic_tree = DynamicTree::new();
-    let dynamic = dynamic_tree.handle();
+    let dynamic = dynamic_tree.scope();
     let runtime = OrderedTree::new()
         .actor(directory_spec)
         .subtree("dynamic", dynamic_tree)
         .spawn()?;
-    let handle = runtime.handle();
+    let handle = runtime.scope();
     handle.wait_started().await?;
 
     let (printed, mut output) = mpsc::unbounded_channel();

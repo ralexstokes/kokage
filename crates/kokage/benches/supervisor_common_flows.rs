@@ -111,7 +111,7 @@ async fn spawn_shutdown_flow(children: usize) {
     }
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
-    let handle = handle_owner.handle();
+    let handle = handle_owner.scope();
     let mut events = handle.watch_lifecycle();
     let started = wait_for_child_start_count(&mut events, children).await;
     black_box(started);
@@ -149,7 +149,7 @@ async fn one_for_one_restart_flow() {
     }
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
-    let handle = handle_owner.handle();
+    let handle = handle_owner.scope();
     let mut snapshots = handle.subscribe_snapshots();
     let baseline = handle
         .snapshot()
@@ -201,7 +201,7 @@ async fn one_for_all_restart_flow() {
     }
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
-    let handle = handle_owner.handle();
+    let handle = handle_owner.scope();
     let mut events = handle.watch_lifecycle();
     let restarted = wait_for_restart_count(&mut events, 4).await;
     black_box(restarted);
@@ -214,12 +214,10 @@ async fn dynamic_add_remove_flow() {
     let handle_owner = DynamicTree::new()
         .spawn()
         .expect("benchmark tree should spawn");
-    let handle = handle_owner.handle();
+    let handle = handle_owner.scope();
     let mut events = handle.watch_lifecycle();
 
     handle
-        .dynamic()
-        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -230,8 +228,6 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "seed").await;
 
     handle
-        .dynamic()
-        .expect("dynamic supervisor")
         .add_child(ChildSpec::task("dynamic", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -241,8 +237,6 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "dynamic").await;
 
     handle
-        .dynamic()
-        .expect("dynamic supervisor")
         .remove_child("dynamic")
         .await
         .expect("dynamic child should be removable");

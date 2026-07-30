@@ -1,0 +1,20 @@
+error[E0432]: unresolved imports `kokage::RestrictedScope`, `kokage::Runtime`, `kokage::Scope`
+ --> tests/ui/public-api/scope_type_names_removed.rs:1:14
+  |
+1 | use kokage::{RestrictedScope, Runtime, Scope};
+  |              ^^^^^^^^^^^^^^^  ^^^^^^^  ^^^^^ no `Scope` in the root
+  |              |                |
+  |              |                no `Runtime` in the root
+  |              no `RestrictedScope` in the root
+  |
+  = help: consider importing this struct instead:
+          std::thread::Scope
+help: a similar name exists in the module
+  |
+1 | use kokage::{RestrictedScopeRef, Runtime, Scope};
+  |                             +++
+help: a similar name exists in the module
+  |
+1 - use kokage::{RestrictedScope, Runtime, Scope};
+1 + use kokage::{RestrictedScope, runtime, Scope};
+  |

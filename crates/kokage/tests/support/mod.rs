@@ -1,15 +1,12 @@
 #![allow(dead_code)]
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicRuntimeHandle, OrderedTree, Runtime,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree, RunningTree, ScopeRef,
     host::{RawActor, RunnableActor},
 };
 
-pub(crate) fn dynamic_root(runtime: &Runtime) -> DynamicRuntimeHandle {
-    runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+pub(crate) fn dynamic_root(runtime: &RunningTree) -> ScopeRef {
+    runtime.scope()
 }
 
 /// Small test fixture for incrementally assembling heterogeneous actor specs.
@@ -111,7 +108,7 @@ impl TreeBuilder {
         self.tree.take().expect("test tree builder is single-use")
     }
 
-    pub(crate) fn spawn(self) -> Result<kokage::Runtime, kokage::BuildError> {
+    pub(crate) fn spawn(self) -> Result<kokage::RunningTree, kokage::BuildError> {
         self.build().spawn()
     }
 }
