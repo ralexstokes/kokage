@@ -180,6 +180,16 @@ pub enum ActorRunError {
         /// Stable id of the actor whose shutdown timed out.
         actor_id: String,
     },
+    /// The declaration carries a zero mailbox capacity.
+    ///
+    /// Supervised placement rejects this at spawn; a direct host learns it
+    /// here, when the run starts.
+    #[error("actor `{actor_id}` has a zero mailbox capacity")]
+    #[non_exhaustive]
+    ZeroMailboxCapacity {
+        /// Stable id of the actor whose declaration is invalid.
+        actor_id: String,
+    },
 }
 
 /// The shutdown bound a standalone host should pass to
@@ -328,6 +338,11 @@ impl RunnableActor {
         A: Future<Output = ()>,
         R: FnOnce(),
     {
+        if self.inner.mailbox_capacity == 0 {
+            return Err(ActorRunError::ZeroMailboxCapacity {
+                actor_id: self.inner.actor_id.to_string(),
+            });
+        }
         let _active_run = ActiveActorRun::start(&self.inner)?;
         let actor_id = self.inner.actor_id.clone();
         let actor_shutdown = CancellationToken::new();
