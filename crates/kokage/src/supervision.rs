@@ -941,7 +941,11 @@ impl<const DYNAMIC: bool> std::fmt::Debug for TreeData<DYNAMIC> {
 
 /// Payload-free declaration tree suitable for comparison and serialization.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(from = "outline_wire::WireOutline")
+)]
 #[non_exhaustive]
 pub struct SupervisionOutline {
     /// Immutable scope kind.
@@ -994,6 +998,104 @@ pub enum ChildOutline {
         /// Nested declaration.
         outline: SupervisionOutline,
     },
+}
+
+/// Deserialization mirror for [`SupervisionOutline`].
+///
+/// Scope-edge policies were added to the outline format after it first
+/// shipped. An outline persisted without them carries no explicit edge
+/// policy, which at declaration time meant "inherit the enclosing scope's
+/// defaults" — so missing fields must resolve against the parent outline's
+/// `default_restart` and `default_shutdown`, not the global defaults.
+#[cfg(feature = "serde")]
+mod outline_wire {
+    use super::{ChildOutline, Restart, ScopeKind, Shutdown, Strategy, SupervisionOutline};
+
+    #[derive(serde::Deserialize)]
+    pub struct WireOutline {
+        kind: ScopeKind,
+        strategy: Strategy,
+        #[serde(default)]
+        default_restart: Restart,
+        #[serde(default)]
+        default_shutdown: Shutdown,
+        children: Vec<WireChild>,
+    }
+
+    #[derive(serde::Deserialize)]
+    enum WireChild {
+        Actor {
+            id: String,
+            restart: Restart,
+            shutdown: Shutdown,
+        },
+        Task {
+            id: String,
+            restart: Restart,
+            shutdown: Shutdown,
+        },
+        Scope {
+            id: String,
+            #[serde(default)]
+            restart: Option<Restart>,
+            #[serde(default)]
+            shutdown: Option<Shutdown>,
+            outline: WireOutline,
+        },
+    }
+
+    impl From<WireOutline> for SupervisionOutline {
+        fn from(wire: WireOutline) -> Self {
+            let WireOutline {
+                kind,
+                strategy,
+                default_restart,
+                default_shutdown,
+                children,
+            } = wire;
+            let children = children
+                .into_iter()
+                .map(|child| match child {
+                    WireChild::Actor {
+                        id,
+                        restart,
+                        shutdown,
+                    } => ChildOutline::Actor {
+                        id,
+                        restart,
+                        shutdown,
+                    },
+                    WireChild::Task {
+                        id,
+                        restart,
+                        shutdown,
+                    } => ChildOutline::Task {
+                        id,
+                        restart,
+                        shutdown,
+                    },
+                    WireChild::Scope {
+                        id,
+                        restart,
+                        shutdown,
+                        outline,
+                    } => ChildOutline::Scope {
+                        id,
+                        restart: restart.unwrap_or(default_restart),
+                        shutdown: shutdown.unwrap_or(default_shutdown),
+                        outline: outline.into(),
+                    },
+                })
+                .collect();
+            Self {
+                kind,
+                strategy,
+                default_restart,
+                default_shutdown,
+                children,
+            }
+        }
+    }
 }
 
 impl SupervisionOutline {
