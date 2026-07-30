@@ -25,9 +25,9 @@ mod coverage_probe {
             ActorFactory, Backoff, BackoffParts, BlockingCancelled, CancellationHandle,
             CancellationToken, ControlError, DownReason, DynamicRestrictedScope,
             DynamicRuntimeHandle, DynamicTree, MailboxMode, MonitorEvent, OffloadDeadline, Restart,
-            RestartMode, RestrictedScope, Runtime, RuntimeHandle, SealedActorSlot,
-            SealedActorSpec, Shutdown, ShutdownMode, Strategy, SupervisorBuildError,
-            SupervisorError, TaskHandle, TimerKey, TreeNode,
+            RestartMode, RestrictedScope, Runtime, RuntimeHandle, SealedActorSlot, SealedActorSpec,
+            Shutdown, ShutdownMode, Strategy, SupervisorBuildError, SupervisorError, TaskHandle,
+            TimerKey, TreeNode,
         };
         use kokage_supervisor::{ChildContext, ChildResult, Supervisor, SupervisorHandle};
     }

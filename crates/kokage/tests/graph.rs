@@ -1,6 +1,5 @@
 mod support;
 
-use support::{RunnableActors as RunnableSet, RunnableBuilder as RunnableSetBuilder};
 use std::{
     future::{Future, pending, poll_fn},
     io,
@@ -12,6 +11,7 @@ use std::{
     task::Poll,
     time::Duration,
 };
+use support::{RunnableActors as RunnableSet, RunnableBuilder as RunnableSetBuilder};
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus, CallError,
