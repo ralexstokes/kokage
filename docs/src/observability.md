@@ -223,6 +223,8 @@ external sends through an `ActorRef` have no source actor.
 
 Actor spans are nested under the supervisor child span, so `child_path` and
 `supervisor_path` provide their scope identity without a separate graph name.
+The tracing field remains `supervisor_path`; the corresponding runtime API
+vocabulary uses `scope_path` for paths carried by stats and lifecycle events.
 Actor start and exit events include `running_actors`; this is the number of
 actors currently running in that immediate scope, not an application-wide
 total. Use recursive runtime stats or snapshots for a whole-tree view.

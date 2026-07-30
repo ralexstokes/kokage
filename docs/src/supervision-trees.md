@@ -43,7 +43,7 @@ scheduled.
 
 ## Identity exists before spawn
 
-Each tree has a stable handle as soon as it is created. This lets a factory
+Each tree has a stable reference as soon as it is created. This lets a factory
 capture a future scope without a global cell:
 
 ```rust
@@ -51,20 +51,20 @@ capture a future scope without a global cell:
 # struct Router(kokage::ScopeRef);
 # impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = DynamicTree::new();
-let sessions_handle = sessions.scope();
-let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
+let sessions_ref = sessions.scope();
+let router = ActorSpec::new("router", move || Router(sessions_ref.clone()));
 
 let app = OrderedTree::new()
     // Moving the nested tree transfers its identity into the root. Declaring
     // it first also makes it ready before the dependent router starts.
     .subtree("sessions", sessions)
     .actor(router);
-let handle = app.scope();
-# let _ = handle;
+let app_ref = app.scope();
+# let _ = app_ref;
 ```
 
 Moving a tree into `subtree` transfers ownership, while previously issued
-handles continue to address the same identity.
+references continue to address the same identity.
 
 Use `TreeNode` when the nested scope's edge needs policies distinct from its
 siblings. `restart` and `shutdown` configure how the parent restarts or stops
@@ -87,9 +87,9 @@ Trees deliberately do not implement `Clone`: one identity binds to one
 runtime. Before binding, control operations return `ControlError::Unavailable`,
 while projected snapshots and subscriptions are already usable. `spawn()`
 consumes the tree and returns its owning runtime. Dropping an unspawned tree or
-failing to spawn it makes issued handles terminal.
+failing to spawn it makes issued references terminal.
 
-Dropping a non-owning handle does not stop a runtime. Dropping the owning
+Dropping a non-owning reference does not stop a runtime. Dropping the owning
 `RunningTree` requests graceful shutdown, so `let _ = tree.spawn()?;` is a footgun:
 the temporary owner is dropped at the end of the statement.
 

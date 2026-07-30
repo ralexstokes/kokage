@@ -113,11 +113,16 @@ impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
     /// should stay possible, or consume it with [`Guard::detach`] for true
     /// fire-and-forget. The spawned task holds no lifecycle
     /// ownership, so it never keeps a root supervisor alive on its own.
+    /// Errors produced while evaluating the completion condition are logged
+    /// with the requested child ids and then discarded; they do not request
+    /// shutdown.
     ///
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
     pub fn then_shutdown(self) -> Guard {
+        let child_ids = self.set.awaited.clone();
+        let scope_kind = self.kind;
         let handle = self.handle.clone();
         let cancellation = CancellationToken::new();
         let (finished, finished_on_drop) = CompletionOnDrop::armed();
@@ -135,7 +140,9 @@ impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
                 Err(error) => {
                     tracing::warn!(
                         %error,
-                        "completion-triggered shutdown watch could not be armed"
+                        ?scope_kind,
+                        ?child_ids,
+                        "completion-triggered shutdown watch failed"
                     );
                 }
             }

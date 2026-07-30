@@ -34,6 +34,7 @@ enum Message {
 
 #[derive(Default)]
 struct Worker {
+    refresh: Option<Guard>,
     reconcile: Option<Guard>,
 }
 
@@ -44,7 +45,7 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
-        ctx.send_after(Message::Refresh, Duration::from_secs(10)).detach();
+        self.refresh = Some(ctx.send_after(Message::Refresh, Duration::from_secs(10)));
         self.reconcile =
             Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
         Ok(())
@@ -81,14 +82,6 @@ period returns an already-finished guard. The interval also ends with the
 scheduling incarnation or when the target permanently terminates; those
 environmental endings set `is_finished()` without setting `is_cancelled()`;
 await `finished()` to wait for termination without polling.
-
-When the operation is independently owned rather than a replaceable protocol
-deadline, use `send_after(message, delay)` and retain its `Guard`. That
-deliberately takes the ordinary self-mailbox path: mailbox capacity and
-conflation apply, and a successful delivery increments accepted-message
-statistics. It cannot be exactly replaced or retracted by key. By contrast,
-`set_timeout(key, message, delay)` is stored in the actor loop, bypasses the
-mailbox, and can be exactly replaced or cleared until delivery.
 
 ## Replaceable timeouts
 

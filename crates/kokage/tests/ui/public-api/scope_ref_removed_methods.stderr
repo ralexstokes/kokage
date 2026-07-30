@@ -1,23 +1,23 @@
 error[E0599]: no method named `wait_completed` found for reference `&ScopeRef` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:4:19
+ --> tests/ui/public-api/scope_ref_removed_methods.rs:4:19
   |
 4 |     let _ = scope.wait_completed(["future"]);
   |                   ^^^^^^^^^^^^^^ method not found in `&ScopeRef`
 
 error[E0599]: no method named `shutdown_on_completion` found for reference `&ScopeRef` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:5:19
+ --> tests/ui/public-api/scope_ref_removed_methods.rs:5:19
   |
 5 |     let _ = scope.shutdown_on_completion(["future"]);
   |                   ^^^^^^^^^^^^^^^^^^^^^^ method not found in `&ScopeRef`
 
 error[E0599]: no method named `wait_completed_dynamic` found for reference `&ScopeRef` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:6:19
+ --> tests/ui/public-api/scope_ref_removed_methods.rs:6:19
   |
 6 |     let _ = scope.wait_completed_dynamic(["future"]);
   |                   ^^^^^^^^^^^^^^^^^^^^^^ method not found in `&ScopeRef`
 
 error[E0599]: no method named `shutdown_on_dynamic_completion` found for reference `&ScopeRef` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:7:19
+ --> tests/ui/public-api/scope_ref_removed_methods.rs:7:19
   |
 7 |     let _ = scope.shutdown_on_dynamic_completion(["future"]);
   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -29,7 +29,7 @@ help: there is a method `shutdown_and_wait` with a similar name, but with differ
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error[E0599]: no method named `dynamic` found for reference `&ScopeRef` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:8:19
+ --> tests/ui/public-api/scope_ref_removed_methods.rs:8:19
   |
 8 |     let _ = scope.dynamic();
   |                   ^^^^^^^ method not found in `&ScopeRef`

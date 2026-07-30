@@ -47,8 +47,10 @@ pub struct TaskSpec {
 }
 
 /// Internal carrier for any supervised child: task, actor host, or nested
-/// supervisor. `TaskSpec` is the public task-only constructor; every other
-/// child kind is built and passed around as a `ChildSpec`.
+/// supervisor. `TaskSpec` is the public task-only constructor and unwraps to
+/// this carrier; actor hosts likewise begin with `TaskSpec::new(..)` before
+/// lowering through `into_spec()`, while nested supervisors are constructed
+/// directly as `ChildSpec` values.
 pub(crate) struct ChildSpec {
     pub(crate) inner: Arc<ChildDefinition>,
 }

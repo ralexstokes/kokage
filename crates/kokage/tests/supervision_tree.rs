@@ -386,7 +386,7 @@ fn pre_spawn_projection_preserves_declared_restart_policies() {
 }
 
 #[tokio::test]
-async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() {
+async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
     let spec = ActorSpec::new("buffered", || Parked).mailbox(MailboxMode::conflate());
     let actor = spec.actor_ref();
     let spec = spec.message_size(|message: &Vec<u8>| message.len());

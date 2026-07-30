@@ -168,5 +168,4 @@ relationships. Wiring does not choose topology.
 A `DynamicTree` is an initially empty one-for-one scope. Its `ScopeRef` accepts
 `ActorSpec` values and nested trees at runtime. Static and dynamic scopes
 share the same reference type, snapshots, lifecycle streams, and shutdown
-behavior;
-only their membership capability differs.
+behavior; only their membership capability differs.
