@@ -120,15 +120,17 @@ impl SupervisorHandle {
     ///     .child(ChildSpec::task("source", |_| async { Ok(()) }).restart(Restart::on_failure()))
     ///     .child(ChildSpec::task("indexer", |_| async { Ok(()) }).restart(Restart::never()));
     /// let handle = builder.handle();
-    /// let _finished = handle.shutdown_on_completion(["source", "indexer"]);
+    /// handle.shutdown_on_completion(["source", "indexer"]).detach();
     /// let supervisor = builder.build()?;
     /// # let _ = supervisor;
     /// # Ok(())
     /// # }
     /// ```
     ///
-    /// The returned guard must be retained: dropping it cancels the watch and
-    /// leaves the supervisor running. The spawned task holds no lifecycle
+    /// The returned guard cancels the watch when dropped and leaves the
+    /// supervisor running; retain it for as long as revoking the shutdown
+    /// should stay possible, or consume it with [`Guard::detach`] as above
+    /// for true fire-and-forget. The spawned task holds no lifecycle
     /// ownership, so it never keeps a root supervisor alive on its own.
     ///
     /// # Panics
