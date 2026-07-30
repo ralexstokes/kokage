@@ -57,7 +57,7 @@ impl<M> fmt::Debug for SendError<M> {
 
 impl<M> fmt::Display for SendError<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "actor `{}` is unavailable", self.actor_id)
+        write!(f, "actor `{}` has terminated", self.actor_id)
     }
 }
 
@@ -318,7 +318,7 @@ mod tests {
             actor_id: "worker".to_owned(),
             message: Opaque,
         };
-        assert_eq!(send.to_string(), "actor `worker` is unavailable");
+        assert_eq!(send.to_string(), "actor `worker` has terminated");
         assert_eq!(
             format!("{send:?}"),
             "SendError { actor_id: \"worker\", .. }"

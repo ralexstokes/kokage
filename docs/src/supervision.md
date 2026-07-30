@@ -63,7 +63,7 @@ press starting (generation 3)
 runtime gave up: restart intensity exceeded
 ```
 
-The important boundary is ownership: the tree is single-use configuration,
+The important boundary is ownership: the tree is single-use configuration;
 `OrderedTree` and `DynamicTree` are single-use declarations. Spawning either
 produces a `RunningTree` owner, while `RunningTree::scope()` returns the root
 `ScopeRef` used for control and observation; nested lookups return more

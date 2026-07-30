@@ -1271,4 +1271,13 @@ mod tests {
 
         assert_mailbox_closed(mailbox.try_send(()).expect_err("mailbox is dropped"));
     }
+
+    #[test]
+    fn try_send_keeps_closed_conflating_rejection_private() {
+        let (sender, mut receiver) = mailbox(&MailboxMode::conflate(), 1);
+        receiver.close_external();
+        let mailbox = MailboxRef::new(Arc::from("worker"), sender);
+
+        assert_mailbox_closed(mailbox.try_send(()).expect_err("mailbox is closed"));
+    }
 }

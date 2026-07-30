@@ -94,6 +94,10 @@ impl Backoff {
 /// and whether a terminal dynamic membership is removed. The default is
 /// [`on_failure`](Self::on_failure), limited to five restarts within thirty
 /// seconds, with immediate retries and retained terminal membership.
+///
+/// With the `serde` feature, the `mode` field serializes as `Always` (every
+/// exit), `OnFailure` (only errors, panics, and aborts), or `Never` (at most
+/// one run).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Restart {

@@ -1,5 +1,5 @@
 error[E0599]: no method named `handle` found for reference `&RunningTree` in the current scope
- --> tests/ui/single-use-tree/runtime_handle_methods.rs:4:27
+ --> tests/ui/single-use-tree/running_tree_handle_method.rs:4:27
   |
 4 |     let _handle = runtime.handle();
   |                           ^^^^^^ method not found in `&RunningTree`

@@ -1488,6 +1488,10 @@ impl DynamicSupervisorHandle {
     /// for nested supervisors and actor hosts. A nested-supervisor spec
     /// registers the nested supervisor's restart-stable handle and attachment
     /// at insertion, before it is spawned.
+    ///
+    /// Naming note: the public `add_child` method predates the task/child
+    /// vocabulary and accepts only `TaskSpec`; this crate-private entry point
+    /// accepts the umbrella `ChildSpec` used by every lowered child kind.
     pub(crate) async fn add_child_spec(&self, child: ChildSpec) -> Result<u64, ControlError> {
         let endpoint = self.handle.control_endpoint()?;
         if matches!(&child.inner.kind, ChildKind::Supervisor(_)) {

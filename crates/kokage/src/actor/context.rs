@@ -177,11 +177,13 @@ impl<M> ActorRef<M> {
     ///
     /// The deadline is checked before the first acceptance attempt, so a zero
     /// bound always returns [`SendTimeoutError::Timeout`]; use
-    /// [`try_send`](Self::try_send) for one immediate attempt. The bound covers
-    /// asynchronous waits for binding and capacity. It cannot preempt
-    /// synchronous user code such as a keyed-conflation matcher, but the
-    /// deadline is rechecked after that code and the message is not accepted
-    /// late.
+    /// [`try_send`](Self::try_send) for one immediate attempt. A nonzero bound
+    /// shorter than the runtime's timer tick can expire on that same tick and
+    /// likewise should not be relied on to permit an attempt, particularly
+    /// when passing a computed remaining budget. The bound covers asynchronous
+    /// waits for binding and capacity. It cannot preempt synchronous user code
+    /// such as a keyed-conflation matcher, but the deadline is rechecked after
+    /// that code and the message is not accepted late.
     ///
     /// This is a delivery primitive rather than a convenience wrapper around
     /// [`tokio::time::timeout`]. Cancelling a `send` future drops the message
@@ -341,6 +343,9 @@ impl<M> ActorRef<M> {
 
     /// Sends to one captured incarnation without following a later rebind.
     async fn send_to_mailbox(&self, mailbox: MailboxRef<M>, message: M, gate: &SendGate) {
+        // Materialization installs the observer before binding the first
+        // mailbox. This captured mailbox therefore implies that the set-once
+        // observer, when configured, is already visible here.
         let message_size = self
             .message_size
             .get()
@@ -1999,5 +2004,120 @@ fn try_send_rejection<M>(error: &TrySendError<M>) -> MessageRejection {
         TrySendError::NotRunning { .. } => MessageRejection::NotRunning,
         TrySendError::Terminated { .. } => MessageRejection::ActorTerminated,
         TrySendError::Full { .. } => MessageRejection::MailboxFull,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{self, Write},
+        sync::{Arc, Mutex, PoisonError},
+    };
+
+    use tracing::Level;
+    use tracing_subscriber::{
+        fmt::{self, MakeWriter},
+        prelude::*,
+    };
+
+    use super::*;
+    use crate::{
+        MailboxMode, Restart,
+        actor::binding::{BindingGuard, mailbox},
+    };
+
+    #[test]
+    fn actor_ref_try_send_traces_closed_mailbox_reason() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = Arc::new(BindingCore::new(Arc::clone(&actor_id)));
+        let actor = ActorRef::from_core(&core, None);
+        let (sender, mut receiver) = mailbox(&MailboxMode::conflate(), 1);
+        let _binding = BindingGuard::bind(
+            Arc::clone(&core),
+            MailboxRef::new(actor_id, sender),
+            ScopeObservability::new(),
+            Restart::never(),
+        );
+        receiver.close_external();
+
+        let output = capture_tracing_output(|| {
+            assert!(matches!(
+                actor.try_send(()),
+                Err(TrySendError::NotRunning { actor_id, .. }) if actor_id == "worker"
+            ));
+        });
+        for expected in [
+            r#""actor_id":"worker""#,
+            r#""operation":"try_send""#,
+            r#""reason":"mailbox_closed""#,
+        ] {
+            assert!(
+                output.contains(expected),
+                "expected tracing output to contain `{expected}`, got: {output}"
+            );
+        }
+    }
+
+    fn capture_tracing_output(f: impl FnOnce()) -> String {
+        let buffer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::registry().with(
+            fmt::layer()
+                .json()
+                .with_writer(buffer.clone())
+                .with_current_span(false)
+                .with_span_list(false)
+                .without_time()
+                .with_filter(tracing_subscriber::filter::LevelFilter::from_level(
+                    Level::TRACE,
+                )),
+        );
+
+        tracing::subscriber::with_default(subscriber, f);
+        buffer.to_string_output()
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedBuffer {
+        fn to_string_output(&self) -> String {
+            String::from_utf8(
+                self.inner
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+            )
+            .expect("tracing output should be utf-8")
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedWriter {
+                inner: Arc::clone(&self.inner),
+            }
+        }
+    }
+
+    struct SharedWriter {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.inner
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 }

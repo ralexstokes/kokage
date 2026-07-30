@@ -36,14 +36,13 @@ enum DrainScope<'a> {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum DrainDeadlinePhase {
-    Grace,
+    Grace(std::time::Duration),
     HardAbort,
 }
 
 struct DrainDeadline {
     key: ChildKey,
     at: Instant,
-    grace: std::time::Duration,
     phase: DrainDeadlinePhase,
 }
 
@@ -200,8 +199,6 @@ impl SupervisorRuntime {
             } else {
                 None
             };
-            let expired = expired_grace.is_some();
-
             if let Some(grace) = expired_grace {
                 if matches!(reason, DrainReason::Shutdown) {
                     self.meta
@@ -223,7 +220,7 @@ impl SupervisorRuntime {
                 }
             }
 
-            if aborted_immediately || expired {
+            if aborted_immediately || expired_grace.is_some() {
                 // Give a normal Tokio abort one scheduling turn to complete so
                 // its exit remains ordered. A future that does not reach a
                 // poll boundary must not retain the cursor indefinitely.
@@ -381,8 +378,7 @@ impl SupervisorRuntime {
                 Some(DrainDeadline {
                     key,
                     at: cancelled_at + grace,
-                    grace,
-                    phase: DrainDeadlinePhase::Grace,
+                    phase: DrainDeadlinePhase::Grace(grace),
                 })
             })
             .collect();
@@ -414,10 +410,12 @@ impl SupervisorRuntime {
                     let now = Instant::now();
                     let grace_expired: Vec<_> = deadlines
                         .iter()
-                        .filter(|deadline| {
-                            deadline.phase == DrainDeadlinePhase::Grace && deadline.at <= now
+                        .filter_map(|deadline| match deadline.phase {
+                            DrainDeadlinePhase::Grace(grace) if deadline.at <= now => {
+                                Some((deadline.key, grace))
+                            }
+                            DrainDeadlinePhase::Grace(_) | DrainDeadlinePhase::HardAbort => None,
                         })
-                        .map(|deadline| (deadline.key, deadline.grace))
                         .collect();
                     for (key, grace) in grace_expired {
                         let child = &self.children[key];
@@ -444,7 +442,8 @@ impl SupervisorRuntime {
                     let hard_abort_due: Vec<_> = deadlines
                         .iter()
                         .filter(|deadline| {
-                            deadline.phase == DrainDeadlinePhase::HardAbort && deadline.at <= now
+                            matches!(deadline.phase, DrainDeadlinePhase::HardAbort)
+                                && deadline.at <= now
                         })
                         .map(|deadline| deadline.key)
                         .collect();
@@ -452,7 +451,8 @@ impl SupervisorRuntime {
                         self.abort_child(key);
                     }
                     deadlines.retain(|deadline| {
-                        deadline.phase != DrainDeadlinePhase::HardAbort || deadline.at > now
+                        !matches!(deadline.phase, DrainDeadlinePhase::HardAbort)
+                            || deadline.at > now
                     });
                 }
                 maybe = self.join_set.join_next_with_id() => {

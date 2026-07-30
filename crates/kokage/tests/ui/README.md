@@ -13,8 +13,9 @@ derive attributes and visibility.
 
 `running_tree_scope_methods.rs` pins that `RunningTree` exposes only owner
 lifecycle operations and requires explicit `.scope()` access for control or
-observation. `scope_type_names_removed.rs` keeps the retired `Runtime`, `Scope`,
-and `RestrictedScope` root names absent.
+observation. `scope_type_names_removed.rs` keeps the retired `Runtime`,
+`DynamicRuntime`, `RuntimeHandle`, `DynamicRuntimeHandle`, `Scope`,
+`RestrictedScope`, and `DynamicRestrictedScope` root names absent.
 
 `declaration-unsealed/` contains compile-pass probes proving actor and slot
 mailbox configuration remains available after one or more `actor_ref()` calls.

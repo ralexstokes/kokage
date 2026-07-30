@@ -123,6 +123,10 @@ impl OrderedSupervisorBuilder {
 
     /// Appends any supervised child kind. This is the internal entry point
     /// used for nested supervisors and actor hosts.
+    ///
+    /// Naming note: the public `child` method predates the task/child
+    /// vocabulary and accepts the task-only `TaskSpec`; this crate-private
+    /// method accepts the umbrella `ChildSpec` used after lowering.
     #[must_use]
     pub(crate) fn child_spec(mut self, child: ChildSpec) -> Self {
         self.children.push(child.inner);
