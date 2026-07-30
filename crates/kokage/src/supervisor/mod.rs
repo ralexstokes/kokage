@@ -28,7 +28,8 @@ pub mod __private {
 
     pub use crate::supervisor::attachment::{AttachedChild, AttachedChildIdentity};
     use crate::supervisor::{
-        ChildSpec, DynamicSupervisorHandle, Restart, Shutdown, SupervisorHandle,
+        CancellationToken, ChildSpec, DynamicSupervisorHandle, Guard, Restart, Shutdown,
+        SupervisorHandle,
     };
 
     /// Adds process-local metadata to a child specification.
@@ -63,6 +64,31 @@ pub mod __private {
     ) -> (Restart, Shutdown) {
         child.resolved_policies(default_restart, default_shutdown)
     }
+
+    /// Builds a guard around cancellation and completion tokens for the actor layer.
+    pub fn guard_from_tokens(
+        cancellation: CancellationToken,
+        finished: CancellationToken,
+    ) -> Guard {
+        Guard::from_tokens(cancellation, finished)
+    }
+
+    /// Builds a probe-backed guard for the actor layer.
+    pub fn guard_from_probe(
+        cancellation: CancellationToken,
+        is_finished: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Guard {
+        Guard::from_probe(cancellation, is_finished)
+    }
+
+    /// Builds a probe-backed guard with a custom cancellation hook.
+    pub fn guard_from_probe_with_cancel(
+        cancellation: CancellationToken,
+        is_finished: impl Fn() -> bool + Send + Sync + 'static,
+        cancel_action: impl Fn() + Send + Sync + 'static,
+    ) -> Guard {
+        Guard::from_probe_with_cancel(cancellation, is_finished, cancel_action)
+    }
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
@@ -75,9 +101,9 @@ pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
-pub use restart::{Backoff, Restart};
+pub use restart::{Backoff, BackoffParts, Restart, RestartMode};
 pub use scope::ScopeKind;
-pub use shutdown::Shutdown;
+pub use shutdown::{Shutdown, ShutdownMode};
 pub use snapshot::{
     ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError,
     SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
