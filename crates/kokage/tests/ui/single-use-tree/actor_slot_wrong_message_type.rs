@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, ActorSlot, MessageContext};
+use kokage::{Actor, ActorResult, ActorSlot, Context};
 
 struct TextActor;
 
@@ -8,7 +8,7 @@ impl Actor for TextActor {
     async fn handle(
         &mut self,
         _: String,
-        _: &mut MessageContext<'_, Self>,
+        _: &mut Context<'_, Self>,
     ) -> ActorResult {
         Ok(())
     }
