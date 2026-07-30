@@ -167,7 +167,7 @@ impl<M> ActorRef<M> {
         self.send_to_incarnation(message).await.map(drop)
     }
 
-    /// Sends a message, waiting at most `bound` for mailbox acceptance.
+    /// Sends a message with a bounded asynchronous wait for mailbox acceptance.
     ///
     /// Like [`send`](Self::send), this waits through restart windows and FIFO
     /// mailbox capacity pressure. If the bound expires first, the message is
@@ -175,10 +175,20 @@ impl<M> ActorRef<M> {
     /// terminates first, it is returned in [`SendTimeoutError::Terminated`].
     /// An `Ok` result has the same at-most-once acceptance contract as `send`.
     ///
+    /// The deadline is checked before the first acceptance attempt, so a zero
+    /// bound always returns [`SendTimeoutError::Timeout`]; use
+    /// [`try_send`](Self::try_send) for one immediate attempt. The bound covers
+    /// asynchronous waits for binding and capacity. It cannot preempt
+    /// synchronous user code such as a keyed-conflation matcher, but the
+    /// deadline is rechecked after that code and the message is not accepted
+    /// late.
+    ///
     /// This is a delivery primitive rather than a convenience wrapper around
     /// [`tokio::time::timeout`]. Cancelling a `send` future drops the message
     /// it owns, so `timeout(actor.send(message))` cannot recover the message
-    /// when its bound expires.
+    /// when its bound expires. Cancelling this `send_timeout` future also drops
+    /// its message; ownership is recovered only when the future completes with
+    /// an error.
     pub async fn send_timeout(
         &self,
         message: M,
@@ -361,7 +371,10 @@ impl<M> ActorRef<M> {
     /// Every rejection returns the message through
     /// [`TrySendError::into_message`].
     pub fn try_send(&self, message: M) -> Result<(), TrySendError<M>> {
-        let mailbox = match self.binding.borrow().clone() {
+        // Clone the state separately so the watch read guard is dropped before
+        // tracing or statistics code runs on a rejection path.
+        let binding = self.binding.borrow().clone();
+        let mailbox = match binding {
             BindingState::Bound(mailbox) => mailbox,
             BindingState::Unbound if self.binding.has_changed().is_err() => {
                 let error = self.actor_try_send_terminated(message);

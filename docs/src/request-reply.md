@@ -9,7 +9,8 @@ Actor refs expose four delivery choices:
   returns the rejected message through `into_message()`.
 - `send_timeout(message, bound)` waits through the same binding and capacity
   conditions as `send`, but returns `SendTimeoutError<M>` with the unaccepted
-  message if the bound expires.
+  message if the bound expires. A zero bound always times out; use `try_send`
+  for one immediate attempt.
 - `call(bound, constructor)` bounds delivery plus request/reply. It constructs
   the request around a `Reply`, so `CallError` intentionally stays
   non-generic and does not return that internally constructed message.
@@ -18,6 +19,11 @@ Use `send_timeout` when bounded delivery must preserve ownership. Wrapping the
 ordinary future in `tokio::time::timeout(bound, actor.send(message))` is
 **lossy**: timeout cancels and drops the `send` future, including the message
 it owns. That wrapper cannot be used to retry or reroute after expiry.
+Dropping a `send_timeout` future also drops its message; recovery is guaranteed
+only when the future runs to completion and returns an error. The bound covers
+asynchronous binding and capacity waits, but cannot preempt synchronous user
+code such as a keyed-conflation matcher. Acceptance is rechecked afterward, so
+such work can delay the result but cannot accept the message past its deadline.
 
 Payload-bearing send errors implement `std::error::Error` without requiring
 the message to implement `Debug`, `Display`, or `Sync`; their formatting
@@ -41,9 +47,10 @@ async fn forward(target: &ActorRef<LocalMessage>) -> Result<(), BoxError> {
 }
 ```
 
-`discard()` preserves the actor id and rejection reason. Use it for an
-application error enum or generic error boundary; use `into_message()` when
-the caller will retry, reroute, or otherwise reclaim the payload.
+`discard()` on `SendError`, `TrySendError`, and `SendTimeoutError` preserves the
+actor id and rejection reason. Use it for an application error enum or generic
+error boundary; use `into_message()` when the caller will retry, reroute, or
+otherwise reclaim the payload.
 
 ## Bounded request/reply
 

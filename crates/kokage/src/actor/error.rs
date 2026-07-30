@@ -41,7 +41,7 @@ impl<M> SendError<M> {
     /// This is useful when an application error must be `Send + Sync` but the
     /// message itself is not `Sync`.
     pub fn discard(self) -> SendRejection {
-        SendRejection::Unavailable {
+        SendRejection::Terminated {
             actor_id: self.actor_id,
         }
     }
@@ -189,6 +189,17 @@ impl<M> SendTimeoutError<M> {
             Self::Timeout { message, .. } | Self::Terminated { message, .. } => message,
         }
     }
+
+    /// Drops the message payload and returns a non-generic rejection.
+    ///
+    /// This is useful when an application error must be `Send + Sync` but the
+    /// message itself is not `Sync`.
+    pub fn discard(self) -> SendRejection {
+        match self {
+            Self::Timeout { actor_id, .. } => SendRejection::TimedOut { actor_id },
+            Self::Terminated { actor_id, .. } => SendRejection::Terminated { actor_id },
+        }
+    }
 }
 
 impl<M> fmt::Debug for SendTimeoutError<M> {
@@ -223,19 +234,12 @@ impl<M> Error for SendTimeoutError<M> {}
 
 /// A delivery rejection without the rejected message.
 ///
-/// Use [`SendError::discard`] or [`TrySendError::discard`] when an application
-/// error needs the reason and target id but must not inherit the message's
-/// `Send` or `Sync` bounds.
+/// Use [`SendError::discard`], [`TrySendError::discard`], or
+/// [`SendTimeoutError::discard`] when an application error needs the reason
+/// and target id but must not inherit the message's `Send` or `Sync` bounds.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SendRejection {
-    /// An awaited send determined that the actor membership is unavailable.
-    #[error("actor `{actor_id}` is unavailable")]
-    #[non_exhaustive]
-    Unavailable {
-        /// Stable id of the target actor.
-        actor_id: String,
-    },
     /// The target actor has no live incarnation right now.
     ///
     /// A retry may succeed if its membership remains and another incarnation
@@ -254,6 +258,13 @@ pub enum SendRejection {
         /// Stable id of the target actor.
         actor_id: String,
     },
+    /// The message was not accepted before the delivery bound elapsed.
+    #[error("send to actor `{actor_id}` timed out")]
+    #[non_exhaustive]
+    TimedOut {
+        /// Stable id of the target actor.
+        actor_id: String,
+    },
     /// The target membership has terminated and no restart is scheduled.
     #[error("actor `{actor_id}` has terminated")]
     #[non_exhaustive]
@@ -268,6 +279,10 @@ pub enum SendRejection {
 #[non_exhaustive]
 pub enum CallError {
     /// The request message could not be delivered.
+    ///
+    /// Calls use an awaited send internally, so the current implementation
+    /// produces only [`SendRejection::Terminated`] here. Other delivery
+    /// rejections remain part of the non-exhaustive carrier for composition.
     #[error(transparent)]
     Send(#[from] SendRejection),
     /// The timeout expired before the actor replied.
@@ -334,6 +349,30 @@ mod tests {
         assert_eq!(
             rejection,
             SendRejection::NotRunning {
+                actor_id: "worker".to_owned()
+            }
+        );
+
+        let rejection = SendError {
+            actor_id: "worker".to_owned(),
+            message: Opaque,
+        }
+        .discard();
+        assert_eq!(
+            rejection,
+            SendRejection::Terminated {
+                actor_id: "worker".to_owned()
+            }
+        );
+
+        let rejection = SendTimeoutError::Timeout {
+            actor_id: "worker".to_owned(),
+            message: Opaque,
+        }
+        .discard();
+        assert_eq!(
+            rejection,
+            SendRejection::TimedOut {
                 actor_id: "worker".to_owned()
             }
         );
