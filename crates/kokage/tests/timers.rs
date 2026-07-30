@@ -36,6 +36,22 @@ struct OneShot {
     observed: mpsc::UnboundedSender<&'static str>,
 }
 
+const ONE_SHOT: TimerKey = TimerKey::new("one-shot");
+
+impl Actor for OneShot {
+    type Msg = &'static str;
+
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        ctx.set_timeout(ONE_SHOT, "tick", Duration::from_millis(20));
+        Ok(())
+    }
+
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        self.observed.send(message).expect("observer alive");
+        Ok(())
+    }
+}
+
 struct SelfSendAfter {
     observed: mpsc::UnboundedSender<&'static str>,
 }
@@ -68,22 +84,6 @@ async fn self_send_after_delivers_through_the_actor_mailbox() {
     assert_eq!(stats.messages_received, 1);
 
     handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-const ONE_SHOT: TimerKey = TimerKey::new("one-shot");
-
-impl Actor for OneShot {
-    type Msg = &'static str;
-
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.set_timeout(ONE_SHOT, "tick", Duration::from_millis(20));
-        Ok(())
-    }
-
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        self.observed.send(message).expect("observer alive");
-        Ok(())
-    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -625,6 +625,7 @@ impl RawActor for RawCrossScheduler {
             "a pending delay has not finished before it elapses"
         );
         while ctx.recv().await.is_some() {}
+        // Hold the interval guard for the life of the receive loop.
         drop(interval);
         Ok(())
     }
@@ -657,6 +658,7 @@ impl RawActor for RawSelfScheduler {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("observer alive");
         }
+        // Hold both guards for the life of the receive loop.
         drop((one_shot, interval));
         Ok(())
     }

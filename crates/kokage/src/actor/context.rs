@@ -974,10 +974,11 @@ impl<M: Send + 'static> RawContext<M> {
 
     /// Sends `message` to this actor after `delay` has elapsed.
     ///
-    /// Unlike [`Context::set_timeout`], this uses ordinary mailbox delivery:
-    /// mailbox capacity and conflation apply, and successful delivery increments
-    /// accepted-message statistics. The timer is independently owned by its
-    /// returned [`Guard`]; it has no key for exact replacement or retraction.
+    /// Unlike handler actors' [`Context::set_timeout`] facility, which raw actors
+    /// do not have, this uses ordinary mailbox delivery: mailbox capacity and
+    /// conflation apply, and successful delivery increments accepted-message
+    /// statistics. The timer is independently owned by its returned [`Guard`];
+    /// it has no key for exact replacement or retraction.
     ///
     /// The timer belongs to this actor incarnation and ends if the incarnation
     /// stops or restarts. Dropping the returned [`Guard`] cancels delivery; call
@@ -1031,8 +1032,11 @@ impl<M: Send + 'static> RawContext<M> {
     /// Sends a clone of `message` to this actor after every `period`.
     ///
     /// Delivery takes the ordinary mailbox path, so capacity, conflation, and
-    /// accepted-message statistics apply. See [`Self::interval_to`] for the
-    /// complete timer and [`Guard`] lifetime contract.
+    /// accepted-message statistics apply. Missed ticks are skipped. The timer
+    /// stops when cancelled or when this actor incarnation ends, including a
+    /// restart or permanent termination. Dropping the returned [`Guard`] cancels
+    /// it; call [`Guard::detach`] to leave it running. A zero period returns an
+    /// already-finished guard and sends no messages.
     pub fn interval(&self, message: M, period: Duration) -> Guard
     where
         M: Clone,
