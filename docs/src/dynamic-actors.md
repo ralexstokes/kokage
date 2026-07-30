@@ -57,17 +57,21 @@ replayed automatically. Dynamic scopes always use `Strategy::OneForOne`, so an
 actor's exit, restart, or removal never initiates a sibling restart cycle.
 
 Removal is a sequenced supervisor operation. `remove_child(id)` marks the
-membership `Removing`, requests its configured shutdown, lets the actor apply
-its `DrainPolicy`, runs `on_stop` when cooperative shutdown reaches it, and
-finally detaches the child. Grace expiry or immediate abort may skip unfinished
-drain and hook work. The removal future completes after detachment.
+membership `Removing`, applies its configured `Shutdown`, runs `on_stop` when
+cooperative shutdown reaches it, and finally detaches the child.
+`Shutdown::drain_for` closes intake and drains the accepted message prefix
+within its bound; `Shutdown::discard_after_current` finishes only the in-flight
+handler and drops queued work. Grace expiry or `Shutdown::abort` may skip
+unfinished drain and hook work. The removal future completes after detachment.
 
 There is an intentional race boundary: a send may be accepted after removal is
-requested but before the actor observes cancellation. `Drain` handles that
-accepted prefix; `Discard` drops it. Once intake closes, `try_send` can return
-`TrySendError::Closed`, while an awaited `send` waits for the final disposition
-and returns `SendError`. Applications that cannot lose accepted work need an
-explicit [ownership protocol](ownership-transitions.md).
+requested but before the actor observes cancellation.
+`Shutdown::drain_for` handles that accepted prefix if its bound permits;
+`Shutdown::discard_after_current` drops any of the prefix still queued. Once
+intake closes, `try_send` can return `TrySendError::Closed`, while an awaited
+`send` waits for the final disposition and returns `SendError`. Applications
+that cannot lose accepted work need an explicit
+[ownership protocol](ownership-transitions.md).
 
 After detachment the same id can be added again, but the old `ActorRef` remains
 terminal and never rebinds to the replacement. Compare snapshot `lineage` as
