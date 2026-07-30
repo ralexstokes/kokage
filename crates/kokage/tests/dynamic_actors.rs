@@ -694,7 +694,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let watcher_slot = ActorSlot::new("watcher");
-    let (watcher_slot, watcher) = watcher_slot.actor_ref();
+    let watcher = watcher_slot.actor_ref();
     graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
@@ -1056,15 +1056,18 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let sink = support::dynamic_root(&runtime)
-        .add_actor(
-            ActorSpec::new("sink", Drain::<SizedMessage>::new)
-                .mailbox(MailboxMode::conflate())
-                .message_size(sized_message_size),
-        )
+    let sink_spec =
+        ActorSpec::new("sink", Drain::<SizedMessage>::new).mailbox(MailboxMode::conflate());
+    let sink = sink_spec.actor_ref();
+    let second_ref = sink_spec.actor_ref();
+    let sink_spec = sink_spec.message_size(sized_message_size);
+    let inserted = support::dynamic_root(&runtime)
+        .add_actor(sink_spec)
         .await
         .expect("sized actor added");
 
+    assert_eq!(sink.id(), second_ref.id());
+    assert_eq!(sink.id(), inserted.id());
     sink.send(SizedMessage(vec![0; 12]))
         .await
         .expect("message sent");
@@ -1075,6 +1078,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .find(|stats| stats.actor_id == "sink")
         .expect("dynamic actor stats available");
     assert_eq!(stats.message_bytes_accepted, Some(12));
+    assert_eq!(second_ref.stats().message_bytes_accepted, Some(12));
     assert_eq!(stats.mailbox_capacity, 1);
 
     shutdown_dynamic_runtime(&runtime, "message-size observation test shutdown").await;
@@ -1184,7 +1188,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = TreeBuilder::new();
     let forwarder_slot = ActorSlot::new("forwarder");
-    let (forwarder_slot, forwarder) = forwarder_slot.actor_ref();
+    let forwarder = forwarder_slot.actor_ref();
     builder.define(forwarder_slot, || Forwarder);
     let graph = builder.build();
     let handle = graph
@@ -1246,7 +1250,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = TreeBuilder::new();
     let sink_slot = ActorSlot::new("sink");
-    let (sink_slot, sink) = sink_slot.actor_ref();
+    let sink = sink_slot.actor_ref();
     builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });

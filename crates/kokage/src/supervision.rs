@@ -11,8 +11,8 @@ use crate::supervisor::{
 };
 
 use crate::{
-    DynamicRuntimeHandle, Runtime, RuntimeHandle,
-    actor::{ActorNode, RunnableActorBuilder, SealedActorSpec},
+    ActorSpec, DynamicRuntimeHandle, Runtime, RuntimeHandle,
+    actor::{ActorNode, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
@@ -316,10 +316,10 @@ impl OrderedTree {
         self
     }
 
-    /// Appends an actor declaration, sealed or still configurable.
+    /// Appends an actor declaration, consuming its remaining configuration.
     #[must_use]
-    pub fn actor<M: Send + 'static>(mut self, actor: impl Into<SealedActorSpec<M>>) -> Self {
-        self.inner = self.inner.actor(actor.into());
+    pub fn actor<M: Send + 'static>(mut self, actor: ActorSpec<M>) -> Self {
+        self.inner = self.inner.actor(actor);
         self
     }
 
@@ -452,7 +452,7 @@ impl TreeData<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor<M: Send + 'static>(mut self, actor: SealedActorSpec<M>) -> Self {
+    fn actor<M: Send + 'static>(mut self, actor: ActorSpec<M>) -> Self {
         self.children_mut()
             .push(SupervisionChild::Actor(actor.into_deferred_node()));
         self
@@ -898,7 +898,7 @@ impl IdentityTree<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor<M: Send + 'static>(self, actor: SealedActorSpec<M>) -> Self {
+    fn actor<M: Send + 'static>(self, actor: ActorSpec<M>) -> Self {
         self.map_tree(|tree| tree.actor(actor))
     }
 

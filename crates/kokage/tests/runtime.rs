@@ -86,7 +86,7 @@ where
 {
     let mut builder = TreeBuilder::new();
     let actor_ref_slot = ActorSlot::new("worker");
-    let (actor_ref_slot, actor_ref) = actor_ref_slot.actor_ref();
+    let actor_ref = actor_ref_slot.actor_ref();
     builder.define(actor_ref_slot, factory);
     let graph = builder.build();
 
@@ -236,15 +236,15 @@ async fn runtime_handle_enumerates_actor_stats() {
 async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     let mut root_graph = TreeBuilder::new();
     let root_ref_slot = ActorSlot::new("root-worker");
-    let (root_ref_slot, root_ref) = root_ref_slot.actor_ref();
+    let root_ref = root_ref_slot.actor_ref();
     root_graph.define(root_ref_slot, Drain::<()>::new);
     let mut nested_graph = TreeBuilder::new();
     let nested_ref_slot = ActorSlot::new("nested-worker");
-    let (nested_ref_slot, nested_ref) = nested_ref_slot.actor_ref();
+    let nested_ref = nested_ref_slot.actor_ref();
     nested_graph.define(nested_ref_slot, Drain::<()>::new);
     let mut leaf_graph = TreeBuilder::new();
     let leaf_ref_slot = ActorSlot::new("leaf-worker");
-    let (leaf_ref_slot, leaf_ref) = leaf_ref_slot.actor_ref();
+    let leaf_ref = leaf_ref_slot.actor_ref();
     leaf_graph.define(leaf_ref_slot, Drain::<()>::new);
 
     let root_graph = root_graph.build();
@@ -384,7 +384,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
 async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     let mut graph = TreeBuilder::new();
     let static_ref_slot = ActorSlot::new("static-worker");
-    let (static_ref_slot, static_ref) = static_ref_slot.actor_ref();
+    let static_ref = static_ref_slot.actor_ref();
     graph.define(static_ref_slot, Drain::<()>::new);
     let root = DynamicTree::new().spawn().expect("runtime builds");
 
@@ -613,7 +613,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
 async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let mut nested_graph = TreeBuilder::new();
     let static_ref_slot = ActorSlot::new("static-worker");
-    let (static_ref_slot, static_ref) = static_ref_slot.actor_ref();
+    let static_ref = static_ref_slot.actor_ref();
     nested_graph.define(static_ref_slot, || FailOnMessage);
     let nested_graph = nested_graph.build();
     let handle = OrderedTree::new()
@@ -726,7 +726,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
 async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let mut graph = TreeBuilder::new();
     let static_ref_slot = ActorSlot::new("static-worker");
-    let (static_ref_slot, static_ref) = static_ref_slot.actor_ref();
+    let static_ref = static_ref_slot.actor_ref();
     graph.define(static_ref_slot, || FailOnMessage);
     let root = DynamicTree::new().spawn().expect("runtime builds");
     let graph = graph.build();
@@ -773,7 +773,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
 async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     let mut parent_graph = TreeBuilder::new();
     let fuse_slot = ActorSlot::new("fuse");
-    let (fuse_slot, fuse) = fuse_slot.actor_ref();
+    let fuse = fuse_slot.actor_ref();
     parent_graph.define(fuse_slot, || FailOnMessage);
     let parent_graph = parent_graph.build();
     let root = OrderedTree::new()
@@ -1009,7 +1009,7 @@ async fn supervision_tree_wires_graph_into_supervised_runtime() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut builder = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
-    let (worker_ref_slot, worker_ref) = worker_ref_slot.actor_ref();
+    let worker_ref = worker_ref_slot.actor_ref();
     builder.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });
@@ -1135,7 +1135,7 @@ impl RawActor for FailOnMessage {
 async fn snapshot_child_wait_arms_before_the_future_is_polled() {
     let mut builder = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
-    let (worker_ref_slot, worker_ref) = worker_ref_slot.actor_ref();
+    let worker_ref = worker_ref_slot.actor_ref();
     builder.define(worker_ref_slot, || FailOnMessage);
     let graph = builder.build();
 
@@ -1185,7 +1185,7 @@ impl RawActor for AlwaysFails {
 async fn send_fails_after_restart_intensity_is_exhausted() {
     let mut builder = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
-    let (worker_ref_slot, worker_ref) = worker_ref_slot.actor_ref();
+    let worker_ref = worker_ref_slot.actor_ref();
     builder.define(worker_ref_slot, || AlwaysFails);
     let graph = builder.build();
 
@@ -1249,7 +1249,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     let on_starts = Arc::new(AtomicUsize::new(0));
     let mut builder = TreeBuilder::new();
     let counter_slot = ActorSlot::new("counter");
-    let (counter_slot, counter) = counter_slot.actor_ref();
+    let counter = counter_slot.actor_ref();
     builder.define(counter_slot, {
         let on_starts = on_starts.clone();
         move || ResettingCounter {
@@ -1386,7 +1386,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
     let mut graph = TreeBuilder::new();
     let worker_slot =
         ActorSlot::new("worker").shutdown(Shutdown::drain_for(Duration::from_millis(20)));
-    let (worker_slot, worker) = worker_slot.actor_ref();
+    let worker = worker_slot.actor_ref();
     graph.define(worker_slot, {
         let handling_gate = handling_gate.clone();
         let release_gate = release_gate.clone();
@@ -1488,7 +1488,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let worker_ref_slot = ActorSlot::new("worker");
-    let (worker_ref_slot, worker_ref) = worker_ref_slot.actor_ref();
+    let worker_ref = worker_ref_slot.actor_ref();
     graph.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });

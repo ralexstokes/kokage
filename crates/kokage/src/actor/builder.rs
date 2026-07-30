@@ -58,13 +58,10 @@ impl<M: Send + 'static> DeferredActorFactory for DeferredActorSpec<M> {
         } = *self;
         let binding = binding
             .into_inner()
-            .unwrap_or_else(|| match actor_options.size_hint {
-                Some(size_hint) => Arc::new(BindingCore::with_message_size(
-                    Arc::clone(&actor_id),
-                    size_hint,
-                )),
-                None => Arc::new(BindingCore::new(Arc::clone(&actor_id))),
-            });
+            .unwrap_or_else(|| Arc::new(BindingCore::new(Arc::clone(&actor_id))));
+        if let Some(size_hint) = actor_options.size_hint {
+            binding.set_message_size(size_hint);
+        }
         builder.actor_from_parts(
             actor_id,
             binding,
@@ -181,12 +178,7 @@ impl<M> Default for ActorOptions<M> {
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
 /// the declaration through [`crate::OrderedTree::actor`] or
 /// [`crate::DynamicRuntimeHandle::add_actor`].
-///
-/// `CONFIGURABLE` is `true` until [`actor_ref`](Self::actor_ref) mints the
-/// stable binding. That transition returns [`SealedActorSpec`], whose mailbox
-/// configuration is frozen. Most code can omit the parameter and use the
-/// default configurable state.
-pub struct ActorSpec<M: Send + 'static, const CONFIGURABLE: bool = true> {
+pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_id: Arc<str>,
     pub(crate) binding: OnceLock<Arc<BindingCore<M>>>,
     pub(crate) factory: Box<dyn ErasedActorFactory<M>>,
@@ -195,7 +187,7 @@ pub struct ActorSpec<M: Send + 'static, const CONFIGURABLE: bool = true> {
     pub(crate) shutdown: Option<Shutdown>,
 }
 
-impl<M: Send + 'static> ActorSpec<M, true> {
+impl<M: Send + 'static> ActorSpec<M> {
     /// Creates a declaration for `factory` under `actor_id`.
     ///
     pub fn new<F>(actor_id: impl Into<String>, factory: F) -> Self
@@ -213,34 +205,13 @@ impl<M: Send + 'static> ActorSpec<M, true> {
         }
     }
 
-    /// Mints this declaration's restart-stable typed ref and seals mailbox
-    /// configuration.
+    /// Returns a restart-stable typed ref for this declaration.
     ///
-    /// The returned declaration can be placed in a tree, but no longer has
-    /// `mailbox`, `mailbox_capacity`, or `message_size` methods. Configure the
-    /// declaration first, then destructure this result.
-    pub fn actor_ref(self) -> (SealedActorSpec<M>, ActorRef<M>) {
-        let binding = Arc::clone(self.binding());
-        let actor_ref = ActorRef::from_core(&binding, None);
-        let Self {
-            actor_id,
-            binding,
-            factory,
-            actor_options,
-            restart,
-            shutdown,
-        } = self;
-        (
-            ActorSpec {
-                actor_id,
-                binding,
-                factory,
-                actor_options,
-                restart,
-                shutdown,
-            },
-            actor_ref,
-        )
+    /// This borrows the declaration and can be called repeatedly. Mailbox
+    /// configuration remains mutable until the declaration is consumed by a
+    /// placement API or [`into_runnable`](Self::into_runnable).
+    pub fn actor_ref(&self) -> ActorRef<M> {
+        ActorRef::from_core(self.binding(), None)
     }
 
     /// Overrides the hosting scope's mailbox capacity for this actor.
@@ -264,39 +235,7 @@ impl<M: Send + 'static> ActorSpec<M, true> {
         self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
-}
 
-/// An [`ActorSpec`] whose stable binding has been minted and whose mailbox
-/// configuration is frozen.
-pub type SealedActorSpec<M> = ActorSpec<M, false>;
-
-impl<M: Send + 'static> From<ActorSpec<M>> for SealedActorSpec<M> {
-    /// Seals mailbox configuration without minting a typed ref.
-    ///
-    /// Placement APIs accept `impl Into<SealedActorSpec<M>>`, so a declaration
-    /// in either state can be passed directly and this conversion stays
-    /// implicit. Use [`ActorSpec::actor_ref`] instead when the ref is needed.
-    fn from(spec: ActorSpec<M>) -> Self {
-        let ActorSpec {
-            actor_id,
-            binding,
-            factory,
-            actor_options,
-            restart,
-            shutdown,
-        } = spec;
-        Self {
-            actor_id,
-            binding,
-            factory,
-            actor_options,
-            restart,
-            shutdown,
-        }
-    }
-}
-
-impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
     /// Overrides the enclosing scope's complete restart declaration.
     ///
     /// This replaces the inherited mode, budget, backoff, and terminal-removal
@@ -316,13 +255,7 @@ impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
 
     pub(crate) fn binding(&self) -> &Arc<BindingCore<M>> {
         self.binding
-            .get_or_init(|| match self.actor_options.size_hint {
-                Some(size_hint) => Arc::new(BindingCore::with_message_size(
-                    Arc::clone(&self.actor_id),
-                    size_hint,
-                )),
-                None => Arc::new(BindingCore::new(Arc::clone(&self.actor_id))),
-            })
+            .get_or_init(|| Arc::new(BindingCore::new(Arc::clone(&self.actor_id))))
     }
 
     /// Converts this declaration into the advanced custom-host actor.
@@ -368,18 +301,7 @@ impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
     }
 }
 
-impl<M: Send + 'static> ActorSpec<M, false> {
-    /// Returns another handle to this sealed declaration's stable binding.
-    ///
-    /// Mailbox configuration has already been frozen by the consuming
-    /// `actor_ref` call that produced this declaration, so every handle
-    /// observes the same binding configuration.
-    pub fn actor_ref(&self) -> ActorRef<M> {
-        ActorRef::from_core(self.binding(), None)
-    }
-}
-
-impl<M: Send + 'static, const CONFIGURABLE: bool> fmt::Debug for ActorSpec<M, CONFIGURABLE> {
+impl<M: Send + 'static> fmt::Debug for ActorSpec<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ActorSpec")
             .field("actor_id", &self.actor_id)
@@ -437,9 +359,7 @@ impl fmt::Debug for ActorNode {
 /// Create the slot and its ref before factories that close a cycle, then pass
 /// the factory to [`define`](Self::define) to obtain an ordinary [`ActorSpec`].
 /// A slot has the same fluent configuration vocabulary as `ActorSpec`.
-/// `CONFIGURABLE` follows the same transition: [`actor_ref`](Self::actor_ref)
-/// returns a [`SealedActorSlot`] whose mailbox configuration is frozen.
-pub struct ActorSlot<M: Send + 'static, const CONFIGURABLE: bool = true> {
+pub struct ActorSlot<M: Send + 'static> {
     actor_id: Arc<str>,
     binding: OnceLock<Arc<BindingCore<M>>>,
     actor_options: ActorOptions<M>,
@@ -447,7 +367,7 @@ pub struct ActorSlot<M: Send + 'static, const CONFIGURABLE: bool = true> {
     shutdown: Option<Shutdown>,
 }
 
-impl<M: Send + 'static> ActorSlot<M, true> {
+impl<M: Send + 'static> ActorSlot<M> {
     /// Opens an unfilled actor declaration.
     pub fn new(actor_id: impl Into<String>) -> Self {
         Self {
@@ -459,39 +379,17 @@ impl<M: Send + 'static> ActorSlot<M, true> {
         }
     }
 
-    /// Mints this slot's restart-stable typed ref and seals mailbox
-    /// configuration.
-    pub fn actor_ref(self) -> (SealedActorSlot<M>, ActorRef<M>) {
-        let binding = Arc::clone(self.binding());
-        let actor_ref = ActorRef::from_core(&binding, None);
-        let Self {
-            actor_id,
-            binding,
-            actor_options,
-            restart,
-            shutdown,
-        } = self;
-        (
-            ActorSlot {
-                actor_id,
-                binding,
-                actor_options,
-                restart,
-                shutdown,
-            },
-            actor_ref,
-        )
+    /// Returns a restart-stable typed ref for this slot.
+    ///
+    /// This borrows the slot and can be called repeatedly. Configuration
+    /// remains mutable until [`define`](Self::define) consumes the slot.
+    pub fn actor_ref(&self) -> ActorRef<M> {
+        ActorRef::from_core(self.binding(), None)
     }
 
     fn binding(&self) -> &Arc<BindingCore<M>> {
         self.binding
-            .get_or_init(|| match self.actor_options.size_hint {
-                Some(size_hint) => Arc::new(BindingCore::with_message_size(
-                    Arc::clone(&self.actor_id),
-                    size_hint,
-                )),
-                None => Arc::new(BindingCore::new(Arc::clone(&self.actor_id))),
-            })
+            .get_or_init(|| Arc::new(BindingCore::new(Arc::clone(&self.actor_id))))
     }
 
     /// Overrides the hosting scope's default mailbox capacity for this slot.
@@ -514,28 +412,7 @@ impl<M: Send + 'static> ActorSlot<M, true> {
         self.actor_options = self.actor_options.message_size(size_hint);
         self
     }
-}
 
-/// An [`ActorSlot`] whose stable binding has been minted and whose mailbox
-/// configuration is frozen.
-pub type SealedActorSlot<M> = ActorSlot<M, false>;
-
-impl<M: Send + 'static> ActorSlot<M, false> {
-    /// Returns another handle to this sealed slot's stable binding.
-    ///
-    /// Mailbox configuration has already been frozen by the consuming
-    /// `actor_ref` call that produced this slot, so every handle observes the
-    /// same binding configuration.
-    pub fn actor_ref(&self) -> ActorRef<M> {
-        let binding = self
-            .binding
-            .get()
-            .expect("a sealed actor slot has already minted its binding");
-        ActorRef::from_core(binding, None)
-    }
-}
-
-impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
     /// Overrides the enclosing scope's complete restart declaration.
     ///
     /// This replaces the inherited mode, budget, backoff, and terminal-removal
@@ -558,7 +435,7 @@ impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSlot<M, CONFIGURABLE> {
     /// The slot token's message type must match the actor's message type, so a
     /// mismatch is rejected by the compiler. Consuming the token also makes a
     /// second definition unrepresentable in ordinary Rust code.
-    pub fn define<F>(self, factory: F) -> ActorSpec<M, CONFIGURABLE>
+    pub fn define<F>(self, factory: F) -> ActorSpec<M>
     where
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
@@ -628,10 +505,21 @@ mod tests {
     #[test]
     fn actor_spec_applies_options_and_returns_runnable() {
         let spec = ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate());
-        let (spec, actor_ref) = spec.actor_ref();
+        let actor_ref = spec.actor_ref();
         let actor = spec.into_runnable();
         assert_eq!(actor_ref.id(), "worker");
         assert_eq!(actor.label(), "worker");
+    }
+
+    #[test]
+    fn materialization_applies_message_size_configured_after_actor_ref() {
+        let spec = ActorSpec::new("worker", || StringActor);
+        let actor_ref = spec.actor_ref();
+        assert_eq!(actor_ref.stats().message_bytes_accepted, None);
+
+        let _actor = spec.message_size(String::len).into_runnable();
+
+        assert_eq!(actor_ref.stats().message_bytes_accepted, Some(0));
     }
 
     #[test]
@@ -664,13 +552,15 @@ mod tests {
     }
 
     #[test]
-    fn sealed_declarations_still_accept_non_binding_policies() {
-        let (spec, _actor_ref) = ActorSpec::new("spec", || OpaqueActor).actor_ref();
+    fn refs_do_not_end_declaration_configuration() {
+        let spec = ActorSpec::new("spec", || OpaqueActor);
+        let _actor_ref = spec.actor_ref();
         let spec = spec.restart(Restart::never()).shutdown(Shutdown::abort());
         assert_eq!(spec.restart, Some(Restart::never()));
         assert_eq!(spec.shutdown, Some(Shutdown::abort()));
 
-        let (slot, _actor_ref) = ActorSlot::<OpaqueMessage>::new("slot").actor_ref();
+        let slot = ActorSlot::<OpaqueMessage>::new("slot");
+        let _actor_ref = slot.actor_ref();
         let spec = slot
             .restart(Restart::always())
             .shutdown(Shutdown::discard_after_current(Duration::from_secs(1)))

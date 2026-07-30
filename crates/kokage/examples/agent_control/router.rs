@@ -145,7 +145,7 @@ impl Router {
         let generation = self.session_epoch.fetch_add(1, Ordering::Relaxed) + 1;
         let subtree_id = format!("session:{chat}#{generation}");
         let actor_slot = ActorSlot::new("session");
-        let (actor_slot, actor) = actor_slot.actor_ref();
+        let actor = actor_slot.actor_ref();
         let session_actor = actor_slot
             .define(SessionFactory {
                 chat,

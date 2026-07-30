@@ -28,7 +28,7 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let echo = ActorSpec::new("echo", || Echo);
-//! let (echo, echo_ref) = echo.actor_ref();
+//! let echo_ref = echo.actor_ref();
 //! let runtime = OrderedTree::new().actor(echo).spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
@@ -127,9 +127,9 @@
 //! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 //! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 //! let left_slot = ActorSlot::<()>::new("left");
-//! let (left_slot, left) = left_slot.actor_ref();
+//! let left = left_slot.actor_ref();
 //! let right_slot = ActorSlot::<()>::new("right");
-//! let (right_slot, right) = right_slot.actor_ref();
+//! let right = right_slot.actor_ref();
 //!
 //! let left_actor = left_slot.define({ let right = right.clone(); move || Left(right.clone()) });
 //! let right_actor = right_slot.define({ let left = left.clone(); move || Right(left.clone()) });
@@ -285,8 +285,8 @@ pub use kokage_derive::ActorFactory;
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
     BlockingCancelled, CallError, Context, DownReason, DynamicRestrictedScope, MailboxMode,
-    MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SealedActorSlot, SealedActorSpec,
-    SendError, StopContext, TimerKey, TrySendError,
+    MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SendError, StopContext, TimerKey,
+    TrySendError,
 };
 pub use runtime::{DynamicRuntimeHandle, Runtime, RuntimeHandle};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

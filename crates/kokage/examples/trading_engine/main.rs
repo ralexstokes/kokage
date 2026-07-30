@@ -220,23 +220,23 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 
     // Open every slot first so cyclic factories can capture the stable refs.
     let venue_a_feed_slot = feed_slot("venue-a-feed");
-    let (venue_a_feed_slot, venue_a_feed) = venue_a_feed_slot.actor_ref();
+    let venue_a_feed = venue_a_feed_slot.actor_ref();
     let venue_a_gateway_slot = venue_slot("venue-a-gateway");
-    let (venue_a_gateway_slot, venue_a_gateway) = venue_a_gateway_slot.actor_ref();
+    let venue_a_gateway = venue_a_gateway_slot.actor_ref();
     let venue_b_feed_slot = feed_slot("venue-b-feed");
-    let (venue_b_feed_slot, venue_b_feed) = venue_b_feed_slot.actor_ref();
+    let venue_b_feed = venue_b_feed_slot.actor_ref();
     let venue_b_gateway_slot = venue_slot("venue-b-gateway");
-    let (venue_b_gateway_slot, venue_b_gateway) = venue_b_gateway_slot.actor_ref();
+    let venue_b_gateway = venue_b_gateway_slot.actor_ref();
     let reconciler_slot = ActorSlot::<ReconcilerMsg>::new("reconciler");
-    let (reconciler_slot, reconciler) = reconciler_slot.actor_ref();
+    let reconciler = reconciler_slot.actor_ref();
     let ledger_slot = ActorSlot::<LedgerMsg>::new("ledger");
-    let (ledger_slot, ledger) = ledger_slot.actor_ref();
+    let ledger = ledger_slot.actor_ref();
     let router_slot = ActorSlot::<RouterMsg>::new("order-router");
-    let (router_slot, router) = router_slot.actor_ref();
+    let router = router_slot.actor_ref();
     let control_slot = ActorSlot::<ControlMsg>::new("control");
-    let (control_slot, control) = control_slot.actor_ref();
+    let control = control_slot.actor_ref();
     let health_slot = ActorSlot::<HealthMsg>::new("health");
-    let (health_slot, health) = health_slot.actor_ref();
+    let health = health_slot.actor_ref();
 
     let reconciler_actor = reconciler_slot.define({
         let feed_refs = HashMap::from([

@@ -179,7 +179,7 @@ async fn send_waits_during_permanent_restart_window() {
         observed: observed_tx.clone(),
     })
     .restart(restart);
-    let (worker, worker_ref) = worker.actor_ref();
+    let worker_ref = worker.actor_ref();
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)
@@ -332,7 +332,7 @@ async fn call_succeeds_across_restart_window() {
         failed: failed.clone(),
     })
     .restart(restart);
-    let (rpc, rpc_ref) = rpc.actor_ref();
+    let rpc_ref = rpc.actor_ref();
 
     let handle = OrderedTree::new()
         .strategy(Strategy::OneForOne)

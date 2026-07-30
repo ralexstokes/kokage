@@ -75,7 +75,7 @@ async fn cancelling_an_unpolled_offload_finishes_its_guard() {
     let (finished, mut finishes) = mpsc::unbounded_channel();
     let mut tree = TreeBuilder::new();
     let slot = ActorSlot::new("cancel-before-poll");
-    let (slot, actor) = slot.actor_ref();
+    let actor = slot.actor_ref();
     tree.define(slot, move || CancelBeforePoll {
         finished: finished.clone(),
     });
@@ -261,7 +261,7 @@ async fn offload_is_aborted_and_never_reaches_a_fresh_incarnation() {
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("StaleActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let constructed = constructed.clone();
         let drop_started = drop_started.clone();
@@ -347,7 +347,7 @@ async fn dropping_offload_guard_cancels_and_updates_the_outstanding_gauge() {
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("AbortActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handle_slot = handle_slot.clone();
         let done = done.clone();
@@ -385,7 +385,7 @@ async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
     let done = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("RestartedOffloadActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handle_slot = handle_slot.clone();
         let done = done.clone();
@@ -470,7 +470,7 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     let release = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("ReadyAbortActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let release = release.clone();
         move || ReadyAbortActor {
@@ -503,7 +503,7 @@ async fn detached_offload_guard_preserves_completion_delivery() {
     let release = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DetachedOffloadActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let release = release.clone();
         move || ReadyAbortActor {
@@ -564,7 +564,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
     let shutdown_seen = Arc::new(Notify::new());
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DrainAbortActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let shutdown_seen = shutdown_seen.clone();
         move || DrainAbortActor {
@@ -639,7 +639,7 @@ async fn shutdown_case(policy: Shutdown) -> Vec<&'static str> {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let actor_slot = ActorSlot::new("ShutdownActor").shutdown(policy);
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let release = release.clone();
         let entered = entered.clone();
@@ -738,7 +738,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
     let actor_slot = ActorSlot::new("BackpressureActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handler_release = handler_release.clone();
         let offload_release = offload_release.clone();
@@ -781,7 +781,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("conflating-offload").mailbox(MailboxMode::conflate());
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let handler_release = handler_release.clone();
         let offload_release = offload_release.clone();
@@ -858,7 +858,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("DeadlineDrainActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let registered = registered.clone();
         move || DeadlineDrainActor {
@@ -941,7 +941,7 @@ async fn offload_panic_fails_the_actor_and_is_supervised() {
     let constructed = Arc::new(AtomicUsize::new(0));
     let mut graph = TreeBuilder::new();
     let actor_slot = ActorSlot::new("PanicActor");
-    let (actor_slot, actor) = actor_slot.actor_ref();
+    let actor = actor_slot.actor_ref();
     graph.define(actor_slot, {
         let constructed = constructed.clone();
         move || {

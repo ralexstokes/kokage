@@ -60,7 +60,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let spec = ActorSpec::new("Observe", move || {
         Observe::<String>::new(observed_tx.clone())
     });
-    let (spec, frontend) = spec.actor_ref();
+    let frontend = spec.actor_ref();
     let actor = spec.into_runnable();
     let first_run = tokio::spawn({
         let actor = actor.clone();

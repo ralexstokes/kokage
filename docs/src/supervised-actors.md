@@ -15,7 +15,7 @@ lifecycle events, and statistics.
 let worker = ActorSpec::new("worker", || Worker)
     .restart(Restart::always())
     .shutdown(Shutdown::drain_for(Duration::from_secs(5)));
-let (worker, worker_ref) = worker.actor_ref();
+let worker_ref = worker.actor_ref();
 
 let runtime = OrderedTree::new()
     .actor(worker)
@@ -82,9 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runs: runs.clone(),
         run: 0,
     });
-    let (press_actor, press) = press_actor.actor_ref();
+    let press = press_actor.actor_ref();
     let orders_actor = ActorSpec::new("front-desk", move || FrontDesk(press.clone()));
-    let (orders_actor, orders) = orders_actor.actor_ref();
+    let orders = orders_actor.actor_ref();
 
     let runtime = OrderedTree::new()
         .default_restart(Restart::on_failure().limit(5, Duration::from_secs(60)))

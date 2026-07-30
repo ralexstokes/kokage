@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    ActorRef, SealedActorSpec,
+    ActorRef, ActorSpec,
     actor::{
         ActorNode, ActorOptionsValidationError, ActorStats, RunnableActor, RunnableActorBuilder,
         SupervisorPathSegment,
@@ -74,7 +74,7 @@ impl ActorRuntimeState {
             .clone()
     }
 
-    fn make_actor<M: Send + 'static>(&self, spec: SealedActorSpec<M>) -> ActorNode {
+    fn make_actor<M: Send + 'static>(&self, spec: ActorSpec<M>) -> ActorNode {
         spec.into_node(&self.actor_builder())
     }
 
@@ -618,10 +618,9 @@ impl DynamicRuntimeHandle {
     /// [`ControlError::Rejected`].
     pub async fn add_actor<M: Send + 'static>(
         &self,
-        spec: impl Into<SealedActorSpec<M>>,
+        spec: ActorSpec<M>,
     ) -> Result<ActorRef<M>, ControlError> {
-        let spec = spec.into();
-        let actor_ref = ActorRef::from_core(spec.binding(), None);
+        let actor_ref = spec.actor_ref();
         spec.actor_options
             .validate()
             .map_err(|error: ActorOptionsValidationError| {
@@ -816,7 +815,7 @@ mod tests {
     #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
         let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(Restart::never());
-        let (static_spec, static_ref) = static_spec.actor_ref();
+        let static_ref = static_spec.actor_ref();
         let static_runtime = OrderedTree::new()
             .actor(static_spec)
             .spawn()

@@ -3,7 +3,7 @@ use std::{
     fmt,
     future::Future,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -46,7 +46,7 @@ pub struct ActorRef<M> {
     actor_id: Arc<str>,
     binding: watch::Receiver<BindingState<M>>,
     stats: Arc<ActorStatsCounters>,
-    message_size: Option<Arc<MessageSizeObserver<M>>>,
+    message_size: Arc<OnceLock<MessageSizeObserver<M>>>,
     source_actor_id: Option<Arc<str>>,
     monitors: Arc<MonitorHub>,
 }
@@ -58,7 +58,7 @@ impl<M> Clone for ActorRef<M> {
             actor_id: Arc::clone(&self.actor_id),
             binding: self.binding.clone(),
             stats: Arc::clone(&self.stats),
-            message_size: self.message_size.clone(),
+            message_size: Arc::clone(&self.message_size),
             source_actor_id: self.source_actor_id.clone(),
             monitors: Arc::clone(&self.monitors),
         }
@@ -91,7 +91,7 @@ impl<M> ActorRef<M> {
         actor_id: Arc<str>,
         binding: watch::Receiver<BindingState<M>>,
         stats: Arc<ActorStatsCounters>,
-        message_size: Option<Arc<MessageSizeObserver<M>>>,
+        message_size: Arc<OnceLock<MessageSizeObserver<M>>>,
         source_actor_id: Option<Arc<str>>,
         monitors: Arc<MonitorHub>,
     ) -> Self {
@@ -175,10 +175,6 @@ impl<M> ActorRef<M> {
     pub(crate) async fn send_to_incarnation(&self, message: M) -> Result<MailboxRef<M>, SendError> {
         let mut binding = self.binding.clone();
         let mut message = message;
-        let message_size = self
-            .message_size
-            .as_ref()
-            .map(|observer| observer.size_hint(&message));
 
         loop {
             let mailbox = match self.wait_for_next_mailbox(&mut binding).await {
@@ -189,6 +185,13 @@ impl<M> ActorRef<M> {
                     return Err(error);
                 }
             };
+            // Materialization installs the observer before binding the first
+            // mailbox. Read it only after that bind so a send polled while the
+            // declaration is still configurable cannot miss late sizing.
+            let message_size = self
+                .message_size
+                .get()
+                .map(|observer| observer.size_hint(&message));
 
             match mailbox.send_retaining(message).await {
                 SendOutcome::Accepted { conflated } => {
@@ -218,7 +221,7 @@ impl<M> ActorRef<M> {
     async fn send_to_mailbox(&self, mailbox: MailboxRef<M>, message: M, gate: &SendGate) {
         let message_size = self
             .message_size
-            .as_ref()
+            .get()
             .map(|observer| observer.size_hint(&message));
 
         match mailbox.send_retaining_gated(message, gate).await {
@@ -241,14 +244,22 @@ impl<M> ActorRef<M> {
     /// A full FIFO queue returns [`TrySendError::Full`]. A conflating
     /// mailbox instead accepts the message and replaces stale unread state.
     pub fn try_send(&self, message: M) -> Result<(), TrySendError> {
+        let mailbox = match self.current_mailbox() {
+            Ok(mailbox) => mailbox,
+            Err(error) => {
+                self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
+                self.stats.record_send(false);
+                return Err(error);
+            }
+        };
+        // Materialization installs the observer before binding the first
+        // mailbox. Resolve the mailbox first so a pre-materialization ref
+        // cannot race that transition and miss sizing for an accepted send.
         let message_size = self
             .message_size
-            .as_ref()
+            .get()
             .map(|observer| observer.size_hint(&message));
-        let result = match self.current_mailbox() {
-            Ok(mailbox) => mailbox.try_send(message),
-            Err(error) => Err(error),
-        };
+        let result = mailbox.try_send(message);
         self.observe_send(
             MessageOperation::TrySend,
             result.as_ref().err().map(try_send_rejection),
@@ -410,7 +421,7 @@ impl<M> ActorRef<M> {
         if let Some(message_size) = message_size {
             self.stats.record_message_size(message_size);
             self.message_size
-                .as_ref()
+                .get()
                 .expect("message size was produced by an observer")
                 .record_metrics(message_size);
         }

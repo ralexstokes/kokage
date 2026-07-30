@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         release: actor_release.clone(),
     })
     .mailbox_capacity(1);
-    let (worker_spec, worker) = worker_spec.actor_ref();
+    let worker = worker_spec.actor_ref();
 
     let handle = support::ActorTasks::start([worker_spec.into_runnable()]);
 

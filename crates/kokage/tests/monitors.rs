@@ -124,7 +124,7 @@ where
 {
     let mut builder = RunnableBuilder::new();
     let slot = ActorSlot::new(label);
-    let (slot, actor_ref) = slot.actor_ref();
+    let actor_ref = slot.actor_ref();
     builder.define(slot, factory);
     let graph = builder.build();
     let actor = graph

@@ -200,7 +200,7 @@ async fn typed_pipeline_end_to_end() {
 
     let mut builder = RunnableSetBuilder::new();
     let worker_slot = ActorSlot::<Job>::new("worker");
-    let (worker_slot, worker) = worker_slot.actor_ref();
+    let worker = worker_slot.actor_ref();
     let frontend_slot = ActorSlot::new("frontend");
     let frontend = builder.define(frontend_slot, move || Frontend {
         worker: worker.clone(),
@@ -1016,9 +1016,9 @@ async fn cyclic_wiring_via_slot() {
 
     let mut builder = RunnableSetBuilder::new();
     let pong_slot = ActorSlot::<Ball>::new("pong");
-    let (pong_slot, pong) = pong_slot.actor_ref();
+    let pong = pong_slot.actor_ref();
     let ping_slot = ActorSlot::new("ping");
-    let (ping_slot, ping) = ping_slot.actor_ref();
+    let ping = ping_slot.actor_ref();
     builder.define(ping_slot, {
         let done_tx = done_tx.clone();
         move || Paddle {
@@ -1044,7 +1044,7 @@ async fn cyclic_wiring_via_slot() {
 #[test]
 fn dropping_an_unfilled_actor_slot_terminates_its_ref() {
     let slot = ActorSlot::<u32>::new("ghost");
-    let (slot, ghost) = slot.actor_ref();
+    let ghost = slot.actor_ref();
     drop(slot);
 
     assert!(matches!(
@@ -1056,7 +1056,7 @@ fn dropping_an_unfilled_actor_slot_terminates_its_ref() {
 #[test]
 fn dropping_an_unplaced_actor_spec_terminates_its_ref() {
     let spec = ActorSpec::new("ghost", Drain::<u32>::new);
-    let (spec, ghost) = spec.actor_ref();
+    let ghost = spec.actor_ref();
     drop(spec);
 
     assert!(matches!(
@@ -1376,17 +1376,20 @@ mod runnable_actor {
         let mut builder = RunnableSetBuilder::new();
         let actor_slot = ActorSlot::new("worker").message_size(sized_payload_size);
         builder.define(actor_slot, Drain::<SizedPayload>::new);
-        let detached_slot = ActorSlot::new("worker").message_size(sized_payload_size);
-        let (detached_slot, detached) = detached_slot.actor_ref();
+        let detached_slot = ActorSlot::new("worker");
+        let detached = detached_slot.actor_ref();
+        let detached_slot = detached_slot.message_size(sized_payload_size);
         builder.define(detached_slot, Drain::<SizedPayload>::new);
 
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
 
         let detached_slot =
             ActorSlot::<SizedPayload>::new("worker").message_size(sized_payload_size);
-        let (detached_slot, detached) = detached_slot.actor_ref();
+        let detached = detached_slot.actor_ref();
         drop(detached_slot);
-        assert_eq!(detached.stats().message_bytes_accepted, Some(0));
+        // The option becomes observable only if definition reaches
+        // materialization; dropping an unfilled declaration applies nothing.
+        assert_eq!(detached.stats().message_bytes_accepted, None);
         assert!(matches!(
             detached.try_send(SizedPayload(Vec::new())),
             Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
@@ -1514,14 +1517,17 @@ mod runnable_actor {
                 received: received_tx.clone(),
             }
         })
-        .message_size(sized_payload_size)
         .mailbox_capacity(1);
-        let worker_ref = builder.actor(worker_spec);
+        let worker_ref = worker_spec.actor_ref();
+        let second_ref = worker_spec.actor_ref();
+        let worker_spec = worker_spec.message_size(sized_payload_size);
+        builder.actor(worker_spec);
         let graph = builder.build();
         let worker = single_actor(graph, "worker");
         let (stop, task) = start_actor(worker);
 
         started_rx.recv().await.expect("actor started");
+        assert_eq!(worker_ref.id(), second_ref.id());
         worker_ref
             .try_send(SizedPayload(vec![0; 4]))
             .expect("first message accepted");
@@ -1538,7 +1544,28 @@ mod runnable_actor {
             .await
             .expect("second message accepted");
         assert_eq!(worker_ref.stats().message_bytes_accepted, Some(7));
+        assert_eq!(second_ref.stats().message_bytes_accepted, Some(7));
 
+        stop_actor(stop, task).await.expect("actor stops");
+    }
+
+    #[tokio::test]
+    async fn pending_send_observes_message_size_configured_before_materialization() {
+        let spec = ActorSpec::new("worker", Drain::<SizedPayload>::new);
+        let worker_ref = spec.actor_ref();
+        let send = tokio::spawn({
+            let worker_ref = worker_ref.clone();
+            async move { worker_ref.send(SizedPayload(vec![0; 9])).await }
+        });
+        tokio::task::yield_now().await;
+
+        let actor = spec.message_size(sized_payload_size).into_runnable();
+        let (stop, task) = start_actor(actor);
+        send.await
+            .expect("send task does not panic")
+            .expect("message is accepted after the first mailbox binds");
+
+        assert_eq!(worker_ref.stats().message_bytes_accepted, Some(9));
         stop_actor(stop, task).await.expect("actor stops");
     }
 
@@ -1932,7 +1959,7 @@ mod runnable_actor {
 
         let mut builder = RunnableSetBuilder::new();
         let worker_slot = ActorSlot::<Work>::new("worker");
-        let (worker_slot, worker_ref) = worker_slot.actor_ref();
+        let worker_ref = worker_slot.actor_ref();
         let frontend_ref_slot = ActorSlot::new("frontend");
         let frontend_ref = builder.define(frontend_ref_slot, move || Forwarder {
             worker: worker_ref.clone(),
