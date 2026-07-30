@@ -1327,19 +1327,23 @@ async fn dynamic_tree_idles_empty_until_an_actor_is_added() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("empty dynamic tree builds");
-    let dynamic = runtime.handle();
-    dynamic
+    let handle = runtime.handle();
+    handle
         .wait_started()
         .await
         .expect("empty dynamic tree starts");
-    assert!(dynamic.snapshot().children.is_empty());
+    assert!(handle.snapshot().children.is_empty());
+
+    let dynamic = handle
+        .dynamic()
+        .expect("dynamic tree exposes membership capability");
 
     let actor = dynamic
         .add_actor(ActorSpec::new("worker", Drain::<()>::new))
         .await
         .expect("actor is added after idle startup");
     actor.send(()).await.expect("added actor is running");
-    assert!(dynamic.snapshot().child("worker").is_some());
+    assert!(handle.snapshot().child("worker").is_some());
 
     runtime
         .shutdown_and_wait()
