@@ -18,36 +18,17 @@ pub(crate) struct RunnableBuilder {
     actors: Vec<RunnableActor>,
 }
 
-pub(crate) trait SealTestSpec<M: Send + 'static> {
-    fn seal(self) -> (SealedActorSpec<M>, ActorRef<M>);
-}
-
-impl<M: Send + 'static> SealTestSpec<M> for ActorSpec<M> {
-    fn seal(self) -> (SealedActorSpec<M>, ActorRef<M>) {
-        self.actor_ref()
-    }
-}
-
-impl<M: Send + 'static> SealTestSpec<M> for SealedActorSpec<M> {
-    fn seal(self) -> (SealedActorSpec<M>, ActorRef<M>) {
-        let actor_ref = self.actor_ref();
-        (self, actor_ref)
-    }
-}
-
 impl RunnableBuilder {
     pub(crate) fn new() -> Self {
         Self { actors: Vec::new() }
     }
 
-    pub(crate) fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+    pub(crate) fn actor<M: Send + 'static>(
         &mut self,
-        spec: ActorSpec<M, CONFIGURABLE>,
-    ) -> ActorRef<M>
-    where
-        ActorSpec<M, CONFIGURABLE>: SealTestSpec<M>,
-    {
-        let (spec, actor_ref) = SealTestSpec::seal(spec);
+        spec: impl Into<SealedActorSpec<M>>,
+    ) -> ActorRef<M> {
+        let spec = spec.into();
+        let actor_ref = spec.actor_ref();
         self.actors.push(spec.into_runnable());
         actor_ref
     }
@@ -61,7 +42,7 @@ impl RunnableBuilder {
         M: Send + 'static,
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
-        ActorSpec<M, CONFIGURABLE>: SealTestSpec<M>,
+        ActorSpec<M, CONFIGURABLE>: Into<SealedActorSpec<M>>,
     {
         self.actor(slot.define(factory))
     }
@@ -98,14 +79,12 @@ impl TreeBuilder {
         }
     }
 
-    pub(crate) fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
+    pub(crate) fn actor<M: Send + 'static>(
         &mut self,
-        spec: ActorSpec<M, CONFIGURABLE>,
-    ) -> ActorRef<M>
-    where
-        ActorSpec<M, CONFIGURABLE>: SealTestSpec<M>,
-    {
-        let (spec, actor_ref) = SealTestSpec::seal(spec);
+        spec: impl Into<SealedActorSpec<M>>,
+    ) -> ActorRef<M> {
+        let spec = spec.into();
+        let actor_ref = spec.actor_ref();
         self.tree = Some(
             self.tree
                 .take()
@@ -124,7 +103,7 @@ impl TreeBuilder {
         M: Send + 'static,
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
-        ActorSpec<M, CONFIGURABLE>: SealTestSpec<M>,
+        ActorSpec<M, CONFIGURABLE>: Into<SealedActorSpec<M>>,
     {
         self.actor(slot.define(factory))
     }

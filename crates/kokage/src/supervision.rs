@@ -12,7 +12,7 @@ use kokage_supervisor::{
 
 use crate::{
     DynamicRuntime, DynamicRuntimeHandle, Runtime, RuntimeHandle,
-    actor::{ActorNode, ActorSpec, RunnableActorBuilder},
+    actor::{ActorNode, RunnableActorBuilder, SealedActorSpec},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
@@ -206,8 +206,10 @@ macro_rules! tree_common_methods {
         /// This is the FIFO queue capacity and the maximum number of distinct
         /// unread keys for keyed conflation. Unkeyed conflation always has
         /// capacity 1 and ignores this setting. Individual actors can override
-        /// it with [`ActorSpec::mailbox_capacity`]. The value is validated when
-        /// the tree is spawned or dynamically inserted.
+        /// it with
+        /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity).
+        /// The value is validated when the tree is spawned or dynamically
+        /// inserted.
         #[must_use]
         pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
             self.inner = self.inner.mailbox_capacity(capacity);
@@ -259,13 +261,10 @@ impl OrderedTree {
         self
     }
 
-    /// Appends an actor declaration.
+    /// Appends an actor declaration, sealed or still configurable.
     #[must_use]
-    pub fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
-        mut self,
-        actor: ActorSpec<M, CONFIGURABLE>,
-    ) -> Self {
-        self.inner = self.inner.actor(actor);
+    pub fn actor<M: Send + 'static>(mut self, actor: impl Into<SealedActorSpec<M>>) -> Self {
+        self.inner = self.inner.actor(actor.into());
         self
     }
 
@@ -385,10 +384,7 @@ impl TreeData<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
-        mut self,
-        actor: ActorSpec<M, CONFIGURABLE>,
-    ) -> Self {
+    fn actor<M: Send + 'static>(mut self, actor: SealedActorSpec<M>) -> Self {
         self.children_mut()
             .push(SupervisionChild::Actor(actor.into_deferred_node()));
         self
@@ -809,10 +805,7 @@ impl IdentityTree<false> {
 
     /// Appends an actor node.
     #[must_use]
-    fn actor<M: Send + 'static, const CONFIGURABLE: bool>(
-        self,
-        actor: ActorSpec<M, CONFIGURABLE>,
-    ) -> Self {
+    fn actor<M: Send + 'static>(self, actor: SealedActorSpec<M>) -> Self {
         self.map_tree(|tree| tree.actor(actor))
     }
 
