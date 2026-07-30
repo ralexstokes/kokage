@@ -290,6 +290,10 @@ async fn incarnation_restart_finishes_scope_wait_without_cancelling_its_guard() 
     actor.send(CancelMsg::Start).await.expect("actor is live");
     let guard = wait_for(&mut handle_rx, "scope-wait guard").await;
     wait_for(&mut starts, "scope wait to start").await;
+    assert!(
+        !guard.is_finished(),
+        "a started scope wait has not finished before the incarnation aborts it"
+    );
     actor
         .send(CancelMsg::Crash)
         .await
