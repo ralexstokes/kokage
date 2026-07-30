@@ -1275,6 +1275,7 @@ impl<M> Drop for RawContext<M> {
 /// The parameter is the actor, not its message: a hook signature writes
 /// `&mut Context<'_, Self>` and the message type is projected from
 /// [`Actor::Msg`](crate::Actor::Msg).
+///
 /// A helper shared across actor types names that actor generically:
 ///
 /// ```no_run
