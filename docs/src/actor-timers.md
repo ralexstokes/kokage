@@ -15,9 +15,10 @@ replaced or retracted. Periodic mailbox delivery uses `interval`.
 
 ## Self-scheduling
 
-Handler-style actors have one loop-owned keyed timer table for one-shot self
-messages. Periodic work uses the self-first `interval(message, period)` and
-returns a `Guard`:
+Handler-style actors can schedule one-shot self messages through either an
+independently guarded mailbox delivery or a loop-owned keyed timer table.
+Periodic work uses the self-first `interval(message, period)` and returns a
+`Guard`:
 
 ```rust,ignore
 use std::time::Duration;
@@ -27,6 +28,7 @@ use kokage::{Guard, TimerKey, prelude::*};
 #[derive(Clone)]
 enum Message {
     Reconnect,
+    Refresh,
     Reconcile,
 }
 
@@ -42,6 +44,7 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
+        ctx.send_after(Message::Refresh, Duration::from_secs(10)).detach();
         self.reconcile =
             Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
         Ok(())
@@ -54,6 +57,7 @@ impl Actor for Worker {
     ) -> ExitResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
+            Message::Refresh => { /* independently scheduled mailbox work */ }
             Message::Reconcile => { /* reconcile periodically */ }
         }
         Ok(())
