@@ -1669,7 +1669,7 @@ impl DynamicRestrictedScope {
     /// same scope, which validates ids against current or declared membership
     /// and rejects an unknown child. The returned guard must be retained;
     /// dropping it cancels the watch and leaves the scope running.
-    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::observe::CompletionGuard
+    pub fn shutdown_on_completion<I, S>(&self, ids: I) -> crate::Guard
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
