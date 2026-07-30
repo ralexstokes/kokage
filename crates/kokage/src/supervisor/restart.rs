@@ -193,8 +193,7 @@ impl Restart {
         self.mode
     }
 
-    #[doc(hidden)]
-    pub const fn should_restart(self, is_failure: bool) -> bool {
+    pub(crate) const fn should_restart(self, is_failure: bool) -> bool {
         match self.mode {
             RestartMode::Always => true,
             RestartMode::OnFailure => is_failure,
