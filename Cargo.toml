@@ -18,7 +18,7 @@ name = "kokage"
 axum = "0.8"
 futures-util = "0.3"
 getrandom = "0.3"
-kokage = { path = "crates/kokage", version = "0.1.0" }
+kokage = { path = "crates/kokage" }
 kokage-derive = { path = "crates/kokage-derive", version = "0.1.0" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
