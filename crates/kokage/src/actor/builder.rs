@@ -297,8 +297,10 @@ impl<M: Send + 'static> ActorSpec<M> {
     ///
     /// This conversion stores configuration without applying supervision-tree
     /// validation. Supervised placement rejects a zero mailbox capacity with
-    /// [`SupervisorBuildError`](crate::SupervisorBuildError); a direct host is
-    /// responsible for supplying a valid configuration before running it.
+    /// [`SupervisorBuildError`](crate::SupervisorBuildError); a direct host
+    /// sees the same rejection as
+    /// [`ActorRunError::ZeroMailboxCapacity`](crate::host::ActorRunError::ZeroMailboxCapacity)
+    /// when the run starts.
     pub fn into_runnable(self) -> RunnableActor {
         self.into_deferred_node()
             .materialize(&RunnableActorBuilder::new())
@@ -590,6 +592,26 @@ mod tests {
             .into_runnable();
 
         assert_eq!(actor.label(), "worker");
+    }
+
+    #[tokio::test]
+    async fn run_until_rejects_zero_mailbox_capacity() {
+        let actor = ActorSpec::new("worker", || OpaqueActor)
+            .mailbox_capacity(0)
+            .into_runnable();
+
+        let result = actor
+            .run_until(
+                std::future::ready(()),
+                Default::default(),
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(crate::host::ActorRunError::ZeroMailboxCapacity { actor_id }) if actor_id == "worker"
+        ));
     }
 
     struct StringActor;
