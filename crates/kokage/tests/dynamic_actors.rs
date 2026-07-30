@@ -15,8 +15,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context, ControlError,
-    DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, RunningTree,
+    Actor, ActorRef, ActorSlot, ActorSpec, BuildError, Context, ControlError, DownReason,
+    DynamicTree, ExitResult, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, RunningTree,
     ScopeRef, SendError, Shutdown, StopContext, SupervisorError, TrySendError,
     host::{BoxError, RawActor, RawContext, TaskSpec},
     observe::ChildMembershipView,
@@ -43,7 +43,7 @@ impl<M> Clone for Drain<M> {
 impl<M: Send + 'static> RawActor for Drain<M> {
     type Msg = M;
 
-    async fn run(&mut self, mut ctx: RawContext<M>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<M>) -> ExitResult {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -58,7 +58,7 @@ struct GatedExit {
 impl RawActor for GatedExit {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
         self.release.notified().await;
         if self.fail {
             Err(io::Error::other("dynamic actor failed").into())
@@ -76,12 +76,12 @@ struct CleanStop {
 impl Actor for CleanStop {
     type Msg = ();
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.stop();
         Ok(())
     }
@@ -95,7 +95,7 @@ struct RestartOnce {
 impl RawActor for RestartOnce {
     type Msg = ();
 
-    async fn run(&mut self, ctx: RawContext<()>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<()>) -> ExitResult {
         if self.starts.fetch_add(1, Ordering::SeqCst) == 0 {
             Err(io::Error::other("restart me").into())
         } else {
@@ -118,7 +118,7 @@ struct Watcher {
 impl RawActor for Watcher {
     type Msg = WatchMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         let mut watch: Option<Guard> = None;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -251,7 +251,7 @@ struct ObserveOrder {
 impl RawActor for ObserveOrder {
     type Msg = (u8, u32);
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -262,7 +262,7 @@ impl RawActor for ObserveOrder {
 impl RawActor for Observe {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.observed.send(message).expect("receiver alive");
         }
@@ -281,7 +281,7 @@ struct Forwarder;
 impl RawActor for Forwarder {
     type Msg = ForwardMsg;
 
-    async fn run(&mut self, mut ctx: RawContext<ForwardMsg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<ForwardMsg>) -> ExitResult {
         let mut target = None;
         while let Some(message) = ctx.recv().await {
             match message {
@@ -459,7 +459,7 @@ struct RemovalProbe {
 impl Actor for RemovalProbe {
     type Msg = RemovalMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             RemovalMsg::Hold => {
                 self.events
@@ -1084,7 +1084,7 @@ struct GatedDrain {
 impl RawActor for GatedDrain {
     type Msg = u64;
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         self.release.notified().await;
         while ctx.recv().await.is_some() {}
         Ok(())
@@ -1227,7 +1227,7 @@ struct ForwardTo {
 impl RawActor for ForwardTo {
     type Msg = String;
 
-    async fn run(&mut self, mut ctx: RawContext<String>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<String>) -> ExitResult {
         while let Some(message) = ctx.recv().await {
             self.target.send(message).await?;
         }
@@ -1283,7 +1283,7 @@ struct PendingActor;
 impl RawActor for PendingActor {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<()>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
         pending::<()>().await;
         Ok(())
     }

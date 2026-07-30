@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorRef, ActorResult, ActorSlot, Context, OrderedTree};
+use kokage::{Actor, ActorRef, ActorSlot, Context, ExitResult, OrderedTree};
 use tokio::sync::mpsc;
 
 enum FrontendMsg {
@@ -19,7 +19,7 @@ struct Frontend {
 impl Actor for Frontend {
     type Msg = FrontendMsg;
 
-    async fn handle(&mut self, message: FrontendMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: FrontendMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             FrontendMsg::Feed(line) => self.parser.send(ParserMsg(line)).await?,
             FrontendMsg::Ack => self.acked.send(()).expect("receiver alive"),
@@ -36,7 +36,7 @@ struct Parser {
 impl Actor for Parser {
     type Msg = ParserMsg;
 
-    async fn handle(&mut self, message: ParserMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: ParserMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.sink.send(SinkMsg(message.0.to_uppercase())).await?;
         self.frontend.send(FrontendMsg::Ack).await?;
         Ok(())
@@ -50,7 +50,7 @@ struct Sink {
 impl Actor for Sink {
     type Msg = SinkMsg;
 
-    async fn handle(&mut self, message: SinkMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: SinkMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.out.send(message.0).expect("receiver alive");
         Ok(())
     }

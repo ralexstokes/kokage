@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{Instrument, info_span};
 
 use crate::{
-    actor::ActorResult,
+    actor::ExitResult,
     supervisor::{
         builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder},
         child::{ChildDefinition, ChildKind},
@@ -39,9 +39,9 @@ use crate::{
 ///
 /// A `Supervisor` owns the stable identity behind [`handle`](Self::handle),
 /// reserved when its builder was created. Moving the declaration into
-/// [`spawn`](Self::spawn) or [`TaskSpec::supervisor`](crate::supervisor::TaskSpec::supervisor)
-/// transfers that identity. Clone the handle, not the declaration, when
-/// multiple observers or controllers need to address it.
+/// [`spawn`](Self::spawn) or nesting it under a parent scope transfers that
+/// identity. Clone the handle, not the declaration, when multiple observers
+/// or controllers need to address it.
 pub struct Supervisor {
     pub(crate) config: SupervisorConfig,
     pub(crate) channels: Arc<StableSupervisorChannels>,
@@ -260,7 +260,7 @@ impl Supervisor {
         path: Vec<String>,
         revivable: bool,
         abort_cascades: Arc<AtomicBool>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         let generation = ctx.generation();
         let (shutdown_tx, shutdown_rx, command_tx, command_rx, done_tx, done_rx) =
             channels.take_initial_incarnation(generation).map_or_else(

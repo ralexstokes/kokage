@@ -32,7 +32,7 @@ impl Actor for Greeter {
         &mut self,
         name: String,
         _ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         println!("hello, {name}");
         Ok(())
     }

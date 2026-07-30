@@ -19,7 +19,7 @@
 //!         &mut self,
 //!         message: String,
 //!         _ctx: &mut Context<'_, Self>,
-//!     ) -> ActorResult {
+//!     ) -> ExitResult {
 //!         println!("{message}");
 //!         Ok(())
 //!     }
@@ -124,8 +124,8 @@
 //! use kokage::prelude::*;
 //! # struct Left(kokage::ActorRef<()>);
 //! # struct Right(kokage::ActorRef<()>);
-//! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
-//! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+//! # impl kokage::Actor for Left { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
+//! # impl kokage::Actor for Right { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 //! let left_slot = ActorSlot::<()>::new("left");
 //! let left = left_slot.actor_ref();
 //! let right_slot = ActorSlot::<()>::new("right");
@@ -144,11 +144,11 @@
 //!
 //! ```
 //! use kokage::{
-//!     Actor, ActorResult, ActorSpec, CancellationToken, Context,
+//!     Actor, ExitResult, ActorSpec, CancellationToken, Context,
 //!     Restart, Shutdown, host::DEFAULT_SHUTDOWN_BOUND,
 //! };
 //! # struct Worker;
-//! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ActorResult { Ok(()) } }
+//! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let actor = ActorSpec::new("worker", || Worker).into_runnable();
@@ -230,15 +230,14 @@ mod supervisor;
 /// Most applications use [`ActorSpec`] and a supervision tree.
 /// This module contains the lower-level execution surface for custom receive
 /// loops, directly driven runnable actors, and arbitrary supervised tasks.
-/// For task children it re-exports every type needed to name a
-/// [`host::TaskSpec::new`] factory as a standalone function. Nested scopes are
+/// For task children it re-exports the types needed to name a
+/// [`host::TaskSpec::new`] factory as a standalone function; the shared
+/// [`ExitResult`] alias lives at the crate root. Nested scopes are
 /// composed with [`OrderedTree::subtree`] or
 /// [`ScopeRef::add_subtree`].
 pub mod host {
     pub use crate::{
-        actor::{
-            ActorResult, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
-        },
+        actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
         supervisor::{BoxError, TaskContext, TaskSpec},
     };
 }
@@ -275,7 +274,7 @@ pub mod observe {
 /// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, OrderedTree, Reply,
+        Actor, ActorRef, ActorSlot, ActorSpec, Context, ExitResult, OrderedTree, Reply,
         StopContext,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
@@ -285,9 +284,9 @@ pub mod prelude {
 pub use kokage_derive::ActorFactory;
 
 pub use actor::{
-    Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
-    BlockingCancelled, CallError, Context, DownReason, MailboxMode, MonitorEvent, OffloadDeadline,
-    Reply, RestrictedScopeRef, SendError, StopContext, TimerKey, TrySendError,
+    Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
+    Context, DownReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply,
+    RestrictedScopeRef, SendError, StopContext, TimerKey, TrySendError,
 };
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

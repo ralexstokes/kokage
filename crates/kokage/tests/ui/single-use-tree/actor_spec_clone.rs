@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, ActorSpec, Context};
+use kokage::{Actor, ExitResult, ActorSpec, Context};
 
 struct Idle;
 
@@ -9,7 +9,7 @@ impl Actor for Idle {
         &mut self,
         (): (),
         _ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         Ok(())
     }
 }

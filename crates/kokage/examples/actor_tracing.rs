@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorResult, ActorSpec, Context};
+use kokage::{Actor, ActorSpec, Context, ExitResult};
 use tokio::sync::mpsc;
 
 mod support;
@@ -13,7 +13,7 @@ struct Worker {
 impl Actor for Worker {
     type Msg = &'static str;
 
-    async fn handle(&mut self, message: &'static str, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: &'static str, ctx: &mut Context<'_, Self>) -> ExitResult {
         tracing::info!(message, "worker received message");
         ctx.run_blocking(|_token| ()).await?;
         self.completed.send(()).expect("receiver alive");

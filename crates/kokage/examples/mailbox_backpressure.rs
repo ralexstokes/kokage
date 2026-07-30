@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use kokage::{
-    ActorResult, ActorSpec, TrySendError,
+    ActorSpec, ExitResult, TrySendError,
     host::{RawActor, RawContext},
 };
 use tokio::sync::Notify;
@@ -18,7 +18,7 @@ struct ParkBeforeRecv {
 impl RawActor for ParkBeforeRecv {
     type Msg = &'static str;
 
-    async fn run(&mut self, mut ctx: RawContext<&'static str>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<&'static str>) -> ExitResult {
         self.release.notified().await;
         while let Some(message) = ctx.recv().await {
             println!("worker received `{message}`");

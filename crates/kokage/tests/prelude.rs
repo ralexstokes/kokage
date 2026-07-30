@@ -16,7 +16,7 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, Context, OrderedTree, Reply,
+            Actor, ActorRef, ActorSlot, ActorSpec, Context, ExitResult, OrderedTree, Reply,
             StopContext, SupervisorSnapshot, SupervisorSnapshotReceiver,
         };
     }
@@ -32,8 +32,8 @@ mod coverage_probe {
 
     mod host {
         use kokage::host::{
-            ActorResult, ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext,
-            RunnableActor, TaskContext, TaskSpec,
+            ActorRunError, BoxError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
+            TaskContext, TaskSpec,
         };
     }
 
@@ -63,7 +63,7 @@ fn prelude_constructs_acyclic_and_cyclic_actor_declarations() {
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
-async fn named_task(ctx: kokage::host::TaskContext) -> kokage::host::ActorResult {
+async fn named_task(ctx: kokage::host::TaskContext) -> kokage::ExitResult {
     ctx.shutdown_token().cancelled().await;
     Ok(())
 }
@@ -152,7 +152,7 @@ struct BlockingWorker {
 impl Actor for BlockingWorker {
     type Msg = ();
 
-    async fn handle(&mut self, _message: (), ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, _message: (), ctx: &mut Context<'_, Self>) -> ExitResult {
         let observed = self.observed.clone();
         let actor_id = ctx.id().to_owned();
         ctx.run_blocking(move |token| {

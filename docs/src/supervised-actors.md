@@ -9,7 +9,7 @@ lifecycle events, and statistics.
 
 # use kokage::{ActorSpec, OrderedTree, Restart, Shutdown};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let worker = ActorSpec::new("worker", || Worker)
@@ -47,7 +47,7 @@ struct FrontDesk(ActorRef<String>);
 impl Actor for FrontDesk {
     type Msg = String;
 
-    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.0.send(order).await?;
         Ok(())
     }
@@ -61,12 +61,12 @@ struct Press {
 impl Actor for Press {
     type Msg = String;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.run = self.runs.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, order: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.run == 0 && order.contains("origami") {
             return Err::<_, BoxError>(Box::new(io::Error::other("paper jam")));
         }
@@ -123,7 +123,7 @@ restart boundaries:
 ```rust
 # use kokage::{ActorSpec, OrderedTree, Strategy};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let venues = OrderedTree::new()
     .strategy(Strategy::OneForAll)
     .actor(ActorSpec::new("feed", || Worker))

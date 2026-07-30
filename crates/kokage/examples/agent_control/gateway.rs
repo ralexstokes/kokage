@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use kokage::{
-    Actor, ActorRef, ActorResult, Context,
+    Actor, ActorRef, Context, ExitResult,
     host::{RawActor, RawContext},
 };
 
@@ -28,7 +28,7 @@ impl Outbound {
 impl Actor for Outbound {
     type Msg = OutboundMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             OutboundMsg::Reply { chat, text } | OutboundMsg::Notice { chat, text } => {
                 self.chat.deliver_reply(chat, text);
@@ -52,7 +52,7 @@ impl Progress {
 impl Actor for Progress {
     type Msg = ProgressMsg;
 
-    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         let (chat, line) = match message {
             ProgressMsg::Delta { chat, line } => (chat, line),
             ProgressMsg::Typing { chat } => (chat, "typing…".to_owned()),
@@ -81,7 +81,7 @@ impl Inbound {
         }
     }
 
-    async fn delivery(&self, delivery: crate::messages::ChatDelivery) -> ActorResult {
+    async fn delivery(&self, delivery: crate::messages::ChatDelivery) -> ExitResult {
         let ack = self
             .journal
             .call(PHASE_TIMEOUT, |reply| JournalMsg::Append {
@@ -116,7 +116,7 @@ impl Inbound {
         Ok(())
     }
 
-    async fn bridge_message(&self, message: InboundMsg) -> ActorResult {
+    async fn bridge_message(&self, message: InboundMsg) -> ExitResult {
         match message {
             InboundMsg::Delivery(delivery) => self.delivery(delivery).await,
             InboundMsg::Disconnected => {
@@ -134,7 +134,7 @@ impl RawActor for Inbound {
         true
     }
 
-    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         let mut session = self.chat.connect();
         ctx.mark_ready();
         loop {

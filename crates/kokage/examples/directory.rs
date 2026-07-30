@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, time::Duration};
 
-use kokage::{Actor, ActorRef, ActorResult, ActorSpec, Context, DynamicTree, OrderedTree, Reply};
+use kokage::{Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, OrderedTree, Reply};
 use tokio::sync::mpsc;
 
 enum DirectoryMsg<M> {
@@ -27,7 +27,7 @@ impl<M: Send + 'static> Actor for Directory<M> {
         &mut self,
         message: DirectoryMsg<M>,
         _ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         match message {
             DirectoryMsg::Insert(name, actor_ref) => {
                 self.entries.insert(name, actor_ref);
@@ -46,7 +46,7 @@ struct Printer {
 impl Actor for Printer {
     type Msg = String;
 
-    async fn handle(&mut self, message: String, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.printed.send(message).expect("receiver alive");
         Ok(())
     }

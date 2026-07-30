@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kokage::{Actor, ActorRef, ActorResult, CancellationToken, Context};
+use kokage::{Actor, ActorRef, CancellationToken, Context, ExitResult};
 
 use crate::{
     messages::{
@@ -34,7 +34,7 @@ pub struct AgentRun {
 }
 
 impl AgentRun {
-    async fn append(&self, entry: JournalEntry) -> ActorResult {
+    async fn append(&self, entry: JournalEntry) -> ExitResult {
         self.journal
             .call(PHASE_TIMEOUT, |reply| JournalMsg::Append {
                 chat: self.chat,
@@ -65,7 +65,7 @@ impl AgentRun {
         .detach();
     }
 
-    async fn start_tool(&self, index: usize, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn start_tool(&self, index: usize, ctx: &mut Context<'_, Self>) -> ExitResult {
         let call = self.tools[index].clone();
         let key = format!("{}:{}:{index}", self.chat, self.task);
         self.append(JournalEntry::ToolIntent {
@@ -119,7 +119,7 @@ impl AgentRun {
         Ok(())
     }
 
-    async fn finish(&self, ctx: &mut Context<'_, Self>, output: RunOutput) -> ActorResult {
+    async fn finish(&self, ctx: &mut Context<'_, Self>, output: RunOutput) -> ExitResult {
         self.session
             .send(SessionMsg::RunFinished {
                 task: self.task,
@@ -135,12 +135,12 @@ impl AgentRun {
 impl Actor for AgentRun {
     type Msg = RunMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.continue_with(RunMsg::Step);
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             RunMsg::Step => self.start_model(ctx),
             RunMsg::ModelResult { result } => {

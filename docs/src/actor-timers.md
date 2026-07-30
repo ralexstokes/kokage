@@ -38,7 +38,7 @@ const RECONNECT: TimerKey = TimerKey::new("reconnect");
 impl Actor for Worker {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
         self.reconcile = Some(ctx.interval(
             &ctx.myself(),
@@ -52,7 +52,7 @@ impl Actor for Worker {
         &mut self,
         message: Message,
         _ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
             Message::Reconcile => { /* reconcile periodically */ }
@@ -118,7 +118,7 @@ const CANCEL: TimerKey = TimerKey::new("cancel");
 impl Actor for Order {
     type Msg = Message;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(FILL, Message::FillTimedOut, Duration::from_millis(500));
         Ok(())
     }
@@ -127,7 +127,7 @@ impl Actor for Order {
         &mut self,
         message: Message,
         ctx: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         match (&self.phase, message) {
             (Phase::PendingFill, Message::Filled) => {
                 ctx.clear_timeout(FILL);

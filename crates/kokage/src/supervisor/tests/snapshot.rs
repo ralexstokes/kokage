@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildMembershipView, ChildSnapshot, ChildStateView, Restart, ScopeKind, Supervisor,
-    SupervisorSnapshot, SupervisorStateView, TaskSpec,
+    Backoff, ChildMembershipView, ChildSnapshot, ChildSpec, ChildStateView, Restart, ScopeKind,
+    Supervisor, SupervisorSnapshot, SupervisorStateView, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -76,7 +76,7 @@ async fn nested_supervisors_allocate_lineages_independently() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::supervisor("nested", nested))
+        .add_child_spec(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested supervisor added");
     let nested_handle = handle
@@ -320,7 +320,7 @@ async fn root_snapshot_includes_nested_supervisor_tree() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
-        .child(TaskSpec::supervisor("nested", nested))
+        .child_spec(ChildSpec::supervisor("nested", nested))
         .build()
         .expect("valid outer supervisor");
 

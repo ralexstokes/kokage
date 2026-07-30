@@ -14,8 +14,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    ChildStateView, CompletionOutcome, Restart, Shutdown, Strategy, Supervisor, SupervisorError,
-    TaskSpec,
+    ChildSpec, ChildStateView, CompletionOutcome, Restart, Shutdown, Strategy, Supervisor,
+    SupervisorError, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -288,7 +288,7 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
     let inner = inner_builder.build().expect("valid inner supervisor");
 
     let parent = Supervisor::ordered()
-        .child(TaskSpec::supervisor("job", inner).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("job", inner).restart(Restart::on_failure()))
         .build()
         .expect("valid parent supervisor");
 
@@ -325,7 +325,7 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
     let _inner_finished = inner_builder.handle().completions(["done"]).then_shutdown();
     let inner = inner_builder.build().expect("valid inner supervisor");
 
-    let parent_builder = Supervisor::ordered().child(TaskSpec::supervisor("job", inner));
+    let parent_builder = Supervisor::ordered().child_spec(ChildSpec::supervisor("job", inner));
     let _parent_finished = parent_builder.handle().completions(["job"]).then_shutdown();
 
     let running = parent_builder

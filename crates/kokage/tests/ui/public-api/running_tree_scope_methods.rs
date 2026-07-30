@@ -1,5 +1,5 @@
 use kokage::{
-    Actor as ActorTrait, ActorResult, ActorSpec, Context, OrderedTree, RunningTree,
+    Actor as ActorTrait, ActorSpec, Context, ExitResult, OrderedTree, RunningTree,
     host::TaskSpec,
 };
 
@@ -8,7 +8,7 @@ struct Actor;
 impl ActorTrait for Actor {
     type Msg = ();
 
-    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
         Ok(())
     }
 }

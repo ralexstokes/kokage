@@ -916,8 +916,8 @@ async fn parent_child_grace_bounds_a_slow_nested_ordered_teardown() {
         .build()
         .expect("nested ordered supervisor builds");
     let handle_owner = Supervisor::ordered()
-        .child(
-            crate::supervisor::TaskSpec::supervisor("nested", nested)
+        .child_spec(
+            crate::supervisor::ChildSpec::supervisor("nested", nested)
                 .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()
@@ -975,15 +975,15 @@ async fn parent_grace_expiry_hard_cascades_through_nested_supervisor_levels() {
         .build()
         .expect("inner supervisor builds");
     let middle = Supervisor::ordered()
-        .child(
-            crate::supervisor::TaskSpec::supervisor("inner", inner)
+        .child_spec(
+            crate::supervisor::ChildSpec::supervisor("inner", inner)
                 .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
         )
         .build()
         .expect("middle supervisor builds");
     let handle_owner = Supervisor::ordered()
-        .child(
-            crate::supervisor::TaskSpec::supervisor("middle", middle)
+        .child_spec(
+            crate::supervisor::ChildSpec::supervisor("middle", middle)
                 .shutdown(Shutdown::drain_for(common::SHORT_GRACE)),
         )
         .build()

@@ -1,10 +1,5 @@
-error[E0624]: associated function `supervisor` is private
+error[E0599]: no associated function or constant named `supervisor` found for struct `TaskSpec` in the current scope
  --> tests/ui/public-api/private_task_spec_supervisor.rs:4:23
   |
 4 |     let _ = TaskSpec::supervisor;
-  |                       ^^^^^^^^^^ private associated function
-  |
- ::: src/supervisor/child.rs
-  |
-  |     pub(crate) fn supervisor(id: impl Into<String>, supervisor: Supervisor) -> Self {
-  |     ------------------------------------------------------------------------------- private associated function defined here
+  |                       ^^^^^^^^^^ associated function or constant not found in `TaskSpec`

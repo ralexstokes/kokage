@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use crate::supervisor::{
-    __private, BuildError, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart, ScopeKind,
+    BuildError, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart, ScopeKind,
     Shutdown, Strategy, Supervisor, TaskSpec,
 };
 
@@ -113,7 +113,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// impl Actor for Worker {
 ///     type Msg = ();
 ///
-///     async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ActorResult {
+///     async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
 ///         Ok(())
 ///     }
 /// }
@@ -673,7 +673,7 @@ impl SupervisionChild {
             },
             Self::Task(child) => {
                 let (restart, shutdown) =
-                    __private::child_policies(child, default_restart, default_shutdown);
+                    child.resolved_policies(default_restart, default_shutdown);
                 ChildOutline::Task {
                     id: child.id().to_owned(),
                     restart,
@@ -713,7 +713,7 @@ impl SupervisionChild {
                     restart,
                     shutdown,
                 } = actors.materialize_actor_node(actor);
-                builder.child(actor_child_spec(
+                builder.child_spec(actor_child_spec(
                     actor.expect("tree lowering materialized the actor"),
                     actors,
                     ActorChildOptions::new(
@@ -730,17 +730,15 @@ impl SupervisionChild {
                 shutdown,
             } => {
                 let (nested, nested_actors) = node.lower(reservations)?;
-                let mut child = TaskSpec::supervisor(id, nested);
+                let mut child = ChildSpec::supervisor(id, nested);
                 if let Some(restart) = restart {
                     child = child.restart(restart);
                 }
                 if let Some(shutdown) = shutdown {
                     child = child.shutdown(shutdown);
                 }
-                builder.child(__private::attach(
-                    child,
-                    RuntimeAttachment::subtree(actors, nested_actors),
-                ))
+                builder
+                    .child_spec(child.attachment(RuntimeAttachment::subtree(actors, nested_actors)))
             }
         })
     }
@@ -799,12 +797,9 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
                             actor.restart.unwrap_or(config.default_restart)
                         }
                         SupervisionChild::Task(child) => {
-                            __private::child_policies(
-                                child,
-                                config.default_restart,
-                                config.default_shutdown,
-                            )
-                            .0
+                            child
+                                .resolved_policies(config.default_restart, config.default_shutdown)
+                                .0
                         }
                         SupervisionChild::Scope { restart, .. } => {
                             restart.unwrap_or(config.default_restart)

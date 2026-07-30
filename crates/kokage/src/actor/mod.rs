@@ -27,4 +27,4 @@ pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActorBuilder};
 pub use handler::Actor;
 pub use monitor::{DownReason, MonitorEvent};
-pub use raw::{ActorResult, RawActor};
+pub use raw::{ExitResult, RawActor};

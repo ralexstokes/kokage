@@ -1,3 +1,9 @@
+error[E0432]: unresolved import `kokage::host::ExitResult`
+ --> tests/ui/public-api/root_export_tier.rs:4:75
+  |
+4 |     RawContext as _, ActorRunError as _, BoxError as _, TaskContext as _, ExitResult as _,
+  |                                                                           ^^^^^^^^^^^^^^^ no `ExitResult` in `host`
+
 error[E0432]: unresolved import `kokage::RawContext`
   --> tests/ui/public-api/root_export_tier.rs:17:5
    |

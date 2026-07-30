@@ -26,7 +26,7 @@ struct Worker;
 impl Actor for Worker {
     type Msg = Reply<u32>;
 
-    async fn handle(&mut self, reply: Reply<u32>, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, reply: Reply<u32>, _ctx: &mut Context<'_, Self>) -> ExitResult {
         reply.send(7);
         Ok(())
     }
@@ -37,7 +37,7 @@ struct Finite;
 impl RawActor for Finite {
     type Msg = ();
 
-    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ExitResult {
         Ok(())
     }
 }
@@ -47,7 +47,7 @@ struct Parked;
 impl RawActor for Parked {
     type Msg = Vec<u8>;
 
-    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ActorResult {
+    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }

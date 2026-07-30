@@ -33,7 +33,7 @@ impl Control {
 impl Actor for Control {
     type Msg = ControlMsg;
 
-    async fn handle(&mut self, message: ControlMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: ControlMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             ControlMsg::KillSwitch { reply } => {
                 self.intake_gate.store(false, Ordering::Release);

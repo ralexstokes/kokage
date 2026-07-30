@@ -9,7 +9,7 @@ topology are expressed together.
 ```rust
 # use kokage::{ActorSpec, OrderedTree, Strategy};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let tree = OrderedTree::new()
     .strategy(Strategy::OneForOne)
     .actor(ActorSpec::new("ingest", || Worker))
@@ -49,7 +49,7 @@ capture a future scope without a global cell:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
 # struct Router(kokage::ScopeRef);
-# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = DynamicTree::new();
 let sessions_handle = sessions.scope();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
@@ -100,7 +100,7 @@ the temporary owner is dropped at the end of the statement.
 ```rust
 # use kokage::{ActorSpec, OrderedTree, Strategy};
 # struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let tree = OrderedTree::new()
     .strategy(Strategy::RestForOne)
     .actor(ActorSpec::new("ingest", || Worker))
@@ -120,7 +120,7 @@ Represent an actor and its workers with an explicit nested tree:
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy};
 # struct Leader;
-# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
+# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 let sessions = OrderedTree::new().subtree(
     "session-runtime",
     OrderedTree::new()

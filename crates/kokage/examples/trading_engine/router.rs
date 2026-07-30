@@ -77,7 +77,7 @@ impl OrderRouter {
 impl Actor for OrderRouter {
     type Msg = RouterMsg;
 
-    async fn handle(&mut self, message: RouterMsg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: RouterMsg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             RouterMsg::Submit {
                 symbol,

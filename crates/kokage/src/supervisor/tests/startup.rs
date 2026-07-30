@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{Restart, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{ChildSpec, Restart, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::common;
@@ -326,7 +326,7 @@ async fn nested_supervisor_gates_later_parent_siblings() {
     })
     .wait_for_ready();
     let handle_owner = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested))
+        .child_spec(ChildSpec::supervisor("nested", nested))
         .child(later)
         .build()
         .unwrap()
@@ -371,7 +371,7 @@ async fn nested_traffic_does_not_starve_sequential_readiness() {
             }))
             .build()
             .unwrap();
-        root = root.child(TaskSpec::supervisor(format!("noisy-{index}"), nested));
+        root = root.child_spec(ChildSpec::supervisor(format!("noisy-{index}"), nested));
     }
 
     let gated = TaskSpec::new("gated", {
@@ -606,7 +606,7 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
         .build()
         .unwrap();
     let handle_owner = Supervisor::ordered()
-        .child(TaskSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
         .build()
         .unwrap()
         .spawn();

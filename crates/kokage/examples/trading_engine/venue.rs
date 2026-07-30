@@ -177,12 +177,12 @@ pub struct VenueFeed {
 impl Actor for VenueFeed {
     type Msg = FeedMsg;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         self.exchange.open_feed_session(self.venue);
         Ok(())
     }
 
-    async fn handle(&mut self, message: FeedMsg, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: FeedMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
         let started = Instant::now();
         match message {
             FeedMsg::Tick(snapshot) => {
@@ -226,7 +226,7 @@ impl VenueGateway {
 impl Actor for VenueGateway {
     type Msg = GatewayMsg;
 
-    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, _ctx: &mut Context<'_, Self>) -> ExitResult {
         // Stalled replies belong to the actor session. A restart drops them,
         // allowing abandoned callers to observe the incarnation boundary.
         self.stalled_replies
@@ -237,7 +237,7 @@ impl Actor for VenueGateway {
         Ok(())
     }
 
-    async fn handle(&mut self, message: GatewayMsg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: GatewayMsg, ctx: &mut Context<'_, Self>) -> ExitResult {
         let started = Instant::now();
         match message {
             GatewayMsg::Place {

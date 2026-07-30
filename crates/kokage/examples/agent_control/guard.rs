@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use kokage::{Actor, ActorRef, ActorResult, Context, TimerKey};
+use kokage::{Actor, ActorRef, Context, ExitResult, TimerKey};
 use tokio::time::Instant;
 
 use crate::{
@@ -49,7 +49,7 @@ impl Guard {
         }
     }
 
-    async fn set_paused(&mut self, paused: bool, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn set_paused(&mut self, paused: bool, ctx: &mut Context<'_, Self>) -> ExitResult {
         if self.report.paused == paused {
             return Ok(());
         }
@@ -67,7 +67,7 @@ impl Guard {
 impl Actor for Guard {
     type Msg = GuardMsg;
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             GuardMsg::RunFailureObserved { chat, task } => {
                 tracing::debug!(chat, task, "guard observed run failure");

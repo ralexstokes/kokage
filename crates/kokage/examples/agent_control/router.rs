@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorResult, ActorSlot, Context, ControlError, DynamicTree, Guard,
-    OrderedTree, ScopeRef, Shutdown, Strategy, SupervisorError,
+    Actor, ActorRef, ActorSlot, Context, ControlError, DynamicTree, ExitResult, Guard, OrderedTree,
+    ScopeRef, Shutdown, Strategy, SupervisorError,
     observe::{ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
 };
 
@@ -295,7 +295,7 @@ impl Router {
 impl Actor for Router {
     type Msg = RouterMsg;
 
-    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         // Alignment is watch first, snapshot second, then seq filtering in the
         // handler. A restarted router owns no prior slots, so every membership
         // in the snapshot is an orphan to sweep. A concurrently completed old
@@ -308,7 +308,7 @@ impl Actor for Router {
         Ok(())
     }
 
-    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ActorResult {
+    async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             RouterMsg::MountLifecycle(event) => {
                 match mount_event_disposition(self.alignment_seq, &event) {

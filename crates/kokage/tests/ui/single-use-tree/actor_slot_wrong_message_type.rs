@@ -1,4 +1,4 @@
-use kokage::{Actor, ActorResult, ActorSlot, Context};
+use kokage::{Actor, ExitResult, ActorSlot, Context};
 
 struct TextActor;
 
@@ -9,7 +9,7 @@ impl Actor for TextActor {
         &mut self,
         _: String,
         _: &mut Context<'_, Self>,
-    ) -> ActorResult {
+    ) -> ExitResult {
         Ok(())
     }
 }

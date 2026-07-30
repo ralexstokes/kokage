@@ -1,4 +1,4 @@
-use crate::supervisor::{__private, Supervisor, TaskSpec};
+use crate::supervisor::{__private, ChildSpec, Supervisor, TaskSpec};
 
 fn waiting_child(id: &str) -> TaskSpec {
     TaskSpec::new(id, |ctx| async move {
@@ -10,21 +10,22 @@ fn waiting_child(id: &str) -> TaskSpec {
 #[tokio::test]
 async fn attached_children_walk_direct_memberships_before_descendants() {
     let nested = Supervisor::ordered()
-        .child(__private::attach(
-            waiting_child("leaf"),
-            "leaf metadata".to_owned(),
-        ))
+        .child_spec(
+            waiting_child("leaf")
+                .into_spec()
+                .attachment("leaf metadata".to_owned()),
+        )
         .build()
         .expect("nested supervisor builds");
     let root_owner = Supervisor::ordered()
-        .child(__private::attach(
-            waiting_child("worker"),
-            "worker metadata".to_owned(),
-        ))
-        .child(__private::attach(
-            TaskSpec::supervisor("branch", nested),
-            "branch metadata".to_owned(),
-        ))
+        .child_spec(
+            waiting_child("worker")
+                .into_spec()
+                .attachment("worker metadata".to_owned()),
+        )
+        .child_spec(
+            ChildSpec::supervisor("branch", nested).attachment("branch metadata".to_owned()),
+        )
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -66,7 +67,11 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
     let old_lineage = handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(__private::attach(waiting_child("worker"), "old".to_owned()))
+        .add_child_spec(
+            waiting_child("worker")
+                .into_spec()
+                .attachment("old".to_owned()),
+        )
         .await
         .expect("old child added");
 
@@ -84,7 +89,11 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
     let new_lineage = handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(__private::attach(waiting_child("worker"), "new".to_owned()))
+        .add_child_spec(
+            waiting_child("worker")
+                .into_spec()
+                .attachment("new".to_owned()),
+        )
         .await
         .expect("replacement child added");
 
@@ -101,10 +110,11 @@ async fn replacing_a_child_replaces_its_attachment_and_identity_atomically() {
 #[tokio::test]
 async fn attachments_are_absent_from_serialized_snapshots() {
     let handle_owner = Supervisor::ordered()
-        .child(__private::attach(
-            waiting_child("worker"),
-            "not serialized".to_owned(),
-        ))
+        .child_spec(
+            waiting_child("worker")
+                .into_spec()
+                .attachment("not serialized".to_owned()),
+        )
         .build()
         .expect("supervisor builds")
         .spawn();

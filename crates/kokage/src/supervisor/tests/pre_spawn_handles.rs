@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ControlError, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
+    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
     SupervisorError, TaskSpec,
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -189,7 +189,7 @@ async fn rejected_add_terminalizes_the_inserted_scopes_reserved_handle() {
         parent
             .dynamic()
             .expect("dynamic supervisor")
-            .add_child(TaskSpec::supervisor("nested", nested))
+            .add_child_spec(ChildSpec::supervisor("nested", nested))
             .await,
         Err(ControlError::Rejected(
             crate::supervisor::BuildError::DuplicateChildId(id)
@@ -227,7 +227,7 @@ async fn dropping_the_last_retained_nested_handle_does_not_stop_the_inserted_sco
     parent
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::supervisor("nested", nested))
+        .add_child_spec(ChildSpec::supervisor("nested", nested))
         .await
         .expect("nested scope inserts");
     retained.wait_started().await.expect("nested scope starts");
