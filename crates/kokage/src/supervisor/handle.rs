@@ -1441,9 +1441,13 @@ impl SupervisorHandle {
     ///
     /// Ordered supervisors have immutable membership and return `None`.
     pub fn dynamic(&self) -> Option<DynamicSupervisorHandle> {
-        (self.snapshots_rx().borrow().kind == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
+        (self.kind() == ScopeKind::Dynamic).then(|| DynamicSupervisorHandle {
             handle: self.clone(),
         })
+    }
+
+    pub(crate) fn kind(&self) -> ScopeKind {
+        self.snapshots_rx().borrow().kind
     }
 
     // The private runtime suite uses this to inspect restart-stable nested

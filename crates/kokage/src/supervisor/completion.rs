@@ -28,7 +28,7 @@ pub enum CompletionOutcome {
     Closed,
 }
 
-/// Error returned when a static completion wait names no current child.
+/// Error returned when a completion watch cannot use its requested mode or ids.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CompletionError {
@@ -81,8 +81,9 @@ impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
     /// Treats absent ids as membership that may be inserted later.
     ///
     /// This mode is valid only for a dynamic scope. On an ordered scope,
-    /// awaiting an awaitable watch returns [`CompletionError::NotDynamic`]
-    /// and an armed shutdown watch completes without requesting shutdown.
+    /// awaiting an awaitable watch returns [`CompletionError::NotDynamic`]. An
+    /// armed shutdown watch logs the error and completes without requesting
+    /// shutdown.
     pub fn allow_future_members(mut self) -> Self {
         if self.kind == ScopeKind::Dynamic {
             self.allow_future_members = true;
@@ -128,8 +129,15 @@ impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
                 () = task_cancellation.cancelled() => return,
                 outcome = self.outcome() => outcome,
             };
-            if outcome == Ok(CompletionOutcome::Completed) {
-                handle.shutdown();
+            match outcome {
+                Ok(CompletionOutcome::Completed) => handle.shutdown(),
+                Ok(CompletionOutcome::Closed) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "completion-triggered shutdown watch could not be armed"
+                    );
+                }
             }
         });
 
@@ -175,7 +183,7 @@ impl SupervisorHandle {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        CompletionWatch::new(self.clone(), self.snapshot().kind, ids)
+        CompletionWatch::new(self.clone(), self.kind(), ids)
     }
 }
 

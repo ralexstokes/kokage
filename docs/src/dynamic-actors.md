@@ -167,8 +167,7 @@ let children = ctx
     .supervisor()
     .subtree("children")
     .expect("declared child scope");
-let dynamic = children;
-let worker = dynamic
+let worker = children
     .add_actor(ActorSpec::new("worker", WorkerFactory::default()))
     .await?;
 ```

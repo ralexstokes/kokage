@@ -173,7 +173,7 @@ async fn runtime_handle_waits_for_actor_completion() {
 }
 
 #[tokio::test]
-async fn runtime_handle_can_arm_shutdown_on_completion_before_spawn() {
+async fn pre_spawn_scope_can_arm_shutdown_on_completion() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
         observed: observed_tx.clone(),
