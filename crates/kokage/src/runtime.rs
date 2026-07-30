@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    ActorRef, ActorSpec,
+    ActorRef, SealedActorSpec,
     actor::{
         ActorNode, ActorOptionsValidationError, ActorStats, CancelOnDrop, RunnableActor,
         RunnableActorBuilder, SupervisorPathSegment,
@@ -74,10 +74,7 @@ impl ActorRuntimeState {
             .clone()
     }
 
-    fn make_actor<M: Send + 'static, const CONFIGURABLE: bool>(
-        &self,
-        spec: ActorSpec<M, CONFIGURABLE>,
-    ) -> ActorNode {
+    fn make_actor<M: Send + 'static>(&self, spec: SealedActorSpec<M>) -> ActorNode {
         spec.into_node(&self.actor_builder())
     }
 
@@ -522,7 +519,8 @@ impl RuntimeHandle {
     /// Unlike [`ActorRef::stats`], each returned sample populates
     /// [`ActorStats::supervisor_path`] and [`ActorStats::lineage`] from the
     /// current runtime membership. Message-size totals remain `None` unless
-    /// observation was enabled with [`ActorSpec::message_size`].
+    /// observation was enabled with
+    /// [`ActorSpec::message_size`](crate::ActorSpec::message_size).
     pub fn actor_stats(&self) -> Vec<ActorStats> {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
@@ -682,12 +680,13 @@ impl DynamicRuntimeHandle {
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`RuntimeHandle::wait_started`] retains
     /// the stronger readiness contract. A zero
-    /// [`ActorSpec::mailbox_capacity`] is rejected with
+    /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity) is rejected with
     /// [`ControlError::Rejected`].
-    pub async fn add_actor<M: Send + 'static, const CONFIGURABLE: bool>(
+    pub async fn add_actor<M: Send + 'static>(
         &self,
-        spec: ActorSpec<M, CONFIGURABLE>,
+        spec: impl Into<SealedActorSpec<M>>,
     ) -> Result<ActorRef<M>, ControlError> {
+        let spec = spec.into();
         let actor_ref = ActorRef::from_core(spec.binding(), None);
         spec.actor_options
             .validate()

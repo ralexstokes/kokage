@@ -270,6 +270,32 @@ impl<M: Send + 'static> ActorSpec<M, true> {
 /// configuration is frozen.
 pub type SealedActorSpec<M> = ActorSpec<M, false>;
 
+impl<M: Send + 'static> From<ActorSpec<M>> for SealedActorSpec<M> {
+    /// Seals mailbox configuration without minting a typed ref.
+    ///
+    /// Placement APIs accept `impl Into<SealedActorSpec<M>>`, so a declaration
+    /// in either state can be passed directly and this conversion stays
+    /// implicit. Use [`ActorSpec::actor_ref`] instead when the ref is needed.
+    fn from(spec: ActorSpec<M>) -> Self {
+        let ActorSpec {
+            actor_id,
+            binding,
+            factory,
+            actor_options,
+            restart,
+            shutdown,
+        } = spec;
+        Self {
+            actor_id,
+            binding,
+            factory,
+            actor_options,
+            restart,
+            shutdown,
+        }
+    }
+}
+
 impl<M: Send + 'static, const CONFIGURABLE: bool> ActorSpec<M, CONFIGURABLE> {
     /// Overrides the enclosing scope's complete restart declaration.
     ///
