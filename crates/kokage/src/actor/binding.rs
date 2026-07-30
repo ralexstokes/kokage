@@ -34,22 +34,22 @@ use crate::actor::{
 pub struct ActorStats {
     /// Actor id used to correlate these stats with supervisor snapshots.
     pub actor_id: String,
-    /// Identity path of the supervisors containing this actor when sampled
+    /// Identity path of the nested scopes containing this actor when sampled
     /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
     ///
     /// A direct child of the sampled runtime has an empty path. Each nested
-    /// segment includes the supervisor child's lineage and generation
+    /// segment includes the scope child's lineage and generation
     /// so identical actor ids and local lineages in sibling or restarted
     /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
     /// have no supervisor context and report `None`. The element type is the
     /// public [`ScopePathSegment`].
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub supervisor_path: Option<Vec<ScopePathSegment>>,
+    pub scope_path: Option<Vec<ScopePathSegment>>,
     /// Identity of the actor's current supervisor membership, when sampled
     /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
     ///
     /// Pair this with [`actor_id`](Self::actor_id) and
-    /// [`supervisor_path`](Self::supervisor_path) to distinguish a removed
+    /// [`scope_path`](Self::scope_path) to distinguish a removed
     /// actor from a later actor added under the same id, including actors with
     /// identical local identities in different subtrees. Samples taken from
     /// `ActorRef::stats` have no supervisor membership and report `None`.
@@ -111,10 +111,10 @@ mod serde_tests {
     use serde_json::json;
 
     #[test]
-    fn actor_stats_round_trip_with_supervisor_identity() {
+    fn actor_stats_round_trip_with_scope_identity() {
         let stats = ActorStats {
             actor_id: "worker".into(),
-            supervisor_path: Some(vec![ScopePathSegment {
+            scope_path: Some(vec![ScopePathSegment {
                 id: "workers".into(),
                 lineage: 7,
                 generation: 2,
@@ -133,7 +133,7 @@ mod serde_tests {
 
         let value = serde_json::to_value(&stats).expect("actor stats serialize");
         assert_eq!(
-            value["supervisor_path"],
+            value["scope_path"],
             json!([{"id": "workers", "lineage": 7, "generation": 2}])
         );
         let decoded: ActorStats = serde_json::from_value(value).expect("actor stats deserialize");
@@ -144,7 +144,7 @@ mod serde_tests {
     fn actor_stats_omit_absent_optional_fields() {
         let stats = ActorStats {
             actor_id: "worker".into(),
-            supervisor_path: None,
+            scope_path: None,
             lineage: None,
             messages_received: 0,
             messages_accepted: 0,
@@ -158,7 +158,7 @@ mod serde_tests {
         };
 
         let value = serde_json::to_value(stats).expect("actor stats serialize");
-        assert!(value.get("supervisor_path").is_none());
+        assert!(value.get("scope_path").is_none());
         assert!(value.get("lineage").is_none());
         assert!(value.get("message_bytes_accepted").is_none());
     }
@@ -236,7 +236,7 @@ impl ActorStatsCounters {
     ) -> ActorStats {
         ActorStats {
             actor_id: actor_id.to_owned(),
-            supervisor_path: None,
+            scope_path: None,
             lineage: None,
             messages_received: self.messages_received.load(Ordering::Relaxed),
             messages_accepted: self.messages_accepted.load(Ordering::Relaxed),
@@ -1167,7 +1167,7 @@ impl<M> BindingCore<M> {
 
     pub(crate) fn terminate(&self) {
         self.current.send_replace(BindingState::Terminated);
-        self.monitors.terminated();
+        self.monitors.removed();
         self.outbound_monitors.terminate();
     }
 }
@@ -1188,7 +1188,7 @@ impl<M: Send + 'static> BindingLifecycle for BindingCore<M> {
 
 impl<M> Drop for BindingCore<M> {
     fn drop(&mut self) {
-        self.monitors.terminated();
+        self.monitors.removed();
         self.outbound_monitors.terminate();
     }
 }

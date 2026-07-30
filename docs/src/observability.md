@@ -32,7 +32,7 @@ membership. Lineages start at zero, include statically configured children in
 declaration order, and are monotonic across every incarnation of one
 restart-stable supervisor identity. Each nested supervisor identity allocates
 its own local sequence; lineages are not global. In a recursive view, identify
-a child by the full supervisor path together with its local `(id, lineage)`.
+a child by the full scope path together with its local `(id, lineage)`.
 Each path segment includes the containing supervisor's id, parent-assigned
 lineage, and generation.
 
@@ -88,7 +88,7 @@ let mut lifecycle = handle.watch_lifecycle();
 let snapshot = handle.snapshot();
 
 while let Some(event) = lifecycle.next().await {
-    if event.supervisor_path.is_empty()
+    if event.scope_path.is_empty()
         && event.seq().is_some_and(|seq| seq <= snapshot.lifecycle_seq)
     {
         continue;
@@ -179,12 +179,12 @@ mailbox remains full, cancellation or target termination is the escape hatch.
 ### Tree watching and depth filtering
 
 `watch_lifecycle()` yields one ordered stream for the watched scope and every
-nested supervisor. Each event carries a `supervisor_path` relative
+nested supervisor. Each event carries a `scope_path` relative
 to the watched handle. Every path segment includes the nested supervisor's id,
 lineage, and generation, so consumers can distinguish both a restarted
 incarnation and a removed-then-reinserted subtree.
 
-`LifecycleEvent` is an envelope containing the supervisor path and a flat
+`LifecycleEvent` is an envelope containing the scope path and a flat
 `LifecycleEventKind`. Child variants retain the emitting scope's sequence and
 cumulative restart counters. A nested scope's
 stable identity is reattached automatically when an ancestor recreates it; the
@@ -201,7 +201,7 @@ while let Some(event) = tree.next().await {
 Each watch has one bounded buffer for the whole watched tree. On
 overflow, the oldest details collapse into an in-band, tree-wide
 `LifecycleEventKind::Lagged { dropped }` marker with an empty
-`supervisor_path`. Consumers maintaining derived tree state must read a fresh
+`scope_path`. Consumers maintaining derived tree state must read a fresh
 recursive snapshot and realign the whole tree.
 Stream closure means that the watched stable identity is terminal, after all
 staged events have drained.
@@ -266,8 +266,8 @@ returned by `ScopeRef::subtree` provides the same view scoped to that
 subtree, including actors added dynamically through that reference.
 These runtime-scoped samples set `observe::ActorStats::lineage` from the
 membership identity retained when the actor was registered. They also carry
-`observe::ActorStats::supervisor_path`: each containing nested supervisor is identified
-by id, lineage, and generation. Use the full supervisor path together
+`observe::ActorStats::scope_path`: each containing nested scope is identified
+by id, lineage, and generation. Use the full scope path together
 with `(actor_id, lineage)` to join a flattened recursive sample to the
 exact current tree node; local lineages can repeat in sibling subtrees. A direct
 child has an empty path. Stats sampled directly from an `ActorRef` report

@@ -217,8 +217,7 @@ async fn reduce_completion(
             // A dropped prefix may have contained transitions for awaited
             // children, so edge-derived state has to be rebuilt from state.
             baseline = set.realign(&handle.snapshot());
-        } else if event.supervisor_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline)
-        {
+        } else if event.scope_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline) {
             let needs_realign = matches!(
                 &event.kind,
                 LifecycleEventKind::ChildAdded { .. } | LifecycleEventKind::ChildExited { .. }

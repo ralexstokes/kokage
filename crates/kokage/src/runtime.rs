@@ -369,7 +369,7 @@ impl ScopeRef {
     /// incarnation-local dynamic children by construction.
     ///
     /// Unlike [`ActorRef::stats`], each returned sample populates
-    /// [`ActorStats::supervisor_path`] and [`ActorStats::lineage`] from the
+    /// [`ActorStats::scope_path`] and [`ActorStats::lineage`] from the
     /// current runtime membership. Message-size totals remain `None` unless
     /// observation was enabled with
     /// [`ActorSpec::message_size`](crate::ActorSpec::message_size).
@@ -378,10 +378,10 @@ impl ScopeRef {
         let mut stats = Vec::new();
 
         for attached in __private::attached_children::<RuntimeAttachment>(&self.supervisor) {
-            let Some((child, supervisor_path)) = attached.path().split_last() else {
+            let Some((child, scope_path)) = attached.path().split_last() else {
                 continue;
             };
-            let Some(owner) = runtime_owners.get(supervisor_path) else {
+            let Some(owner) = runtime_owners.get(scope_path) else {
                 continue;
             };
             let attachment = attached.attachment();
@@ -392,12 +392,8 @@ impl ScopeRef {
             match &attachment.kind {
                 RuntimeAttachmentKind::Actor(actor) => {
                     let mut actor_stats = actor.stats();
-                    actor_stats.supervisor_path = Some(
-                        supervisor_path
-                            .iter()
-                            .map(supervisor_path_segment)
-                            .collect(),
-                    );
+                    actor_stats.scope_path =
+                        Some(scope_path.iter().map(scope_path_segment).collect());
                     actor_stats.lineage = Some(child.lineage);
                     stats.push(actor_stats);
                 }
@@ -700,7 +696,7 @@ pub(crate) fn actor_child_spec(
     .shutdown(shutdown)
 }
 
-fn supervisor_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
+fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
     ScopePathSegment {
         id: identity.id.clone(),
         lineage: identity.lineage,

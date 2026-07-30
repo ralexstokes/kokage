@@ -241,7 +241,7 @@ enum Lifecycle {
     Pending,
     Running(u64),
     Exited(u64),
-    Terminated(Option<u64>),
+    Removed(Option<u64>),
 }
 
 struct MonitorState {
@@ -289,7 +289,7 @@ impl MonitorHub {
         let mut state = self.state();
         state.watchers.retain(Watcher::is_live);
         match state.lifecycle {
-            Lifecycle::Terminated(generation) => {
+            Lifecycle::Removed(generation) => {
                 queue.push(self.removed_event(generation));
                 return WatchQueueGuard { queue, finished };
             }
@@ -325,7 +325,7 @@ impl MonitorHub {
         state.watchers.retain(|watcher| watcher.notify(&exited));
     }
 
-    pub(crate) fn terminated(&self) {
+    pub(crate) fn removed(&self) {
         let mut state = self.state();
         let (exited, generation) = match state.lifecycle {
             Lifecycle::Pending => (None, None),
@@ -334,9 +334,9 @@ impl MonitorHub {
                 Some(generation),
             ),
             Lifecycle::Exited(generation) => (None, Some(generation)),
-            Lifecycle::Terminated(_) => return,
+            Lifecycle::Removed(_) => return,
         };
-        state.lifecycle = Lifecycle::Terminated(generation);
+        state.lifecycle = Lifecycle::Removed(generation);
         let removed = self.removed_event(generation);
         for watcher in state.watchers.drain(..) {
             if !watcher.is_live() {

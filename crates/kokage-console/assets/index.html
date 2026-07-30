@@ -578,7 +578,7 @@
     return details.exit || details.previous_exit || null;
   }
 
-  function sameSupervisorPath(actual, expected) {
+  function sameScopePath(actual, expected) {
     if (!actual || actual.length !== expected.length) return false;
     return actual.every(function (segment, index) {
       const wanted = expected[index];
@@ -588,7 +588,7 @@
     });
   }
 
-  function nodeRow(child, supervisorPath) {
+  function nodeRow(child, scopePath) {
     const row = el("span", "node-main");
     row.appendChild(el("span", "node-id", child.id));
     row.appendChild(stateBadge(child.state));
@@ -603,7 +603,7 @@
 
     const actor = actorStats.find(function (stats) {
       return stats.actor_id === child.id &&
-        (stats.supervisor_path == null || sameSupervisorPath(stats.supervisor_path, supervisorPath)) &&
+        (stats.scope_path == null || sameScopePath(stats.scope_path, scopePath)) &&
         (stats.lineage == null || stats.lineage === child.lineage);
     });
     if (actor) {
@@ -624,12 +624,12 @@
     return row;
   }
 
-  function renderChild(child, parentPath, supervisorPath) {
+  function renderChild(child, parentPath, scopePath) {
     const path = parentPath + "/" + child.id;
 
     if (!child.supervisor) {
       const leaf = el("div", "node-row node-leaf");
-      leaf.appendChild(nodeRow(child, supervisorPath));
+      leaf.appendChild(nodeRow(child, scopePath));
       return leaf;
     }
 
@@ -644,21 +644,21 @@
     });
 
     const sum = el("summary", "node-row");
-    sum.appendChild(nodeRow(child, supervisorPath));
+    sum.appendChild(nodeRow(child, scopePath));
     det.appendChild(sum);
 
     const nested = el("div", "node-nested");
-    const nestedSupervisorPath = supervisorPath.concat([{
+    const nestedScopePath = scopePath.concat([{
       id: child.id,
       lineage: child.lineage,
       generation: child.generation
     }]);
-    nested.appendChild(renderSupervisor(child.supervisor, path, nestedSupervisorPath));
+    nested.appendChild(renderSupervisor(child.supervisor, path, nestedScopePath));
     det.appendChild(nested);
     return det;
   }
 
-  function renderSupervisor(sup, parentPath, supervisorPath) {
+  function renderSupervisor(sup, parentPath, scopePath) {
     const frag = document.createDocumentFragment();
 
     const header = el("div", "sup-header");
@@ -670,7 +670,7 @@
     const children = el("div", "sup-children");
     if (sup.children && sup.children.length > 0) {
       sup.children.forEach(function (c) {
-        children.appendChild(renderChild(c, parentPath, supervisorPath));
+        children.appendChild(renderChild(c, parentPath, scopePath));
       });
     } else {
       children.appendChild(el("div", "node-row node-leaf", "no children"));
@@ -810,7 +810,7 @@
   // --- Rendering: Event Log ---
   function classifyEvent(ev) {
     const envelope = ev && typeof ev === "object" ? ev : {};
-    const supervisorPath = Array.isArray(envelope.supervisor_path) ? envelope.supervisor_path : [];
+    const scopePath = Array.isArray(envelope.scope_path) ? envelope.scope_path : [];
     const envelopeName = variantName(envelope.kind);
     const envelopePayload = variantPayload(envelope.kind);
     let eventName = envelopeName;
@@ -852,8 +852,8 @@
       info = { kind: "lagged", cls: "kind-critical", msg: "Lifecycle stream dropped " + lifecycle.dropped + " tree events; resynchronize from the latest snapshot" };
     }
     info = info || { kind: "event", cls: "kind-muted", msg: JSON.stringify(ev) || "Unknown lifecycle event" };
-    if (supervisorPath.length > 0) {
-      const prefix = supervisorPath.map(function (segment) {
+    if (scopePath.length > 0) {
+      const prefix = scopePath.map(function (segment) {
         return "[" + segment.id + " lineage:" + segment.lineage + " gen:" + segment.generation + "]";
       }).join(" ");
       info.msg = prefix + " " + info.msg;
