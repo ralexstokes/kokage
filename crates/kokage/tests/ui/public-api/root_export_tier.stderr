@@ -147,38 +147,44 @@ error[E0432]: unresolved import `kokage::RunnableActor`
 39 | use kokage::RunnableActor;
    |     ^^^^^^^^^^^^^^^^^^^^^ no `RunnableActor` in the root
 
-error[E0432]: unresolved import `kokage::SnapshotRecvError`
+error[E0432]: unresolved import `kokage::ScopeKind`
   --> tests/ui/public-api/root_export_tier.rs:40:5
    |
-40 | use kokage::SnapshotRecvError;
+40 | use kokage::ScopeKind;
+   |     ^^^^^^^^^^^^^^^^^ no `ScopeKind` in the root
+
+error[E0432]: unresolved import `kokage::SnapshotRecvError`
+  --> tests/ui/public-api/root_export_tier.rs:41:5
+   |
+41 | use kokage::SnapshotRecvError;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `SnapshotRecvError` in the root
 
 error[E0432]: unresolved import `kokage::SupervisionOutline`
-  --> tests/ui/public-api/root_export_tier.rs:41:5
+  --> tests/ui/public-api/root_export_tier.rs:42:5
    |
-41 | use kokage::SupervisionOutline;
+42 | use kokage::SupervisionOutline;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisionOutline` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorPathSegment`
-  --> tests/ui/public-api/root_export_tier.rs:42:5
+  --> tests/ui/public-api/root_export_tier.rs:43:5
    |
-42 | use kokage::SupervisorPathSegment;
+43 | use kokage::SupervisorPathSegment;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorPathSegment` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorSnapshot`
-  --> tests/ui/public-api/root_export_tier.rs:43:5
+  --> tests/ui/public-api/root_export_tier.rs:44:5
    |
-43 | use kokage::SupervisorSnapshot;
+44 | use kokage::SupervisorSnapshot;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorSnapshot` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorSnapshotReceiver`
-  --> tests/ui/public-api/root_export_tier.rs:44:5
+  --> tests/ui/public-api/root_export_tier.rs:45:5
    |
-44 | use kokage::SupervisorSnapshotReceiver;
+45 | use kokage::SupervisorSnapshotReceiver;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorSnapshotReceiver` in the root
 
 error[E0432]: unresolved import `kokage::SupervisorStateView`
-  --> tests/ui/public-api/root_export_tier.rs:45:5
+  --> tests/ui/public-api/root_export_tier.rs:46:5
    |
-45 | use kokage::SupervisorStateView;
+46 | use kokage::SupervisorStateView;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `SupervisorStateView` in the root
