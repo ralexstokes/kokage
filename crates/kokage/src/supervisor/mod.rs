@@ -73,25 +73,18 @@ pub mod __private {
         Guard::from_tokens(cancellation, finished)
     }
 
-    /// Builds a probe-backed guard for the actor layer.
-    pub fn guard_from_probe(
+    /// Builds a token-backed guard with a custom cancellation hook.
+    pub fn guard_from_tokens_with_cancel(
         cancellation: CancellationToken,
-        is_finished: impl Fn() -> bool + Send + Sync + 'static,
-    ) -> Guard {
-        Guard::from_probe(cancellation, is_finished)
-    }
-
-    /// Builds a probe-backed guard with a custom cancellation hook.
-    pub fn guard_from_probe_with_cancel(
-        cancellation: CancellationToken,
-        is_finished: impl Fn() -> bool + Send + Sync + 'static,
+        finished: CancellationToken,
         cancel_action: impl Fn() + Send + Sync + 'static,
     ) -> Guard {
-        Guard::from_probe_with_cancel(cancellation, is_finished, cancel_action)
+        Guard::from_tokens_with_cancel(cancellation, finished, cancel_action)
     }
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
+pub(crate) use cancellation::CancelOnDrop;
 pub use cancellation::CancellationToken;
 pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionError, CompletionOutcome};

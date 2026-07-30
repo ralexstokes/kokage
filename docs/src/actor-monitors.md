@@ -89,7 +89,8 @@ retract an event already accepted by the mailbox. Permanently removing either
 actor membership also ends the watch; a watched actor's final `Terminated`
 event is queued before its membership removal completes. Once the operation
 ends for either environmental reason, `is_finished()` is true while
-`is_cancelled()` remains false. Only `Guard::cancel` or dropping an armed guard
+`is_cancelled()` remains false. Await `finished()` when code needs to wait for
+that point without polling. Only `Guard::cancel` or dropping an armed guard
 marks cancellation.
 
 Calling `watch` again for the same observer/subject pair is idempotent. This

@@ -256,13 +256,9 @@ async fn incarnation_restart_finishes_scope_wait_without_cancelling_its_guard() 
         .await
         .expect("actor accepts crash");
     wait_for(&mut drops, "incarnation-aborted scope wait").await;
-    tokio::time::timeout(WAIT, async {
-        while !guard.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("incarnation abort finishes scope wait");
+    tokio::time::timeout(WAIT, guard.finished())
+        .await
+        .expect("incarnation abort finishes scope wait");
     assert!(
         !guard.is_cancelled(),
         "incarnation abort is environmental, not explicit cancellation"
@@ -433,13 +429,9 @@ async fn handle_abort_wins_before_a_blocked_scope_wait_message_is_accepted() {
     assert_eq!(actor.stats().mailbox_depth, 1);
 
     wait_handle.cancel();
-    tokio::time::timeout(WAIT, async {
-        while !wait_handle.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("blocked scope-wait send is cancelled and reaped");
+    tokio::time::timeout(WAIT, wait_handle.finished())
+        .await
+        .expect("blocked scope-wait send is cancelled and reaped");
     handler_release.notify_one();
 
     assert_eq!(wait_for(&mut observed_rx, "FIFO filler").await, "filler");
@@ -787,9 +779,7 @@ impl Actor for CompletedPanicDuringDrain {
             },
             |()| -> Infallible { unreachable!("panicking wait cannot map a message") },
         );
-        while !handle.is_finished() {
-            tokio::task::yield_now().await;
-        }
+        handle.finished().await;
         ctx.stop();
         Ok(())
     }

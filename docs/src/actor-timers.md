@@ -76,7 +76,8 @@ dropped; retain it for the desired lifetime or call `detach()` for explicit
 fire-and-forget scheduling. Calling `cancel` also cancels the operation. A zero
 period returns an already-finished guard. The interval also ends with the
 scheduling incarnation or when the target permanently terminates; those
-environmental endings set `is_finished()` without setting `is_cancelled()`.
+environmental endings set `is_finished()` without setting `is_cancelled()`;
+await `finished()` to wait for termination without polling.
 
 When several independent one-shots cannot share a static protocol key, use
 `send_after(&ctx.myself(), message, delay)`. That deliberately takes the

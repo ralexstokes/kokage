@@ -381,13 +381,9 @@ async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
         .send(AbortMsg::Crash)
         .await
         .expect("actor accepts crash");
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        while !guard.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("incarnation abort finishes offload");
+    tokio::time::timeout(TEST_TIMEOUT, guard.finished())
+        .await
+        .expect("incarnation abort finishes offload");
     assert!(
         !guard.is_cancelled(),
         "incarnation abort is environmental, not explicit cancellation"
@@ -445,13 +441,9 @@ async fn abort_suppresses_a_completion_until_the_loop_reaps_it() {
     wait_runtime_started(&runtime.handle(), "ready-abort runtime startup").await;
     actor.send(ReadyAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "ready-abort offload handle").await;
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        while !offload.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("offload future should finish before the abort");
+    tokio::time::timeout(TEST_TIMEOUT, offload.finished())
+        .await
+        .expect("offload future should finish before the abort");
     offload.cancel();
     release.notify_one();
     assert!(

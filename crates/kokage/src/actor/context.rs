@@ -10,8 +10,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    __private::{guard_from_probe, guard_from_probe_with_cancel, guard_from_tokens},
-    CancellationToken, Guard,
+    __private::{guard_from_tokens, guard_from_tokens_with_cancel},
+    CancelOnDrop, CancellationToken, Guard,
 };
 use tokio::{
     sync::{oneshot, watch},
@@ -26,7 +26,6 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, GatedSendOutcome,
         MailboxReceiver, MailboxRef, MessageSizeObserver, SendGate, SendOutcome,
     },
-    cancellation::CancelOnDrop,
     error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError},
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
@@ -833,7 +832,10 @@ impl<M: Send + 'static> RawContext<M> {
             .expect("a live actor context must have a bound mailbox");
         let gate = Arc::new(SendGate::new());
         let task_gate = Arc::clone(&gate);
+        let finished = CancellationToken::new();
+        let task_finished = finished.clone();
         let abort = self.scope_waits.spawn(async move {
+            let _finished_on_drop = CancelOnDrop::new(task_finished);
             let output = tokio::select! {
                 biased;
                 () = task_gate.cancelled() => return,
@@ -850,11 +852,7 @@ impl<M: Send + 'static> RawContext<M> {
         let cancellation = CancellationToken::new();
         let cancel = TaskCancellation::ScopeWait(gate);
         let guard_abort = abort.clone();
-        guard_from_probe_with_cancel(
-            cancellation,
-            move || abort.is_finished(),
-            move || cancel.cancel(&guard_abort),
-        )
+        guard_from_tokens_with_cancel(cancellation, finished, move || cancel.cancel(&guard_abort))
     }
 
     /// Runs a bounded future without blocking this actor's receive loop and
@@ -894,7 +892,10 @@ impl<M: Send + 'static> RawContext<M> {
     {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = Arc::clone(&cancelled);
+        let finished = CancellationToken::new();
+        let task_finished = finished.clone();
         let abort = self.offloads.spawn(async move {
+            let _finished_on_drop = CancelOnDrop::new(task_finished);
             OffloadCompletion {
                 message: continuation(timeout(deadline, future).await.map_err(|_| OffloadDeadline)),
                 cancelled: task_cancelled,
@@ -904,11 +905,7 @@ impl<M: Send + 'static> RawContext<M> {
         let cancellation = CancellationToken::new();
         let cancel = TaskCancellation::Offload(cancelled);
         let guard_abort = abort.clone();
-        guard_from_probe_with_cancel(
-            cancellation,
-            move || abort.is_finished(),
-            move || cancel.cancel(&guard_abort),
-        )
+        guard_from_tokens_with_cancel(cancellation, finished, move || cancel.cancel(&guard_abort))
     }
 
     pub(crate) fn close_external_intake(&mut self) {
@@ -982,11 +979,14 @@ impl<M: Send + 'static> RawContext<M> {
         delay: Duration,
     ) -> Guard {
         let cancellation = CancellationToken::new();
+        let finished = CancellationToken::new();
         let task_cancellation = cancellation.clone();
+        let task_finished = finished.clone();
         let lifetime = self.lifetime.token();
         let target = target.clone();
 
         let task = tokio::spawn(async move {
+            let _finished_on_drop = CancelOnDrop::new(task_finished);
             tokio::select! {
                 biased;
                 () = task_cancellation.cancelled() => {}
@@ -1002,8 +1002,8 @@ impl<M: Send + 'static> RawContext<M> {
             }
         });
 
-        let task = task.abort_handle();
-        guard_from_probe(cancellation, move || task.is_finished())
+        std::mem::drop(task);
+        guard_from_tokens(cancellation, finished)
     }
 
     /// Sends a clone of `message` to `target` after every `period`.
@@ -1027,9 +1027,12 @@ impl<M: Send + 'static> RawContext<M> {
         }
 
         let task_cancellation = cancellation.clone();
+        let finished = CancellationToken::new();
+        let task_finished = finished.clone();
         let lifetime = self.lifetime.token();
         let target = target.clone();
         let task = tokio::spawn(async move {
+            let _finished_on_drop = CancelOnDrop::new(task_finished);
             let start = deadline_after(period);
             let mut interval = tokio::time::interval_at(start, period);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -1054,8 +1057,8 @@ impl<M: Send + 'static> RawContext<M> {
             }
         });
 
-        let task = task.abort_handle();
-        guard_from_probe(cancellation, move || task.is_finished())
+        std::mem::drop(task);
+        guard_from_tokens(cancellation, finished)
     }
 
     /// Watches the target logical actor across restarts.

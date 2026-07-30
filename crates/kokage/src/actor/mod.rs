@@ -6,7 +6,6 @@
 
 mod binding;
 mod builder;
-mod cancellation;
 mod context;
 mod error;
 mod factory;

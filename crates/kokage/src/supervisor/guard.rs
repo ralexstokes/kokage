@@ -8,8 +8,6 @@ use std::{
 
 use crate::supervisor::CancellationToken;
 
-type FinishedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
-
 struct CancelAction {
     invoked: AtomicBool,
     action: Box<dyn Fn() + Send + Sync>,
@@ -44,7 +42,7 @@ impl CancelAction {
 #[must_use = "dropping the guard cancels the operation; call `.detach()` for explicit fire-and-forget"]
 pub struct Guard {
     cancellation: CancellationToken,
-    is_finished: FinishedProbe,
+    finished: CancellationToken,
     cancel_action: Option<Arc<CancelAction>>,
     cancel_on_drop: bool,
 }
@@ -56,32 +54,20 @@ impl Guard {
     ) -> Self {
         Self {
             cancellation,
-            is_finished: Arc::new(move || finished.is_cancelled()),
+            finished,
             cancel_action: None,
             cancel_on_drop: true,
         }
     }
 
-    pub(crate) fn from_probe(
+    pub(crate) fn from_tokens_with_cancel(
         cancellation: CancellationToken,
-        is_finished: impl Fn() -> bool + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            cancellation,
-            is_finished: Arc::new(is_finished),
-            cancel_action: None,
-            cancel_on_drop: true,
-        }
-    }
-
-    pub(crate) fn from_probe_with_cancel(
-        cancellation: CancellationToken,
-        is_finished: impl Fn() -> bool + Send + Sync + 'static,
+        finished: CancellationToken,
         cancel_action: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         Self {
             cancellation,
-            is_finished: Arc::new(is_finished),
+            finished,
             cancel_action: Some(Arc::new(CancelAction::new(cancel_action))),
             cancel_on_drop: true,
         }
@@ -114,7 +100,16 @@ impl Guard {
     /// Cancellation can be requested before the operation has observed it, so
     /// this may briefly remain `false` after [`cancel`](Self::cancel).
     pub fn is_finished(&self) -> bool {
-        (self.is_finished)()
+        self.finished.is_cancelled()
+    }
+
+    /// Waits until the guarded background operation has finished.
+    ///
+    /// Cancellation can be requested before the operation has observed it, so
+    /// this waits for the operation itself to terminate after
+    /// [`cancel`](Self::cancel).
+    pub async fn finished(&self) {
+        self.finished.cancelled().await;
     }
 
     /// Leaves the operation running without retaining a guard.
@@ -157,7 +152,7 @@ mod tests {
     fn dropping_an_armed_guard_cancels_the_operation() {
         let cancellation = CancellationToken::new();
         let observed = cancellation.clone();
-        let guard = Guard::from_probe(cancellation, || false);
+        let guard = Guard::from_tokens(cancellation, CancellationToken::new());
 
         drop(guard);
 
@@ -168,19 +163,20 @@ mod tests {
     fn detaching_a_guard_leaves_the_operation_running() {
         let cancellation = CancellationToken::new();
         let observed = cancellation.clone();
-        let guard = Guard::from_probe(cancellation, || false);
+        let guard = Guard::from_tokens(cancellation, CancellationToken::new());
 
         guard.detach();
         assert!(!observed.is_cancelled());
     }
 
-    #[test]
-    fn finished_state_is_independent_from_cancellation() {
+    #[tokio::test]
+    async fn finished_state_is_independent_from_cancellation() {
         let cancellation = CancellationToken::new();
         let finished = CancellationToken::new();
         finished.cancel();
         let guard = Guard::from_tokens(cancellation, finished);
 
+        guard.finished().await;
         assert!(guard.is_finished());
         assert!(!guard.is_cancelled());
     }
@@ -189,9 +185,9 @@ mod tests {
     fn operation_cancel_action_is_invoked_only_once() {
         let invocations = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&invocations);
-        let guard = Guard::from_probe_with_cancel(
+        let guard = Guard::from_tokens_with_cancel(
             CancellationToken::new(),
-            || false,
+            CancellationToken::new(),
             move || {
                 counted.fetch_add(1, Ordering::Relaxed);
             },

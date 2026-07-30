@@ -315,13 +315,9 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         final_event.kind,
         LifecycleEventKind::ChildExited { generation: 0, .. }
     ));
-    timeout(Duration::from_secs(2), async {
-        while !guard.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("pump stops with watched identity");
+    timeout(Duration::from_secs(2), guard.finished())
+        .await
+        .expect("pump stops with watched identity");
     assert!(
         !guard.is_cancelled(),
         "normal completion is not cancellation"
@@ -342,13 +338,9 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .remove_child("sink")
         .await
         .expect("target removed");
-    timeout(Duration::from_secs(2), async {
-        while !guard.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("pump stops with target identity");
+    timeout(Duration::from_secs(2), guard.finished())
+        .await
+        .expect("pump stops with target identity");
     assert!(
         !guard.is_cancelled(),
         "normal completion is not cancellation"

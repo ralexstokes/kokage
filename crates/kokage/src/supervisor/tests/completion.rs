@@ -54,13 +54,9 @@ async fn a_completed_child_stops_siblings_and_supervisor() {
     let mut events = common::event_watch(&handle);
     handle.wait().await.expect("completion should stop cleanly");
     common::recv_event(&mut cancelled_rx).await;
-    timeout(common::EVENT_TIMEOUT, async {
-        while !completion.is_finished() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("completion guard reports natural completion");
+    timeout(common::EVENT_TIMEOUT, completion.finished())
+        .await
+        .expect("completion guard reports natural completion");
     assert!(
         !completion.is_cancelled(),
         "natural completion is distinct from cancellation"

@@ -77,7 +77,7 @@ storage.
 ## How to read this tutorial
 
 Start with [Getting started](getting-started.md), then use
-[Actor wiring](actor-graphs.md) for slots and cyclic references. Continue with
+[Actor wiring](actor-trees.md) for slots and cyclic references. Continue with
 [Supervised actors](supervised-actors.md) and
 [Inspectable supervision trees](supervision-trees.md) before adding runtime
 membership from [Dynamic actors](dynamic-actors.md).

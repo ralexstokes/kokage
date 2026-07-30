@@ -10,11 +10,11 @@ use crate::{
         SupervisorPathSegment,
     },
     supervisor::{
-        __private::{self, AttachedChildIdentity, guard_from_probe},
-        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOutcome, ControlError,
-        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
-        Shutdown, ShutdownMode, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-        SupervisorSnapshotReceiver,
+        __private::{self, AttachedChildIdentity, guard_from_tokens},
+        BuildError, CancelOnDrop, CancellationToken, ChildSpec, CompletionError, CompletionOutcome,
+        ControlError, DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart,
+        RunningSupervisor, Shutdown, ShutdownMode, SupervisorError, SupervisorHandle,
+        SupervisorSnapshot, SupervisorSnapshotReceiver,
     },
 };
 
@@ -130,8 +130,11 @@ where
     F: FnMut(LifecycleEvent) -> M + Send + 'static,
 {
     let cancellation = CancellationToken::new();
+    let finished = CancellationToken::new();
     let task_cancellation = cancellation.clone();
+    let task_finished = finished.clone();
     let task = tokio::spawn(async move {
+        let _finished_on_drop = CancelOnDrop::new(task_finished);
         loop {
             let Some(event) = (tokio::select! {
                 biased;
@@ -163,8 +166,8 @@ where
         }
     });
 
-    let task = task.abort_handle();
-    guard_from_probe(cancellation, move || task.is_finished())
+    std::mem::drop(task);
+    guard_from_tokens(cancellation, finished)
 }
 
 /// Owns a spawned actor runtime.
