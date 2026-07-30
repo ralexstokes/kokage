@@ -1,5 +1,6 @@
 use std::{
     cell::Cell,
+    io,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -9,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, CallError, ExitResult, MailboxMode, OrderedTree, Reply, SendError,
-    SendRejection, SendTimeoutError, TrySendError,
+    ActorRef, ActorSpec, Backoff, CallError, ExitResult, MailboxMode, OrderedTree, Reply, Restart,
+    SendError, SendRejection, SendTimeoutError, TrySendError,
     host::{BoxError, RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -42,6 +43,63 @@ impl RawActor for Drain {
         while ctx.recv().await.is_some() {}
         Ok(())
     }
+}
+
+#[derive(Clone)]
+struct FailWithoutReceiving {
+    started: mpsc::UnboundedSender<()>,
+    fail: Arc<Notify>,
+}
+
+impl RawActor for FailWithoutReceiving {
+    type Msg = String;
+
+    async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult {
+        self.started.send(()).expect("start receiver remains open");
+        tokio::select! {
+            () = self.fail.notified() => Err(io::Error::other("test failure").into()),
+            () = ctx.shutdown_token().cancelled() => Ok(()),
+        }
+    }
+}
+
+async fn close_full_mailbox_during_bounded_send(
+    restart: Restart,
+    bound: Duration,
+    message: &str,
+) -> Result<(), SendTimeoutError<String>> {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let fail = Arc::new(Notify::new());
+    let spec = ActorSpec::new("worker", {
+        let fail = Arc::clone(&fail);
+        move || FailWithoutReceiving {
+            started: started_tx.clone(),
+            fail: Arc::clone(&fail),
+        }
+    })
+    .mailbox_capacity(1)
+    .restart(restart);
+    let actor = spec.actor_ref();
+    let runtime = OrderedTree::new().actor(spec).spawn().expect("tree builds");
+    started_rx.recv().await.expect("first incarnation starts");
+    actor
+        .send("fills first mailbox".to_owned())
+        .await
+        .expect("first mailbox fills");
+
+    let bounded_actor = actor.clone();
+    let message = message.to_owned();
+    let bounded = tokio::spawn(async move { bounded_actor.send_timeout(message, bound).await });
+    tokio::task::yield_now().await;
+    assert!(!bounded.is_finished(), "bounded send waits for capacity");
+    fail.notify_one();
+
+    let result = bounded.await.expect("bounded send task joins");
+    runtime
+        .shutdown_and_wait()
+        .await
+        .expect("runtime shuts down cleanly");
+    result
 }
 
 #[derive(Clone)]
@@ -103,6 +161,19 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
         .await
         .expect("bounded send task joins")
         .expect("bounded send reaches the new mailbox");
+
+    let zero_bound = actor
+        .send_timeout("zero bound".to_owned(), Duration::ZERO)
+        .await
+        .expect_err("the deadline is checked before the first acceptance attempt");
+    assert!(matches!(
+        &zero_bound,
+        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+    ));
+    assert_eq!(zero_bound.into_message(), "zero bound");
+    actor
+        .try_send("one immediate attempt".to_owned())
+        .expect("try_send is the immediate-attempt API");
     runtime
         .shutdown_and_wait()
         .await
@@ -273,6 +344,49 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
 }
 
 #[tokio::test]
+async fn bounded_send_rides_a_closed_mailbox_into_the_next_incarnation() {
+    close_full_mailbox_during_bounded_send(
+        Restart::on_failure(),
+        Duration::from_secs(1),
+        "after restart",
+    )
+    .await
+    .expect("bounded send reaches the replacement mailbox");
+}
+
+#[tokio::test]
+async fn bounded_send_returns_termination_after_its_mailbox_closes() {
+    let error = close_full_mailbox_during_bounded_send(
+        Restart::never(),
+        Duration::from_secs(1),
+        "not accepted",
+    )
+    .await
+    .expect_err("terminated membership rejects the message");
+    assert!(matches!(
+        &error,
+        SendTimeoutError::Terminated { actor_id, .. } if actor_id == "worker"
+    ));
+    assert_eq!(error.into_message(), "not accepted");
+}
+
+#[tokio::test]
+async fn bounded_send_times_out_waiting_for_rebind_after_its_mailbox_closes() {
+    let error = close_full_mailbox_during_bounded_send(
+        Restart::on_failure().backoff(Backoff::fixed(Duration::from_secs(1))),
+        Duration::from_millis(20),
+        "deadline wins",
+    )
+    .await
+    .expect_err("restart backoff exceeds the delivery bound");
+    assert!(matches!(
+        &error,
+        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+    ));
+    assert_eq!(error.into_message(), "deadline wins");
+}
+
+#[tokio::test]
 async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generic() {
     let spec = ActorSpec::new("worker", || Drain);
     let actor = spec.actor_ref();
@@ -317,7 +431,7 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .expect_err("terminated actor rejects call delivery");
     assert!(matches!(
         call_error,
-        CallError::Send(SendRejection::Unavailable { actor_id, .. }) if actor_id == "worker"
+        CallError::Send(SendRejection::Terminated { actor_id, .. }) if actor_id == "worker"
     ));
 }
 
@@ -338,5 +452,14 @@ async fn non_sync_message_can_discard_before_question_mark(
         })
         .await
         .map_err(SendError::discard)?;
+    actor
+        .send_timeout(
+            NotSync {
+                _value: Cell::new(2),
+            },
+            Duration::from_secs(1),
+        )
+        .await
+        .map_err(SendTimeoutError::discard)?;
     Ok(())
 }
