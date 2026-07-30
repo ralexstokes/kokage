@@ -1,4 +1,4 @@
-//! Navigating to a nested scope must not hand back the waits `RestrictedScope`
+//! Navigating to a nested scope must not hand back the waits `RestrictedScopeRef`
 //! withholds: an ordered sibling's start is sequenced after this actor reports
 //! ready, so awaiting it from `on_start` deadlocks.
 use kokage::{Actor, ActorResult, Context};

@@ -3,7 +3,7 @@
 Actors are the usual unit of a kokage application, but a supervision tree can
 also host plain async tasks. Define those tasks with [`host::ChildSpec`], place
 them in an [`OrderedTree`] or [`DynamicTree`], and control the result through
-the same [`Runtime`] and [`RuntimeHandle`] used for actor trees.
+the same [`RunningTree`] and [`ScopeRef`] used for actor trees.
 
 This example supervises a `front-desk` task that should run forever and a
 `press` task that keeps jamming:
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The press starts four generations, each separated by 100 ms, before its
 restart budget is exhausted. That failure stops the root runtime and is
-returned from `Runtime::wait`:
+returned from `RunningTree::wait`:
 
 ```text
 press starting (generation 0)
@@ -64,9 +64,15 @@ runtime gave up: restart intensity exceeded
 ```
 
 The important boundary is ownership: the tree is single-use configuration,
-`Runtime` owns the live root, and a cloned `RuntimeHandle` is non-owning
-control and observation access. Plain tasks do not introduce a second
-application lifecycle model.
+`OrderedTree` and `DynamicTree` are single-use declarations. Spawning either
+produces a `RunningTree` owner, while `RunningTree::scope()` returns the root
+`ScopeRef` used for control and observation; nested lookups return more
+`ScopeRef` values. Pass those cheaply cloned references to components just as
+`ActorRef` addresses an actor. The usual pattern for repeated root operations
+is `let root = running.scope();`. A `ScopeRef` does not keep its `RunningTree`
+alive: dropping the reference is inert, while dropping the owner initiates
+graceful shutdown. Plain tasks do not introduce a second application lifecycle
+model.
 
 ## Restart policies
 
@@ -96,7 +102,7 @@ scope-wide declaration, and `ChildSpec::restart` when one task needs its own
 mode, budget, backoff, or terminal-removal behavior. To configure the parent
 edge of a nested scope, wrap it with
 `TreeNode::from(subtree).restart(policy).shutdown(policy)` before passing it to
-`OrderedTree::subtree` or `DynamicRuntimeHandle::add_subtree`. The nested
+`OrderedTree::subtree` or `ScopeRef::add_subtree`. The nested
 tree's own defaults still configure its children independently.
 
 ## Ordered startup and readiness
@@ -118,7 +124,7 @@ let runtime = OrderedTree::new()
     .task(api)
     .spawn()?;
 
-runtime.handle().wait_started().await?;
+runtime.scope().wait_started().await?;
 ```
 
 The API task is not spawned until the database reports readiness. Plain tasks
@@ -127,9 +133,10 @@ automatically: their `on_start` hook is the readiness boundary. Use
 `Context::continue_with(message)` in `on_start` to queue expensive
 follow-up work as the actor's next message without delaying later siblings.
 
-Ordered membership is immutable after spawn, so `RuntimeHandle::dynamic`
-returns `None`. Use `DynamicTree` when members should start independently and
-be added at runtime. There is no implicit readiness timeout.
+Ordered membership is immutable after spawn. `ScopeRef::kind()` reports that
+capability, and membership operations on an ordered scope return
+`ControlError::NotDynamic`. Use `DynamicTree` when members should start
+independently and be added at runtime. There is no implicit readiness timeout.
 
 ## Strategies
 
@@ -210,7 +217,7 @@ together, and a short-grace child cannot borrow a longer sibling's budget.
 ## Stopping when finite work completes
 
 Pipeline and batch trees often have a natural completion point. Arm
-[`shutdown_on_completion`] on a pre-spawn handle so even a task that finishes
+`completions(ids).then_shutdown()` on a pre-spawn scope so even a task that finishes
 immediately is observed:
 
 ```rust,ignore
@@ -219,10 +226,13 @@ let tree = OrderedTree::new()
     .task(indexer.restart(Restart::never()))
     .task(metrics_reporter);
 
-let handle = tree.handle();
+let handle = tree.scope();
 // Detach for fire-and-forget; retain the guard instead to keep the
 // option of cancelling the watch (dropping it cancels too).
-handle.shutdown_on_completion(["source", "indexer"]).detach();
+handle
+    .completions(["source", "indexer"])
+    .then_shutdown()
+    .detach();
 let runtime = tree.spawn()?;
 runtime.wait().await?;
 ```
@@ -230,9 +240,10 @@ runtime.wait().await?;
 The scope stops when every named child is simultaneously completed. A child
 counts as completed when its current generation returns `Ok(())` on its own
 and no restart is pending. Failure still follows its restart policy, and an
-unknown id is rejected. A `DynamicRuntimeHandle` provides the same names with
-future-member semantics when an id may be added later. Use [`wait_completed`]
-to await the same condition without automatically stopping the runtime.
+unknown id is rejected. Call `allow_future_members()` explicitly when an id
+may be added later to a dynamic scope; ordered scopes report
+`CompletionError::NotDynamic`. Use `completions(ids).wait()` to await the same
+condition without automatically stopping the runtime.
 
 - Failures still follow the normal restart policy. A `Restart::never()` child that fails
   can never complete, and the scope runs until explicitly stopped.
@@ -248,10 +259,10 @@ to await the same condition without automatically stopping the runtime.
 
 Nested scopes need nothing special: a scope that stops itself this way is
 observed by its parent as an ordinary clean child exit, so a parent can name it
-in its own completion set. A `DynamicRuntimeHandle` uses `wait_completed` and
-`shutdown_on_completion` with future-member semantics: absent ids remain
-pending until those memberships are added. The same names on `RuntimeHandle`
-validate ids against current or declared membership instead.
+in its own completion set. Completion watches are strict by default: absent ids
+return `CompletionError::UnknownChild`. On a dynamic scope,
+`allow_future_members()` keeps those ids pending until their memberships are
+added.
 
 ## Supervision trees
 
@@ -278,13 +289,12 @@ that shape.
 
 ## Dynamic task children
 
-`DynamicTree` starts empty. Obtain its membership capability before spawn or
-recover it from the runtime handle afterward, then add and remove `ChildSpec`
-tasks:
+`DynamicTree` starts empty. Obtain its scope before spawn or from the runtime
+afterward, then add and remove `ChildSpec` tasks:
 
 ```rust,ignore
 let runtime = DynamicTree::new().spawn()?;
-let dynamic = runtime.handle().dynamic().expect("dynamic root");
+let dynamic = runtime.scope();
 
 let lineage = dynamic
     .add_child(ChildSpec::task("night-shift-press", factory))
@@ -303,14 +313,12 @@ actors](dynamic-actors.md).
 [`host::ChildSpec`]: https://stokes.io/kokage/api/kokage/host/struct.ChildSpec.html
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
-[`Runtime`]: https://stokes.io/kokage/api/kokage/struct.Runtime.html
-[`RuntimeHandle`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html
+[`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html
+[`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`Restart`]: https://stokes.io/kokage/api/kokage/struct.Restart.html
 [`Backoff`]: https://stokes.io/kokage/api/kokage/struct.Backoff.html
 [`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
 [`Shutdown`]: https://stokes.io/kokage/api/kokage/struct.Shutdown.html
 [`host::DEFAULT_SHUTDOWN_BOUND`]: https://stokes.io/kokage/api/kokage/host/constant.DEFAULT_SHUTDOWN_BOUND.html
-[`shutdown_on_completion`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.shutdown_on_completion
-[`wait_completed`]: https://stokes.io/kokage/api/kokage/struct.RuntimeHandle.html#method.wait_completed
 [`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html#variant.ChildExited
 [`agent_control` example]: https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples/agent_control

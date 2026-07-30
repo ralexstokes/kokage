@@ -16,8 +16,8 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorResult, ActorSlot, ActorSpec, BuildError, Context, ControlError,
-    DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, Runtime,
-    RuntimeHandle, SendError, Shutdown, StopContext, SupervisorError, TrySendError,
+    DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, RunningTree,
+    ScopeRef, SendError, Shutdown, StopContext, SupervisorError, TrySendError,
     host::{BoxError, ChildSpec, RawActor, RawContext},
     observe::ChildMembershipView,
 };
@@ -137,7 +137,7 @@ impl RawActor for Watcher {
     }
 }
 
-async fn wait_for_child(handle: &RuntimeHandle, id: &str, present: bool) {
+async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
     timeout(Duration::from_secs(1), async {
         let mut snapshots = handle.subscribe_snapshots();
         loop {
@@ -158,7 +158,7 @@ async fn wait_for_child(handle: &RuntimeHandle, id: &str, present: bool) {
 // is also observable on the removal path, so seeing that snapshot alone does not
 // prove retention. Settling a later control operation flushes the removal path,
 // and only then is the surviving entry a retention decision.
-async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
+async fn wait_for_retained_terminal_child(handle: &ScopeRef, id: &str) {
     timeout(Duration::from_secs(1), async {
         let mut snapshots = handle.subscribe_snapshots();
         loop {
@@ -179,14 +179,10 @@ async fn wait_for_retained_terminal_child(handle: &RuntimeHandle, id: &str) {
     .expect("terminal child remains in membership");
 
     handle
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor(ActorSpec::new("settle", Drain::<()>::new))
         .await
         .expect("settling actor added");
     handle
-        .dynamic()
-        .expect("dynamic scope")
         .remove_child("settle")
         .await
         .expect("settling actor removed");
@@ -215,21 +211,21 @@ async fn recv_test_event<T>(rx: &mut mpsc::UnboundedReceiver<T>, phase: &str) ->
         .unwrap_or_else(|| panic!("channel closed while waiting for {phase}"))
 }
 
-async fn wait_runtime_started(handle: &RuntimeHandle, phase: &str) {
+async fn wait_runtime_started(handle: &ScopeRef, phase: &str) {
     timeout(Duration::from_secs(2), handle.wait_started())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_runtime(handle: &RuntimeHandle, phase: &str) {
+async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
     timeout(Duration::from_secs(2), handle.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_dynamic_runtime(runtime: &Runtime, phase: &str) {
+async fn shutdown_dynamic_runtime(runtime: &RunningTree, phase: &str) {
     timeout(Duration::from_secs(2), runtime.shutdown_and_wait())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -309,7 +305,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    assert!(runtime.handle().snapshot().children.is_empty());
+    assert!(runtime.scope().snapshot().children.is_empty());
     let sink = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("sink", {
             let observed_tx = observed_tx.clone();
@@ -325,14 +321,14 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         "first"
     );
     let initial_lineage = runtime
-        .handle()
+        .scope()
         .snapshot()
         .child("sink")
         .expect("sink snapshot available")
         .lineage;
     assert_eq!(
         runtime
-            .handle()
+            .scope()
             .actor_stats()
             .into_iter()
             .find(|stats| stats.actor_id == "sink")
@@ -375,13 +371,13 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         "second"
     );
     let replacement_snapshot_lineage = runtime
-        .handle()
+        .scope()
         .snapshot()
         .child("sink")
         .expect("replacement snapshot available")
         .lineage;
     let replacement_lineage = runtime
-        .handle()
+        .scope()
         .actor_stats()
         .into_iter()
         .find(|stats| stats.actor_id == "sink")
@@ -522,7 +518,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = runtime.handle().subscribe_snapshots();
+    let mut snapshots = runtime.scope().subscribe_snapshots();
     let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("removable").await });
     timeout(Duration::from_secs(1), async {
@@ -587,7 +583,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .await
         .expect("removal task joined")
         .expect("removal completed");
-    assert!(runtime.handle().snapshot().child("removable").is_none());
+    assert!(runtime.scope().snapshot().child("removable").is_none());
 
     let replacement = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("removable", Drain::<RemovalMsg>::new))
@@ -635,7 +631,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = runtime.handle().subscribe_snapshots();
+    let mut snapshots = runtime.scope().subscribe_snapshots();
     let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("discarding").await });
     timeout(Duration::from_secs(1), async {
@@ -703,15 +699,13 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed scope runtime builds");
-    wait_runtime_started(&handle.handle(), "mixed runtime startup").await;
+    wait_runtime_started(&handle.scope(), "mixed runtime startup").await;
     let dynamic = handle
-        .handle()
+        .scope()
         .subtree("dynamic")
         .expect("dynamic subtree is available");
     let starts = Arc::new(AtomicUsize::new(0));
     let target = dynamic
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor(
             ActorSpec::new("temporary", {
                 let starts = starts.clone();
@@ -751,12 +745,10 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     ));
 
     dynamic
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor(ActorSpec::new("temporary", Drain::<()>::new))
         .await
         .expect("auto-removed actor id is reusable");
-    shutdown_runtime(&handle.handle(), "remove-on-exit monitor test shutdown").await;
+    shutdown_runtime(&handle.scope(), "remove-on-exit monitor test shutdown").await;
 }
 
 #[tokio::test]
@@ -778,7 +770,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
         .await
         .expect("transient actor added");
     transient.send(()).await.expect("clean stop requested");
-    wait_for_child(&runtime.handle(), "transient", false).await;
+    wait_for_child(&runtime.scope(), "transient", false).await;
     assert_eq!(transient_starts.load(Ordering::SeqCst), 1);
     assert!(matches!(
         transient.send(()).await,
@@ -808,7 +800,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
     .expect("Always actor restarted after clean stop");
     assert!(
         runtime
-            .handle()
+            .scope()
             .snapshot()
             .child("permanent")
             .is_some_and(|child| child.generation >= 1)
@@ -857,7 +849,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     })
     .await
     .expect("builder default restarts the cleanly stopped actor");
-    wait_for_child(&runtime.handle(), "explicit", false).await;
+    wait_for_child(&runtime.scope(), "explicit", false).await;
     assert_eq!(explicit_starts.load(Ordering::SeqCst), 1);
 
     shutdown_dynamic_runtime(&runtime, "dynamic default options test shutdown").await;
@@ -925,7 +917,7 @@ async fn never_actor_auto_removes_after_failure() {
         .expect("temporary actor added");
 
     release.notify_one();
-    wait_for_child(&runtime.handle(), "temporary", false).await;
+    wait_for_child(&runtime.scope(), "temporary", false).await;
     assert!(matches!(
         target.send(()).await,
         Err(SendError { actor_id, .. }) if actor_id == "temporary"
@@ -953,7 +945,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
         .await
         .expect("transient actor added");
     default_release.notify_one();
-    wait_for_child(&runtime.handle(), "transient-removed", false).await;
+    wait_for_child(&runtime.scope(), "transient-removed", false).await;
 
     let transient_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
@@ -970,7 +962,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
         .await
         .expect("retained transient actor added");
     transient_release.notify_one();
-    wait_for_retained_terminal_child(&runtime.handle(), "transient-retained").await;
+    wait_for_retained_terminal_child(&runtime.scope(), "transient-retained").await;
 
     let reversed_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
@@ -987,7 +979,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
         .await
         .expect("reversed retained transient actor added");
     reversed_release.notify_one();
-    wait_for_retained_terminal_child(&runtime.handle(), "transient-retained-reversed").await;
+    wait_for_retained_terminal_child(&runtime.scope(), "transient-retained-reversed").await;
 
     let never_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
@@ -1004,7 +996,7 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
         .await
         .expect("retained never actor added");
     never_release.notify_one();
-    wait_for_retained_terminal_child(&runtime.handle(), "never-retained").await;
+    wait_for_retained_terminal_child(&runtime.scope(), "never-retained").await;
 
     shutdown_dynamic_runtime(&runtime, "terminal-membership ordering test shutdown").await;
 }
@@ -1029,7 +1021,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
         .expect("restartable actor added");
 
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = runtime.handle().subscribe_snapshots();
+        let mut snapshots = runtime.scope().subscribe_snapshots();
         loop {
             if snapshots
                 .latest()
@@ -1072,7 +1064,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
         .await
         .expect("message sent");
     let stats = runtime
-        .handle()
+        .scope()
         .actor_stats()
         .into_iter()
         .find(|stats| stats.actor_id == "sink")
@@ -1176,7 +1168,7 @@ async fn runtime_added_actor_uses_its_actor_id_as_the_child_id() {
         .expect("actor is added");
 
     actor.send(1).await.expect("actor receives");
-    let snapshot = runtime.handle().snapshot();
+    let snapshot = runtime.scope().snapshot();
     assert!(snapshot.child("local-actor").is_some());
     assert_eq!(actor.id(), "local-actor");
 
@@ -1195,15 +1187,13 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed scope runtime builds");
-    wait_runtime_started(&handle.handle(), "mixed runtime startup").await;
+    wait_runtime_started(&handle.scope(), "mixed runtime startup").await;
     let dynamic = handle
-        .handle()
+        .scope()
         .subtree("dynamic")
         .expect("dynamic subtree is available");
 
     let sink = dynamic
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor(ActorSpec::new("sink", move || Observe {
             observed: observed_tx.clone(),
         }))
@@ -1223,7 +1213,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         "forwarded"
     );
     shutdown_runtime(
-        &handle.handle(),
+        &handle.scope(),
         "static-to-dynamic forwarding test shutdown",
     )
     .await;
@@ -1259,15 +1249,13 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
         .subtree("dynamic", DynamicTree::new())
         .spawn()
         .expect("mixed scope runtime builds");
-    wait_runtime_started(&handle.handle(), "mixed runtime startup").await;
+    wait_runtime_started(&handle.scope(), "mixed runtime startup").await;
     let dynamic_scope = handle
-        .handle()
+        .scope()
         .subtree("dynamic")
         .expect("dynamic subtree is available");
 
     let dynamic = dynamic_scope
-        .dynamic()
-        .expect("dynamic scope")
         .add_actor(ActorSpec::new("dynamic", move || ForwardTo {
             target: sink.clone(),
         }))
@@ -1283,7 +1271,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     );
 
     shutdown_runtime(
-        &handle.handle(),
+        &handle.scope(),
         "dynamic-to-static forwarding test shutdown",
     )
     .await;
@@ -1319,7 +1307,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
     ));
     assert!(
         runtime
-            .handle()
+            .scope()
             .actor_stats()
             .iter()
             .all(|stats| stats.actor_id != "dynamic"),
@@ -1347,7 +1335,14 @@ async fn ordered_tree_has_no_runtime_membership_capability() {
         .spawn()
         .expect("valid tree");
 
-    assert!(handle.handle().dynamic().is_none());
+    assert_eq!(handle.scope().kind(), kokage::observe::ScopeKind::Ordered);
+    assert!(matches!(
+        handle
+            .scope()
+            .add_actor(ActorSpec::new("rejected", Drain::<()>::new))
+            .await,
+        Err(ControlError::NotDynamic)
+    ));
 
     timeout(Duration::from_secs(1), handle.shutdown_and_wait())
         .await

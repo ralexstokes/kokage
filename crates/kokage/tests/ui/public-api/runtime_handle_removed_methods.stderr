@@ -1,43 +1,35 @@
-error[E0599]: no method named `wait_completed_dynamic` found for reference `&RuntimeHandle` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:4:20
+error[E0599]: no method named `wait_completed` found for reference `&ScopeRef` in the current scope
+ --> tests/ui/public-api/runtime_handle_removed_methods.rs:4:19
   |
-4 |     let _ = handle.wait_completed_dynamic(["future"]);
-  |                    ^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: there is a method `wait_completed` with a similar name
-  |
-4 -     let _ = handle.wait_completed_dynamic(["future"]);
-4 +     let _ = handle.wait_completed(["future"]);
-  |
+4 |     let _ = scope.wait_completed(["future"]);
+  |                   ^^^^^^^^^^^^^^ method not found in `&ScopeRef`
 
-error[E0599]: no method named `shutdown_on_dynamic_completion` found for reference `&RuntimeHandle` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:5:20
+error[E0599]: no method named `shutdown_on_completion` found for reference `&ScopeRef` in the current scope
+ --> tests/ui/public-api/runtime_handle_removed_methods.rs:5:19
   |
-5 |     let _ = handle.shutdown_on_dynamic_completion(["future"]);
-  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-help: there is a method `shutdown_on_completion` with a similar name
-  |
-5 -     let _ = handle.shutdown_on_dynamic_completion(["future"]);
-5 +     let _ = handle.shutdown_on_completion(["future"]);
-  |
+5 |     let _ = scope.shutdown_on_completion(["future"]);
+  |                   ^^^^^^^^^^^^^^^^^^^^^^ method not found in `&ScopeRef`
 
-error[E0599]: no method named `as_runtime_handle` found for struct `DynamicRuntimeHandle` in the current scope
- --> tests/ui/public-api/runtime_handle_removed_methods.rs:9:20
+error[E0599]: no method named `wait_completed_dynamic` found for reference `&ScopeRef` in the current scope
+ --> tests/ui/public-api/runtime_handle_removed_methods.rs:6:19
   |
-9 |     let _ = handle.as_runtime_handle();
-  |                    ^^^^^^^^^^^^^^^^^
-  |
-help: there is a method `into_runtime_handle` with a similar name
-  |
-9 -     let _ = handle.as_runtime_handle();
-9 +     let _ = handle.into_runtime_handle();
-  |
+6 |     let _ = scope.wait_completed_dynamic(["future"]);
+  |                   ^^^^^^^^^^^^^^^^^^^^^^ method not found in `&ScopeRef`
 
-error[E0277]: the trait bound `RuntimeHandle: From<DynamicRuntimeHandle>` is not satisfied
-  --> tests/ui/public-api/runtime_handle_removed_methods.rs:10:35
-   |
-10 |     let _: RuntimeHandle = handle.into();
-   |                                   ^^^^ the trait `From<DynamicRuntimeHandle>` is not implemented for `RuntimeHandle`
-   |
-   = note: required for `DynamicRuntimeHandle` to implement `Into<RuntimeHandle>`
+error[E0599]: no method named `shutdown_on_dynamic_completion` found for reference `&ScopeRef` in the current scope
+ --> tests/ui/public-api/runtime_handle_removed_methods.rs:7:19
+  |
+7 |     let _ = scope.shutdown_on_dynamic_completion(["future"]);
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+help: there is a method `shutdown_and_wait` with a similar name, but with different arguments
+ --> src/runtime.rs
+  |
+  |     pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `dynamic` found for reference `&ScopeRef` in the current scope
+ --> tests/ui/public-api/runtime_handle_removed_methods.rs:8:19
+  |
+8 |     let _ = scope.dynamic();
+  |                   ^^^^^^^ method not found in `&ScopeRef`

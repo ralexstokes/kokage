@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .actor(frontend_spec)
         .actor(worker_spec)
         .spawn()?;
-    let handle = runtime.handle();
+    let handle = runtime.scope();
     let mut events = handle.watch_lifecycle();
     let mut snapshots = handle.subscribe_snapshots();
 

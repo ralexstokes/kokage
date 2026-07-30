@@ -2,8 +2,9 @@
 
 A `DynamicTree` is an initially empty one-for-one scope whose membership can
 change at runtime. It owns identity like an ordered tree and exposes its
-dynamic capability before spawn. Both tree kinds spawn the same `Runtime`
-owner; after spawn, recover that capability from `runtime.handle().dynamic()`.
+dynamic capability before spawn. Both tree kinds spawn the same `RunningTree`
+owner; after spawn, use `runtime.scope()` directly. `ScopeRef::kind()` reports
+whether a navigated scope has dynamic membership.
 
 ## Standalone dynamic scope
 
@@ -27,18 +28,17 @@ impl Actor for Worker {
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-let tree = DynamicTree::new();
-let dynamic = tree.handle();
-let runtime = tree.spawn()?;
+let runtime = DynamicTree::new().spawn()?;
+let scope = runtime.scope();
 
-let worker = dynamic
+let worker = scope
     .add_actor(ActorSpec::new("worker", || Worker))
     .await?;
-assert!(runtime.handle().snapshot().child("worker").is_some());
+assert!(scope.snapshot().child("worker").is_some());
 worker.send("ready".to_owned()).await?;
 
-dynamic.remove_child("worker").await?;
-assert!(runtime.handle().snapshot().child("worker").is_none());
+scope.remove_child("worker").await?;
+assert!(scope.snapshot().child("worker").is_none());
 runtime.shutdown_and_wait().await?;
 # Ok(())
 # }
@@ -114,13 +114,11 @@ id:
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let tree = OrderedTree::new().subtree("sessions", DynamicTree::new());
 let runtime = tree.spawn()?;
-runtime.handle().wait_started().await?;
+runtime.scope().wait_started().await?;
 let sessions = runtime
-    .handle()
+    .scope()
     .subtree("sessions")
-    .expect("declared subtree")
-    .dynamic()
-    .expect("dynamic membership");
+    .expect("declared subtree");
 
 let session = sessions
     .add_actor(ActorSpec::new("session-42", || Worker))
@@ -136,17 +134,17 @@ lowering validates all declarations before startup is scheduled. Duplicate
 ids in the destination scope fail without partially mounting the subtree.
 The same actor id may appear in different sibling scopes.
 
-## Obtain the handle before the scope exists
+## Obtain the reference before the scope exists
 
-A declaration's handle is stable before spawn, so actor factories can capture
+A declaration's `ScopeRef` is stable before spawn, so actor factories can capture
 future dynamic scopes directly:
 
 ```rust
 # use kokage::{ActorSpec, DynamicTree, OrderedTree};
-# struct Router(kokage::DynamicRuntimeHandle);
+# struct Router(kokage::ScopeRef);
 # impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ActorResult { Ok(()) } }
 let sessions = DynamicTree::new();
-let sessions_handle = sessions.handle();
+let sessions_handle = sessions.scope();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
 
 let app = OrderedTree::new()
@@ -157,9 +155,9 @@ let app = OrderedTree::new()
 ```
 
 No global `OnceLock` is needed, and moving the declaration into the parent
-preserves the issued handle's identity.
+preserves the issued reference's identity.
 
-## Advanced orchestration: scope handles inside actors
+## Advanced orchestration: scope references inside actors
 
 Actor lifecycle contexts expose the containing scope through
 `ctx.supervisor()`. Resolve a declared nested scope by id:
@@ -169,18 +167,19 @@ let children = ctx
     .supervisor()
     .subtree("children")
     .expect("declared child scope");
-let dynamic = children.dynamic().expect("dynamic membership");
+let dynamic = children;
 let worker = dynamic
     .add_actor(ActorSpec::new("worker", WorkerFactory::default()))
     .await?;
 ```
 
-This advanced orchestration surface returns a `RestrictedScope`: observation
-and scheduled insertion are available, while lifecycle waits that could
-deadlock an actor callback remain withheld. The lookup works during `on_start`,
-before the child scope starts. Use `Context::spawn_scope_wait` when a lifecycle
-wait must run outside the callback and map its result back through the actor's
-mailbox.
+This advanced orchestration surface returns a `RestrictedScopeRef`: observation
+and scheduled insertion are available, while scope-wide readiness and
+termination waits remain withheld. Its completion watches can arm
+`then_shutdown`, but cannot be awaited. The lookup works during `on_start`,
+before the child scope starts. Use `Context::spawn_scope_wait` to create and
+await an unrestricted lifecycle or completion wait outside the callback and
+map its result back through the actor's mailbox.
 
 Declare a leader-owned scope explicitly:
 

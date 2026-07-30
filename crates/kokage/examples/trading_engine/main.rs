@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, DownReason, Guard, MailboxMode, Restart, RuntimeHandle,
+    ActorSlot, CancellationToken, DownReason, Guard, MailboxMode, Restart, ScopeRef,
     observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -174,7 +174,7 @@ fn feed_slot(label: &str) -> ActorSlot<FeedMsg> {
 }
 
 struct App {
-    runtime: kokage::Runtime,
+    runtime: kokage::RunningTree,
     venue_a_feed: ActorRef<FeedMsg>,
     venue_b_feed: ActorRef<FeedMsg>,
     router: ActorRef<RouterMsg>,
@@ -326,7 +326,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     let runtime = tree.spawn()?;
 
     let background_stop = CancellationToken::new();
-    let sampler = tokio::spawn(telemetry::sample(runtime.handle(), background_stop.clone()));
+    let sampler = tokio::spawn(telemetry::sample(runtime.scope(), background_stop.clone()));
     // The aggregate restart breaker is fed from the lifecycle stream's
     // cumulative counters rather than inferring restarts from event pairs.
     // Child transitions carry the venues supervisor's cumulative restart
@@ -334,7 +334,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     // until the next child transition. The scope is direct children; nested
     // per-venue supervisors would each need their own lifecycle pump.
     let venues_runtime = runtime
-        .handle()
+        .scope()
         .subtree("venues")
         .expect("venues runtime subtree");
     let mut venue_restarts = venues_runtime.snapshot().total_restarts;
@@ -366,7 +366,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.handle().wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.runtime.scope().wait_started()).await??;
     assert_eq!(app.venue_a.feed_sessions(VENUE_A), 1);
     assert_eq!(app.venue_b.feed_sessions(VENUE_B), 1);
     assert_eq!(app.venue_a.gateway_sessions(VENUE_A), 1);
@@ -445,7 +445,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     let before_b = generation(app, "venue-b-feed");
     let venues = app
         .runtime
-        .handle()
+        .scope()
         .subtree("venues")
         .expect("venues runtime subtree");
     let (lifecycle, baseline) = restart_observer(&venues, "venue-a-feed");
@@ -618,7 +618,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     await_until(|| async {
         let stats = app
             .runtime
-            .handle()
+            .scope()
             .subtree("venues")
             .expect("venue runtime subtree")
             .actor_stats();
@@ -642,7 +642,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     flood.await?;
     let feed_stats = app
         .runtime
-        .handle()
+        .scope()
         .subtree("venues")
         .expect("venue runtime subtree")
         .actor_stats();
@@ -663,7 +663,7 @@ async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
     let venues = app
         .runtime
-        .handle()
+        .scope()
         .subtree("venues")
         .expect("venues runtime subtree");
     for (id, feed) in [
@@ -748,11 +748,11 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
     println!("selected metrics: {selected_metrics:#?}");
     println!(
         "final supervisor snapshot: {:#?}",
-        app.runtime.handle().snapshot()
+        app.runtime.scope().snapshot()
     );
     println!(
         "final actor stats: {:#?}",
-        app.runtime.handle().actor_stats()
+        app.runtime.scope().actor_stats()
     );
     println!("PHASE 8 OK — staged shutdown and observability");
     Ok(())
@@ -769,7 +769,7 @@ where
     Ok(actor.call(PHASE_TIMEOUT, message).await?)
 }
 
-fn restart_observer(handle: &RuntimeHandle, id: &str) -> (SupervisorSnapshotReceiver, u64) {
+fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
     let snapshots = handle.subscribe_snapshots();
     let generation = handle
         .snapshot()
@@ -870,7 +870,7 @@ fn both_health(status: &ReconcilerStatus, health: VenueHealth) -> bool {
 
 fn generation(app: &App, child: &str) -> u64 {
     app.runtime
-        .handle()
+        .scope()
         .snapshot()
         .descendant(["venues", child])
         .expect("nested child snapshot")

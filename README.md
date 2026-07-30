@@ -77,10 +77,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`spawn()` returns the owning `Runtime`; keep it alive for as long as the
-application should run. Clone `runtime.handle()` when another component needs
-non-owning control or observation. Dropping handles has no lifecycle effect,
-while dropping the owner requests graceful shutdown—so a discarded
+`spawn()` returns the owning `RunningTree`; keep it alive for as long as the
+application should run. `running.scope()` returns a cheaply cloneable
+`ScopeRef`, the non-owning reference/control capability for a supervision
+scope, parallel to an `ActorRef`. Bind `let root = running.scope();` when a
+component performs repeated root operations. A `ScopeRef` does not keep its
+`RunningTree` alive; dropping references has no lifecycle effect, while
+dropping the owner requests graceful shutdown—so a discarded
 `let _ = tree.spawn()?;` shuts down immediately.
 
 Background actor operations such as watches, mailbox timers, offloads, scope

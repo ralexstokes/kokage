@@ -22,7 +22,7 @@ impl<M: Send + 'static> RawActor for Idle<M> {
     }
 }
 
-fn report(label: &str, result: Result<kokage::Runtime, BuildError>) {
+fn report(label: &str, result: Result<kokage::RunningTree, BuildError>) {
     match result {
         Ok(_) => panic!("{label} unexpectedly spawned"),
         Err(error) => println!("{label}: {error}"),

@@ -1,6 +1,6 @@
-use kokage::{DynamicRestrictedScope, OrderedTree, RuntimeHandle};
+use kokage::{OrderedTree, RestrictedScopeRef, ScopeRef};
 
-async fn escape(scope: DynamicRestrictedScope) -> RuntimeHandle {
+async fn escape(scope: RestrictedScopeRef) -> ScopeRef {
     scope
         .add_subtree("nested", OrderedTree::new())
         .await

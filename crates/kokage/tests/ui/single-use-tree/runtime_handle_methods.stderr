@@ -1,5 +1,5 @@
-error[E0599]: no method named `snapshot` found for reference `&Runtime` in the current scope
- --> tests/ui/single-use-tree/runtime_handle_methods.rs:4:29
+error[E0599]: no method named `handle` found for reference `&RunningTree` in the current scope
+ --> tests/ui/single-use-tree/runtime_handle_methods.rs:4:27
   |
-4 |     let _snapshot = runtime.snapshot();
-  |                             ^^^^^^^^ method not found in `&Runtime`
+4 |     let _handle = runtime.handle();
+  |                           ^^^^^^ method not found in `&RunningTree`

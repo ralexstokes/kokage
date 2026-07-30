@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .task(warm_cache)
         .task(metrics)
         .spawn()?;
-    let running = running_owner.handle();
+    let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();
     let scheduled = timeout(
         Duration::from_secs(2),

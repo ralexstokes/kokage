@@ -87,7 +87,7 @@ pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub use child::{BoxError, ChildResult, ChildSpec};
-pub use completion::{CompletionError, CompletionOutcome};
+pub use completion::{CompletionError, CompletionOutcome, CompletionWatch};
 pub use context::ChildContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;

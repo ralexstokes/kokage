@@ -13,7 +13,8 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! # let runtime = OrderedTree::new().spawn()?;
-//! let console = ConsoleBuilder::for_runtime(&runtime.handle())
+//! let root = runtime.scope();
+//! let console = ConsoleBuilder::for_runtime(&root)
 //!     .spawn()
 //!     .await
 //!     .expect("failed to start console");
@@ -38,7 +39,7 @@ mod ws;
 use std::{io, net::SocketAddr, sync::Arc};
 
 use kokage::{
-    RuntimeHandle,
+    ScopeRef,
     observe::{ActorStats, LifecycleWatch, SupervisorSnapshotReceiver},
 };
 use thiserror::Error;
@@ -97,11 +98,11 @@ impl ConsoleBuilder {
     /// The console remains an application-side observer: it subscribes to
     /// snapshots and lifecycle events and samples actor stats without adding
     /// a console dependency or feature to `kokage`.
-    pub fn for_runtime(handle: &RuntimeHandle) -> Self {
-        let lifecycle = handle.clone();
-        let stats = handle.clone();
+    pub fn for_runtime(scope: &ScopeRef) -> Self {
+        let lifecycle = scope.clone();
+        let stats = scope.clone();
         Self::new()
-            .snapshots(handle.subscribe_snapshots())
+            .snapshots(scope.subscribe_snapshots())
             .lifecycle(move || lifecycle.watch_lifecycle())
             .actor_stats(move || stats.actor_stats())
     }

@@ -5,7 +5,7 @@ use support::TreeBuilder;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, DynamicTree, Restart, RuntimeHandle, Shutdown, SupervisorError,
+    ActorSpec, ActorStatus, DynamicTree, Restart, ScopeRef, Shutdown, SupervisorError,
     host::{BoxError, ChildSpec, RawActor, RawContext},
     prelude::*,
 };
@@ -40,7 +40,7 @@ impl Actor for Probe {
 
 #[derive(Clone)]
 struct AddsChildOnStart {
-    handle_rx: watch::Receiver<Option<RuntimeHandle>>,
+    handle_rx: watch::Receiver<Option<ScopeRef>>,
     added_started: Arc<Notify>,
 }
 
@@ -61,8 +61,6 @@ impl Actor for AddsChildOnStart {
         };
         let added_started = Arc::clone(&self.added_started);
         handle
-            .dynamic()
-            .expect("dynamic scope")
             .add_child(ChildSpec::task("added-from-on-start", move |ctx| {
                 let added_started = Arc::clone(&added_started);
                 async move {
@@ -82,11 +80,11 @@ impl Actor for AddsChildOnStart {
 
 #[tokio::test]
 async fn actor_on_start_can_await_add_child_on_its_own_dynamic_supervisor() {
-    let (handle_tx, handle_rx) = watch::channel::<Option<RuntimeHandle>>(None);
+    let (handle_tx, handle_rx) = watch::channel::<Option<ScopeRef>>(None);
     let added_started = Arc::new(Notify::new());
     let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     handle_tx
-        .send(Some(handle.handle()))
+        .send(Some(handle.scope()))
         .expect("startup actor retains handle receiver");
     support::dynamic_root(&handle)
         .add_actor(ActorSpec::new("starter", {
@@ -130,7 +128,7 @@ async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() 
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(&*order.lock().await, &["first"]);
     release.notify_one();
-    tokio::time::timeout(Duration::from_secs(1), handle.handle().wait_started())
+    tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
         .unwrap();
@@ -181,13 +179,13 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
         .spawn()
         .unwrap();
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(1), handle.handle().wait_started())
+        tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
             .await
             .unwrap(),
         Err(SupervisorError::StartupAborted(_))
     ));
     let child = handle
-        .handle()
+        .scope()
         .snapshot()
         .children
         .into_iter()
@@ -248,7 +246,7 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
         }
     }));
     let handle = graph.build().spawn().unwrap();
-    handle.handle().wait_started().await.unwrap();
+    handle.scope().wait_started().await.unwrap();
     actor.send("hold").await.unwrap();
     started.notified().await;
     actor.send("trigger").await.unwrap();
@@ -355,7 +353,7 @@ async fn status_separates_the_drain_phase_from_ordinary_handling() {
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
     let handle = graph.build().spawn().unwrap();
-    handle.handle().wait_started().await.unwrap();
+    handle.scope().wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
     started.notified().await;
@@ -384,7 +382,7 @@ async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() 
         .default_restart(Restart::never())
         .spawn()
         .unwrap();
-    handle.handle().wait_started().await.unwrap();
+    handle.scope().wait_started().await.unwrap();
 
     actor.send("stop").await.unwrap();
     started.notified().await;
@@ -448,7 +446,7 @@ async fn status_carves_local_stop_during_graph_shutdown() {
         }
     }));
     let handle = graph.build().spawn().unwrap();
-    handle.handle().wait_started().await.unwrap();
+    handle.scope().wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
     assert_eq!(statuses.recv().await, Some(ActorStatus::Running));
@@ -521,7 +519,7 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
     started.notified().await;
     actor.send("mailbox").await.unwrap();
     release.notify_one();
-    tokio::time::timeout(Duration::from_secs(1), handle.handle().wait_started())
+    tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
         .unwrap();
@@ -565,7 +563,7 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     started.notified().await;
     actor.send("mailbox").await.unwrap();
     release.notify_one();
-    tokio::time::timeout(Duration::from_secs(1), handle.handle().wait_started())
+    tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
         .unwrap();
@@ -601,12 +599,12 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
         .default_restart(Restart::never())
         .spawn()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(1), handle.handle().wait_started())
+    tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
         .unwrap();
     assert!(
-        handle.handle().snapshot().children[0]
+        handle.scope().snapshot().children[0]
             .state
             .last_exit()
             .is_some_and(|exit| exit.is_completed())
@@ -665,7 +663,7 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
         release: actor_release.clone(),
     }));
     let handle = graph.build().spawn().unwrap();
-    handle.handle().wait_started().await.unwrap();
+    handle.scope().wait_started().await.unwrap();
 
     // Park the handler so the next sends land in the mailbox rather than being
     // consumed by the ordinary receive loop.

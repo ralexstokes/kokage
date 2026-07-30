@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use kokage::{CancellationToken, RuntimeHandle};
+use kokage::{CancellationToken, ScopeRef};
 use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 
 #[derive(Clone, Debug, Default)]
@@ -40,7 +40,7 @@ pub fn install_metrics() -> Result<Snapshotter, metrics::SetRecorderError<Debugg
     Ok(snapshotter)
 }
 
-pub async fn sample(runtime: RuntimeHandle, stop: CancellationToken) {
+pub async fn sample(runtime: ScopeRef, stop: CancellationToken) {
     let mut interval = tokio::time::interval(Duration::from_millis(250));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {

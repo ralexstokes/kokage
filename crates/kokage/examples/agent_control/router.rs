@@ -10,7 +10,7 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorResult, ActorSlot, Context, ControlError, DynamicTree, Guard,
-    OrderedTree, RuntimeHandle, Shutdown, Strategy, SupervisorError,
+    OrderedTree, ScopeRef, Shutdown, Strategy, SupervisorError,
     observe::{ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
 };
 
@@ -105,7 +105,7 @@ fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountE
 pub struct Router {
     /// Reserved before the root is built and retained by `RouterFactory`, so
     /// it survives router restarts without late binding.
-    mount: RuntimeHandle,
+    mount: ScopeRef,
     #[factory(default)]
     sessions: HashMap<ChatId, SessionSlot>,
     journal: ActorRef<JournalMsg>,
@@ -130,7 +130,7 @@ pub struct Router {
 }
 
 impl Router {
-    fn mount(&self) -> RuntimeHandle {
+    fn mount(&self) -> ScopeRef {
         self.mount.clone()
     }
 
@@ -177,8 +177,6 @@ impl Router {
                 // skipped by the group respawn and cannot themselves recycle
                 // the session.
                 let subtree = mount
-                    .dynamic()
-                    .expect("the session mount is declared dynamic")
                     .add_subtree(
                         offload_id,
                         OrderedTree::new().subtree(
@@ -216,11 +214,7 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount
-                        .dynamic()
-                        .expect("the session mount is declared dynamic")
-                        .remove_child(remove_id)
-                        .await,
+                    mount.remove_child(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))
@@ -244,11 +238,7 @@ impl Router {
             PHASE_TIMEOUT,
             async move {
                 matches!(
-                    mount
-                        .dynamic()
-                        .expect("the session mount is declared dynamic")
-                        .remove_child(remove_id)
-                        .await,
+                    mount.remove_child(remove_id).await,
                     Ok(())
                         | Err(ControlError::UnknownChildId(_))
                         | Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(_)))

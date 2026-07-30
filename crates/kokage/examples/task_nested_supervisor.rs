@@ -48,17 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .restart(Restart::always());
 
     let running_owner = DynamicTree::new().spawn()?;
-    let running = running_owner.handle();
-    running
-        .dynamic()
-        .expect("dynamic supervisor")
-        .add_child(metrics)
-        .await?;
-    let nested_handle = running
-        .dynamic()
-        .expect("dynamic supervisor")
-        .add_subtree("nested-pipeline", nested_tree)
-        .await?;
+    let running = running_owner.scope();
+    running.add_child(metrics).await?;
+    let nested_handle = running.add_subtree("nested-pipeline", nested_tree).await?;
     let mut nested_snapshots = nested_handle.subscribe_snapshots();
     timeout(
         Duration::from_secs(2),

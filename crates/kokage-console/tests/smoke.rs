@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::StreamExt;
 use kokage::{
-    Actor, ActorResult, ActorSpec, Context, DynamicTree, Runtime, host::ChildSpec,
+    Actor, ActorResult, ActorSpec, Context, DynamicTree, RunningTree, host::ChildSpec,
     observe::ActorStats,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError, ConsoleHandle};
@@ -59,14 +59,12 @@ fn actor_stats() -> Vec<ActorStats> {
 
 async fn spawn_console_with_stats(
     stats: impl Fn() -> Vec<ActorStats> + Send + Sync + 'static,
-) -> (ConsoleHandle, Runtime, Runtime) {
+) -> (ConsoleHandle, RunningTree, RunningTree) {
     let snapshots = DynamicTree::new()
         .spawn()
         .expect("test snapshot tree spawns");
-    let snapshots_handle = snapshots.handle();
+    let snapshots_handle = snapshots.scope();
     snapshots_handle
-        .dynamic()
-        .expect("test snapshot supervisor is dynamic")
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -76,7 +74,7 @@ async fn spawn_console_with_stats(
     let lifecycle = DynamicTree::new()
         .spawn()
         .expect("test lifecycle tree spawns");
-    let lifecycle_source = lifecycle.handle();
+    let lifecycle_source = lifecycle.scope();
     let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle())
@@ -89,7 +87,7 @@ async fn spawn_console_with_stats(
     (handle, snapshots, lifecycle)
 }
 
-async fn spawn_console() -> (ConsoleHandle, Runtime, Runtime) {
+async fn spawn_console() -> (ConsoleHandle, RunningTree, RunningTree) {
     spawn_console_with_stats(actor_stats).await
 }
 
@@ -219,8 +217,8 @@ async fn token_bootstrap_sets_cookie_and_authorization_is_accepted() {
     let lifecycle = DynamicTree::new()
         .spawn()
         .expect("test lifecycle tree spawns");
-    let snapshots_handle = snapshots.handle();
-    let lifecycle_source = lifecycle.handle();
+    let snapshots_handle = snapshots.scope();
+    let lifecycle_source = lifecycle.scope();
     let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle())
@@ -308,8 +306,8 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
     let lifecycle = DynamicTree::new()
         .spawn()
         .expect("test lifecycle tree spawns");
-    let snapshots_handle = snapshots.handle();
-    let lifecycle_source = lifecycle.handle();
+    let snapshots_handle = snapshots.scope();
+    let lifecycle_source = lifecycle.scope();
     let handle = ConsoleBuilder::new()
         .snapshots(snapshots_handle.subscribe_snapshots())
         .lifecycle(move || lifecycle_source.watch_lifecycle())
@@ -326,9 +324,9 @@ async fn explicit_host_allowlist_accepts_external_and_default_port_forms() {
 #[tokio::test]
 async fn non_loopback_bind_requires_token() {
     let snapshots = DynamicTree::new();
-    let snapshot_rx = snapshots.handle().subscribe_snapshots();
+    let snapshot_rx = snapshots.scope().subscribe_snapshots();
     let lifecycle = DynamicTree::new();
-    let lifecycle_handle = lifecycle.handle();
+    let lifecycle_handle = lifecycle.scope();
     let error = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
         .lifecycle(move || lifecycle_handle.watch_lifecycle())
@@ -350,7 +348,7 @@ async fn builder_reports_missing_observability_sources() {
     assert!(matches!(missing_snapshots, ConsoleError::MissingSnapshots));
 
     let snapshots = DynamicTree::new();
-    let snapshot_rx = snapshots.handle().subscribe_snapshots();
+    let snapshot_rx = snapshots.scope().subscribe_snapshots();
     let missing_lifecycle = ConsoleBuilder::new()
         .snapshots(snapshot_rx)
         .spawn()
@@ -441,9 +439,7 @@ async fn ws_streams_snapshot_updates() {
     read_handshake(&mut socket).await;
 
     snapshots
-        .handle()
-        .dynamic()
-        .expect("test snapshot supervisor is dynamic")
+        .scope()
         .add_child(ChildSpec::task("updated", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -478,9 +474,7 @@ async fn ws_streams_events() {
     read_handshake(&mut socket).await;
 
     lifecycle
-        .handle()
-        .dynamic()
-        .expect("dynamic scope")
+        .scope()
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -501,7 +495,7 @@ async fn dynamic_tree_wires_public_observability() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("failed to spawn empty runtime");
-    let console = ConsoleBuilder::for_runtime(&runtime.handle())
+    let console = ConsoleBuilder::for_runtime(&runtime.scope())
         .bind(([127, 0, 0, 1], 0))
         .spawn()
         .await
@@ -514,9 +508,7 @@ async fn dynamic_tree_wires_public_observability() {
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
     runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+        .scope()
         .add_child(ChildSpec::task("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -525,9 +517,7 @@ async fn dynamic_tree_wires_public_observability() {
         .expect("failed to add runtime child");
 
     runtime
-        .handle()
-        .dynamic()
-        .expect("dynamic root exposes membership capability")
+        .scope()
         .add_actor(ActorSpec::new("tracked", || IdleActor))
         .await
         .expect("failed to add runtime actor");

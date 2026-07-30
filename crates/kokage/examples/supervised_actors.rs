@@ -73,7 +73,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .actor(worker_spec)
         .actor(orders_spec)
         .spawn()?;
-    let handle = runtime.handle();
+    let handle = runtime.scope();
 
     orders.send("business cards x100".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));

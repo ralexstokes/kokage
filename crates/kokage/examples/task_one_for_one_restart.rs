@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let running_owner = OrderedTree::new().task(flaky).task(metrics).spawn()?;
-    let running = running_owner.handle();
+    let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();
     let restarted = timeout(
         Duration::from_secs(2),

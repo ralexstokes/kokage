@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style supervision trees and typed actors over an
-//! async scheduler (Tokio today), with an owning [`Runtime`] and integrated
-//! non-owning [`RuntimeHandle`] values.
+//! async scheduler (Tokio today), with an owning [`RunningTree`] and integrated
+//! non-owning [`ScopeRef`] values.
 //!
 //! Declare each actor with [`ActorSpec`], place the specs directly in an
 //! [`OrderedTree`], and spawn the tree:
@@ -52,9 +52,9 @@
 //! | Type | Role |
 //! |------|------|
 //! | [`ActorSpec`] / [`ActorSlot`] | Single-actor declarations and typed cyclic wiring. |
-//! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their handles are available before spawn. |
-//! | [`Runtime`] | Owns a spawned root and requests graceful shutdown when dropped. |
-//! | [`RuntimeHandle`] | Non-owning control and observation surface; [`RuntimeHandle::dynamic`] exposes dynamic membership when supported. |
+//! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
+//! | [`RunningTree`] | Owns a spawned supervision tree and requests graceful shutdown when dropped. |
+//! | [`ScopeRef`] | Cheaply cloneable, non-owning reference and control capability for a supervision scope; [`ScopeRef::kind`] reports ordered or dynamic membership. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`host::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
@@ -71,7 +71,7 @@
 //!   leader-owned scopes.
 //! - **Dynamic actor membership** via [`DynamicTree::new`]: an initially empty
 //!   `OneForOne` scope that accepts actor specs and subtrees at runtime. Its
-//!   handle is available before spawn for typed wiring.
+//!   scope is available before spawn for typed wiring.
 //!
 //! Fate sharing is selected with [`Strategy::OneForAll`] or tree shape; actor
 //! wiring does not choose execution topology.
@@ -176,7 +176,7 @@
 //! `tracing` spans and structured logs are emitted automatically for
 //! supervisor, actor, and mailbox lifecycle. Message counters and live mailbox
 //! usage are available through [`ActorRef::stats`] and
-//! [`RuntimeHandle::actor_stats`]. Actors configured with
+//! [`ScopeRef::actor_stats`]. Actors configured with
 //! [`ActorSpec::message_size`] also expose accepted-byte totals.
 //!
 //! # Runtime-independent boundaries
@@ -233,7 +233,7 @@ mod supervisor;
 /// For task children it re-exports every type needed to name a
 /// [`host::ChildSpec::task`] factory as a standalone function. Nested scopes are
 /// composed with [`OrderedTree::subtree`] or
-/// [`DynamicRuntimeHandle::add_subtree`].
+/// [`ScopeRef::add_subtree`].
 pub mod host {
     pub use crate::{
         actor::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
@@ -243,7 +243,7 @@ pub mod host {
 
 /// Runtime observation, lifecycle, topology, and completion types.
 ///
-/// Control remains on [`RuntimeHandle`]; this module groups the values and
+/// Control remains on [`ScopeRef`]; this module groups the values and
 /// streams returned by that handle without injecting them into the crate root.
 pub mod observe {
     pub use crate::{
@@ -251,8 +251,8 @@ pub mod observe {
         supervision::{ChildOutline, SupervisionOutline},
         supervisor::{
             ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-            CompletionOutcome, LifecycleEvent, LifecycleEventKind, LifecyclePathSegment,
-            LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
+            CompletionOutcome, CompletionWatch, LifecycleEvent, LifecycleEventKind,
+            LifecyclePathSegment, LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
             SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
@@ -284,11 +284,10 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorResult, ActorSlot, ActorSpec, ActorStatus,
-    BlockingCancelled, CallError, Context, DownReason, DynamicRestrictedScope, MailboxMode,
-    MonitorEvent, OffloadDeadline, Reply, RestrictedScope, SendError, StopContext, TimerKey,
-    TrySendError,
+    BlockingCancelled, CallError, Context, DownReason, MailboxMode, MonitorEvent, OffloadDeadline,
+    Reply, RestrictedScopeRef, SendError, StopContext, TimerKey, TrySendError,
 };
-pub use runtime::{DynamicRuntimeHandle, Runtime, RuntimeHandle};
+pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
 pub use supervisor::{
     Backoff, BackoffParts, BuildError, CancellationToken, ControlError, Guard, Restart,

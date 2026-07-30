@@ -19,8 +19,7 @@ pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
 pub use context::{
-    ActorRef, ActorStatus, Context, DynamicRestrictedScope, RawContext, Reply, RestrictedScope,
-    StopContext, TimerKey,
+    ActorRef, ActorStatus, Context, RawContext, Reply, RestrictedScopeRef, StopContext, TimerKey,
 };
 pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, TrySendError};
 pub use factory::ActorFactory;

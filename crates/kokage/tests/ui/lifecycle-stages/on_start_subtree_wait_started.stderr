@@ -1,5 +1,5 @@
-error[E0599]: no method named `wait_started` found for struct `RestrictedScope` in the current scope
+error[E0599]: no method named `wait_started` found for struct `RestrictedScopeRef` in the current scope
   --> tests/ui/lifecycle-stages/on_start_subtree_wait_started.rs:13:21
    |
 13 |             sibling.wait_started().await?;
-   |                     ^^^^^^^^^^^^ method not found in `RestrictedScope`
+   |                     ^^^^^^^^^^^^ method not found in `RestrictedScopeRef`

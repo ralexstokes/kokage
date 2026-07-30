@@ -5,7 +5,7 @@
 
 use std::{error::Error, time::Duration};
 
-use kokage::{ActorSpec, CancellationToken, RuntimeHandle, prelude::*};
+use kokage::{ActorSpec, CancellationToken, ScopeRef, prelude::*};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -23,7 +23,7 @@ impl Actor for Worker {
     }
 }
 
-async fn sample(worker: ActorRef<&'static str>, runtime: RuntimeHandle, stop: CancellationToken) {
+async fn sample(worker: ActorRef<&'static str>, runtime: ScopeRef, stop: CancellationToken) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sampler_stop = CancellationToken::new();
     let sampler = tokio::spawn(sample(
         worker.clone(),
-        runtime.handle(),
+        runtime.scope(),
         sampler_stop.clone(),
     ));
     worker.send("hello stats").await?;

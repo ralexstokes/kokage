@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }))
         .spawn()?;
-    let handle = running.handle();
+    let handle = running.scope();
     let mut events = handle.watch_lifecycle();
 
     let observer = tokio::spawn(async move {

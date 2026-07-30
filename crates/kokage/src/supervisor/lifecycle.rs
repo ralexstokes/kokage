@@ -220,7 +220,7 @@ pub enum LifecycleEventKind {
 }
 
 /// Lifecycle stream created by
-/// [`RuntimeHandle::watch_lifecycle`](crate::RuntimeHandle::watch_lifecycle).
+/// [`ScopeRef::watch_lifecycle`](crate::ScopeRef::watch_lifecycle).
 pub struct LifecycleWatch {
     watcher: Arc<LifecycleWatcher>,
     watcher_count: Option<Arc<AtomicUsize>>,
