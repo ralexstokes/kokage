@@ -267,7 +267,7 @@ impl ScopeRef {
 
     /// Returns whether this scope has ordered or dynamic membership.
     pub fn kind(&self) -> ScopeKind {
-        self.supervisor.snapshot().kind
+        self.supervisor.kind()
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -448,7 +448,7 @@ impl ScopeRef {
         self.supervisor.dynamic().ok_or(ControlError::NotDynamic)
     }
 
-    /// Builds and adds an actor-aware runtime subtree dynamically.
+    /// Builds and adds an actor-aware runtime subtree.
     ///
     /// The returned handle can add actors or further subtrees, and recursive
     /// [`ScopeRef::actor_stats`] include the new subtree. Removing the
@@ -469,7 +469,11 @@ impl ScopeRef {
     /// or [`TreeNode::shutdown`](crate::TreeNode::shutdown) to override the
     /// subtree edge's policies in this dynamic parent.
     ///
-    /// Both failure phases use [`ControlError::Rejected`]: first the supplied
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
+    /// membership. Both validation failure phases use
+    /// [`ControlError::Rejected`]: first the supplied
     /// tree is lowered and validated, then the parent validates insertion of
     /// the resulting child. For example, a duplicate actor binding fails the
     /// first phase, while an already-occupied child id fails the second. The
@@ -516,6 +520,11 @@ impl ScopeRef {
     /// lineage assigned to that membership. Task children do not appear in
     /// [`ScopeRef::actor_stats`], but remain visible through snapshots and
     /// lifecycle watches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
+    /// membership. Other failures are reported by the dynamic supervisor.
     pub async fn add_child(&self, child: ChildSpec) -> Result<u64, ControlError> {
         self.dynamic_supervisor()?.add_child(child).await
     }
@@ -523,13 +532,20 @@ impl ScopeRef {
     /// Adds one actor declaration and returns its stable typed ref.
     ///
     /// The actor id is its direct supervisor child id, so it can be removed
-    /// later through the dynamic capability. See [`crate::ActorFactory`] for
+    /// later through [`ScopeRef::remove_child`]. See [`crate::ActorFactory`] for
     /// the incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
     /// the stronger readiness contract. A zero
     /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity) is rejected with
     /// [`ControlError::Rejected`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
+    /// membership. Invalid actor configuration and insertion failures are
+    /// returned as [`ControlError::Rejected`]; a stopped scope returns
+    /// [`ControlError::Unavailable`].
     pub async fn add_actor<M: Send + 'static>(
         &self,
         spec: ActorSpec<M>,
@@ -598,6 +614,12 @@ impl ScopeRef {
     /// `send` waits and then returns [`SendError`](crate::SendError).
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
+    /// membership. A stopped scope returns [`ControlError::Unavailable`], and
+    /// operation failures are reported through the remaining variants.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.remove_child(id).await
     }

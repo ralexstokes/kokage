@@ -1,5 +1,0 @@
-error[E0599]: no method named `dynamic` found for reference `&ScopeRef` in the current scope
- --> tests/ui/public-api/runtime_handle_dynamic_mutators.rs:4:19
-  |
-4 |     let _ = scope.dynamic();
-  |                   ^^^^^^^ method not found in `&ScopeRef`

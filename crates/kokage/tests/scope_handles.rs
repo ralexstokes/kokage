@@ -52,7 +52,6 @@ impl Actor for ScopeProbe {
         self.starts.fetch_add(1, Ordering::SeqCst);
         let Some(children_id) = self.children_id else {
             let supervisor = ctx.supervisor();
-            assert_eq!(supervisor.snapshot().kind, ScopeKind::Ordered);
             assert_eq!(supervisor.kind(), ScopeKind::Ordered);
             self.reports
                 .send("ordered-supervisor")
@@ -226,15 +225,14 @@ impl Actor for RestrictedTaskAdder {
             .supervisor()
             .subtree("children")
             .expect("actor's declared child scope is registered");
-        let dynamic = children;
-        let lineage = dynamic
+        let lineage = children
             .add_child(ChildSpec::task("task", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
             .await?;
         self.lineage.send(lineage).expect("test receiver open");
-        let subtree: RestrictedScopeRef = dynamic
+        let subtree: RestrictedScopeRef = children
             .add_subtree("restricted-subtree", OrderedTree::new())
             .await?;
         self.subtree.send(subtree).expect("test receiver open");
@@ -381,7 +379,7 @@ async fn dynamic_completion_names_wait_for_future_members() {
 }
 
 #[tokio::test]
-async fn dynamic_shutdown_on_completion_waits_for_future_members() {
+async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
     let _completion = dynamic

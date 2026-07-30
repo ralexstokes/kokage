@@ -1585,85 +1585,85 @@ pub struct RestrictedScopeRef {
     handle: ScopeRef,
 }
 
-macro_rules! restricted_scope_forwards {
-    () => {
-        /// Returns a point-in-time snapshot of the scope.
-        pub fn snapshot(&self) -> crate::observe::SupervisorSnapshot {
-            self.handle.snapshot()
-        }
-
-        /// Returns per-actor message counters for this scope.
-        pub fn actor_stats(&self) -> Vec<crate::observe::ActorStats> {
-            self.handle.actor_stats()
-        }
-
-        /// Subscribes to scope snapshots.
-        pub fn subscribe_snapshots(&self) -> crate::observe::SupervisorSnapshotReceiver {
-            self.handle.subscribe_snapshots()
-        }
-
-        /// Returns a handle to a nested subtree by id, restricted the same way
-        /// as this one.
-        pub fn subtree(&self, id: &str) -> Option<Self> {
-            self.handle.subtree(id).map(Self::new)
-        }
-
-        /// Returns whether this scope has ordered or dynamic membership.
-        pub fn kind(&self) -> crate::observe::ScopeKind {
-            self.handle.kind()
-        }
-
-        /// Observes lifecycle transitions of this scope and its descendants.
-        pub fn watch_lifecycle(&self) -> crate::observe::LifecycleWatch {
-            self.handle.watch_lifecycle()
-        }
-
-        /// Pumps direct-child lifecycle events into `target` using its ordinary
-        /// mailbox policy.
-        ///
-        /// The pump runs in a detached task, so starting it from a lifecycle
-        /// hook does not block that hook. Retain the returned guard for as long
-        /// as delivery is wanted; dropping or cancelling it stops the pump.
-        /// See [`ScopeRef::watch_lifecycle_to`].
-        pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> crate::Guard
-        where
-            M: Send + 'static,
-            F: FnMut(crate::observe::LifecycleEvent) -> M + Send + 'static,
-        {
-            self.handle.watch_lifecycle_to(target, map)
-        }
-
-        /// Creates a non-awaitable completion watch for direct children.
-        ///
-        /// The watch can be configured with `allow_future_members` and armed
-        /// with `then_shutdown`. Use [`Context::spawn_scope_wait`] when the
-        /// completion outcome must be awaited.
-        pub fn completions<I, S>(&self, ids: I) -> crate::observe::CompletionWatch<false>
-        where
-            I: IntoIterator<Item = S>,
-            S: Into<String>,
-        {
-            self.handle.restricted_completions(ids)
-        }
-
-        /// Requests shutdown of this scope without waiting for it.
-        pub fn shutdown(&self) {
-            self.handle.shutdown()
-        }
-    };
-}
-
 impl RestrictedScopeRef {
     fn new(handle: ScopeRef) -> Self {
         Self { handle }
     }
 
-    restricted_scope_forwards!();
+    /// Returns a point-in-time snapshot of the scope.
+    pub fn snapshot(&self) -> crate::observe::SupervisorSnapshot {
+        self.handle.snapshot()
+    }
+
+    /// Returns per-actor message counters for this scope.
+    pub fn actor_stats(&self) -> Vec<crate::observe::ActorStats> {
+        self.handle.actor_stats()
+    }
+
+    /// Subscribes to scope snapshots.
+    pub fn subscribe_snapshots(&self) -> crate::observe::SupervisorSnapshotReceiver {
+        self.handle.subscribe_snapshots()
+    }
+
+    /// Returns a handle to a nested subtree by id, restricted the same way
+    /// as this one.
+    pub fn subtree(&self, id: &str) -> Option<Self> {
+        self.handle.subtree(id).map(Self::new)
+    }
+
+    /// Returns whether this scope has ordered or dynamic membership.
+    pub fn kind(&self) -> crate::observe::ScopeKind {
+        self.handle.kind()
+    }
+
+    /// Observes lifecycle transitions of this scope and its descendants.
+    pub fn watch_lifecycle(&self) -> crate::observe::LifecycleWatch {
+        self.handle.watch_lifecycle()
+    }
+
+    /// Pumps direct-child lifecycle events into `target` using its ordinary
+    /// mailbox policy.
+    ///
+    /// The pump runs in a detached task, so starting it from a lifecycle
+    /// hook does not block that hook. Retain the returned guard for as long
+    /// as delivery is wanted; dropping or cancelling it stops the pump.
+    /// See [`ScopeRef::watch_lifecycle_to`].
+    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> crate::Guard
+    where
+        M: Send + 'static,
+        F: FnMut(crate::observe::LifecycleEvent) -> M + Send + 'static,
+    {
+        self.handle.watch_lifecycle_to(target, map)
+    }
+
+    /// Creates a non-awaitable completion watch for direct children.
+    ///
+    /// The watch can be configured with `allow_future_members` and armed
+    /// with `then_shutdown`. Use [`Context::spawn_scope_wait`] when the
+    /// completion outcome must be awaited.
+    pub fn completions<I, S>(&self, ids: I) -> crate::observe::CompletionWatch<false>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.handle.restricted_completions(ids)
+    }
+
+    /// Requests shutdown of this scope without waiting for it.
+    pub fn shutdown(&self) {
+        self.handle.shutdown()
+    }
 
     /// Inserts one actor declaration into this scope.
     ///
     /// Success means insertion completed and startup was scheduled, not that
     /// the actor reported ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`](crate::ControlError::NotDynamic)
+    /// when this scope has ordered membership. See [`ScopeRef::add_actor`] for
+    /// the remaining insertion errors.
     pub async fn add_actor<M: Send + 'static>(
         &self,
         spec: crate::ActorSpec<M>,
@@ -1672,6 +1672,12 @@ impl RestrictedScopeRef {
     }
 
     /// Inserts an arbitrary supervised task child into this scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`](crate::ControlError::NotDynamic)
+    /// when this scope has ordered membership. See [`ScopeRef::add_child`] for
+    /// the remaining insertion errors.
     pub async fn add_child(
         &self,
         child: crate::host::ChildSpec,
@@ -1680,6 +1686,12 @@ impl RestrictedScopeRef {
     }
 
     /// Inserts an identity-owning subtree and returns a restricted handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`](crate::ControlError::NotDynamic)
+    /// when this scope has ordered membership. See [`ScopeRef::add_subtree`]
+    /// for validation and insertion errors.
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
@@ -1695,6 +1707,12 @@ impl RestrictedScopeRef {
     ///
     /// Awaiting removal of the current actor from one of its own lifecycle
     /// callbacks can deadlock until the shutdown grace period expires.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlError::NotDynamic`](crate::ControlError::NotDynamic)
+    /// when this scope has ordered membership. See [`ScopeRef::remove_child`]
+    /// for the remaining operation errors.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), crate::ControlError> {
         self.handle.remove_child(id).await
     }

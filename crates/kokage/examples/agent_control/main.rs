@@ -160,7 +160,7 @@ struct App {
     runtime: kokage::RunningTree,
     gateway: ScopeRef,
     core: ScopeRef,
-    sessions: kokage::ScopeRef,
+    sessions: ScopeRef,
     chat: ChatSim,
     model: ScriptedModel,
     router: ActorRef<RouterMsg>,
