@@ -84,8 +84,8 @@ pub mod __private {
 }
 
 pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
-pub(crate) use cancellation::CancelOnDrop;
 pub use cancellation::CancellationToken;
+pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub use child::{BoxError, ChildResult, ChildSpec};
 pub use completion::{CompletionError, CompletionOutcome};
 pub use context::ChildContext;

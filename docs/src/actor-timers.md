@@ -212,8 +212,8 @@ later deliveries through its restart-stable ref. Messages should carry a key
 or generation when the target must reject stale cross-actor work.
 
 `Guard` owns the authority to stop the timer operation. It exposes `cancel`,
-`is_cancelled`, and `is_finished`; the actor lifetime token itself remains
-private to the context. Dropping a guard cancels its operation, while
+`is_cancelled`, `is_finished`, and `finished`; the actor lifetime token itself
+remains private to the context. Dropping a guard cancels its operation, while
 `detach()` deliberately leaves it running.
 
 ## `host::RawActor` deadlines
