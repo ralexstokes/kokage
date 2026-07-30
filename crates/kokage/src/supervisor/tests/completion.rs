@@ -47,6 +47,10 @@ async fn a_completed_child_stops_siblings_and_supervisor() {
             }
         }));
     let completion = builder.handle().shutdown_on_completion(["trigger"]);
+    assert!(
+        !completion.is_finished(),
+        "an armed completion has not finished before the supervisor runs"
+    );
     let supervisor = builder.build().expect("valid supervisor");
 
     let handle_owner = supervisor.spawn();
@@ -337,9 +341,13 @@ async fn a_dynamic_scope_can_await_completion() {
     let builder = Supervisor::dynamic().default_restart(Restart::never());
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
-    let _finished = builder
+    let finished = builder
         .handle()
         .shutdown_on_dynamic_completion(["first", "second"]);
+    assert!(
+        !finished.is_finished(),
+        "an armed dynamic completion has not finished before its members exist"
+    );
     let spawned_owner = builder.build().expect("valid dynamic supervisor").spawn();
     let spawned = spawned_owner.handle();
 

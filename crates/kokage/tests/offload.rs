@@ -414,6 +414,10 @@ async fn incarnation_restart_finishes_offload_without_cancelling_its_guard() {
     })
     .await
     .expect("offload guard is published");
+    assert!(
+        !guard.is_finished(),
+        "a pending offload has not finished before the incarnation aborts it"
+    );
 
     actor
         .send(AbortMsg::Crash)

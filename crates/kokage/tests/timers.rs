@@ -584,7 +584,11 @@ impl RawActor for RawCrossScheduler {
     type Msg = ();
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ActorResult {
-        let _timer = ctx.send_after(&self.target, "raw-cross", Duration::from_millis(20));
+        let timer = ctx.send_after(&self.target, "raw-cross", Duration::from_millis(20));
+        assert!(
+            !timer.is_finished(),
+            "a pending delay has not finished before it elapses"
+        );
         while ctx.recv().await.is_some() {}
         Ok(())
     }
@@ -824,6 +828,10 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
         .spawn()
         .expect("runtime builds");
     let guard = guard_rx.recv().await.expect("scheduler reports guard");
+    assert!(
+        !guard.is_finished(),
+        "interval stays live until the target terminates"
+    );
 
     advance(Duration::from_millis(10)).await;
     timeout(Duration::from_secs(1), guard.finished())
