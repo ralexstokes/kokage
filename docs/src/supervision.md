@@ -216,8 +216,9 @@ let tree = OrderedTree::new()
     .task(metrics_reporter);
 
 let handle = tree.handle();
-// Retain the guard: dropping it cancels the watch.
-let _finished = handle.shutdown_on_completion(["source", "indexer"]);
+// Detach for fire-and-forget; retain the guard instead to keep the
+// option of cancelling the watch (dropping it cancels too).
+handle.shutdown_on_completion(["source", "indexer"]).detach();
 let runtime = tree.spawn()?;
 runtime.wait().await?;
 ```
