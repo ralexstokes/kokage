@@ -4,7 +4,7 @@ use support::TreeBuilder;
 
 use std::{
     convert::Infallible,
-    future::pending,
+    future::{pending, poll_fn},
     io,
     sync::{
         Arc,
@@ -25,6 +25,45 @@ async fn wait_for<T>(receiver: &mut mpsc::UnboundedReceiver<T>, phase: &str) -> 
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|| panic!("channel closed while waiting for {phase}"))
+}
+
+struct CancelBeforePoll {
+    finished: mpsc::UnboundedSender<()>,
+}
+
+impl Actor for CancelBeforePoll {
+    type Msg = ();
+
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
+        let scope = ctx.supervisor();
+        let guard = ctx.spawn_scope_wait(
+            &scope,
+            |_| poll_fn(|_| -> std::task::Poll<()> { panic!("cancelled scope wait was polled") }),
+            |()| (),
+        );
+        guard.cancel();
+        guard.finished().await;
+        self.finished.send(()).expect("receiver remains open");
+        ctx.stop();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancelling_an_unpolled_scope_wait_finishes_its_guard() {
+    let (finished, mut finishes) = mpsc::unbounded_channel();
+    let mut tree = TreeBuilder::new();
+    let slot = ActorSlot::new("cancel-before-poll");
+    let (slot, actor) = slot.actor_ref();
+    tree.define(slot, move || CancelBeforePoll {
+        finished: finished.clone(),
+    });
+    let runtime = tree.build().spawn().expect("runtime builds");
+
+    actor.send(()).await.expect("actor accepts cancellation");
+    wait_for(&mut finishes, "unpolled scope-wait cancellation").await;
+
+    runtime.shutdown_and_wait().await.expect("clean shutdown");
 }
 
 enum ReadyMsg {

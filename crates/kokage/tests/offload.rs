@@ -3,7 +3,7 @@ mod support;
 use support::TreeBuilder;
 
 use std::{
-    future::pending,
+    future::{pending, poll_fn},
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -47,6 +47,44 @@ async fn recv_test_event<T>(receiver: &mut mpsc::UnboundedReceiver<T>, phase: &s
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|| panic!("channel closed while waiting for {phase}"))
+}
+
+struct CancelBeforePoll {
+    finished: mpsc::UnboundedSender<()>,
+}
+
+impl Actor for CancelBeforePoll {
+    type Msg = ();
+
+    async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ActorResult {
+        let guard = ctx.offload(
+            TEST_TIMEOUT,
+            poll_fn(|_| -> Poll<()> { panic!("cancelled offload was polled") }),
+            |_| (),
+        );
+        guard.cancel();
+        guard.finished().await;
+        self.finished.send(()).expect("receiver remains open");
+        ctx.stop();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancelling_an_unpolled_offload_finishes_its_guard() {
+    let (finished, mut finishes) = mpsc::unbounded_channel();
+    let mut tree = TreeBuilder::new();
+    let slot = ActorSlot::new("cancel-before-poll");
+    let (slot, actor) = slot.actor_ref();
+    tree.define(slot, move || CancelBeforePoll {
+        finished: finished.clone(),
+    });
+    let runtime = tree.build().spawn().expect("runtime builds");
+
+    actor.send(()).await.expect("actor accepts cancellation");
+    recv_test_event(&mut finishes, "unpolled offload cancellation").await;
+
+    shutdown_runtime(&runtime.handle(), "unpolled offload runtime shutdown").await;
 }
 
 #[derive(Debug)]
