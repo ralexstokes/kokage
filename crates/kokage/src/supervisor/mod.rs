@@ -73,7 +73,7 @@ pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
-pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch};
+pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch, ScopePathSegment};
 pub use owner::{RunningSupervisor, Supervisor};
 pub use restart::{Backoff, Restart};
 pub use scope::ScopeKind;

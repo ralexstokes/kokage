@@ -7,14 +7,13 @@ use crate::{
     ActorRef, ActorSpec,
     actor::{
         ActorNode, ActorOptionsValidationError, ActorStats, RunnableActor, RunnableActorBuilder,
-        SupervisorPathSegment,
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
         BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
         DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
-        ScopeKind, Shutdown, SupervisorError, SupervisorHandle, SupervisorSnapshot,
-        SupervisorSnapshotReceiver, TaskSpec,
+        ScopeKind, ScopePathSegment, Shutdown, SupervisorError, SupervisorHandle,
+        SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec,
     },
 };
 
@@ -701,8 +700,8 @@ pub(crate) fn actor_child_spec(
     .shutdown(shutdown)
 }
 
-fn supervisor_path_segment(identity: &AttachedChildIdentity) -> SupervisorPathSegment {
-    SupervisorPathSegment {
+fn supervisor_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
+    ScopePathSegment {
         id: identity.id.clone(),
         lineage: identity.lineage,
         generation: identity.generation,

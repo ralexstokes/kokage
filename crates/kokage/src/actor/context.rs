@@ -1260,10 +1260,10 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Each lifecycle transition of the target is converted by `map` into
     /// this actor's message type and delivered through this actor's mailbox,
-    /// in lifecycle order: [`MonitorEvent::Up`] when an incarnation starts,
-    /// [`MonitorEvent::Down`] when it exits, and a final
-    /// [`MonitorEvent::Terminated`] when the target is permanently gone. A
-    /// target that is already running delivers an immediate `Up` for the
+    /// in lifecycle order: [`MonitorEvent::Started`] when an incarnation starts,
+    /// [`MonitorEvent::Exited`] when it exits, and a final
+    /// [`MonitorEvent::Removed`] when the target is permanently gone. A
+    /// target that is already running delivers an immediate `Started` for the
     /// current incarnation; a target between incarnations stays silent until
     /// the next start, so a watch never races a supervisor restart.
     ///
@@ -1272,16 +1272,18 @@ impl<M: Send + 'static> RawContext<M> {
     /// delivered to whichever observer incarnation is running next. Calling
     /// `watch` again for the same pair, even within one incarnation, returns
     /// an alias of the existing watch without replacing its original `map`
-    /// closure or emitting another immediate `Up`. Cancelling any alias
+    /// closure or emitting another immediate `Started`. Cancelling any alias
     /// cancels the pair. Explicit cancellation or permanent removal of either
     /// membership ends it.
     ///
     /// A replacement observer does not receive a fresh snapshot of the
     /// target. It must durably persist any observed state that it needs after
     /// a crash. To request a fresh snapshot instead, cancel the existing watch
-    /// and register a new one: a running or terminated target responds
-    /// immediately, at the cost of discarding any transitions still staged on
-    /// the old watch.
+    /// and register a new one: a running target delivers an immediate
+    /// [`MonitorEvent::Started`], an already removed target delivers an
+    /// immediate [`MonitorEvent::Removed`], and a target between incarnations
+    /// stays silent until its next `Started`. Re-registering discards any
+    /// transitions still staged on the old watch.
     ///
     /// Delivery uses the observer's ordinary mailbox policy. A conflating
     /// mailbox may replace an unread event with a later one, so use a FIFO
@@ -1290,7 +1292,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// stays full while its target restarts in a tight loop cannot grow memory
     /// without bound. On overflow the oldest transitions are dropped and the
     /// loss surfaces as a [`MonitorEvent::Lagged`] resync marker rather than
-    /// silently; the terminal `Terminated` is never dropped.
+    /// silently; the terminal `Removed` is never dropped.
     ///
     /// Dropping the returned [`Guard`] cancels the watch; call
     /// [`Guard::detach`] when membership ownership should keep it alive.
@@ -1331,7 +1333,7 @@ impl<M: Send + 'static> RawContext<M> {
                 // races an empty drain is not lost.
                 let waiter = guard.queue().waiter();
                 if let Some(event) = guard.queue().pop() {
-                    let terminal = matches!(event, MonitorEvent::Terminated { .. });
+                    let terminal = matches!(event, MonitorEvent::Removed { .. });
                     let message = map(event);
                     tokio::select! {
                         biased;

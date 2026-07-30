@@ -15,7 +15,7 @@ use tokio::sync::{Notify, futures::Notified};
 /// this bound is only reached when an observer's mailbox stays full while its
 /// target restarts in a tight loop. Beyond the bound the oldest staged event
 /// is dropped, which coalesces a restart storm into recent history plus the
-/// current state; the terminal [`MonitorEvent::Terminated`] is always the
+/// current state; the terminal [`MonitorEvent::Removed`] is always the
 /// newest event, so it is never dropped. This caps the memory a stalled
 /// observer can pin regardless of how fast its target churns.
 const WATCH_BUFFER_CAP: usize = 128;
@@ -44,10 +44,10 @@ impl Finished {
     }
 }
 
-/// The reason carried by a [`MonitorEvent::Down`] notification.
+/// The reason carried by a [`MonitorEvent::Exited`] notification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum DownReason {
+pub enum ExitReason {
     /// The actor stopped cleanly or as part of an orderly shutdown.
     Normal,
     /// The actor failed, panicked, or was aborted.
@@ -57,14 +57,14 @@ pub enum DownReason {
 /// Lifecycle transition of a watched logical actor.
 ///
 /// Delivered by [`RawContext::watch`](crate::host::RawContext::watch). Events
-/// for one watch arrive in lifecycle order: every [`Up`](Self::Up) for a
-/// generation precedes its [`Down`](Self::Down), and
-/// [`Terminated`](Self::Terminated) is final.
+/// for one watch arrive in lifecycle order: every [`Started`](Self::Started)
+/// for a generation precedes its [`Exited`](Self::Exited), and
+/// [`Removed`](Self::Removed) is final.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum MonitorEvent {
     /// An incarnation of the watched actor is running.
-    Up {
+    Started {
         /// Stable id of the watched actor.
         actor_id: String,
         /// Incarnation counter, starting at zero and increasing on every
@@ -72,25 +72,26 @@ pub enum MonitorEvent {
         generation: u64,
     },
     /// The current incarnation exited. If the supervisor restarts the actor,
-    /// a matching [`Up`](Self::Up) follows.
-    Down {
+    /// a matching [`Started`](Self::Started) follows.
+    Exited {
         /// Stable id of the watched actor.
         actor_id: String,
         /// Incarnation counter, starting at zero and increasing on every
         /// restart.
         generation: u64,
         /// How the watched incarnation exited.
-        reason: DownReason,
+        reason: ExitReason,
     },
     /// One or more transitions were dropped because the observer could not
     /// keep up (its mailbox stayed full while the target churned), and the
     /// per-watch buffer overflowed.
     ///
     /// This is a resynchronization point, not an edge: the events immediately
-    /// before it are gone, so a consumer that reacts to individual `Up`/`Down`
-    /// transitions should treat the following events as the target's current
-    /// state rather than assuming strict `Up`/`Down` alternation. Emitted only
-    /// under sustained overload; a healthy observer never sees it.
+    /// before it are gone, so a consumer that reacts to individual
+    /// `Started`/`Exited` transitions should treat the following events as the
+    /// target's current state rather than assuming strict `Started`/`Exited`
+    /// alternation. Emitted only under sustained overload; a healthy observer
+    /// never sees it.
     Lagged {
         /// Stable id of the watched actor.
         actor_id: String,
@@ -98,7 +99,7 @@ pub enum MonitorEvent {
         dropped: u64,
     },
     /// The actor is permanently gone. No further events will be delivered.
-    Terminated {
+    Removed {
         /// Stable id of the watched actor.
         actor_id: String,
         /// The last incarnation that ran, or `None` if the actor never
@@ -269,10 +270,10 @@ impl MonitorHub {
     /// Registers a persistent watch on this logical actor and returns its
     /// staging queue for the caller's forwarder to drain.
     ///
-    /// A running target stages an immediate [`MonitorEvent::Up`] for the
+    /// A running target stages an immediate [`MonitorEvent::Started`] for the
     /// current incarnation. A target between incarnations (or before its
-    /// first start) stays silent until the next start. A terminated target
-    /// stages an immediate final [`MonitorEvent::Terminated`] and is not
+    /// first start) stays silent until the next start. A removed target
+    /// stages an immediate final [`MonitorEvent::Removed`] and is not
     /// registered.
     ///
     /// Events are staged while holding the hub lock, which totally orders
@@ -289,11 +290,11 @@ impl MonitorHub {
         state.watchers.retain(Watcher::is_live);
         match state.lifecycle {
             Lifecycle::Terminated(generation) => {
-                queue.push(self.terminated_event(generation));
+                queue.push(self.removed_event(generation));
                 return WatchQueueGuard { queue, finished };
             }
             Lifecycle::Running(generation) => {
-                queue.push(self.up(generation));
+                queue.push(self.started_event(generation));
             }
             Lifecycle::Pending | Lifecycle::Exited(_) => {}
         }
@@ -310,61 +311,61 @@ impl MonitorHub {
         let generation = state.next_generation;
         state.next_generation = state.next_generation.saturating_add(1);
         state.lifecycle = Lifecycle::Running(generation);
-        let up = self.up(generation);
-        state.watchers.retain(|watcher| watcher.notify(&up));
+        let started = self.started_event(generation);
+        state.watchers.retain(|watcher| watcher.notify(&started));
     }
 
-    pub(crate) fn exited(&self, reason: DownReason) {
+    pub(crate) fn exited(&self, reason: ExitReason) {
         let mut state = self.state();
         let Lifecycle::Running(generation) = state.lifecycle else {
             return;
         };
         state.lifecycle = Lifecycle::Exited(generation);
-        let down = self.down(generation, reason);
-        state.watchers.retain(|watcher| watcher.notify(&down));
+        let exited = self.exited_event(generation, reason);
+        state.watchers.retain(|watcher| watcher.notify(&exited));
     }
 
     pub(crate) fn terminated(&self) {
         let mut state = self.state();
-        let (down, generation) = match state.lifecycle {
+        let (exited, generation) = match state.lifecycle {
             Lifecycle::Pending => (None, None),
             Lifecycle::Running(generation) => (
-                Some(self.down(generation, DownReason::Failure)),
+                Some(self.exited_event(generation, ExitReason::Failure)),
                 Some(generation),
             ),
             Lifecycle::Exited(generation) => (None, Some(generation)),
             Lifecycle::Terminated(_) => return,
         };
         state.lifecycle = Lifecycle::Terminated(generation);
-        let terminated = self.terminated_event(generation);
+        let removed = self.removed_event(generation);
         for watcher in state.watchers.drain(..) {
             if !watcher.is_live() {
                 continue;
             }
-            if let Some(down) = &down {
-                watcher.queue.push(down.clone());
+            if let Some(exited) = &exited {
+                watcher.queue.push(exited.clone());
             }
-            watcher.queue.push(terminated.clone());
+            watcher.queue.push(removed.clone());
         }
     }
 
-    fn up(&self, generation: u64) -> MonitorEvent {
-        MonitorEvent::Up {
+    fn started_event(&self, generation: u64) -> MonitorEvent {
+        MonitorEvent::Started {
             actor_id: self.actor_id.clone(),
             generation,
         }
     }
 
-    fn down(&self, generation: u64, reason: DownReason) -> MonitorEvent {
-        MonitorEvent::Down {
+    fn exited_event(&self, generation: u64, reason: ExitReason) -> MonitorEvent {
+        MonitorEvent::Exited {
             actor_id: self.actor_id.clone(),
             generation,
             reason,
         }
     }
 
-    fn terminated_event(&self, generation: Option<u64>) -> MonitorEvent {
-        MonitorEvent::Terminated {
+    fn removed_event(&self, generation: Option<u64>) -> MonitorEvent {
+        MonitorEvent::Removed {
             actor_id: self.actor_id.clone(),
             generation,
         }
@@ -388,7 +389,7 @@ impl MonitorExitGuard {
         }
     }
 
-    pub(crate) fn report(&mut self, reason: DownReason) {
+    pub(crate) fn report(&mut self, reason: ExitReason) {
         self.hub.exited(reason);
         self.reported = true;
     }
@@ -397,7 +398,7 @@ impl MonitorExitGuard {
 impl Drop for MonitorExitGuard {
     fn drop(&mut self) {
         if !self.reported {
-            self.hub.exited(DownReason::Failure);
+            self.hub.exited(ExitReason::Failure);
         }
     }
 }
@@ -476,18 +477,18 @@ impl ActorMonitors {
 mod tests {
     use super::*;
 
-    fn up_event(generation: u64) -> MonitorEvent {
-        MonitorEvent::Up {
+    fn started_event(generation: u64) -> MonitorEvent {
+        MonitorEvent::Started {
             actor_id: "peer".to_owned(),
             generation,
         }
     }
 
-    fn down_event(generation: u64) -> MonitorEvent {
-        MonitorEvent::Down {
+    fn exited_event(generation: u64) -> MonitorEvent {
+        MonitorEvent::Exited {
             actor_id: "peer".to_owned(),
             generation,
-            reason: DownReason::Failure,
+            reason: ExitReason::Failure,
         }
     }
 
@@ -516,7 +517,7 @@ mod tests {
         let overflow = 5;
         let total = WATCH_BUFFER_CAP as u64 + overflow;
         for generation in 0..total {
-            queue.push(up_event(generation));
+            queue.push(started_event(generation));
         }
 
         let events = queue.events();
@@ -524,21 +525,21 @@ mod tests {
         // Every dropped event is accounted for by the single leading marker,
         // and the newest event is always retained.
         assert!(lagged_count(&events) > 0);
-        assert_eq!(events.back(), Some(&up_event(total - 1)));
+        assert_eq!(events.back(), Some(&started_event(total - 1)));
     }
 
     #[test]
     fn alternating_overflow_is_flagged_not_silent() {
         let queue = WatchQueue::new("peer");
-        // Twice the capacity of alternating Up/Down forces heavy overflow.
+        // Twice the capacity of alternating Started/Exited forces heavy overflow.
         for generation in 0..(WATCH_BUFFER_CAP as u64) {
-            queue.push(up_event(generation));
-            queue.push(down_event(generation));
+            queue.push(started_event(generation));
+            queue.push(exited_event(generation));
         }
 
         let events = queue.events();
         assert_eq!(events.len(), WATCH_BUFFER_CAP);
-        // A consumer never silently sees a Down without its Up: the dropped
+        // A consumer never silently sees an Exited without its Started: the dropped
         // span is fronted by an explicit Lagged resync marker.
         assert!(
             matches!(events.front(), Some(MonitorEvent::Lagged { .. })),
@@ -572,18 +573,18 @@ mod tests {
     fn terminal_event_survives_overflow() {
         let queue = WatchQueue::new("peer");
         for generation in 0..(WATCH_BUFFER_CAP as u64 * 2) {
-            queue.push(up_event(generation));
+            queue.push(started_event(generation));
         }
-        let terminated = MonitorEvent::Terminated {
+        let removed = MonitorEvent::Removed {
             actor_id: "peer".to_owned(),
             generation: Some(7),
         };
-        queue.push(terminated.clone());
+        queue.push(removed.clone());
 
         let mut last = None;
         while let Some(event) = queue.pop() {
             last = Some(event);
         }
-        assert_eq!(last, Some(terminated));
+        assert_eq!(last, Some(removed));
     }
 }

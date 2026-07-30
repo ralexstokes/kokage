@@ -317,10 +317,7 @@ impl EventWatch {
     }
 }
 
-fn wrap_event(
-    event: ObservedEvent,
-    path: &[crate::supervisor::LifecyclePathSegment],
-) -> ObservedEvent {
+fn wrap_event(event: ObservedEvent, path: &[crate::supervisor::ScopePathSegment]) -> ObservedEvent {
     path.iter()
         .rev()
         .fold(event, |event, segment| ObservedEvent::Nested {

@@ -24,7 +24,7 @@ use crate::{
         },
         context::{ActorLifetime, ActorRef, RawContext},
         factory::ActorFactory,
-        monitor::{DownReason, MonitorExitGuard},
+        monitor::{ExitReason, MonitorExitGuard},
         observability::{ActorExitStatus, ScopeObservability},
         raw::{BoxError, RawActor},
     },
@@ -142,9 +142,9 @@ where
             let _bound_mailbox = bound_mailbox;
             let result = actor.run(ctx).await;
             let reason = if result.is_ok() {
-                DownReason::Normal
+                ExitReason::Normal
             } else {
-                DownReason::Failure
+                ExitReason::Failure
             };
             monitor_exit.report(reason);
             result

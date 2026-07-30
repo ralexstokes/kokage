@@ -16,26 +16,26 @@ const LIFECYCLE_BUFFER_CAPACITY: usize = 128;
 
 const _: () = assert!(LIFECYCLE_BUFFER_CAPACITY >= 2);
 
-/// One nested-supervisor edge in a lifecycle event's path.
+/// One nested-scope edge in an actor-stats or lifecycle-event observation path.
 ///
 /// The tuple `(id, lineage, generation)` identifies the exact
-/// supervisor incarnation that forwarded the event. In particular,
-/// `lineage` distinguishes a removed subtree from a later subtree
-/// inserted under the same id.
+/// scope incarnation containing the observed actor or forwarding the event.
+/// In particular, `lineage` distinguishes a removed subtree from a later
+/// subtree inserted under the same id.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub struct LifecyclePathSegment {
-    /// Child id of the nested supervisor.
+pub struct ScopePathSegment {
+    /// Child id of the nested scope.
     pub id: String,
     /// Identity of that child membership in its parent scope.
     pub lineage: u64,
-    /// Generation of the nested supervisor child.
+    /// Generation of the nested scope child.
     pub generation: u64,
 }
 
-impl LifecyclePathSegment {
-    /// Creates one exact nested-supervisor path segment.
+impl ScopePathSegment {
+    /// Creates one exact nested-scope path segment.
     ///
     #[cfg(test)]
     pub(crate) fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
@@ -53,7 +53,7 @@ impl LifecyclePathSegment {
 #[non_exhaustive]
 pub struct LifecycleEvent {
     /// Path from the watched scope to the emitting scope.
-    pub supervisor_path: Vec<LifecyclePathSegment>,
+    pub supervisor_path: Vec<ScopePathSegment>,
     /// Transition that occurred in the emitting scope.
     pub kind: LifecycleEventKind,
 }
@@ -102,10 +102,7 @@ impl LifecycleEvent {
 impl LifecycleEvent {
     /// Creates a recursive lifecycle envelope at `supervisor_path`.
     #[cfg(test)]
-    pub(crate) fn new(
-        supervisor_path: Vec<LifecyclePathSegment>,
-        kind: LifecycleEventKind,
-    ) -> Self {
+    pub(crate) fn new(supervisor_path: Vec<ScopePathSegment>, kind: LifecycleEventKind) -> Self {
         Self {
             supervisor_path,
             kind,
@@ -624,7 +621,7 @@ pub(crate) struct LifecycleTreeSink(Arc<LifecycleTreeSinkInner>);
 
 struct LifecycleTreeSinkInner {
     hub: Arc<LifecycleHub>,
-    parent: Option<(LifecycleTreeSink, LifecyclePathSegment)>,
+    parent: Option<(LifecycleTreeSink, ScopePathSegment)>,
 }
 
 impl LifecycleTreeSink {
@@ -632,11 +629,7 @@ impl LifecycleTreeSink {
         Self(Arc::new(LifecycleTreeSinkInner { hub, parent: None }))
     }
 
-    pub(crate) fn nested(
-        hub: Arc<LifecycleHub>,
-        parent: Self,
-        segment: LifecyclePathSegment,
-    ) -> Self {
+    pub(crate) fn nested(hub: Arc<LifecycleHub>, parent: Self, segment: ScopePathSegment) -> Self {
         Self(Arc::new(LifecycleTreeSinkInner {
             hub,
             parent: Some((parent, segment)),
@@ -683,7 +676,7 @@ impl LifecycleTreeSink {
     }
 }
 
-fn prepend_path(event: &mut LifecycleEvent, segment: LifecyclePathSegment) {
+fn prepend_path(event: &mut LifecycleEvent, segment: ScopePathSegment) {
     event.supervisor_path.insert(0, segment);
 }
 
@@ -693,7 +686,7 @@ mod tests {
 
     use super::{
         ChildLifecycleEventKind, LifecycleEvent, LifecycleEventDraft, LifecycleEventKind,
-        LifecycleHub, LifecyclePathSegment, LifecycleTreeSink,
+        LifecycleHub, LifecycleTreeSink, ScopePathSegment,
     };
 
     /// `emit` sweeps dropped watchers, but an identity that never emits would
@@ -736,7 +729,7 @@ mod tests {
     #[test]
     fn recursive_lagged_marker_has_an_exact_count_and_contiguous_suffix() {
         let queue = super::LifecycleEventQueue::new();
-        let nested = LifecyclePathSegment::new("nested", 3, 5);
+        let nested = ScopePathSegment::new("nested", 3, 5);
 
         for seq in 1..=super::LIFECYCLE_BUFFER_CAPACITY as u64 + 1 {
             queue.push(LifecycleEvent::new(
@@ -771,7 +764,7 @@ mod tests {
         let parent_hub = LifecycleHub::new();
         let child_hub = LifecycleHub::new();
         let parent_sink = LifecycleTreeSink::root(Arc::clone(&parent_hub));
-        let path = LifecyclePathSegment {
+        let path = ScopePathSegment {
             id: "nested".to_owned(),
             lineage: 3,
             generation: 5,

@@ -340,7 +340,7 @@ println!("console at http://{}", console.local_addr());
 
 The console's `actor_stats` WebSocket frames serialize
 `observe::ActorStats` directly. Enabling Kokage's `serde` feature gives
-`ActorStats` and `SupervisorPathSegment` `Serialize` and `Deserialize`
+`ActorStats` and `ScopePathSegment` `Serialize` and `Deserialize`
 implementations, so other observers can use the same protocol types without a
 console-specific mirror.
 

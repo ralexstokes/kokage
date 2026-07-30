@@ -5,7 +5,7 @@ use support::RunnableBuilder;
 use std::{future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, DownReason, DynamicTree, ExitResult, Guard,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitReason, ExitResult, Guard,
     MonitorEvent, Restart, Shutdown,
     host::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
@@ -233,37 +233,37 @@ async fn assert_mapper_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEve
     );
 }
 
-fn up(actor_id: &str, generation: u64) -> MonitorEvent {
-    MonitorEvent::Up {
+fn started_event(actor_id: &str, generation: u64) -> MonitorEvent {
+    MonitorEvent::Started {
         actor_id: actor_id.to_owned(),
         generation,
     }
 }
 
-struct TestDown {
+struct TestExit {
     actor_id: String,
     generation: u64,
-    reason: DownReason,
+    reason: ExitReason,
 }
 
-fn expect_down(event: MonitorEvent) -> TestDown {
+fn expect_exited(event: MonitorEvent) -> TestExit {
     match event {
-        MonitorEvent::Down {
+        MonitorEvent::Exited {
             actor_id,
             generation,
             reason,
-        } => TestDown {
+        } => TestExit {
             actor_id,
             generation,
             reason,
         },
-        other => panic!("expected Down, got {other:?}"),
+        other => panic!("expected Exited, got {other:?}"),
     }
 }
 
-fn expect_terminated(event: MonitorEvent, actor_id: &str) -> Option<u64> {
+fn expect_removed(event: MonitorEvent, actor_id: &str) -> Option<u64> {
     match event {
-        MonitorEvent::Terminated {
+        MonitorEvent::Removed {
             actor_id: id,
             generation,
             ..
@@ -271,7 +271,7 @@ fn expect_terminated(event: MonitorEvent, actor_id: &str) -> Option<u64> {
             assert_eq!(id, actor_id);
             generation
         }
-        other => panic!("expected Terminated, got {other:?}"),
+        other => panic!("expected Removed, got {other:?}"),
     }
 }
 
@@ -301,19 +301,22 @@ async fn watch_reports_panicked_peer_as_failure() {
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
 
     fixture
         .peer_ref
         .send(PeerMessage::Panic)
         .await
         .expect("panic command sent");
-    let notification = expect_down(next_event(&mut fixture.observed).await);
+    let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.actor_id, "peer");
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, DownReason::Failure);
+    assert_eq!(notification.reason, ExitReason::Failure);
     assert_eq!(
-        expect_terminated(next_event(&mut fixture.observed).await, "peer"),
+        expect_removed(next_event(&mut fixture.observed).await, "peer"),
         Some(0),
         "Restart::never() terminates the binding after the failed run"
     );
@@ -352,7 +355,10 @@ async fn watch_reports_clean_stop_as_normal() {
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
 
     fixture
         .peer_ref
@@ -360,11 +366,11 @@ async fn watch_reports_clean_stop_as_normal() {
         .await
         .expect("stop command sent");
     assert_eq!(
-        expect_down(next_event(&mut fixture.observed).await).reason,
-        DownReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).reason,
+        ExitReason::Normal
     );
     assert_eq!(
-        expect_terminated(next_event(&mut fixture.observed).await, "peer"),
+        expect_removed(next_event(&mut fixture.observed).await, "peer"),
         Some(0)
     );
     peer_task
@@ -476,7 +482,10 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
             .await
     });
     started(&mut fixture.observer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
     fixture
         .observer_ref
         .send(ObserverMessage::Crash)
@@ -513,11 +522,11 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
     });
     started(&mut fixture.observer_started).await;
     assert_eq!(
-        expect_down(next_event(&mut fixture.observed).await).reason,
-        DownReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).reason,
+        ExitReason::Normal
     );
     assert_eq!(
-        expect_terminated(next_event(&mut fixture.observed).await, "peer"),
+        expect_removed(next_event(&mut fixture.observed).await, "peer"),
         Some(0)
     );
     assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
@@ -550,7 +559,10 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
             .await
     });
     started(&mut fixture.observer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
     fixture
         .observer_ref
         .send(ObserverMessage::Crash)
@@ -576,7 +588,7 @@ async fn retained_watch_is_reinstalled_with_a_snapshot_after_observer_restart() 
     started(&mut fixture.observer_started).await;
     assert_eq!(
         next_event(&mut fixture.observed).await,
-        up("peer", 0),
+        started_event("peer", 0),
         "dropping incarnation-owned guard installs a fresh snapshot watch"
     );
 
@@ -680,9 +692,10 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
     });
     started(&mut peer_started).await;
     started(&mut observer_started).await;
-    let (registration, event) = recv_test_event(&mut observed, "initial tagged up event").await;
+    let (registration, event) =
+        recv_test_event(&mut observed, "initial tagged started event").await;
     assert_eq!(registration, 0);
-    assert_eq!(event, up("peer", 0));
+    assert_eq!(event, started_event("peer", 0));
 
     observer_ref
         .send(TaggedObserverMessage::Crash)
@@ -715,15 +728,15 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
         .send(PeerMessage::Stop)
         .await
         .expect("peer stop sent");
-    let (registration, event) = recv_test_event(&mut observed, "tagged down event").await;
+    let (registration, event) = recv_test_event(&mut observed, "tagged exited event").await;
     assert_eq!(
         registration, 0,
         "replacement mapper did not replace the watch"
     );
-    assert_eq!(expect_down(event).reason, DownReason::Normal);
+    assert_eq!(expect_exited(event).reason, ExitReason::Normal);
     let (registration, event) = recv_test_event(&mut observed, "tagged terminal event").await;
     assert_eq!(registration, 0);
-    assert_eq!(expect_terminated(event, "peer"), Some(0));
+    assert_eq!(expect_removed(event, "peer"), Some(0));
     let (barrier_tx, barrier_rx) = oneshot::channel();
     observer_ref
         .send(TaggedObserverMessage::Barrier(barrier_tx))
@@ -836,9 +849,10 @@ async fn repeated_watch_calls_alias_until_cancelled() {
     let first = recv_test_event(&mut watch_rx, "first aliased watch handle").await;
     let second = recv_test_event(&mut watch_rx, "second aliased watch handle").await;
 
-    let (registration, event) = recv_test_event(&mut observed, "initial aliased up event").await;
+    let (registration, event) =
+        recv_test_event(&mut observed, "initial aliased started event").await;
     assert_eq!(registration, 0, "the first mapper owns the watch");
-    assert_eq!(event, up("peer", 0));
+    assert_eq!(event, started_event("peer", 0));
 
     second.detach();
     assert!(
@@ -867,20 +881,20 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         .expect("rewatch command sent");
     let fresh = recv_test_event(&mut watch_rx, "replacement watch handle").await;
     assert!(!fresh.is_cancelled());
-    let (registration, event) = recv_test_event(&mut observed, "replacement up event").await;
+    let (registration, event) = recv_test_event(&mut observed, "replacement started event").await;
     assert_eq!(registration, 2, "the fresh mapper owns the new watch");
-    assert_eq!(event, up("peer", 0));
+    assert_eq!(event, started_event("peer", 0));
 
     peer_ref
         .send(PeerMessage::Stop)
         .await
         .expect("peer stop sent");
-    let (registration, event) = recv_test_event(&mut observed, "replacement down event").await;
+    let (registration, event) = recv_test_event(&mut observed, "replacement exited event").await;
     assert_eq!(registration, 2);
-    assert_eq!(expect_down(event).reason, DownReason::Normal);
+    assert_eq!(expect_exited(event).reason, ExitReason::Normal);
     let (registration, event) = recv_test_event(&mut observed, "replacement terminal event").await;
     assert_eq!(registration, 2);
-    assert_eq!(expect_terminated(event, "peer"), Some(0));
+    assert_eq!(expect_removed(event, "peer"), Some(0));
     watch_finished(&fresh).await;
     assert!(
         !fresh.is_cancelled(),
@@ -1012,18 +1026,18 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
     });
     started(&mut peer_started).await;
     let watch = recv_test_event(&mut watch_rx, "subject-removal watch handle").await;
-    assert_eq!(next_event(&mut observed).await, up("peer", 0));
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
 
     peer_ref
         .send(PeerMessage::Stop)
         .await
         .expect("peer stop sent");
     assert_eq!(
-        expect_down(next_event(&mut observed).await).reason,
-        DownReason::Normal
+        expect_exited(next_event(&mut observed).await).reason,
+        ExitReason::Normal
     );
     assert_eq!(
-        expect_terminated(next_event(&mut observed).await, "peer"),
+        expect_removed(next_event(&mut observed).await, "peer"),
         Some(0)
     );
     watch_finished(&watch).await;
@@ -1040,7 +1054,7 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
 }
 
 #[tokio::test]
-async fn watching_terminated_peer_delivers_immediate_terminated() {
+async fn watching_removed_peer_delivers_immediate_removed() {
     let mut fixture = fixture(WatchMode::Detach);
     fixture.peer.terminate_binding();
     let observer = fixture.observer.clone();
@@ -1056,16 +1070,16 @@ async fn watching_terminated_peer_delivers_immediate_terminated() {
     started(&mut fixture.observer_started).await;
 
     assert_eq!(
-        expect_terminated(next_event(&mut fixture.observed).await, "peer"),
+        expect_removed(next_event(&mut fixture.observed).await, "peer"),
         None,
-        "a never-started terminated target has no last generation"
+        "a never-started removed target has no last generation"
     );
     assert_silence(&fixture.observer_ref, &mut fixture.observed).await;
     observer_task.abort();
 }
 
 #[tokio::test]
-async fn watching_detached_peer_delivers_immediate_terminated() {
+async fn watching_detached_peer_delivers_immediate_removed() {
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (started_tx, mut observer_started) = mpsc::unbounded_channel();
     let detached_peer = {
@@ -1093,7 +1107,7 @@ async fn watching_detached_peer_delivers_immediate_terminated() {
     started(&mut observer_started).await;
 
     assert_eq!(
-        expect_terminated(next_event(&mut observed).await, "detached-peer"),
+        expect_removed(next_event(&mut observed).await, "detached-peer"),
         None
     );
     observer_task.abort();
@@ -1124,15 +1138,18 @@ async fn watch_survives_peer_restart_without_reregistration() {
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
     fixture
         .peer_ref
         .send(PeerMessage::Panic)
         .await
         .expect("panic command sent");
-    let notification = expect_down(next_event(&mut fixture.observed).await);
+    let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, DownReason::Failure);
+    assert_eq!(notification.reason, ExitReason::Failure);
     assert!(
         first_task
             .await
@@ -1153,7 +1170,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
     started(&mut fixture.peer_started).await;
     assert_eq!(
         next_event(&mut fixture.observed).await,
-        up("peer", 1),
+        started_event("peer", 1),
         "the original watch reports the replacement incarnation"
     );
     fixture
@@ -1161,9 +1178,9 @@ async fn watch_survives_peer_restart_without_reregistration() {
         .send(PeerMessage::Stop)
         .await
         .expect("stop command sent");
-    let notification = expect_down(next_event(&mut fixture.observed).await);
+    let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 1);
-    assert_eq!(notification.reason, DownReason::Normal);
+    assert_eq!(notification.reason, ExitReason::Normal);
 
     second_task
         .await
@@ -1173,7 +1190,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
 }
 
 #[tokio::test]
-async fn watch_registered_between_incarnations_waits_for_next_up() {
+async fn watch_registered_between_incarnations_waits_for_next_started() {
     let mut fixture = fixture(WatchMode::Detach);
     let first_peer = fixture.peer.clone();
     let first_task = tokio::spawn(async move {
@@ -1224,7 +1241,7 @@ async fn watch_registered_between_incarnations_waits_for_next_up() {
     started(&mut fixture.peer_started).await;
     assert_eq!(
         next_event(&mut fixture.observed).await,
-        up("peer", 1),
+        started_event("peer", 1),
         "a watch registered in the restart gap converges without retry"
     );
 
@@ -1258,15 +1275,18 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
         .await
     });
     started(&mut fixture.peer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
     fixture
         .peer_ref
         .send(PeerMessage::Stop)
         .await
         .expect("stop command sent");
-    let notification = expect_down(next_event(&mut fixture.observed).await);
+    let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, DownReason::Normal);
+    assert_eq!(notification.reason, ExitReason::Normal);
 
     peer_task
         .await
@@ -1301,15 +1321,18 @@ async fn shutdown_request_reports_normal_exit() {
     });
     started(&mut fixture.peer_started).await;
     started(&mut fixture.observer_started).await;
-    assert_eq!(next_event(&mut fixture.observed).await, up("peer", 0));
+    assert_eq!(
+        next_event(&mut fixture.observed).await,
+        started_event("peer", 0)
+    );
 
     peer_stop.cancel();
     assert_eq!(
-        expect_down(next_event(&mut fixture.observed).await).reason,
-        DownReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).reason,
+        ExitReason::Normal
     );
     assert_eq!(
-        expect_terminated(next_event(&mut fixture.observed).await, "peer"),
+        expect_removed(next_event(&mut fixture.observed).await, "peer"),
         Some(0)
     );
     peer_task
@@ -1401,7 +1424,7 @@ impl RawActor for GatedObserver {
         self.watch.send(watch).expect("watch receiver alive");
         self.gate.notified().await;
         while let Some(event) = ctx.recv().await {
-            let done = matches!(event, MonitorEvent::Down { .. });
+            let done = matches!(event, MonitorEvent::Exited { .. });
             self.observed.send(event).expect("observer receiver alive");
             if done {
                 break;
@@ -1461,14 +1484,14 @@ async fn cancelling_watch_cannot_retract_accepted_events() {
         }
     })
     .await
-    .expect("up and down accepted by observer mailbox");
+    .expect("started and exited accepted by observer mailbox");
     watch.cancel();
     assert!(watch.is_cancelled());
     gate.notify_one();
-    assert_eq!(next_event(&mut observed).await, up("peer", 0));
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     assert_eq!(
-        expect_down(next_event(&mut observed).await).reason,
-        DownReason::Normal
+        expect_exited(next_event(&mut observed).await).reason,
+        ExitReason::Normal
     );
 
     peer_task
@@ -1516,7 +1539,7 @@ impl RawActor for UnitObserver {
 }
 
 #[tokio::test]
-async fn supervisor_abort_delivers_failure_down_then_terminated() {
+async fn supervisor_abort_delivers_failure_exited_then_removed() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = support::dynamic_root(&runtime)
@@ -1543,17 +1566,17 @@ async fn supervisor_abort_delivers_failure_down_then_terminated() {
         .expect("observer added");
     started(&mut peer_started).await;
     started(&mut observer_started).await;
-    assert_eq!(next_event(&mut observed).await, up("peer", 0));
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
 
     support::dynamic_root(&runtime)
         .remove_child("peer")
         .await
         .expect("peer removed by abort");
-    let notification = expect_down(next_event(&mut observed).await);
+    let notification = expect_exited(next_event(&mut observed).await);
     assert_eq!(notification.actor_id, "peer");
-    assert_eq!(notification.reason, DownReason::Failure);
+    assert_eq!(notification.reason, ExitReason::Failure);
     assert_eq!(
-        expect_terminated(next_event(&mut observed).await, "peer"),
+        expect_removed(next_event(&mut observed).await, "peer"),
         Some(0),
         "removing the child terminates the binding"
     );
@@ -1667,7 +1690,7 @@ async fn pending_target_can_be_dropped_from_non_runtime_thread() {
         .join()
         .expect("dropping target outside Tokio does not panic");
     assert_eq!(
-        expect_terminated(next_event(&mut observed).await, "peer"),
+        expect_removed(next_event(&mut observed).await, "peer"),
         None
     );
     observer_task.abort();

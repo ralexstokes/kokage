@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::supervisor::{CancellationToken, Restart};
+use crate::supervisor::{CancellationToken, Restart, ScopePathSegment};
 use tokio::{
     sync::{Notify, mpsc, watch},
     time::{Instant, sleep_until},
@@ -27,7 +27,7 @@ use crate::actor::{
 /// therefore survive restarts. Outstanding-work gauges and mailbox fields
 /// describe the currently bound incarnation and are zero while no mailbox is
 /// bound. Enabling the `serde` feature implements `Serialize` and
-/// `Deserialize` for this type and [`SupervisorPathSegment`].
+/// `Deserialize` for this type and [`ScopePathSegment`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -42,9 +42,9 @@ pub struct ActorStats {
     /// so identical actor ids and local lineages in sibling or restarted
     /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
     /// have no supervisor context and report `None`. The element type is the
-    /// public [`SupervisorPathSegment`].
+    /// public [`ScopePathSegment`].
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub supervisor_path: Option<Vec<SupervisorPathSegment>>,
+    pub supervisor_path: Option<Vec<ScopePathSegment>>,
     /// Identity of the actor's current supervisor membership, when sampled
     /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
     ///
@@ -105,29 +105,16 @@ pub struct ActorStats {
     pub mailbox_capacity: usize,
 }
 
-/// Identity of one nested supervisor on an actor stats path.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub struct SupervisorPathSegment {
-    /// Child id under which the nested supervisor is mounted.
-    pub id: String,
-    /// Membership identity of that child in its parent supervisor.
-    pub lineage: u64,
-    /// Current generation of the nested supervisor child.
-    pub generation: u64,
-}
-
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::{ActorStats, SupervisorPathSegment};
+    use super::{ActorStats, ScopePathSegment};
     use serde_json::json;
 
     #[test]
     fn actor_stats_round_trip_with_supervisor_identity() {
         let stats = ActorStats {
             actor_id: "worker".into(),
-            supervisor_path: Some(vec![SupervisorPathSegment {
+            supervisor_path: Some(vec![ScopePathSegment {
                 id: "workers".into(),
                 lineage: 7,
                 generation: 2,
