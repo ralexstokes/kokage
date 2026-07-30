@@ -14,7 +14,7 @@ use crate::supervisor::{
         },
     },
     scope::ScopeKind,
-    shutdown::{Shutdown, tidy_abort_beat},
+    shutdown::tidy_abort_beat,
 };
 
 use super::supervision::SupervisorRuntime;
@@ -43,6 +43,7 @@ enum DrainDeadlinePhase {
 struct DrainDeadline {
     key: ChildKey,
     at: Instant,
+    grace: std::time::Duration,
     phase: DrainDeadlinePhase,
 }
 
@@ -183,10 +184,7 @@ impl SupervisorRuntime {
 
             let id = child.id.clone();
             let policy = child.runtime.definition.shutdown_policy;
-            let grace = match policy {
-                Shutdown::Drain { grace } | Shutdown::Discard { grace } => Some(grace),
-                Shutdown::Abort => None,
-            };
+            let grace = policy.grace();
             self.children[key].runtime.state = RuntimeChildState::Stopping;
             let aborted_immediately = grace.is_none();
             if aborted_immediately {
@@ -195,20 +193,16 @@ impl SupervisorRuntime {
                 self.cancel_child(key);
             }
 
-            let expired = match grace {
-                Some(grace) => {
-                    self.wait_for_ordered_child(
-                        key,
-                        Some(Instant::now() + grace),
-                        scope,
-                        &mut deferred,
-                    )
+            let expired_grace = if let Some(grace) = grace {
+                self.wait_for_ordered_child(key, Some(Instant::now() + grace), scope, &mut deferred)
                     .await?
-                }
-                None => false,
+                    .then_some(grace)
+            } else {
+                None
             };
+            let expired = expired_grace.is_some();
 
-            if expired {
+            if let Some(grace) = expired_grace {
                 if matches!(reason, DrainReason::Shutdown) {
                     self.meta
                         .observability
@@ -219,10 +213,7 @@ impl SupervisorRuntime {
                 let hard_abort_needed = self
                     .wait_for_ordered_child(
                         key,
-                        Some(
-                            Instant::now()
-                                + tidy_abort_beat(grace.expect("expired cooperative shutdown")),
-                        ),
+                        Some(Instant::now() + tidy_abort_beat(grace)),
                         scope,
                         &mut deferred,
                     )
@@ -328,10 +319,7 @@ impl SupervisorRuntime {
                 {
                     return None;
                 }
-                match child.runtime.definition.shutdown_policy {
-                    Shutdown::Drain { grace } | Shutdown::Discard { grace } => Some(grace),
-                    Shutdown::Abort => None,
-                }
+                child.runtime.definition.shutdown_policy.grace()
             })
             .max()
     }
@@ -389,22 +377,18 @@ impl SupervisorRuntime {
                 {
                     return None;
                 }
-                match child.runtime.definition.shutdown_policy {
-                    Shutdown::Drain { grace } | Shutdown::Discard { grace } => {
-                        Some(DrainDeadline {
-                            key,
-                            at: cancelled_at + grace,
-                            phase: DrainDeadlinePhase::Grace,
-                        })
-                    }
-                    Shutdown::Abort => None,
-                }
+                let grace = child.runtime.definition.shutdown_policy.grace()?;
+                Some(DrainDeadline {
+                    key,
+                    at: cancelled_at + grace,
+                    grace,
+                    phase: DrainDeadlinePhase::Grace,
+                })
             })
             .collect();
 
         abort_matching_children(&self.children, |key, child| {
-            scope.contains(key)
-                && matches!(child.runtime.definition.shutdown_policy, Shutdown::Abort)
+            scope.contains(key) && child.runtime.definition.shutdown_policy.is_abort()
         });
         tokio::task::yield_now().await;
         self.drain_ready_joins_for_scope(scope, &mut deferred)
@@ -433,9 +417,9 @@ impl SupervisorRuntime {
                         .filter(|deadline| {
                             deadline.phase == DrainDeadlinePhase::Grace && deadline.at <= now
                         })
-                        .map(|deadline| deadline.key)
+                        .map(|deadline| (deadline.key, deadline.grace))
                         .collect();
-                    for key in grace_expired {
+                    for (key, grace) in grace_expired {
                         let child = &self.children[key];
                         if matches!(reason, DrainReason::Shutdown) {
                             self.meta.observability.record_shutdown_timeout(
@@ -446,10 +430,6 @@ impl SupervisorRuntime {
                         if matches!(reason, DrainReason::Shutdown) {
                             timed_out.push(child.id.clone());
                         }
-                        let grace = match child.runtime.definition.shutdown_policy {
-                            Shutdown::Drain { grace } | Shutdown::Discard { grace } => grace,
-                            Shutdown::Abort => unreachable!("abort policies have no deadline"),
-                        };
                         let beat = tidy_abort_beat(grace);
                         self.escalate_child(key);
                         if let Some(deadline) = deadlines

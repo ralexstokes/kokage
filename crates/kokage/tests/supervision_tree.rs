@@ -602,19 +602,33 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 #[cfg(feature = "serde")]
 #[test]
 fn policy_enums_use_their_direct_wire_shape() {
-    let backoff = serde_json::to_value(Backoff::exponential_with_jitter(
-        Duration::from_millis(25),
-        3,
-        Duration::from_secs(2),
-    ))
-    .expect("backoff serializes");
+    let exponential =
+        Backoff::exponential_with_jitter(Duration::from_millis(25), 3, Duration::from_secs(2));
+    let backoff = serde_json::to_value(exponential).expect("backoff serializes");
     assert_eq!(backoff["Exponential"]["factor"], 3);
     assert_eq!(backoff["Exponential"]["jitter"], true);
     assert!(backoff.get("kind").is_none());
+    assert_eq!(
+        serde_json::from_value::<Backoff>(backoff).expect("exponential backoff deserializes"),
+        exponential
+    );
 
-    let drain = serde_json::to_value(Shutdown::drain_for(Duration::from_secs(7)))
-        .expect("shutdown serializes");
+    let fixed = Backoff::fixed(Duration::from_millis(50));
+    assert_eq!(
+        serde_json::from_value::<Backoff>(
+            serde_json::to_value(fixed).expect("fixed backoff serializes")
+        )
+        .expect("fixed backoff deserializes"),
+        fixed
+    );
+
+    let drain_policy = Shutdown::drain_for(Duration::from_secs(7));
+    let drain = serde_json::to_value(drain_policy).expect("shutdown serializes");
     assert_eq!(drain["Drain"]["grace"]["secs"], 7);
+    assert_eq!(
+        serde_json::from_value::<Shutdown>(drain.clone()).expect("shutdown deserializes"),
+        drain_policy
+    );
     assert_eq!(
         serde_json::to_value(Shutdown::abort()).expect("abort serializes"),
         serde_json::json!("Abort")

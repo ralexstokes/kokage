@@ -310,9 +310,8 @@ impl RunnableActor {
         };
         let abort = async move {
             deadline_start.cancelled().await;
-            match shutdown_policy {
-                Shutdown::Drain { grace } | Shutdown::Discard { grace } => sleep(grace).await,
-                Shutdown::Abort => {}
+            if let Some(grace) = shutdown_policy.grace() {
+                sleep(grace).await;
             }
         };
         self.run_until_ready(

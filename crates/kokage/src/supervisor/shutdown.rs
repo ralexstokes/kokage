@@ -43,7 +43,8 @@ pub(crate) fn tidy_abort_beat(grace: Duration) -> Duration {
 /// cascades recursively through the subtree rather than leaving descendants to
 /// drain without a supervisor above them. Match this enum directly when
 /// inspecting a declaration; unlike the cooperative variants, `Abort` carries
-/// no grace value.
+/// no grace value. Downstream matches need a catch-all arm because the enum is
+/// non-exhaustive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -78,6 +79,17 @@ impl Shutdown {
     pub const fn abort() -> Self {
         Self::Abort
     }
+
+    pub(crate) const fn grace(self) -> Option<Duration> {
+        match self {
+            Self::Drain { grace } | Self::Discard { grace } => Some(grace),
+            Self::Abort => None,
+        }
+    }
+
+    pub(crate) const fn is_abort(self) -> bool {
+        matches!(self, Self::Abort)
+    }
 }
 
 impl Default for Shutdown {
@@ -102,10 +114,7 @@ mod tests {
         // ...and usable for a tiny or zero grace.
         assert_eq!(tidy_abort_beat(Duration::ZERO), MIN_TIDY_ABORT_BEAT);
         assert_eq!(
-            tidy_abort_beat(match Shutdown::default() {
-                Shutdown::Drain { grace } | Shutdown::Discard { grace } => grace,
-                Shutdown::Abort => Duration::ZERO,
-            }),
+            tidy_abort_beat(Shutdown::default().grace().unwrap_or_default()),
             MAX_TIDY_ABORT_BEAT
         );
     }

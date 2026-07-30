@@ -25,8 +25,8 @@ mod coverage_probe {
         use kokage::{
             ActorFactory, Backoff, BlockingCancelled, BuildError, CancellationToken, ControlError,
             DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent, OffloadDeadline, Restart,
-            RestartMode, RestrictedScopeRef, RunningTree, ScopeRef, Shutdown, Strategy,
-            SupervisorError, TimerKey, TreeNode,
+            RestrictedScopeRef, RunningTree, ScopeRef, Shutdown, Strategy, SupervisorError,
+            TimerKey, TreeNode,
         };
     }
 
@@ -128,7 +128,7 @@ fn policy_values_expose_their_declared_behavior() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_ne!(Restart::default(), Restart::always());
+    assert_eq!(Restart::default(), Restart::on_failure());
     assert_eq!(drain_name(kokage::Shutdown::default()), "drain");
     assert_eq!(drain_name(kokage::Shutdown::abort()), "abort");
     assert_eq!(backoff_name(kokage::Backoff::none()), "none");

@@ -10,12 +10,12 @@ use crate::supervisor::restart::{Backoff, Restart};
 /// Sliding-window restart rate limiter.
 ///
 /// Maintains a deque of restart timestamps. On each `record` call, timestamps
-/// older than `intensity.within` are evicted. If the remaining count exceeds
-/// `intensity.max_restarts`, [`exceeded`](Self::exceeded) returns `true`.
+/// older than the intensity window are evicted. If the remaining count exceeds
+/// the restart limit, [`exceeded`](Self::exceeded) returns `true`.
 ///
 /// Also computes the backoff delay for the next restart attempt based on the
 /// configured [`Backoff`]. Backoff uses a consecutive-restart counter
-/// that resets after an incarnation runs longer than `intensity.within`; it is
+/// that resets after an incarnation runs longer than the intensity window; it is
 /// independent of timestamp eviction from the intensity window.
 pub(crate) struct RestartTracker {
     intensity: Restart,
@@ -46,7 +46,7 @@ impl RestartTracker {
         if self
             .run_started_at
             .take()
-            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within)
+            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within())
         {
             self.consecutive_restarts = 0;
         }
@@ -54,7 +54,7 @@ impl RestartTracker {
 
     pub(crate) fn record_restart(&mut self, now: Instant) {
         while let Some(front) = self.times.front() {
-            if now.duration_since(*front) > self.intensity.within {
+            if now.duration_since(*front) > self.intensity.within() {
                 self.times.pop_front();
             } else {
                 break;
@@ -66,11 +66,11 @@ impl RestartTracker {
     }
 
     pub(crate) fn exceeded(&self) -> bool {
-        self.times.len() > self.intensity.max_restarts
+        self.times.len() > self.intensity.max_restarts()
     }
 
     pub(crate) fn backoff(&mut self) -> Duration {
-        let (deterministic, jitter) = match self.intensity.backoff {
+        let (deterministic, jitter) = match self.intensity.backoff_policy() {
             Backoff::None => return Duration::ZERO,
             Backoff::Fixed(delay) => return delay,
             Backoff::Exponential {
