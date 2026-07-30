@@ -248,9 +248,8 @@ fn upload_size(message: &Upload) -> usize {
     message.payload.len()
 }
 
-let uploads = ActorSpec::new("uploads", UploadActor::new);
+let uploads = ActorSpec::new("uploads", UploadActor::new).message_size(upload_size);
 let uploads_ref = uploads.actor_ref();
-let uploads = uploads.message_size(upload_size);
 let tree = OrderedTree::new().actor(uploads);
 ```
 
