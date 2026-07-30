@@ -6,23 +6,28 @@ use crate::supervisor::error::BuildError;
 ///
 /// Use [`fixed`](Self::fixed) for a constant delay or
 /// [`exponential`](Self::exponential) for a delay that grows after consecutive
-/// short-lived incarnations. The default restarts immediately.
+/// short-lived incarnations. The default restarts immediately. Match the enum
+/// directly when reading a declaration; the constructors remain the concise
+/// way to build one.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Backoff {
-    kind: BackoffKind,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-enum BackoffKind {
+#[non_exhaustive]
+pub enum Backoff {
+    /// Restart immediately.
     #[default]
     None,
+    /// Wait the same duration before every restart.
     Fixed(Duration),
+    /// Grow the delay exponentially, optionally applying equal jitter.
     Exponential {
+        /// Initial deterministic delay.
         base: Duration,
+        /// Multiplier applied for each consecutive short-lived incarnation.
         factor: u32,
+        /// Maximum deterministic delay.
         max: Duration,
+        /// Whether equal jitter selects a delay between half and all of the
+        /// deterministic value.
         jitter: bool,
     },
 }
@@ -30,27 +35,21 @@ enum BackoffKind {
 impl Backoff {
     /// Restarts immediately.
     pub const fn none() -> Self {
-        Self {
-            kind: BackoffKind::None,
-        }
+        Self::None
     }
 
     /// Waits the same `delay` before every restart.
     pub const fn fixed(delay: Duration) -> Self {
-        Self {
-            kind: BackoffKind::Fixed(delay),
-        }
+        Self::Fixed(delay)
     }
 
     /// Uses `base * factor^attempt`, clamped to `max`.
     pub const fn exponential(base: Duration, factor: u32, max: Duration) -> Self {
-        Self {
-            kind: BackoffKind::Exponential {
-                base,
-                factor,
-                max,
-                jitter: false,
-            },
+        Self::Exponential {
+            base,
+            factor,
+            max,
+            jitter: false,
         }
     }
 
@@ -59,23 +58,21 @@ impl Backoff {
     /// Each delay is selected from the equal-jitter interval
     /// `[deterministic_delay / 2, deterministic_delay]`.
     pub const fn exponential_with_jitter(base: Duration, factor: u32, max: Duration) -> Self {
-        Self {
-            kind: BackoffKind::Exponential {
-                base,
-                factor,
-                max,
-                jitter: true,
-            },
+        Self::Exponential {
+            base,
+            factor,
+            max,
+            jitter: true,
         }
     }
 
     fn validate(self) -> Result<(), BuildError> {
-        match self.kind {
-            BackoffKind::None => Ok(()),
-            BackoffKind::Fixed(delay) => {
+        match self {
+            Self::None => Ok(()),
+            Self::Fixed(delay) => {
                 require_non_zero_duration(delay, "fixed backoff delay must be non-zero")
             }
-            BackoffKind::Exponential {
+            Self::Exponential {
                 base, factor, max, ..
             } => {
                 require_non_zero_duration(base, "exponential backoff base must be non-zero")?;
@@ -100,9 +97,9 @@ impl Backoff {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Restart {
     mode: RestartMode,
-    max_restarts: usize,
-    within: Duration,
-    backoff: Backoff,
+    pub(crate) max_restarts: usize,
+    pub(crate) within: Duration,
+    pub(crate) backoff: Backoff,
     remove_when_done: bool,
 }
 
@@ -173,26 +170,6 @@ impl Restart {
         self
     }
 
-    /// Returns the maximum restarts allowed inside the sliding window.
-    pub const fn max_restarts(self) -> usize {
-        self.max_restarts
-    }
-
-    /// Returns the sliding restart-budget window.
-    pub const fn within(self) -> Duration {
-        self.within
-    }
-
-    /// Returns the configured retry delay.
-    pub const fn backoff_value(self) -> Backoff {
-        self.backoff
-    }
-
-    /// Returns which exits trigger a restart.
-    pub const fn mode(self) -> RestartMode {
-        self.mode
-    }
-
     pub(crate) const fn should_restart(self, is_failure: bool) -> bool {
         match self.mode {
             RestartMode::Always => true,
@@ -216,48 +193,6 @@ impl Restart {
     pub(crate) fn validate(self) -> Result<(), BuildError> {
         require_non_zero_duration(self.within, "restart intensity window must be non-zero")?;
         self.backoff.validate()
-    }
-}
-
-/// Exhaustive read-only view of a [`Backoff`] declaration.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BackoffParts {
-    /// Restart immediately.
-    None,
-    /// Wait the same duration before every restart.
-    Fixed(Duration),
-    /// Grow the delay exponentially, optionally applying equal jitter.
-    Exponential {
-        /// Initial deterministic delay.
-        base: Duration,
-        /// Multiplier applied for each consecutive short-lived incarnation.
-        factor: u32,
-        /// Maximum deterministic delay.
-        max: Duration,
-        /// Whether equal jitter selects a delay between half and all of the
-        /// deterministic value.
-        jitter: bool,
-    },
-}
-
-impl Backoff {
-    /// Returns an exhaustive view of this delay declaration.
-    pub const fn parts(self) -> BackoffParts {
-        match self.kind {
-            BackoffKind::None => BackoffParts::None,
-            BackoffKind::Fixed(delay) => BackoffParts::Fixed(delay),
-            BackoffKind::Exponential {
-                base,
-                factor,
-                max,
-                jitter,
-            } => BackoffParts::Exponential {
-                base,
-                factor,
-                max,
-                jitter,
-            },
-        }
     }
 }
 

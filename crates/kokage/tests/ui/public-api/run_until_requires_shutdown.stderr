@@ -11,3 +11,9 @@ note: method defined here
   |
   |     pub async fn run_until<F>(
   |                  ^^^^^^^^^
+help: try wrapping the expression in a variant of `kokage::Shutdown`
+  |
+6 |     let _run = actor.run_until(pending::<()>(), Restart::never(), kokage::Shutdown::Drain { grace: Duration::from_secs(1) });
+  |                                                                   ++++++++++++++++++++++++++++++++                        +
+6 |     let _run = actor.run_until(pending::<()>(), Restart::never(), kokage::Shutdown::Discard { grace: Duration::from_secs(1) });
+  |                                                                   ++++++++++++++++++++++++++++++++++                        +

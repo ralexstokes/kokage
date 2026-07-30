@@ -14,7 +14,8 @@ use tokio::{
 };
 
 use kokage::{
-    ActorSpec, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy, TreeNode,
+    ActorSpec, Backoff, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy,
+    TreeNode,
     host::{ChildSpec, RawActor, RawContext},
     observe::{ChildOutline, ScopeKind},
     prelude::*,
@@ -596,6 +597,42 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         decoded.child("clock"),
         Some(ChildOutline::Task { .. })
     ));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn policy_enums_use_their_direct_wire_shape() {
+    let backoff = serde_json::to_value(Backoff::exponential_with_jitter(
+        Duration::from_millis(25),
+        3,
+        Duration::from_secs(2),
+    ))
+    .expect("backoff serializes");
+    assert_eq!(backoff["Exponential"]["factor"], 3);
+    assert_eq!(backoff["Exponential"]["jitter"], true);
+    assert!(backoff.get("kind").is_none());
+
+    let drain = serde_json::to_value(Shutdown::drain_for(Duration::from_secs(7)))
+        .expect("shutdown serializes");
+    assert_eq!(drain["Drain"]["grace"]["secs"], 7);
+    assert_eq!(
+        serde_json::to_value(Shutdown::abort()).expect("abort serializes"),
+        serde_json::json!("Abort")
+    );
+    assert!(drain.get("mode").is_none());
+
+    assert!(
+        serde_json::from_value::<Backoff>(serde_json::json!({ "kind": "None" })).is_err(),
+        "the former mirrored backoff shape is intentionally unsupported"
+    );
+    assert!(
+        serde_json::from_value::<Shutdown>(serde_json::json!({
+            "mode": "Abort",
+            "grace": { "secs": 0, "nanos": 0 }
+        }))
+        .is_err(),
+        "the former shutdown struct shape is intentionally unsupported"
+    );
 }
 
 #[cfg(feature = "serde")]

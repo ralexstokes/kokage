@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{CancelOnDrop, CancellationToken, Restart, Shutdown, ShutdownMode};
+use crate::supervisor::{CancelOnDrop, CancellationToken, Restart, Shutdown};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
 use tokio_util::task::AbortOnDropHandle;
@@ -310,16 +310,16 @@ impl RunnableActor {
         };
         let abort = async move {
             deadline_start.cancelled().await;
-            if shutdown_policy.mode() == ShutdownMode::Abort {
-                return;
+            match shutdown_policy {
+                Shutdown::Drain { grace } | Shutdown::Discard { grace } => sleep(grace).await,
+                Shutdown::Abort => {}
             }
-            sleep(shutdown_policy.grace()).await;
         };
         self.run_until_ready(
             bounded_shutdown,
             abort,
             restart,
-            shutdown_policy.mode() == ShutdownMode::Drain,
+            matches!(shutdown_policy, Shutdown::Drain { .. }),
             ScopeRef::unavailable(),
             || {},
         )

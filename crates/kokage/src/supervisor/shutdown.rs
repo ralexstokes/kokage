@@ -41,22 +41,23 @@ pub(crate) fn tidy_abort_beat(grace: Duration) -> Duration {
 ///
 /// [`abort`](Self::abort) has no cooperative grace. For a nested supervisor it
 /// cascades recursively through the subtree rather than leaving descendants to
-/// drain without a supervisor above them.
+/// drain without a supervisor above them. Match this enum directly when
+/// inspecting a declaration; unlike the cooperative variants, `Abort` carries
+/// no grace value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Shutdown {
-    mode: ShutdownMode,
-    grace: Duration,
-}
-
-/// How a child handles work after shutdown is requested.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum ShutdownMode {
+#[non_exhaustive]
+pub enum Shutdown {
     /// Close actor intake and drain every accepted message within the grace.
-    Drain,
+    Drain {
+        /// Maximum time allowed for draining and cleanup.
+        grace: Duration,
+    },
     /// Finish only the in-flight actor message and discard queued work.
-    Discard,
+    Discard {
+        /// Maximum time allowed for the in-flight handler and cleanup.
+        grace: Duration,
+    },
     /// Abort the child immediately without cooperative grace.
     Abort,
 }
@@ -64,41 +65,18 @@ pub enum ShutdownMode {
 impl Shutdown {
     /// Closes intake and drains every accepted actor message for at most `bound`.
     pub const fn drain_for(bound: Duration) -> Self {
-        Self {
-            mode: ShutdownMode::Drain,
-            grace: bound,
-        }
+        Self::Drain { grace: bound }
     }
 
     /// Finishes the in-flight handler, discards queued work, and allows
     /// cleanup to run for at most `bound`.
     pub const fn discard_after_current(bound: Duration) -> Self {
-        Self {
-            mode: ShutdownMode::Discard,
-            grace: bound,
-        }
+        Self::Discard { grace: bound }
     }
 
     /// Aborts the child immediately.
     pub const fn abort() -> Self {
-        Self {
-            mode: ShutdownMode::Abort,
-            grace: Duration::ZERO,
-        }
-    }
-
-    /// Returns the cooperative grace period, or zero for [`ShutdownMode::Abort`].
-    pub const fn grace(self) -> Duration {
-        self.grace
-    }
-
-    /// Returns how the child handles work after shutdown is requested.
-    pub const fn mode(self) -> ShutdownMode {
-        self.mode
-    }
-
-    pub(crate) const fn is_abort(self) -> bool {
-        matches!(self.mode, ShutdownMode::Abort)
+        Self::Abort
     }
 }
 
@@ -124,7 +102,10 @@ mod tests {
         // ...and usable for a tiny or zero grace.
         assert_eq!(tidy_abort_beat(Duration::ZERO), MIN_TIDY_ABORT_BEAT);
         assert_eq!(
-            tidy_abort_beat(Shutdown::default().grace()),
+            tidy_abort_beat(match Shutdown::default() {
+                Shutdown::Drain { grace } | Shutdown::Discard { grace } => grace,
+                Shutdown::Abort => Duration::ZERO,
+            }),
             MAX_TIDY_ABORT_BEAT
         );
     }

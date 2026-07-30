@@ -290,6 +290,6 @@ pub use actor::{
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};
 pub use supervisor::{
-    Backoff, BackoffParts, BuildError, CancellationToken, ControlError, Guard, Restart,
-    RestartMode, Shutdown, ShutdownMode, Strategy, SupervisorError,
+    Backoff, BuildError, CancellationToken, ControlError, Guard, Restart, RestartMode, Shutdown,
+    Strategy, SupervisorError,
 };

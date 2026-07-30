@@ -92,7 +92,11 @@ Unbounded restarting would turn a persistent fault into a busy loop, so
 sliding `within` window. Exceeding the budget fails the scope and escalates to
 its parent.
 
-A [`Backoff`] can delay attempts with a fixed or exponential schedule.
+A [`Backoff`] can delay attempts with a fixed or exponential schedule. It is a
+data enum, so code that needs to inspect a declaration can match
+`Backoff::None`, `Backoff::Fixed(delay)`, or
+`Backoff::Exponential { base, factor, max, jitter }` directly. The convenience
+constructors remain the recommended spelling when declaring a policy.
 The exponential attempt count is tracked per child and resets after a run
 survives longer than the intensity window. Shutdown always wins over a pending
 restart delay.
@@ -192,9 +196,11 @@ its complete grace, so the worst-case grace budget is their sum. Dynamic
 scopes cancel siblings together and use the longest single grace as their
 overall budget.
 
-A supervised actor has one user-facing shutdown declaration. Its `Shutdown`
-grace bounds queued messages, outstanding offloads, and `on_stop`, and its mode
-decides whether queued messages are drained or discarded. Offload deadlines
+A supervised actor has one user-facing shutdown declaration. `Shutdown` is a
+data enum: `Drain { grace }`, `Discard { grace }`, or `Abort`; the abort variant
+carries no synthetic zero grace. The cooperative variants' grace bounds queued
+messages, outstanding offloads, and `on_stop`, and the variant decides whether
+queued messages are drained or discarded. Offload deadlines
 remain independent bounds on individual offloads; they do not extend the child
 grace. A host running an actor outside a tree passes the same `Shutdown` value
 to `RunnableActor::run_until`; a conventional standalone declaration is
@@ -316,9 +322,9 @@ actors](dynamic-actors.md).
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`Restart`]: https://stokes.io/kokage/api/kokage/struct.Restart.html
-[`Backoff`]: https://stokes.io/kokage/api/kokage/struct.Backoff.html
+[`Backoff`]: https://stokes.io/kokage/api/kokage/enum.Backoff.html
 [`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
-[`Shutdown`]: https://stokes.io/kokage/api/kokage/struct.Shutdown.html
+[`Shutdown`]: https://stokes.io/kokage/api/kokage/enum.Shutdown.html
 [`host::DEFAULT_SHUTDOWN_BOUND`]: https://stokes.io/kokage/api/kokage/host/constant.DEFAULT_SHUTDOWN_BOUND.html
 [`LifecycleEventKind::ChildExited`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html#variant.ChildExited
 [`agent_control` example]: https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples/agent_control
