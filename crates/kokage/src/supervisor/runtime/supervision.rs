@@ -1116,7 +1116,11 @@ impl SupervisorRuntime {
                 entry.runtime.state = RuntimeChildState::Stopping;
             }
             let policy = entry.runtime.definition.shutdown_policy;
-            let grace_deadline = Instant::now() + policy.grace();
+            let grace = match policy {
+                Shutdown::Drain { grace } | Shutdown::Discard { grace } => grace,
+                Shutdown::Abort => Duration::ZERO,
+            };
+            let grace_deadline = Instant::now() + grace;
             entry.pending_removal = Some(PendingRemoval {
                 reply,
                 policy,
@@ -1130,7 +1134,7 @@ impl SupervisorRuntime {
 
         self.publish_snapshot();
         if active {
-            if policy.is_abort() {
+            if matches!(policy, Shutdown::Abort) {
                 self.abort_child(key);
             } else {
                 self.cancel_child(key);
@@ -1301,7 +1305,7 @@ impl SupervisorRuntime {
     ) -> Result<(), ControlError> {
         let grace_expired = pending.grace_expired
             || (check_elapsed_grace
-                && !pending.policy.is_abort()
+                && !matches!(pending.policy, Shutdown::Abort)
                 && Instant::now() >= pending.grace_deadline);
         if grace_expired && !pending.grace_expired && failure.is_none() {
             self.meta
@@ -1500,10 +1504,9 @@ impl SupervisorRuntime {
             entry.lineage == meta.lineage
                 && entry.runtime.generation == meta.generation
                 && (entry.runtime.shutdown_timed_out
-                    || entry
-                        .pending_removal
-                        .as_ref()
-                        .is_some_and(|pending| !pending.policy.is_abort() && pending.grace_expired))
+                    || entry.pending_removal.as_ref().is_some_and(|pending| {
+                        !matches!(pending.policy, Shutdown::Abort) && pending.grace_expired
+                    }))
         }) {
             ExitStatus::ShutdownTimedOut
         } else {
@@ -1549,7 +1552,7 @@ impl SupervisorRuntime {
             .iter()
             .flat_map(|(_, entry)| {
                 let removal = entry.pending_removal.as_ref().and_then(|pending| {
-                    if !pending.grace_expired && !pending.policy.is_abort() {
+                    if !pending.grace_expired && !matches!(pending.policy, Shutdown::Abort) {
                         Some(pending.grace_deadline)
                     } else {
                         pending.hard_abort_deadline
@@ -1578,7 +1581,7 @@ impl SupervisorRuntime {
                 self.children.get(key).is_some_and(|entry| {
                     entry.pending_removal.as_ref().is_some_and(|pending| {
                         !pending.grace_expired
-                            && !pending.policy.is_abort()
+                            && !matches!(pending.policy, Shutdown::Abort)
                             && pending.grace_deadline <= now
                     })
                 })
@@ -1587,9 +1590,11 @@ impl SupervisorRuntime {
         for key in expired_removals {
             let id = {
                 let entry = &mut self.children[key];
-                let beat = crate::supervisor::shutdown::tidy_abort_beat(
-                    entry.runtime.definition.shutdown_policy.grace(),
-                );
+                let grace = match entry.runtime.definition.shutdown_policy {
+                    Shutdown::Drain { grace } | Shutdown::Discard { grace } => grace,
+                    Shutdown::Abort => unreachable!("abort removals have no grace deadline"),
+                };
+                let beat = crate::supervisor::shutdown::tidy_abort_beat(grace);
                 let pending = entry
                     .pending_removal
                     .as_mut()

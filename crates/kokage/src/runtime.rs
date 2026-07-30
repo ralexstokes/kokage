@@ -13,7 +13,7 @@ use crate::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
         BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
         DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
-        ScopeKind, Shutdown, ShutdownMode, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+        ScopeKind, Shutdown, SupervisorError, SupervisorHandle, SupervisorSnapshot,
         SupervisorSnapshotReceiver,
     },
 };
@@ -685,7 +685,7 @@ pub(crate) fn actor_child_spec(
                         ctx.shutdown_token().cancelled(),
                         ctx.abort_token().cancelled(),
                         restart,
-                        shutdown.mode() == ShutdownMode::Drain,
+                        matches!(shutdown, Shutdown::Drain { .. }),
                         supervisor,
                         || ctx.mark_ready(),
                     )

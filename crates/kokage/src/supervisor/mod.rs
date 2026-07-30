@@ -94,9 +94,9 @@ pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecyclePathSegment, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
-pub use restart::{Backoff, BackoffParts, Restart, RestartMode};
+pub use restart::{Backoff, Restart, RestartMode};
 pub use scope::ScopeKind;
-pub use shutdown::{Shutdown, ShutdownMode};
+pub use shutdown::Shutdown;
 pub use snapshot::{
     ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError,
     SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,

@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::supervisor::{CancellationToken, Restart, RestartMode};
+use crate::supervisor::{CancellationToken, Restart};
 use tokio::sync::{Notify, mpsc, watch};
 
 use crate::actor::{
@@ -1105,7 +1105,7 @@ impl<M> BindingGuard<M> {
 
 impl<M> Drop for BindingGuard<M> {
     fn drop(&mut self) {
-        if self.restart_policy.mode() == RestartMode::Never {
+        if self.restart_policy.is_never() {
             self.core.terminate();
         } else {
             // A dropped run is a failure for restart purposes. Unknown future
