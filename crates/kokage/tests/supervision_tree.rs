@@ -604,3 +604,42 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
         Some(ChildOutline::Task { .. })
     ));
 }
+
+#[cfg(feature = "serde")]
+#[test]
+fn an_outline_without_scope_edge_policies_inherits_the_parent_defaults() {
+    // Outlines persisted before scope edges carried explicit policies must
+    // keep their meaning: a missing edge policy meant "inherit the enclosing
+    // scope's defaults", not the global defaults.
+    let (graph, _ingest, _parse) = two_actor_tree();
+    let outline = graph
+        .default_restart(Restart::always())
+        .default_shutdown(Shutdown::abort())
+        .subtree("workers", DynamicTree::new())
+        .outline();
+
+    let mut json = serde_json::to_value(&outline).expect("outline serializes");
+    let workers = json["children"]
+        .as_array_mut()
+        .expect("children serialize as an array")
+        .iter_mut()
+        .find_map(|child| child.get_mut("Scope"))
+        .expect("scope child serializes under its public tag");
+    let workers = workers.as_object_mut().expect("scope body is an object");
+    assert!(workers.remove("restart").is_some(), "edge restart present");
+    assert!(
+        workers.remove("shutdown").is_some(),
+        "edge shutdown present"
+    );
+
+    let decoded: kokage::observe::SupervisionOutline =
+        serde_json::from_value(json).expect("pre-edge-policy outline deserializes");
+    let ChildOutline::Scope {
+        restart, shutdown, ..
+    } = decoded.child("workers").expect("scope child survives")
+    else {
+        panic!("expected scope child");
+    };
+    assert_eq!(*restart, Restart::always());
+    assert_eq!(*shutdown, Shutdown::abort());
+}
