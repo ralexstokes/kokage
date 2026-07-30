@@ -11,8 +11,9 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorResult, ActorSpec, Context, ControlError, DynamicRuntimeHandle, DynamicTree, Guard,
-    BuildError, OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext, Strategy,
+    Actor, ActorResult, ActorSpec, BuildError, Context, ControlError, DynamicRuntimeHandle,
+    DynamicTree, Guard, OrderedTree, Restart, RestrictedScope, RuntimeHandle, StopContext,
+    Strategy,
     host::{BoxError, ChildSpec},
     observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
