@@ -15,8 +15,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorSlot, ActorSpec, BuildError, Context, ControlError, DownReason,
-    DynamicTree, ExitResult, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, RunningTree,
+    Actor, ActorRef, ActorSlot, ActorSpec, BuildError, Context, ControlError, DynamicTree,
+    ExitReason, ExitResult, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart, RunningTree,
     ScopeRef, SendError, Shutdown, StopContext, SupervisorError, TrySendError,
     host::{BoxError, RawActor, RawContext, TaskSpec},
     observe::ChildMembershipView,
@@ -728,18 +728,18 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .expect("watch requested");
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent::Up { ref actor_id, .. } if actor_id == "temporary"
+        MonitorEvent::Started { ref actor_id, .. } if actor_id == "temporary"
     ));
 
     target.send(()).await.expect("clean stop requested");
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent::Down { ref actor_id, reason: DownReason::Normal, .. }
+        MonitorEvent::Exited { ref actor_id, reason: ExitReason::Normal, .. }
             if actor_id == "temporary"
     ));
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent::Terminated { ref actor_id, .. } if actor_id == "temporary"
+        MonitorEvent::Removed { ref actor_id, .. } if actor_id == "temporary"
     ));
     assert_eq!(starts.load(Ordering::SeqCst), 1);
     wait_for_child(&dynamic, "temporary", false).await;

@@ -32,7 +32,7 @@ struct ActiveRun {
     input: PendingInput,
     cancel: CancellationToken,
     failure_reported: bool,
-    retry_after_termination: bool,
+    retry_after_removal: bool,
 }
 
 #[derive(kokage::ActorFactory)]
@@ -141,7 +141,7 @@ impl Session {
             input,
             cancel,
             failure_reported: false,
-            retry_after_termination: false,
+            retry_after_removal: false,
         });
         *self
             .proof
@@ -300,7 +300,7 @@ impl Actor for Session {
                                 })
                                 .await?;
                         }
-                        active.retry_after_termination = true;
+                        active.retry_after_removal = true;
                     }
                     RunOutput::Cancelled => {
                         self.active = None;
@@ -322,8 +322,8 @@ impl Actor for Session {
                     .entry(task)
                     .or_default()
                     .push(event.clone());
-                if let kokage::MonitorEvent::Down { reason, .. } = &event
-                    && *reason == kokage::DownReason::Failure
+                if let kokage::MonitorEvent::Exited { reason, .. } = &event
+                    && *reason == kokage::ExitReason::Failure
                 {
                     if let Some(active) = self.active.as_mut()
                         && active.task == task
@@ -338,14 +338,14 @@ impl Actor for Session {
                                 })
                                 .await?;
                         }
-                        active.retry_after_termination = true;
+                        active.retry_after_removal = true;
                     }
-                } else if matches!(event, kokage::MonitorEvent::Terminated { .. })
+                } else if matches!(event, kokage::MonitorEvent::Removed { .. })
                     && let Some(active) = self.active.take()
                 {
                     if active.task != task || active.role != role {
                         self.active = Some(active);
-                    } else if active.retry_after_termination && self.gate.load(Ordering::Acquire) {
+                    } else if active.retry_after_removal && self.gate.load(Ordering::Acquire) {
                         self.start_run(
                             active.task,
                             active.role,
@@ -354,7 +354,7 @@ impl Actor for Session {
                             ctx,
                         )
                         .await?;
-                    } else if active.retry_after_termination {
+                    } else if active.retry_after_removal {
                         self.pending.push_front(active.input);
                         self.heartbeat = None;
                     }

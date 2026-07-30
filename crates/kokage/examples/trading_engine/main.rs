@@ -29,8 +29,8 @@
 //!   shutdown so queued effects are not lost.
 //! * `reconciler` — market-data health. Tracks each venue as
 //!   Fresh/Stale/Down: ticks make it Fresh, a state-timeout-driven sweep
-//!   demotes quiet venues, and watches on the feeds map restart and
-//!   termination events to Down.
+//!   demotes quiet venues, and watches on the feeds map exit and removal
+//!   events to Down.
 //! * `control` — the kill switch: closes the shared intake gate checked by
 //!   the router and fans `CancelAll` out to both gateways.
 //! * `health` — the restart circuit breaker: counts venue-subtree restarts
@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, DownReason, Guard, MailboxMode, Restart, ScopeRef,
+    ActorSlot, CancellationToken, ExitReason, Guard, MailboxMode, Restart, ScopeRef,
     observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -483,7 +483,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     );
     assert!(!final_status.transitions[VENUE_B].contains(&VenueHealth::Down));
     assert!(
-        final_status.down_reasons[VENUE_A].contains(&DownReason::Failure),
+        final_status.exit_reasons[VENUE_A].contains(&ExitReason::Failure),
         "venue-a monitor must report the scripted panic as Failure"
     );
     assert!(!bounded_call(&app.health, |reply| HealthMsg::Tripped { reply }).await?);

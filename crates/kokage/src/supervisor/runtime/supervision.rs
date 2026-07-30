@@ -24,7 +24,7 @@ use crate::supervisor::{
     },
     lifecycle::{
         ChildLifecycleEventKind as ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft,
-        LifecycleEventKind, LifecycleHub, LifecyclePathSegment, LifecycleTreeSink,
+        LifecycleEventKind, LifecycleHub, LifecycleTreeSink, ScopePathSegment,
     },
     observability::{SupervisorObservability, format_child_path},
     owner::{ParentLink, SupervisorConfig},
@@ -388,7 +388,7 @@ impl SupervisorRuntime {
                 LifecycleTreeSink::nested(
                     Arc::clone(&lifecycle),
                     link.lifecycle_tree.clone(),
-                    LifecyclePathSegment {
+                    ScopePathSegment {
                         id: link.id.clone(),
                         lineage: link.lineage,
                         generation: link.generation,

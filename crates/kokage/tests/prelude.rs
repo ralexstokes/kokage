@@ -24,7 +24,7 @@ mod coverage_probe {
     mod advanced_root {
         use kokage::{
             ActorFactory, Backoff, BlockingCancelled, BuildError, CallError, CancellationToken,
-            ControlError, DownReason, DynamicTree, Guard, MailboxMode, MonitorEvent,
+            ControlError, DynamicTree, ExitReason, Guard, MailboxMode, MonitorEvent,
             OffloadDeadline, Restart, RestrictedScopeRef, RunningTree, ScopeRef, SendError,
             SendRejection, SendTimeoutError, Shutdown, Strategy, SupervisorError, TimerKey,
             TreeNode, TrySendError,
@@ -42,8 +42,8 @@ mod coverage_probe {
         use kokage::observe::{
             ActorStats, ChildExitView, ChildMembershipView, ChildOutline, ChildSnapshot,
             ChildStateView, CompletionError, CompletionOutcome, LifecycleEvent, LifecycleEventKind,
-            LifecyclePathSegment, LifecycleWatch, ScopeKind, SupervisionOutline,
-            SupervisorPathSegment, SupervisorSnapshot, SupervisorStateView,
+            LifecycleWatch, ScopeKind, ScopePathSegment, SupervisionOutline, SupervisorSnapshot,
+            SupervisorStateView,
         };
     }
 }
@@ -75,12 +75,12 @@ fn host_task_surface_supports_a_named_factory_from_the_single_crate() {
 }
 
 #[test]
-fn actor_supervisor_path_segments_are_nameable() {
-    fn path_len(path: &[kokage::observe::SupervisorPathSegment]) -> usize {
+fn scope_path_segments_are_nameable() {
+    fn path_len(path: &[kokage::observe::ScopePathSegment]) -> usize {
         path.len()
     }
 
-    let path: Vec<kokage::observe::SupervisorPathSegment> = Vec::new();
+    let path: Vec<kokage::observe::ScopePathSegment> = Vec::new();
     assert_eq!(path_len(&path), 0);
 }
 

@@ -102,13 +102,24 @@
 //! unbound restart window, but it cannot recover a message already accepted by
 //! the failed incarnation.
 //!
-//! Actors can watch a peer with [`host::RawContext::watch`]. The watch follows
-//! logical membership across restarts and maps [`MonitorEvent`]s — `Up`,
-//! `Down`, terminal `Terminated`, or overload `Lagged` — into the observer's
-//! ordinary mailbox. Watches survive restarts of both actors;
-//! [`Guard::cancel`] stops future delivery, and permanent removal of either
-//! membership ends the watch. Watches, mailbox timers, offloads, scope waits,
-//! and lifecycle/completion pumps return a [`Guard`]. Dropping it
+//! # Observing lifecycle
+//!
+//! Peer monitors and supervisor lifecycle streams are two projections of one
+//! lifecycle model: a membership is added, its incarnations start and exit,
+//! and the membership is eventually removed. [`MonitorEvent`] projects the
+//! actor-relative transitions as `Started`, `Exited`, and terminal `Removed`
+//! events delivered through a typed peer's ordinary mailbox.
+//! [`observe::LifecycleEventKind`] projects the same transitions as
+//! `ChildStarted`, `ChildExited`, and `ChildRemoved` in an operations-oriented
+//! recursive tree stream, alongside membership, restart, and supervisor
+//! transitions. The mechanisms remain separate so each keeps the identity,
+//! ordering, and delivery contract appropriate to its audience.
+//!
+//! [`host::RawContext::watch`] follows logical membership across restarts;
+//! `Lagged` reports sustained observer overload. Watches survive restarts of
+//! both actors; [`Guard::cancel`] stops future delivery, and permanent removal
+//! of either membership ends the watch. Watches, mailbox timers, offloads,
+//! scope waits, and lifecycle/completion pumps return a [`Guard`]. Dropping it
 //! cancels the operation; retain it or call [`Guard::detach`] to keep the work
 //! alive.
 //!
@@ -252,12 +263,12 @@ pub mod host {
 /// streams returned by that handle without injecting them into the crate root.
 pub mod observe {
     pub use crate::{
-        actor::{ActorStats, SupervisorPathSegment},
+        actor::ActorStats,
         supervision::{ChildOutline, SupervisionOutline},
         supervisor::{
             ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-            CompletionOutcome, CompletionWatch, LifecycleEvent, LifecycleEventKind,
-            LifecyclePathSegment, LifecycleWatch, ScopeKind, SnapshotRecvError, SupervisorSnapshot,
+            CompletionOutcome, CompletionWatch, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
+            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
             SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
@@ -289,7 +300,7 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
-    Context, DownReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply,
+    Context, ExitReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply,
     RestrictedScopeRef, SendError, SendRejection, SendTimeoutError, StopContext, TimerKey,
     TrySendError,
 };

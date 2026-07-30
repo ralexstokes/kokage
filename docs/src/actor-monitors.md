@@ -32,10 +32,10 @@ impl Actor for Coordinator {
     ) -> ExitResult {
         let CoordinatorMsg::Worker(event) = message;
         match event {
-            MonitorEvent::Up { actor_id, generation } => {
-                eprintln!("{actor_id} generation {generation} is up");
+            MonitorEvent::Started { actor_id, generation } => {
+                eprintln!("{actor_id} generation {generation} started");
             }
-            MonitorEvent::Down { actor_id, generation, reason } => {
+            MonitorEvent::Exited { actor_id, generation, reason } => {
                 eprintln!(
                     "{} generation {} exited: {:?}",
                     actor_id, generation, reason
@@ -44,7 +44,7 @@ impl Actor for Coordinator {
             MonitorEvent::Lagged { actor_id, dropped } => {
                 eprintln!("{actor_id} watch lagged, {dropped} transitions dropped");
             }
-            MonitorEvent::Terminated { actor_id, .. } => {
+            MonitorEvent::Removed { actor_id, .. } => {
                 eprintln!("{actor_id} is permanently gone");
             }
             _ => {}
@@ -60,33 +60,33 @@ memberships live. Events that arrive while the observer is between
 incarnations wait for its next mailbox binding. Events arrive in lifecycle
 order:
 
-- `MonitorEvent::Up` — an incarnation started. The first actor run is
+- `MonitorEvent::Started` — an incarnation started. The first actor run is
   generation `0`, and each restart increments the generation. Registering a
-  watch on an already-running target delivers an immediate `Up` for the
+  watch on an already-running target delivers an immediate `Started` for the
   current incarnation, so the observer always learns the current state.
-- `MonitorEvent::Down` — the current incarnation exited. `DownReason::Normal`
-  covers a clean return and cooperative shutdown; `DownReason::Failure` covers
+- `MonitorEvent::Exited` — the current incarnation exited. `ExitReason::Normal`
+  covers a clean return and cooperative shutdown; `ExitReason::Failure` covers
   errors, panics, aborts, and a dropped actor run. If the supervisor restarts
-  the actor, a matching `Up` follows.
+  the actor, a matching `Started` follows.
 - `MonitorEvent::Lagged` — one or more transitions were dropped because the
   observer could not keep up under sustained overload. This is a
   resynchronization point, not an edge: treat the events that follow it as the
-  target's current state rather than assuming strict `Up`/`Down` alternation. A
-  healthy observer never sees it.
-- `MonitorEvent::Terminated` — the actor is permanently gone (its binding was
-  terminated, or it was dropped without ever starting). No further events
+  target's current state rather than assuming strict `Started`/`Exited`
+  alternation. A healthy observer never sees it.
+- `MonitorEvent::Removed` — the actor is permanently gone (its binding was
+  removed, or it was dropped without ever starting). No further events
   will be delivered.
 
 A watch registered before the target's first start stays silent until
 generation `0` starts, and a watch registered between incarnations stays
-silent until the next `Up`. This removes actor-start and restart ordering
+silent until the next `Started`. This removes actor-start and restart ordering
 races from a declaration set: there is never a reason to retry registration.
 
 `ctx.watch` returns a `Guard`. Dropping a retained guard cancels the watch;
 call `detach()` when membership ownership should keep it alive without storing
 a guard. Calling `cancel` suppresses future delivery. Cancellation cannot
 retract an event already accepted by the mailbox. Permanently removing either
-actor membership also ends the watch; a watched actor's final `Terminated`
+actor membership also ends the watch; a watched actor's final `Removed`
 event is queued before its membership removal completes. Once the operation
 ends for either environmental reason, `is_finished()` is true while
 `is_cancelled()` remains false. Await `finished()` when code needs to wait for
@@ -96,7 +96,7 @@ marks cancellation.
 Calling `watch` again for the same observer/subject pair is idempotent. This
 keeps the common pattern of registering in `on_start` and detaching safe when
 the observer restarts: the replacement incarnation gets the existing watch
-rather than a duplicate immediate `Up`. The mapping closure from the first
+rather than a duplicate immediate `Started`. The mapping closure from the first
 registration is membership-owned and remains in use until cancellation, so it
 should capture durable configuration rather than incarnation-local state. This
 also applies to repeated calls within one incarnation: every returned `Guard`
@@ -106,8 +106,8 @@ or cancelling any non-detached returned guard cancels the pair.
 That no-snapshot behavior depends on detaching the guard. If an actor retains
 the guard in incarnation state, a crash drops it and cancels the watch. The
 replacement actor therefore installs a fresh watch and receives an immediate
-`Up` when the target is running. Target transitions in the gap between the old
-guard's drop and the new registration are not staged. Choose detached
+`Started` when the target is running. Target transitions in the gap between
+the old guard's drop and the new registration are not staged. Choose detached
 membership ownership when the watch and its transition history must survive
 observer restarts; choose a retained guard when each incarnation should own a
 fresh registration and snapshot.
@@ -116,9 +116,9 @@ Events that a detached watch delivered to a previous incarnation and then lost
 in a crash are not replayed, so an observer that needs its last known target
 state after restart must persist that state durably. To deliberately trade
 staged transition history for a fresh snapshot, cancel or drop the existing
-guard and call `watch` again. A running target then emits an immediate `Up`, a
-terminated target emits an immediate `Terminated`, and a target between
-incarnations remains silent until its next `Up`.
+guard and call `watch` again. A running target then emits an immediate
+`Started`, a removed target emits an immediate `Removed`, and a target between
+incarnations remains silent until its next `Started`.
 
 Watch notifications use the observer's ordinary mailbox. FIFO mailboxes wait
 for capacity and preserve every accepted notification. A conflating mailbox
@@ -134,9 +134,9 @@ the observer learns it fell behind and can resynchronize to the current state
 rather than replaying the entire storm. Because no mailbox mode can guarantee
 that every transition is observed under sustained overload, consumers that
 react to individual transitions should treat `Lagged` as a resync point. The
-terminal `Terminated` event is always the newest event, so it is never
+terminal `Removed` event is always the newest event, so it is never
 dropped.
 
 For one-shot, incarnation-scoped monitoring — "tell me if the incarnation I
-am talking to right now dies" — watch the target, act on the first `Down`,
+am talking to right now dies" — watch the target, act on the first `Exited`,
 and cancel the handle.

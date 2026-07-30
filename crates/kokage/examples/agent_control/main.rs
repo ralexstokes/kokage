@@ -100,7 +100,7 @@
 //!     ─▶ tool loop: journal ToolIntent ─▶ Execute (bounded) ─▶ ToolResult,
 //!         reconciling an unknown outcome through an idempotency-key Query
 //!     ─▶ RunFinished{output} to the session + ctx.stop(); terminal exit auto-removes
-//!     ─▶ on panic: Down(Failure) then Terminated to the session's watch;
+//!     ─▶ on panic: Exited(Failure) then Removed to the session's watch;
 //!         the session reports the failure and spawns a fresh attempt
 //! ```
 //!
@@ -131,7 +131,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DownReason, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent,
+    ActorSlot, DynamicTree, ExitReason, Guard as OperationGuard, MailboxMode, MonitorEvent,
     ScopeRef, Strategy, prelude::*,
 };
 use tokio::time::Instant;
@@ -404,25 +404,25 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             events.iter().any(|event| {
                 matches!(
                     event,
-                    MonitorEvent::Down {
-                        reason: DownReason::Failure,
+                    MonitorEvent::Exited {
+                        reason: ExitReason::Failure,
                         ..
                     }
                 )
             })
         })
         .expect("panic run monitor events");
-    let down = panic_events
+    let exited = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Down { .. }))
-        .expect("Down event");
-    let terminated = panic_events
+        .position(|event| matches!(event, MonitorEvent::Exited { .. }))
+        .expect("Exited event");
+    let removed = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Terminated { .. }))
-        .expect("Terminated event");
+        .position(|event| matches!(event, MonitorEvent::Removed { .. }))
+        .expect("Removed event");
     assert!(
-        down < terminated,
-        "never-restart child reports Down then Terminated"
+        exited < removed,
+        "never-restart child reports Exited then Removed"
     );
     let tool_report = tool_report(&app.tool_host).await?;
     let panic_key = tool_report
@@ -439,7 +439,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             .session_generations[CHAT_B],
         b_generation
     );
-    println!("PHASE 2 OK — add_actor(Restart::never()) + ctx.watch Down/Terminated");
+    println!("PHASE 2 OK — add_actor(Restart::never()) + ctx.watch Exited/Removed");
     Ok(())
 }
 

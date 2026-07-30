@@ -15,7 +15,7 @@ mod monitor;
 mod observability;
 mod raw;
 
-pub use binding::{ActorStats, MailboxMode, SupervisorPathSegment};
+pub use binding::{ActorStats, MailboxMode};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
 pub use context::{
@@ -29,5 +29,5 @@ pub use factory::ActorFactory;
 pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActorBuilder};
 pub use handler::Actor;
-pub use monitor::{DownReason, MonitorEvent};
+pub use monitor::{ExitReason, MonitorEvent};
 pub use raw::{ExitResult, RawActor};

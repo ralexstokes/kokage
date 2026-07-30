@@ -100,7 +100,7 @@ pub enum VenueHealth {
 pub struct ReconcilerStatus {
     pub venues: HashMap<VenueId, VenueHealth>,
     pub transitions: HashMap<VenueId, Vec<VenueHealth>>,
-    pub down_reasons: HashMap<VenueId, Vec<kokage::DownReason>>,
+    pub exit_reasons: HashMap<VenueId, Vec<kokage::ExitReason>>,
 }
 
 #[derive(Debug)]

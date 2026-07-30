@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{DownReason, MonitorEvent, TimerKey, prelude::*};
+use kokage::{ExitReason, MonitorEvent, TimerKey, prelude::*};
 use tokio::time::Instant;
 
 use crate::{
@@ -32,7 +32,7 @@ pub struct Reconciler {
     feeds: HashMap<VenueId, ActorRef<FeedMsg>>,
     sessions: Vec<(VenueId, ExchangeSim)>,
     venues: HashMap<VenueId, VenueState>,
-    down_reasons: HashMap<VenueId, Vec<DownReason>>,
+    exit_reasons: HashMap<VenueId, Vec<ExitReason>>,
 }
 
 impl Reconciler {
@@ -49,7 +49,7 @@ impl Reconciler {
             feeds,
             sessions,
             venues,
-            down_reasons: HashMap::new(),
+            exit_reasons: HashMap::new(),
         }
     }
 
@@ -124,15 +124,15 @@ impl Actor for Reconciler {
             }
             ReconcilerMsg::Feed { venue, event } => {
                 match event {
-                    MonitorEvent::Up { generation, .. } => {
-                        tracing::debug!(venue, generation, "venue feed up");
+                    MonitorEvent::Started { generation, .. } => {
+                        tracing::debug!(venue, generation, "venue feed started");
                         self.transition(venue, VenueHealth::Stale);
                     }
-                    MonitorEvent::Down { reason, .. } => {
-                        self.down_reasons.entry(venue).or_default().push(reason);
+                    MonitorEvent::Exited { reason, .. } => {
+                        self.exit_reasons.entry(venue).or_default().push(reason);
                         self.transition(venue, VenueHealth::Down);
                     }
-                    MonitorEvent::Terminated { .. } => {
+                    MonitorEvent::Removed { .. } => {
                         self.transition(venue, VenueHealth::Down);
                     }
                     MonitorEvent::Lagged { dropped, .. } => {
@@ -175,7 +175,7 @@ impl Actor for Reconciler {
                         .iter()
                         .map(|(&venue, state)| (venue, state.transitions.clone()))
                         .collect(),
-                    down_reasons: self.down_reasons.clone(),
+                    exit_reasons: self.exit_reasons.clone(),
                 });
             }
         }
