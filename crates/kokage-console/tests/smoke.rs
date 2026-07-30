@@ -42,7 +42,7 @@ fn actor_stats() -> Vec<ActorStats> {
     vec![
         serde_json::from_value(json!({
             "actor_id": "worker",
-            "supervisor_path": [],
+            "scope_path": [],
             "lineage": 0,
             "messages_received": 11,
             "messages_accepted": 10,
@@ -386,7 +386,7 @@ async fn ws_sends_snapshot_then_stats_on_connect() {
         stats["data"],
         json!([{
             "actor_id": "worker",
-            "supervisor_path": [],
+            "scope_path": [],
             "lineage": 0,
             "messages_received": 11,
             "messages_accepted": 10,
@@ -485,7 +485,7 @@ async fn ws_streams_events() {
     let _added = read_non_stats_json(&mut socket).await;
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
-    assert_eq!(frame["data"]["supervisor_path"], json!([]));
+    assert_eq!(frame["data"]["scope_path"], json!([]));
     assert_eq!(frame["data"]["kind"]["ChildStarted"]["child_id"], "worker");
     assert_eq!(frame["data"]["kind"]["ChildStarted"]["generation"], 0);
 }

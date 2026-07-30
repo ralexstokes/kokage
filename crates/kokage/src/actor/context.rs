@@ -117,7 +117,7 @@ impl<M> ActorRef<M> {
     /// current mailbox usage.
     ///
     /// A ref has no enclosing runtime context, so
-    /// [`ActorStats::supervisor_path`] and [`ActorStats::lineage`] are `None`.
+    /// [`ActorStats::scope_path`] and [`ActorStats::lineage`] are `None`.
     /// Mailbox depth and capacity are zero while the ref is unbound between
     /// incarnations or permanently terminated.
     pub fn stats(&self) -> ActorStats {

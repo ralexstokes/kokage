@@ -10,42 +10,11 @@ use std::{
 
 use tokio::sync::{Notify, futures::Notified};
 
-use crate::supervisor::ChildExitView;
+use crate::supervisor::{ChildExitView, ScopePathSegment};
 
 const LIFECYCLE_BUFFER_CAPACITY: usize = 128;
 
 const _: () = assert!(LIFECYCLE_BUFFER_CAPACITY >= 2);
-
-/// One nested-scope edge in an actor-stats or lifecycle-event observation path.
-///
-/// The tuple `(id, lineage, generation)` identifies the exact
-/// scope incarnation containing the observed actor or forwarding the event.
-/// In particular, `lineage` distinguishes a removed subtree from a later
-/// subtree inserted under the same id.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub struct ScopePathSegment {
-    /// Child id of the nested scope.
-    pub id: String,
-    /// Identity of that child membership in its parent scope.
-    pub lineage: u64,
-    /// Generation of the nested scope child.
-    pub generation: u64,
-}
-
-impl ScopePathSegment {
-    /// Creates one exact nested-scope path segment.
-    ///
-    #[cfg(test)]
-    pub(crate) fn new(id: impl Into<String>, lineage: u64, generation: u64) -> Self {
-        Self {
-            id: id.into(),
-            lineage,
-            generation,
-        }
-    }
-}
 
 /// One event in a supervisor tree's recursive lifecycle stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,7 +22,7 @@ impl ScopePathSegment {
 #[non_exhaustive]
 pub struct LifecycleEvent {
     /// Path from the watched scope to the emitting scope.
-    pub supervisor_path: Vec<ScopePathSegment>,
+    pub scope_path: Vec<ScopePathSegment>,
     /// Transition that occurred in the emitting scope.
     pub kind: LifecycleEventKind,
 }
@@ -100,18 +69,15 @@ impl LifecycleEvent {
 }
 
 impl LifecycleEvent {
-    /// Creates a recursive lifecycle envelope at `supervisor_path`.
+    /// Creates a recursive lifecycle envelope at `scope_path`.
     #[cfg(test)]
-    pub(crate) fn new(supervisor_path: Vec<ScopePathSegment>, kind: LifecycleEventKind) -> Self {
-        Self {
-            supervisor_path,
-            kind,
-        }
+    pub(crate) fn new(scope_path: Vec<ScopePathSegment>, kind: LifecycleEventKind) -> Self {
+        Self { scope_path, kind }
     }
 
     pub(crate) fn local(kind: LifecycleEventKind) -> Self {
         Self {
-            supervisor_path: Vec::new(),
+            scope_path: Vec::new(),
             kind,
         }
     }
@@ -336,7 +302,7 @@ impl LifecycleWatcher {
     }
 
     fn push(&self, event: LifecycleEvent) {
-        if event.supervisor_path.is_empty() {
+        if event.scope_path.is_empty() {
             self.direct.push(event.clone());
         }
         self.recursive.push(event);
@@ -677,7 +643,7 @@ impl LifecycleTreeSink {
 }
 
 fn prepend_path(event: &mut LifecycleEvent, segment: ScopePathSegment) {
-    event.supervisor_path.insert(0, segment);
+    event.scope_path.insert(0, segment);
 }
 
 #[cfg(test)]
@@ -745,7 +711,7 @@ mod tests {
         }
 
         let lagged = queue.pop().expect("overflow stages a lagged marker");
-        assert!(lagged.supervisor_path.is_empty());
+        assert!(lagged.scope_path.is_empty());
         assert!(matches!(
             lagged.kind,
             LifecycleEventKind::Lagged { dropped: 2 }
@@ -794,7 +760,7 @@ mod tests {
         assert!(matches!(
             forwarded,
             LifecycleEvent {
-                supervisor_path,
+                scope_path,
                 kind: LifecycleEventKind::ChildStarted {
                     seq: _,
                     child_id,
@@ -803,7 +769,7 @@ mod tests {
                     child_restart_count: 2,
                     generation: 1,
                 },
-            } if supervisor_path == vec![path] && child_id == "worker"
+            } if scope_path == vec![path] && child_id == "worker"
         ));
     }
 }

@@ -39,13 +39,13 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
     })
     .await
     .expect("nested child start is observed");
-    assert_eq!(nested_started.supervisor_path.len(), 1);
-    assert_eq!(nested_started.supervisor_path[0].id, "nested");
+    assert_eq!(nested_started.scope_path.len(), 1);
+    assert_eq!(nested_started.scope_path[0].id, "nested");
 
     let direct_started = timeout(WAIT, async {
         loop {
             let event = direct.next().await.expect("direct watch remains open");
-            assert!(event.supervisor_path.is_empty());
+            assert!(event.scope_path.is_empty());
             if matches!(
                 event.kind,
                 LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "nested"
@@ -56,7 +56,7 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
     })
     .await
     .expect("direct child start is observed");
-    assert!(direct_started.supervisor_path.is_empty());
+    assert!(direct_started.scope_path.is_empty());
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }

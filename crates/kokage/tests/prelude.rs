@@ -75,11 +75,21 @@ fn host_task_surface_supports_a_named_factory_from_the_single_crate() {
 }
 
 #[test]
-fn scope_path_segments_are_nameable() {
+fn actor_stats_and_lifecycle_events_share_scope_path_segments() {
+    fn assign_shared_path(
+        stats: &mut kokage::observe::ActorStats,
+        event: &mut kokage::observe::LifecycleEvent,
+        path: Vec<kokage::observe::ScopePathSegment>,
+    ) {
+        stats.scope_path = Some(path.clone());
+        event.scope_path = path;
+    }
+
     fn path_len(path: &[kokage::observe::ScopePathSegment]) -> usize {
         path.len()
     }
 
+    let _assign_shared_path = assign_shared_path;
     let path: Vec<kokage::observe::ScopePathSegment> = Vec::new();
     assert_eq!(path_len(&path), 0);
 }

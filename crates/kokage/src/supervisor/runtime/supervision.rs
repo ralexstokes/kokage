@@ -24,12 +24,12 @@ use crate::supervisor::{
     },
     lifecycle::{
         ChildLifecycleEventKind as ChildLifecycleEvent, LifecycleEvent, LifecycleEventDraft,
-        LifecycleEventKind, LifecycleHub, LifecycleTreeSink, ScopePathSegment,
+        LifecycleEventKind, LifecycleHub, LifecycleTreeSink,
     },
     observability::{SupervisorObservability, format_child_path},
     owner::{ParentLink, SupervisorConfig},
     restart::Restart,
-    scope::ScopeKind,
+    scope::{ScopeKind, ScopePathSegment},
     shutdown::Shutdown,
     snapshot::{
         ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,

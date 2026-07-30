@@ -251,7 +251,7 @@ impl EventWatch {
     }
 
     fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
-        let path = event.supervisor_path;
+        let path = event.scope_path;
         let mut pending = None;
         let leaf = match event.kind {
             LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,

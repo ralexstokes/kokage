@@ -211,7 +211,7 @@ async fn runtime_handle_enumerates_actor_stats() {
     let stats = handle.scope().actor_stats();
     assert_eq!(stats.len(), 1);
     assert_eq!(stats[0].actor_id, worker_ref.id());
-    assert_eq!(stats[0].supervisor_path, Some(Vec::new()));
+    assert_eq!(stats[0].scope_path, Some(Vec::new()));
     assert_eq!(
         stats[0].lineage,
         Some(
@@ -522,9 +522,9 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
         .iter()
         .map(|stats| {
             let path = stats
-                .supervisor_path
+                .scope_path
                 .as_ref()
-                .expect("runtime stats carry a supervisor path");
+                .expect("runtime stats carry a scope path");
             assert_eq!(path.len(), 1);
             (path[0].id.as_str(), path[0].lineage, path[0].generation)
         })
@@ -648,8 +648,8 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
                     continue;
                 }
                 let path = stats
-                    .supervisor_path
-                    .expect("nested actor stats carry their supervisor path");
+                    .scope_path
+                    .expect("nested actor stats carry their scope path");
                 assert_eq!(
                     path[0].generation, old_generation,
                     "an old incarnation's attachment cache must not be traversed through the new incarnation"

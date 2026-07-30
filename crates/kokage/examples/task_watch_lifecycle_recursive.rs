@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn print_event(event: &LifecycleEvent) {
     let path = event
-        .supervisor_path
+        .scope_path
         .iter()
         .map(|segment| {
             format!(

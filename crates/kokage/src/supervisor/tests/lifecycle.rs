@@ -210,7 +210,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let first = next_matching(&mut watch, |event| {
         matches!(event.kind, LifecycleEventKind::SupervisorStarted)
             && event
-                .supervisor_path
+                .scope_path
                 .first()
                 .is_some_and(|segment| segment.id == "nested" && segment.generation == 0)
     })
@@ -218,16 +218,16 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let replacement = next_matching(&mut watch, |event| {
         matches!(event.kind, LifecycleEventKind::SupervisorStarted)
             && event
-                .supervisor_path
+                .scope_path
                 .first()
                 .is_some_and(|segment| segment.id == "nested" && segment.generation == 1)
     })
     .await;
 
-    assert_eq!(first.supervisor_path.len(), 1);
-    assert_eq!(replacement.supervisor_path.len(), 1);
+    assert_eq!(first.scope_path.len(), 1);
+    assert_eq!(replacement.scope_path.len(), 1);
     assert_eq!(
-        first.supervisor_path[0].lineage, replacement.supervisor_path[0].lineage,
+        first.scope_path[0].lineage, replacement.scope_path[0].lineage,
         "restarts retain the parent membership lineage"
     );
 
@@ -530,7 +530,7 @@ async fn restart_intensity_failure_is_an_in_band_scope_event() {
         )
     })
     .await;
-    assert!(intensity.supervisor_path.is_empty());
+    assert!(intensity.scope_path.is_empty());
     assert!(intensity.total_restarts().is_some());
     assert!(matches!(
         running.wait().await,
@@ -611,7 +611,7 @@ async fn overflow_accumulates_one_tree_wide_lag_marker_and_snapshot_realigns() {
         .await
         .expect("lag marker arrives")
         .expect("watch remains open");
-    assert!(lagged.supervisor_path.is_empty());
+    assert!(lagged.scope_path.is_empty());
     let snapshot = running.handle().snapshot();
     assert!(snapshot.children.is_empty());
     assert!(snapshot.lifecycle_seq >= 140);
@@ -692,7 +692,7 @@ async fn nested_churn_cannot_overflow_a_direct_child_watch() {
     let peer = timeout(WAIT, async {
         loop {
             let event = direct.next().await.expect("direct watch remains open");
-            assert!(event.supervisor_path.is_empty());
+            assert!(event.scope_path.is_empty());
             assert!(
                 !matches!(event.kind, LifecycleEventKind::Lagged { .. }),
                 "nested-only traffic must not consume the direct buffer"
@@ -789,7 +789,7 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
         )
     })
     .await;
-    let first_lineage = first.supervisor_path[0].lineage;
+    let first_lineage = first.scope_path[0].lineage;
 
     dynamic
         .remove_child("nested")
@@ -814,11 +814,11 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
         matches!(
             event.kind,
             LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
-        ) && event.supervisor_path[0].lineage > first_lineage
+        ) && event.scope_path[0].lineage > first_lineage
     })
     .await;
-    assert_eq!(second.supervisor_path[0].id, "nested");
-    assert!(second.supervisor_path[0].lineage > first_lineage);
+    assert_eq!(second.scope_path[0].id, "nested");
+    assert!(second.scope_path[0].lineage > first_lineage);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -1240,18 +1240,18 @@ async fn direct_children_is_a_depth_filter_on_the_recursive_vocabulary() {
         )
     })
     .await;
-    assert_eq!(leaf.supervisor_path.len(), 1);
-    assert_eq!(leaf.supervisor_path[0].id, "nested");
+    assert_eq!(leaf.scope_path.len(), 1);
+    assert_eq!(leaf.scope_path[0].id, "nested");
 
     let nested = next_matching(&mut direct, |event| {
-        assert!(event.supervisor_path.is_empty());
+        assert!(event.scope_path.is_empty());
         matches!(
             event.kind,
             LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "nested"
         )
     })
     .await;
-    assert!(nested.supervisor_path.is_empty());
+    assert!(nested.scope_path.is_empty());
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }

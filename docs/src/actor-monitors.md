@@ -74,7 +74,7 @@ order:
   target's current state rather than assuming strict `Started`/`Exited`
   alternation. A healthy observer never sees it.
 - `MonitorEvent::Removed` — the actor is permanently gone (its binding was
-  removed, or it was dropped without ever starting). No further events
+  terminated, or it was dropped without ever starting). No further events
   will be delivered.
 
 A watch registered before the target's first start stays silent until
