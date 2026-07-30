@@ -392,10 +392,9 @@ fn pre_spawn_projection_preserves_declared_restart_policies() {
 
 #[tokio::test]
 async fn tree_placed_specs_preserve_mailbox_mode_and_message_size_observation() {
-    let spec = ActorSpec::new("buffered", || Parked)
-        .mailbox(MailboxMode::conflate())
-        .message_size(|message: &Vec<u8>| message.len());
+    let spec = ActorSpec::new("buffered", || Parked).mailbox(MailboxMode::conflate());
     let actor = spec.actor_ref();
+    let spec = spec.message_size(|message: &Vec<u8>| message.len());
     let runtime = OrderedTree::new().actor(spec).spawn().expect("tree builds");
     runtime.handle().wait_started().await.expect("actor starts");
 

@@ -72,8 +72,9 @@ pub struct ActorStats {
     /// Total bytes reported for accepted messages when message-size
     /// observation is enabled for this actor.
     ///
-    /// `None` means the actor did not opt in. The total accumulates across
-    /// actor restarts, like the message counters.
+    /// `None` means the actor did not opt in or its declaration has not yet
+    /// been materialized. The total accumulates across actor restarts, like
+    /// the message counters.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub message_bytes_accepted: Option<u64>,
     /// Mailbox sends rejected before acceptance.
@@ -185,14 +186,14 @@ pub(crate) struct ActorStatsCounters {
 }
 
 impl ActorStatsCounters {
-    pub(crate) fn new(observe_message_size: bool) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             messages_received: AtomicU64::new(0),
             messages_accepted: AtomicU64::new(0),
             messages_conflated: AtomicU64::new(0),
             sends_rejected: AtomicU64::new(0),
             message_bytes_accepted: AtomicU64::new(0),
-            observe_message_size: AtomicBool::new(observe_message_size),
+            observe_message_size: AtomicBool::new(false),
             outstanding_offloads: AtomicU64::new(0),
             outstanding_scope_waits: AtomicU64::new(0),
         }
@@ -223,7 +224,7 @@ impl ActorStatsCounters {
     }
 
     pub(crate) fn enable_message_size(&self) {
-        self.observe_message_size.store(true, Ordering::Release);
+        self.observe_message_size.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn set_outstanding_offloads(&self, outstanding: usize) {
@@ -251,7 +252,7 @@ impl ActorStatsCounters {
             messages_conflated: self.messages_conflated.load(Ordering::Relaxed),
             message_bytes_accepted: self
                 .observe_message_size
-                .load(Ordering::Acquire)
+                .load(Ordering::Relaxed)
                 .then(|| self.message_bytes_accepted.load(Ordering::Relaxed)),
             sends_rejected: self.sends_rejected.load(Ordering::Relaxed),
             outstanding_offloads: self.outstanding_offloads.load(Ordering::Relaxed),
@@ -972,7 +973,7 @@ impl<M> BindingCore<M> {
             identity: Arc::new(()),
             actor_id,
             current,
-            stats: Arc::new(ActorStatsCounters::new(false)),
+            stats: Arc::new(ActorStatsCounters::new()),
             message_size: Arc::new(OnceLock::new()),
             monitors,
             outbound_monitors,
@@ -980,6 +981,8 @@ impl<M> BindingCore<M> {
     }
 
     pub(crate) fn set_message_size(&self, size_hint: fn(&M) -> usize) {
+        // Materialization calls this before the first mailbox can bind, so
+        // accepted sends cannot race the observer's one-time installation.
         let observer = MessageSizeObserver {
             size_hint,
             metrics: MessageSizeMetrics::new(&self.actor_id),
