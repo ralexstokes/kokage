@@ -972,6 +972,20 @@ impl<M: Send + 'static> RawContext<M> {
         self.myself.clone()
     }
 
+    /// Sends `message` to this actor after `delay` has elapsed.
+    ///
+    /// Unlike [`Context::set_timeout`], this uses ordinary mailbox delivery:
+    /// mailbox capacity and conflation apply, and successful delivery increments
+    /// accepted-message statistics. The timer is independently owned by its
+    /// returned [`Guard`]; it has no key for exact replacement or retraction.
+    ///
+    /// The timer belongs to this actor incarnation and ends if the incarnation
+    /// stops or restarts. Dropping the returned [`Guard`] cancels delivery; call
+    /// [`Guard::detach`] to leave it running.
+    pub fn send_after(&self, message: M, delay: Duration) -> Guard {
+        self.send_after_to(&self.myself, message, delay)
+    }
+
     /// Sends `message` to `target` after `delay` has elapsed.
     ///
     /// The timer belongs to this scheduling actor incarnation, not the target.
@@ -981,7 +995,7 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Dropping the returned [`Guard`] cancels delivery; call
     /// [`Guard::detach`] to leave it running.
-    pub fn send_after<T: Send + 'static>(
+    pub fn send_after_to<T: Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
@@ -1014,6 +1028,18 @@ impl<M: Send + 'static> RawContext<M> {
         guard_from_tokens(cancellation, finished)
     }
 
+    /// Sends a clone of `message` to this actor after every `period`.
+    ///
+    /// Delivery takes the ordinary mailbox path, so capacity, conflation, and
+    /// accepted-message statistics apply. See [`Self::interval_to`] for the
+    /// complete timer and [`Guard`] lifetime contract.
+    pub fn interval(&self, message: M, period: Duration) -> Guard
+    where
+        M: Clone,
+    {
+        self.interval_to(&self.myself, message, period)
+    }
+
     /// Sends a clone of `message` to `target` after every `period`.
     ///
     /// Missed ticks are skipped. The timer stops when cancelled, when this
@@ -1021,7 +1047,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// Dropping the returned [`Guard`] cancels it; call [`Guard::detach`] to
     /// leave it running. A zero period returns an already-finished guard and
     /// sends no messages.
-    pub fn interval<T: Clone + Send + 'static>(
+    pub fn interval_to<T: Clone + Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
@@ -1488,9 +1514,12 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
 
     /// Arms a keyed one-shot timeout, replacing the timeout at the same key.
     ///
-    /// The timeout is owned by the actor loop rather than sent through its
-    /// mailbox. Replacement and [`clear_timeout`](Self::clear_timeout) are
-    /// therefore exact until delivery. Timeouts at other keys are unchanged.
+    /// Unlike [`send_after`](Self::send_after), this timeout is owned by the
+    /// actor loop and never transits the mailbox. Mailbox capacity and
+    /// conflation do not apply; delivery increments received-message statistics
+    /// but not accepted-message statistics. Reusing `key` exactly replaces the
+    /// pending entry, and [`clear_timeout`](Self::clear_timeout) exactly retracts
+    /// it until delivery. Timeouts at other keys are unchanged.
     pub fn set_timeout(&mut self, key: TimerKey, message: A::Msg, delay: Duration) {
         self.cx.timers.insert(key, message, delay);
     }
@@ -1500,28 +1529,50 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         self.cx.timers.clear(key);
     }
 
+    /// Sends `message` to this actor after `delay`, bound to this incarnation.
+    ///
+    /// This uses ordinary mailbox delivery: capacity and conflation apply, and
+    /// successful delivery increments accepted-message statistics. By contrast,
+    /// [`set_timeout`](Self::set_timeout) is loop-owned, supports exact keyed
+    /// replacement and retraction, bypasses the mailbox, and does not increment
+    /// accepted-message statistics. See [`RawContext::send_after`] for the full
+    /// guard and incarnation-lifetime contract.
+    pub fn send_after(&self, message: A::Msg, delay: Duration) -> Guard {
+        self.cx.send_after(message, delay)
+    }
+
     /// Sends `message` to `target` after `delay`, bound to this incarnation.
     ///
-    /// See [`RawContext::send_after`] for the full contract.
-    pub fn send_after<T: Send + 'static>(
+    /// See [`RawContext::send_after_to`] for the full contract.
+    pub fn send_after_to<T: Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
         delay: Duration,
     ) -> Guard {
-        self.cx.send_after(target, message, delay)
+        self.cx.send_after_to(target, message, delay)
+    }
+
+    /// Periodically sends `message` to this actor, bound to this incarnation.
+    ///
+    /// See [`RawContext::interval`] for the full contract.
+    pub fn interval(&self, message: A::Msg, period: Duration) -> Guard
+    where
+        A::Msg: Clone,
+    {
+        self.cx.interval(message, period)
     }
 
     /// Periodically sends `message` to `target`, bound to this incarnation.
     ///
-    /// See [`RawContext::interval`] for the full contract.
-    pub fn interval<T: Clone + Send + 'static>(
+    /// See [`RawContext::interval_to`] for the full contract.
+    pub fn interval_to<T: Clone + Send + 'static>(
         &self,
         target: &ActorRef<T>,
         message: T,
         period: Duration,
     ) -> Guard {
-        self.cx.interval(target, message, period)
+        self.cx.interval_to(target, message, period)
     }
 
     /// Runs a bounded future without blocking this actor's receive loop.

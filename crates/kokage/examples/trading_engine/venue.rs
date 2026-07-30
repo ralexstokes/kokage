@@ -271,7 +271,6 @@ impl Actor for VenueGateway {
                         .await?;
                     if symbol != "OPEN" {
                         ctx.send_after(
-                            &ctx.myself(),
                             GatewayMsg::DeliverFill {
                                 key,
                                 qty,
