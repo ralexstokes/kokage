@@ -262,7 +262,7 @@ impl<M> ActorRef<M> {
         let result = mailbox.try_send(message);
         self.observe_send(
             MessageOperation::TrySend,
-            result.as_ref().err().map(try_send_rejection),
+            result.as_ref().err().map(|failure| failure.rejection),
         );
         self.stats.record_send(result.is_ok());
         match result {
@@ -271,7 +271,7 @@ impl<M> ActorRef<M> {
                 self.record_message_size(message_size);
                 Ok(())
             }
-            Err(error) => Err(error),
+            Err(failure) => Err(failure.error),
         }
     }
 

@@ -513,7 +513,7 @@ impl ScopeRef {
         .ok_or(ControlError::Unavailable)
     }
 
-    /// Adds an arbitrary supervised task child to this runtime.
+    /// Adds an arbitrary supervised task child to this scope.
     ///
     /// This is the task-level counterpart to adding an actor. Success means
     /// the membership was inserted and startup was scheduled, and returns the
