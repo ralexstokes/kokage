@@ -16,10 +16,10 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
-    DynamicScopeRef, DynamicTree, ExitResult, ExitStatus, Guard, Mailbox, MailboxShutdown,
-    MonitorEvent, MonitorEventKind, RestartPolicy, RunningDynamicTree, ScopeRef, SendError,
-    SendErrorKind, Shutdown, StopContext, SupervisorError, TaskSpec, Tree,
-    observe::{ChildMembershipView, SupervisorStateView},
+    DynamicScopeRef, DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
+    MonitorEventKind, RestartPolicy, RunningDynamicTree, ScopeRef, SendError, SendErrorKind,
+    Shutdown, StopContext, SupervisorError, TaskSpec, Tree,
+    observe::{ChildMembershipView, ExitStatus, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
 use tokio::{

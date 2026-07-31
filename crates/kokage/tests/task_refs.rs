@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use kokage::{
-    DynamicTree, ExitStatus, OneShotTaskSpec, RestartPolicy, Shutdown, Strategy, TaskError,
-    TaskSpec, Tree, observe::ChildStateView,
+    DynamicTree, OneShotTaskSpec, RestartPolicy, Shutdown, Strategy, TaskError, TaskSpec, Tree,
+    observe::{ChildStateView, ExitStatus},
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},

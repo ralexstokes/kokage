@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{ExitStatus, TimerKey, prelude::*};
+use kokage::{TimerKey, observe::ExitStatus, prelude::*};
 use tokio::time::Instant;
 
 use crate::{

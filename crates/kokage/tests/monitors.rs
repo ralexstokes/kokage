@@ -8,8 +8,9 @@ use std::{any::Any, future::pending, panic::AssertUnwindSafe, sync::Arc, time::D
 
 use futures_util::FutureExt;
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitResult, ExitStatus, Guard,
-    MonitorEvent, MonitorEventKind, RestartPolicy, Shutdown, SupervisorError, Tree,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitResult, Guard, MonitorEvent,
+    MonitorEventKind, RestartPolicy, Shutdown, SupervisorError, Tree,
+    observe::ExitStatus,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext},
 };
 use tokio::{

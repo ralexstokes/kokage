@@ -13,16 +13,15 @@ mod coverage_probe {
             Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
             DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
             MonitorEventKind, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
-            SendError, SendErrorKind, Shutdown, StopContext, Strategy, SupervisorSnapshot,
-            SupervisorSnapshotReceiver, TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
+            SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef,
+            TaskSpec, TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, BlockingCancelled, BoxError, BuildError, CancellationToken,
-            ExitStatus, OffloadDeadline, ReplyError, ReplyReceiver, SubtreeSpec, SupervisorError,
-            TaskError,
+            OffloadDeadline, ReplyError, ReplyReceiver, SubtreeSpec, SupervisorError, TaskError,
         };
     }
 
@@ -356,22 +355,22 @@ fn task_policy_types_cover_common_configuration() {
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
     );
     let policy = RestartPolicy::on_failure();
-    let RestartPolicy::OnFailure(settings) = policy else {
+    let RestartPolicy::OnFailure {
+        max_restarts,
+        within,
+        backoff,
+    } = policy
+    else {
         panic!("on_failure builds the matching transparent variant");
     };
-    assert_eq!(settings.max_restarts(), 5);
-    assert_eq!(settings.within(), Duration::from_secs(30));
-    assert_eq!(settings.backoff_policy(), kokage::Backoff::none());
+    assert_eq!(max_restarts, 5);
+    assert_eq!(within, Duration::from_secs(30));
+    assert_eq!(backoff, kokage::Backoff::none());
 
-    let direct = RestartPolicy::OnFailure(
-        RestartSettings::new(2, Duration::from_secs(4))
-            .backoff(Backoff::fixed(Duration::from_millis(25))),
-    );
-    assert_eq!(
-        direct
-            .settings()
-            .expect("restartable policy")
-            .max_restarts(),
-        2
-    );
+    let direct = RestartPolicy::OnFailure {
+        max_restarts: 2,
+        within: Duration::from_secs(4),
+        backoff: Backoff::fixed(Duration::from_millis(25)),
+    };
+    assert_eq!(direct.max_restarts(), Some(2));
 }

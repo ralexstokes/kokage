@@ -130,9 +130,9 @@ with `ActorSpec::restart(...)`, or set a scope-wide default with
 The constructors and builders cover normal configuration. `RestartPolicy` is
 also a public enum, so generic configuration code can match or construct its
 `Always`, `OnFailure`, and `Never` variants directly. Restartable variants
-carry one `RestartSettings` payload; `Never` carries no meaningless budget
-fields. Keeping shared tuning in that payload lets the settings grow without
-changing both restartable variant shapes.
+carry their budget, window, and backoff fields directly; `Never` carries no
+meaningless tuning. The fluent constructors remain the concise common path,
+while the variants are the at-hand escape hatch for generic configuration.
 
 The `serde` representation is likewise unversioned during `0.x`. Persisted
 configuration that must survive Kokage upgrades should live behind an
