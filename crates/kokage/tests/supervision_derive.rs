@@ -177,6 +177,7 @@ async fn nested_declaration_reserves_every_ref_before_wiring() {
 
     let runtime = tree.spawn().expect("derived tree should spawn");
     runtime
+        .scope()
         .wait_started()
         .await
         .expect("tree should become ready");
