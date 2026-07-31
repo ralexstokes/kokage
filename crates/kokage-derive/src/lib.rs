@@ -67,6 +67,9 @@ pub fn derive_actor_factory(input: TokenStream) -> TokenStream {
 }
 
 fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let mut reserved_names = HashSet::new();
+    reserve_ident_names(input.to_token_stream(), &mut reserved_names);
+
     if let Some(attr) = input
         .attrs
         .iter()
@@ -111,6 +114,8 @@ fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     };
     let initializers = parse_factory_attributes(&fields)?;
     let factory = format_ident!("{actor}Factory");
+    let custom_defaults_trait =
+        fresh_generated_ident("__KokageActorFactoryDefaults", &mut reserved_names);
     let factory_doc = format!(
         "Reusable factory generated from [`{actor}`].\n\nUnmarked fields are durable configuration cloned into every actor incarnation; fields marked with `#[factory(default)]` or `#[factory(default = expression)]` are freshly initialized."
     );
@@ -144,7 +149,7 @@ fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     #ident: <#ty as ::core::default::Default>::default()
                 },
                 FactoryFieldInit::Expr(_) => quote_spanned! {field.span()=>
-                    #ident: <#actor as __KokageActorFactoryDefaults>::#ident()
+                    #ident: <#actor as #custom_defaults_trait>::#ident()
                 },
             }
         })
@@ -195,11 +200,11 @@ fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     } else {
         quote! {
             const _: () = {
-                trait __KokageActorFactoryDefaults {
+                trait #custom_defaults_trait {
                     #(#custom_default_signatures)*
                 }
 
-                impl __KokageActorFactoryDefaults for #actor {
+                impl #custom_defaults_trait for #actor {
                     #(#custom_default_methods)*
                 }
 
@@ -926,6 +931,19 @@ fn fresh_factory_param(next: &mut usize, reserved: &mut HashSet<String>) -> Iden
             return format_ident!("{candidate}");
         }
     }
+}
+
+fn fresh_generated_ident(base: &str, reserved: &mut HashSet<String>) -> Ident {
+    if reserved.insert(base.to_owned()) {
+        return format_ident!("{base}");
+    }
+    for suffix in 0usize.. {
+        let candidate = format!("{base}_{suffix}");
+        if reserved.insert(candidate.clone()) {
+            return format_ident!("{candidate}");
+        }
+    }
+    unreachable!("the generated identifier suffix space is inexhaustible")
 }
 
 fn fresh_supervision_ident(base: &str, fields: &[&Ident]) -> Ident {
