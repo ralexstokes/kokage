@@ -1,0 +1,80 @@
+# Kokage's tracked devshell wrapper is required for every project tool. Allow
+# the tracked task runner and the recurring, bounded tool families to leave the
+# sandbox without an approval round trip.
+prefix_rule(
+    pattern = ["./scripts/dev", "just"],
+    decision = "allow",
+    justification = "Run Kokage's tracked just recipes through its pinned Nix devshell.",
+    match = [
+        "./scripts/dev just ci",
+        "./scripts/dev just ci-nix",
+        "./scripts/dev just test-docs",
+    ],
+    not_match = [
+        "./scripts/dev",
+        "./scripts/dev cargo check --workspace",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./scripts/dev", "cargo", ["check", "build", "test", "nextest", "run"]],
+    decision = "allow",
+    justification = "Run Kokage's routine Cargo verification commands through its pinned Nix devshell.",
+    match = [
+        "./scripts/dev cargo check --workspace --all-targets --all-features",
+        "./scripts/dev cargo build --workspace",
+        "./scripts/dev cargo test --workspace",
+        "./scripts/dev cargo nextest run --workspace",
+        "./scripts/dev cargo run --example agent_control",
+    ],
+    not_match = [
+        "./scripts/dev cargo clean",
+        "./scripts/dev cargo install cargo-edit",
+        "./scripts/dev cargo package -p kokage --allow-dirty",
+        "./scripts/dev cargo publish",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./scripts/dev", "cargo", "+nightly", ["clippy", "fmt"]],
+    decision = "allow",
+    justification = "Run Kokage's pinned nightly lint and formatting commands through its Nix devshell.",
+    match = [
+        "./scripts/dev cargo +nightly clippy --workspace --all-targets --all-features",
+        "./scripts/dev cargo +nightly fmt --all -- --check",
+    ],
+    not_match = [
+        "./scripts/dev cargo +nightly miri test",
+        "./scripts/dev cargo clippy --workspace",
+    ],
+)
+
+# Updating trybuild snapshots is the one recurring Cargo form with a leading
+# environment assignment. Keep both the assignment and Cargo subcommand exact.
+prefix_rule(
+    pattern = ["./scripts/dev", "env", "TRYBUILD=overwrite", "cargo", "test"],
+    decision = "allow",
+    justification = "Run Kokage's trybuild snapshot tests through its pinned Nix devshell.",
+    match = [
+        "./scripts/dev env TRYBUILD=overwrite cargo test -p kokage --test derive_ui",
+    ],
+    not_match = [
+        "./scripts/dev env RUSTFLAGS=-Dwarnings cargo test",
+        "./scripts/dev env TRYBUILD=overwrite cargo publish",
+        "./scripts/dev env TRYBUILD=overwrite bash scripts/test-docs.sh",
+    ],
+)
+
+prefix_rule(
+    pattern = ["./scripts/dev", ["mdbook", "nixfmt"]],
+    decision = "allow",
+    justification = "Run Kokage's documentation and Nix formatters through its pinned Nix devshell.",
+    match = [
+        "./scripts/dev mdbook build docs",
+        "./scripts/dev nixfmt --check flake.nix nix/crane-checks.nix",
+    ],
+    not_match = [
+        "./scripts/dev bash scripts/test-docs.sh",
+        "./scripts/dev rustfmt src/lib.rs",
+    ],
+)

@@ -10,8 +10,12 @@
       "Bash(./scripts/dev cargo build *)",
       "Bash(./scripts/dev cargo test *)",
       "Bash(./scripts/dev cargo nextest *)",
+      "Bash(./scripts/dev cargo run *)",
       "Bash(./scripts/dev cargo +nightly clippy *)",
-      "Bash(./scripts/dev cargo +nightly fmt *)"
+      "Bash(./scripts/dev cargo +nightly fmt *)",
+      "Bash(./scripts/dev env TRYBUILD=overwrite cargo test *)",
+      "Bash(./scripts/dev mdbook *)",
+      "Bash(./scripts/dev nixfmt *)"
     ]
   },
   "hooks": {
