@@ -51,10 +51,12 @@ let left = left_slot.actor_ref();
 let right_slot = ActorSlot::<()>::new("right");
 let right = right_slot.actor_ref();
 
-let left_actor = left_slot.define({
-    let right = right.clone();
-    move || Left(right.clone())
-}).mailbox_capacity(32);
+let left_actor = left_slot
+    .define({
+        let right = right.clone();
+        move || Left(right.clone())
+    })
+    .mailbox_capacity(32);
 let right_actor = right_slot.define({
     let left = left.clone();
     move || Right(left.clone())

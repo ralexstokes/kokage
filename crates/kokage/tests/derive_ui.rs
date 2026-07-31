@@ -18,8 +18,9 @@ fn derive_ui() {
     // a nested scope declaration.
     t.compile_fail("tests/ui/single-use-tree/*.rs");
 
-    // Minting a stable ref borrows the declaration. ActorSpec options remain
-    // configurable until placement; ActorSlot options begin after define.
+    // Minting a stable ref borrows the declaration. A spec stays configurable
+    // until placement; a slot carries no options, so the same probe configures
+    // the spec `define` returns.
     t.pass("tests/ui/declaration-unsealed/*.rs");
 
     // Public API tiers are intentionally disjoint: task declarations and

@@ -152,10 +152,6 @@ type AnyError = Box<dyn Error + Send + Sync>;
 /// Gateway actors use a shallower mailbox than the core scope's default.
 const GATEWAY_MAILBOX: usize = 32;
 
-fn gateway_spec<M: Send + 'static>(spec: ActorSpec<M>) -> ActorSpec<M> {
-    spec.mailbox_capacity(GATEWAY_MAILBOX)
-}
-
 struct App {
     runtime: kokage::RunningTree,
     gateway: ScopeRef,
@@ -249,26 +245,29 @@ async fn build_app() -> Result<App, AnyError> {
         session_epoch: session_epoch.clone(),
         proof: proof.clone(),
     });
-    let outbound_actor = gateway_spec(outbound_slot.define({
-        let chat = chat.clone();
-        move || Outbound::new(chat.clone())
-    }));
-    let progress_actor = gateway_spec(
-        progress_slot
-            .define({
-                let chat = chat.clone();
-                move || Progress::new(chat.clone())
-            })
-            .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| {
-                message.chat()
-            })),
-    );
-    let inbound_actor = gateway_spec(inbound_slot.define({
-        let chat = chat.clone();
-        let journal = journal.clone();
-        let router = router.clone();
-        move || Inbound::new(chat.clone(), journal.clone(), router.clone())
-    }));
+    let outbound_actor = outbound_slot
+        .define({
+            let chat = chat.clone();
+            move || Outbound::new(chat.clone())
+        })
+        .mailbox_capacity(GATEWAY_MAILBOX);
+    let progress_actor = progress_slot
+        .define({
+            let chat = chat.clone();
+            move || Progress::new(chat.clone())
+        })
+        .mailbox_capacity(GATEWAY_MAILBOX)
+        .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| {
+            message.chat()
+        }));
+    let inbound_actor = inbound_slot
+        .define({
+            let chat = chat.clone();
+            let journal = journal.clone();
+            let router = router.clone();
+            move || Inbound::new(chat.clone(), journal.clone(), router.clone())
+        })
+        .mailbox_capacity(GATEWAY_MAILBOX);
     let journal_actor = journal_slot
         .define(Journal::default)
         .message_size(messages::journal_message_size);

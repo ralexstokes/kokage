@@ -163,12 +163,10 @@ fn feed_message_key(message: &FeedMsg) -> &'static str {
 /// Venue actors use a shallower mailbox than the core scope's default.
 const VENUE_MAILBOX: usize = 16;
 
-fn venue_spec<M: Send + 'static>(spec: ActorSpec<M>) -> ActorSpec<M> {
-    spec.mailbox_capacity(VENUE_MAILBOX)
-}
-
+/// Both venue feeds share one configuration: the shallower venue mailbox,
+/// per-symbol conflation, and accepted-byte observation.
 fn feed_spec(spec: ActorSpec<FeedMsg>) -> ActorSpec<FeedMsg> {
-    venue_spec(spec)
+    spec.mailbox_capacity(VENUE_MAILBOX)
         .mailbox(MailboxMode::conflate_by_key(feed_message_key))
         .message_size(messages::feed_message_size)
 }
@@ -289,24 +287,28 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         reconciler: reconciler.clone(),
         latency: latency.clone(),
     }));
-    let venue_a_gateway_actor = venue_spec(venue_a_gateway_slot.define(VenueGatewayFactory {
-        venue: VENUE_A,
-        exchange: venue_a.clone(),
-        ledger: ledger.clone(),
-        latency: latency.clone(),
-    }));
+    let venue_a_gateway_actor = venue_a_gateway_slot
+        .define(VenueGatewayFactory {
+            venue: VENUE_A,
+            exchange: venue_a.clone(),
+            ledger: ledger.clone(),
+            latency: latency.clone(),
+        })
+        .mailbox_capacity(VENUE_MAILBOX);
     let venue_b_feed_actor = feed_spec(venue_b_feed_slot.define(VenueFeedFactory {
         venue: VENUE_B,
         exchange: venue_b.clone(),
         reconciler: reconciler.clone(),
         latency: latency.clone(),
     }));
-    let venue_b_gateway_actor = venue_spec(venue_b_gateway_slot.define(VenueGatewayFactory {
-        venue: VENUE_B,
-        exchange: venue_b.clone(),
-        ledger: ledger.clone(),
-        latency: latency.clone(),
-    }));
+    let venue_b_gateway_actor = venue_b_gateway_slot
+        .define(VenueGatewayFactory {
+            venue: VENUE_B,
+            exchange: venue_b.clone(),
+            ledger: ledger.clone(),
+            latency: latency.clone(),
+        })
+        .mailbox_capacity(VENUE_MAILBOX);
 
     let venues = OrderedTree::new()
         .default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)))
