@@ -31,28 +31,18 @@ fn report(label: &str, result: Result<kokage::RunningTree, BuildError>) {
 
 #[tokio::main]
 async fn main() {
-    report(
-        "zero mailbox capacity",
-        OrderedTree::new()
-            .mailbox_capacity(0)
-            .actor(ActorSpec::new("worker", Idle::<()>::new))
-            .spawn(),
-    );
+    let mut zero_capacity = OrderedTree::new().mailbox_capacity(0);
+    zero_capacity.add_actor(ActorSpec::new("worker", Idle::<()>::new));
+    report("zero mailbox capacity", zero_capacity.spawn());
 
-    report(
-        "duplicate actor ids",
-        OrderedTree::new()
-            .actor(ActorSpec::new("worker", Idle::<()>::new))
-            .actor(ActorSpec::new("worker", Idle::<()>::new))
-            .spawn(),
-    );
+    let mut duplicate_ids = OrderedTree::new();
+    duplicate_ids.add_actor(ActorSpec::new("worker", Idle::<()>::new));
+    duplicate_ids.add_actor(ActorSpec::new("worker", Idle::<()>::new));
+    report("duplicate actor ids", duplicate_ids.spawn());
 
-    report(
-        "empty actor id",
-        OrderedTree::new()
-            .actor(ActorSpec::new("", Idle::<()>::new))
-            .spawn(),
-    );
+    let mut empty_id = OrderedTree::new();
+    empty_id.add_actor(ActorSpec::new("", Idle::<()>::new));
+    report("empty actor id", empty_id.spawn());
 
     // Message-type mismatches now fail at compile time:
     //

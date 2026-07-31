@@ -707,11 +707,9 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     graph.define(watcher_slot, move || Watcher {
         observed: observed_tx.clone(),
     });
-    let graph = graph.build();
-    let handle = graph
-        .subtree("dynamic", DynamicTree::new())
-        .spawn()
-        .expect("mixed scope runtime builds");
+    let mut graph = graph.build();
+    graph.add_subtree("dynamic", DynamicTree::new());
+    let handle = graph.spawn().expect("mixed scope runtime builds");
     wait_runtime_started(&handle.scope(), "mixed runtime startup").await;
     let dynamic = handle
         .scope()
@@ -1195,11 +1193,9 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let forwarder_slot = ActorSlot::new("forwarder");
     let forwarder = forwarder_slot.actor_ref();
     builder.define(forwarder_slot, || Forwarder);
-    let graph = builder.build();
-    let handle = graph
-        .subtree("dynamic", DynamicTree::new())
-        .spawn()
-        .expect("mixed scope runtime builds");
+    let mut graph = builder.build();
+    graph.add_subtree("dynamic", DynamicTree::new());
+    let handle = graph.spawn().expect("mixed scope runtime builds");
     wait_runtime_started(&handle.scope(), "mixed runtime startup").await;
     let dynamic = handle
         .scope()
@@ -1257,11 +1253,9 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     builder.define(sink_slot, move || Observe {
         observed: observed_tx.clone(),
     });
-    let graph = builder.build();
-    let handle = graph
-        .subtree("dynamic", DynamicTree::new())
-        .spawn()
-        .expect("mixed scope runtime builds");
+    let mut graph = builder.build();
+    graph.add_subtree("dynamic", DynamicTree::new());
+    let handle = graph.spawn().expect("mixed scope runtime builds");
     wait_runtime_started(&handle.scope(), "mixed runtime startup").await;
     let dynamic_scope = handle
         .scope()
@@ -1340,13 +1334,12 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 
 #[tokio::test]
 async fn ordered_tree_has_no_runtime_membership_capability() {
-    let handle = OrderedTree::new()
-        .task(TaskSpec::new("seed", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .spawn()
-        .expect("valid tree");
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("seed", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let handle = tree.spawn().expect("valid tree");
 
     assert_eq!(handle.scope().kind(), kokage::observe::ScopeKind::Ordered);
     assert!(matches!(

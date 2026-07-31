@@ -25,7 +25,7 @@ mod coverage_probe {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
             CancellationToken, ControlError, ExitReason, OffloadDeadline, RunningTree, ScopeRef,
-            SendError, SendErrorKind, SendRejection, SupervisorError, TaskContext, TreeNode,
+            SendError, SendErrorKind, SendRejection, SubtreeSpec, SupervisorError, TaskContext,
         };
     }
 
@@ -52,7 +52,9 @@ fn prelude_constructs_actor_and_task_declarations() {
     });
     let task = TaskSpec::new("task", |_| async { Ok(()) });
 
-    let _tree = OrderedTree::new().actor(spec).task(task);
+    let mut tree = OrderedTree::new();
+    tree.add_actor(spec);
+    tree.add_task(task);
 }
 
 #[test]
@@ -63,7 +65,8 @@ fn root_actor_slot_constructs_a_cyclic_declaration() {
         observed: mpsc::unbounded_channel().0,
     });
 
-    let _tree = OrderedTree::new().actor(cyclic);
+    let mut tree = OrderedTree::new();
+    tree.add_actor(cyclic);
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -264,7 +267,8 @@ fn task_policy_sets_remain_nameable_from_the_single_crate() {
 #[tokio::test]
 async fn prelude_observes_raw_task_events_and_snapshots() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("worker", move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx
@@ -320,7 +324,8 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
 #[tokio::test]
 async fn prelude_snapshots_walk_nested_task_children() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
-    let nested = OrderedTree::new().task(TaskSpec::new("leaf", move |ctx| {
+    let mut nested = OrderedTree::new();
+    nested.add_task(TaskSpec::new("leaf", move |ctx| {
         let leaf_started_tx = leaf_started_tx.clone();
         async move {
             leaf_started_tx.send(()).expect("test receiver dropped");
@@ -328,12 +333,12 @@ async fn prelude_snapshots_walk_nested_task_children() {
             Ok(())
         }
     }));
-    let tree = OrderedTree::new()
-        .task(TaskSpec::new("anchor", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .subtree("nested", nested);
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("anchor", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    tree.add_subtree("nested", nested);
     let handle = tree.scope();
     let runtime = tree.spawn().expect("nested task tree spawns");
 

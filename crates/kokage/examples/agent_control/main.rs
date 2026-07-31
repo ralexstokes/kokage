@@ -272,23 +272,22 @@ async fn build_app() -> Result<App, AnyError> {
         .define(Journal::default)
         .message_size(messages::journal_message_size);
 
-    let gateway_tree = OrderedTree::new()
-        .strategy(Strategy::RestForOne)
-        .actor(outbound_actor)
-        .actor(progress_actor)
-        .actor(inbound_actor);
-    let core_tree = OrderedTree::new()
-        .actor(journal_actor)
-        .actor(budget_actor)
-        .actor(guard_actor)
-        .actor(tool_host_actor)
-        .actor(router_actor);
-    let tree = OrderedTree::new()
-        // The router captures this pre-spawn identity, so make the sessions
-        // scope ready before the core subtree starts the router.
-        .subtree("sessions", sessions_runtime)
-        .subtree("gateway", gateway_tree)
-        .subtree("core", core_tree);
+    let mut gateway_tree = OrderedTree::new().strategy(Strategy::RestForOne);
+    gateway_tree.add_actor(outbound_actor);
+    gateway_tree.add_actor(progress_actor);
+    gateway_tree.add_actor(inbound_actor);
+    let mut core_tree = OrderedTree::new();
+    core_tree.add_actor(journal_actor);
+    core_tree.add_actor(budget_actor);
+    core_tree.add_actor(guard_actor);
+    core_tree.add_actor(tool_host_actor);
+    core_tree.add_actor(router_actor);
+    let mut tree = OrderedTree::new();
+    // The router captures this pre-spawn identity, so make the sessions
+    // scope ready before the core subtree starts the router.
+    tree.add_subtree("sessions", sessions_runtime);
+    tree.add_subtree("gateway", gateway_tree);
+    tree.add_subtree("core", core_tree);
     let runtime = tree.spawn()?;
     let gateway = runtime
         .scope()

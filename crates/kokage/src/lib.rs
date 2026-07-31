@@ -29,7 +29,9 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let echo = ActorSpec::new("echo", || Echo);
 //! let echo_ref = echo.actor_ref();
-//! let runtime = OrderedTree::new().actor(echo).spawn()?;
+//! let mut tree = OrderedTree::new();
+//! tree.add_actor(echo);
+//! let runtime = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
 //! runtime.shutdown_and_wait().await?;
@@ -148,7 +150,9 @@
 //!
 //! let left_actor = left_slot.define({ let right = right.clone(); move || Left(right.clone()) });
 //! let right_actor = right_slot.define({ let left = left.clone(); move || Right(left.clone()) });
-//! let tree = OrderedTree::new().actor(left_actor).actor(right_actor);
+//! let mut tree = OrderedTree::new();
+//! tree.add_actor(left_actor);
+//! tree.add_actor(right_actor);
 //! # let _ = (left, right, tree);
 //! ```
 //!
@@ -295,7 +299,7 @@ pub use actor::{
     SendErrorKind, SendRejection, StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef};
-pub use supervision::{DynamicTree, OrderedTree, TreeNode};
+pub use supervision::{DynamicTree, OrderedTree, SubtreeSpec};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, Restart, Shutdown,
     Strategy, SupervisorError, TaskContext, TaskSpec,

@@ -57,13 +57,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let directory_spec = ActorSpec::new("directory", || Directory::<String> {
         entries: HashMap::new(),
     });
-    let directory = directory_spec.actor_ref();
     let dynamic_tree = DynamicTree::new();
     let dynamic = dynamic_tree.scope();
-    let runtime = OrderedTree::new()
-        .actor(directory_spec)
-        .subtree("dynamic", dynamic_tree)
-        .spawn()?;
+    let mut tree = OrderedTree::new();
+    let directory = tree.add_actor(directory_spec);
+    tree.add_subtree("dynamic", dynamic_tree);
+    let runtime = tree.spawn()?;
     let handle = runtime.scope();
     handle.wait_started().await?;
 

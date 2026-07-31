@@ -6,14 +6,14 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let running = OrderedTree::new()
-        .task(TaskSpec::new("worker", |ctx| async move {
-            println!("worker started");
-            ctx.shutdown_token().cancelled().await;
-            println!("worker shutting down");
-            Ok(())
-        }))
-        .spawn()?;
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("worker", |ctx| async move {
+        println!("worker started");
+        ctx.shutdown_token().cancelled().await;
+        println!("worker shutting down");
+        Ok(())
+    }));
+    let running = tree.spawn()?;
     let handle = running.scope();
     let mut events = handle.watch_lifecycle();
 

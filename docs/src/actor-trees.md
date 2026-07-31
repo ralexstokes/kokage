@@ -7,7 +7,8 @@ tree, inserted into a dynamic scope, or converted for a direct host.
 
 ## Straight-line wiring
 
-For acyclic dependencies, obtain a ref from a spec before moving it:
+For acyclic dependencies, add each spec in construction order and retain the
+typed reference that `add_actor` returns:
 
 ```rust
 # use kokage::prelude::*;
@@ -15,23 +16,19 @@ For acyclic dependencies, obtain a ref from a spec before moving it:
 # struct FrontDesk(kokage::ActorRef<()>);
 # impl kokage::Actor for Press { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 # impl kokage::Actor for FrontDesk { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let press_actor = ActorSpec::new("press", || Press);
-let press = press_actor.actor_ref();
+let mut tree = OrderedTree::new();
+let press = tree.add_actor(ActorSpec::new("press", || Press));
 let front_desk_actor = ActorSpec::new("front-desk", {
     let press = press.clone();
     move || FrontDesk(press.clone())
 });
-let front_desk = front_desk_actor.actor_ref();
-
-let tree = OrderedTree::new()
-    .actor(press_actor)
-    .actor(front_desk_actor);
+let front_desk = tree.add_actor(front_desk_actor);
 # let _ = (press, front_desk, tree);
 ```
 
-`actor_ref()` borrows the declaration and may be called repeatedly. The spec
-remains configurable until placement consumes it, so callers may obtain refs
-before adding mailbox or policy options.
+`add_actor` consumes the declaration and returns its typed reference. Use
+`actor_ref()` before placement when a factory needs the reference earlier or
+when multiple callers need refs while the spec is still being configured.
 
 ## Cyclic wiring with slots
 
@@ -62,9 +59,9 @@ let right_actor = right_slot.define({
     move || Right(left.clone())
 });
 
-let tree = OrderedTree::new()
-    .actor(left_actor)
-    .actor(right_actor);
+let mut tree = OrderedTree::new();
+tree.add_actor(left_actor);
+tree.add_actor(right_actor);
 # let _ = (left, right, tree);
 ```
 
@@ -137,4 +134,5 @@ hosts with their own supervision story without applying supervisor-placement
 validation. Tree placement and dynamic insertion reject an explicit zero
 mailbox capacity through their ordinary error types; direct hosts are
 responsible for validating configuration before running it. Normal
-applications should place the spec in `OrderedTree` or `DynamicTree`.
+applications should add the spec to an `OrderedTree` or insert it through a
+dynamic `ScopeRef`.

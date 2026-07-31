@@ -239,12 +239,13 @@ impl Actor for TaskAdder {
 fn single_use_mount(report: mpsc::UnboundedSender<&'static str>) -> OrderedTree {
     let mount_builder = DynamicTree::new();
     let mount = mount_builder.scope();
-    OrderedTree::new()
-        .subtree("mount", mount_builder)
-        .actor(ActorSpec::new("owner", move || BuilderHandleOwner {
-            mount: mount.clone(),
-            report: report.clone(),
-        }))
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("mount", mount_builder);
+    tree.add_actor(ActorSpec::new("owner", move || BuilderHandleOwner {
+        mount: mount.clone(),
+        report: report.clone(),
+    }));
+    tree
 }
 
 async fn next_report(reports: &mut mpsc::UnboundedReceiver<&'static str>) -> &'static str {
@@ -291,11 +292,10 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
 
 #[tokio::test]
 async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
-    let runtime = OrderedTree::new()
-        .subtree("ordered", OrderedTree::new())
-        .subtree("dynamic", DynamicTree::new())
-        .spawn()
-        .expect("mixed tree builds");
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("ordered", OrderedTree::new());
+    tree.add_subtree("dynamic", DynamicTree::new());
+    let runtime = tree.spawn().expect("mixed tree builds");
     let root = runtime.scope();
     let ordered = root.subtree("ordered").expect("ordered subtree handle");
     let dynamic = root.subtree("dynamic").expect("dynamic subtree handle");
@@ -411,7 +411,8 @@ async fn ordered_scope_rejects_future_member_completion_mode() {
 
 #[tokio::test]
 async fn pre_spawn_completion_shutdown_beats_a_fast_child() {
-    let tree = OrderedTree::new().task(TaskSpec::new("fast", |_| async { Ok(()) }));
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("fast", |_| async { Ok(()) }));
     let shutdown = tree.scope().completions(["fast"]).then_shutdown();
     assert!(!shutdown.is_finished());
 
@@ -497,10 +498,9 @@ async fn ordered_context_scope_membership_methods_return_not_dynamic() {
     let probe = ActorSpec::new("probe", move || OrderedScopeProbe {
         checked: checked.clone(),
     });
-    let runtime = OrderedTree::new()
-        .actor(probe)
-        .spawn()
-        .expect("ordered tree builds");
+    let mut tree = OrderedTree::new();
+    tree.add_actor(probe);
+    let runtime = tree.spawn().expect("ordered tree builds");
 
     timeout(WAIT, checked_rx.recv())
         .await
@@ -556,18 +556,18 @@ async fn stop_context_scope_observes_and_controls_its_scope() {
 #[tokio::test]
 async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().subtree(
-        "nested",
-        OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
-            let lifecycle_tx = lifecycle_tx.clone();
-            async move {
-                lifecycle_tx.send("started").expect("test receiver open");
-                ctx.shutdown_token().cancelled().await;
-                lifecycle_tx.send("cancelled").expect("test receiver open");
-                Ok(())
-            }
-        })),
-    );
+    let mut nested_tree = OrderedTree::new();
+    nested_tree.add_task(TaskSpec::new("worker", move |ctx| {
+        let lifecycle_tx = lifecycle_tx.clone();
+        async move {
+            lifecycle_tx.send("started").expect("test receiver open");
+            ctx.shutdown_token().cancelled().await;
+            lifecycle_tx.send("cancelled").expect("test receiver open");
+            Ok(())
+        }
+    }));
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("nested", nested_tree);
     let runtime = tree.spawn().expect("tree builds and spawns");
     let root = runtime.scope();
     let nested = root.subtree("nested").expect("nested runtime handle");
@@ -590,7 +590,8 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
 #[tokio::test]
 async fn dropping_runtime_requests_graceful_shutdown() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("worker", move |ctx| {
         let lifecycle_tx = lifecycle_tx.clone();
         async move {
             lifecycle_tx.send("started").expect("test receiver open");
@@ -611,7 +612,8 @@ async fn dropping_runtime_requests_graceful_shutdown() {
 #[tokio::test]
 async fn fire_and_forget_tree_spawn_shuts_down_observably() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let tree = OrderedTree::new().task(TaskSpec::new("worker", move |ctx| {
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("worker", move |ctx| {
         let cancelled_tx = cancelled_tx.clone();
         async move {
             ctx.shutdown_token().cancelled().await;
@@ -631,7 +633,8 @@ async fn fire_and_forget_tree_spawn_shuts_down_observably() {
 
 #[tokio::test]
 async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
-    let tree = OrderedTree::new().task(TaskSpec::new("worker", |ctx| async move {
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("worker", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -687,16 +690,17 @@ async fn trees_terminalize_handles_when_dropped() {
     let child = DynamicTree::new();
     let child_handle = child.scope();
     let child_snapshots = child_handle.subscribe_snapshots();
-    let parent = OrderedTree::new().subtree("child", child);
+    let mut parent = OrderedTree::new();
+    parent.add_subtree("child", child);
     drop(parent);
     assert_snapshot_receiver_closes(child_snapshots).await;
 }
 
 #[test]
 fn tree_strategy_preserves_declared_pre_spawn_snapshot() {
-    let tree = OrderedTree::new()
-        .task(TaskSpec::new("task", |_| async { Ok(()) }))
-        .actor(ActorSpec::new("actor", || Idle));
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("task", |_| async { Ok(()) }));
+    tree.add_actor(ActorSpec::new("actor", || Idle));
     let handle = tree.scope();
     let declared_before = handle
         .snapshot()
@@ -723,9 +727,9 @@ fn tree_strategy_preserves_declared_pre_spawn_snapshot() {
 
 #[tokio::test]
 async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
-    let tree = OrderedTree::new()
-        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }))
-        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
+    tree.add_task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     let failed_ordered = tree.scope();
     let failed_ordered_snapshots = failed_ordered.subscribe_snapshots();
     assert!(tree.spawn().is_err());
@@ -752,9 +756,9 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
         .await
         .expect("dynamic parent starts");
 
-    let invalid = OrderedTree::new()
-        .actor(ActorSpec::new("duplicate-binding", || Idle))
-        .actor(ActorSpec::new("duplicate-binding", || Idle));
+    let mut invalid = OrderedTree::new();
+    invalid.add_actor(ActorSpec::new("duplicate-binding", || Idle));
+    invalid.add_actor(ActorSpec::new("duplicate-binding", || Idle));
     let rejected = invalid.scope();
     let rejected_snapshots = rejected.subscribe_snapshots();
     assert!(matches!(
@@ -827,16 +831,15 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
 #[tokio::test]
 async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
-    let handle = OrderedTree::new()
-        .actor(ActorSpec::new("ordinary", move || ScopeProbe {
-            reports: reports_tx.clone(),
-            starts: Arc::new(AtomicUsize::new(0)),
-            child_stopped: None,
-            children_id: None,
-            mutate_children_on_start: false,
-        }))
-        .spawn()
-        .expect("runtime builds");
+    let mut tree = OrderedTree::new();
+    tree.add_actor(ActorSpec::new("ordinary", move || ScopeProbe {
+        reports: reports_tx.clone(),
+        starts: Arc::new(AtomicUsize::new(0)),
+        child_stopped: None,
+        children_id: None,
+        mutate_children_on_start: false,
+    }));
+    let handle = tree.spawn().expect("runtime builds");
     handle.scope().wait_started().await.expect("actor starts");
     assert_eq!(next_report(&mut reports_rx).await, "ordered-supervisor");
     assert_eq!(next_report(&mut reports_rx).await, "none");
@@ -858,16 +861,12 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
         }
     });
     let leader = leader_spec.actor_ref();
-    let handle = OrderedTree::new()
-        .subtree(
-            "owned",
-            OrderedTree::new()
-                .strategy(Strategy::RestForOne)
-                .actor(leader_spec)
-                .subtree("children", DynamicTree::new()),
-        )
-        .spawn()
-        .expect("leader-owned scope builds");
+    let mut owned = OrderedTree::new().strategy(Strategy::RestForOne);
+    owned.add_actor(leader_spec);
+    owned.add_subtree("children", DynamicTree::new());
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("owned", owned);
+    let handle = tree.spawn().expect("leader-owned scope builds");
 
     assert_eq!(next_report(&mut reports_rx).await, "some");
     assert_eq!(
@@ -919,15 +918,12 @@ async fn context_scope_add_task_reports_insertion_success() {
         subtree: subtree_tx.clone(),
     });
     let adder = adder_spec.actor_ref();
-    let handle = OrderedTree::new()
-        .subtree(
-            "owned",
-            OrderedTree::new()
-                .actor(adder_spec)
-                .subtree("children", DynamicTree::new()),
-        )
-        .spawn()
-        .expect("tree builds");
+    let mut owned = OrderedTree::new();
+    owned.add_actor(adder_spec);
+    owned.add_subtree("children", DynamicTree::new());
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("owned", owned);
+    let handle = tree.spawn().expect("tree builds");
     handle.scope().wait_started().await.expect("tree starts");
 
     adder.send(()).await.expect("adder receives command");
@@ -990,13 +986,13 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
         let child_stopped = Arc::clone(&child_stopped);
         move || StopProbe(Arc::clone(&child_stopped))
     });
-    let runtime = OrderedTree::new().subtree(
-        "owned",
-        OrderedTree::new()
-            .strategy(Strategy::RestForOne)
-            .actor(leader)
-            .subtree("children", OrderedTree::new().actor(worker)),
-    );
+    let mut children = OrderedTree::new();
+    children.add_actor(worker);
+    let mut owned = OrderedTree::new().strategy(Strategy::RestForOne);
+    owned.add_actor(leader);
+    owned.add_subtree("children", children);
+    let mut runtime = OrderedTree::new();
+    runtime.add_subtree("owned", owned);
     assert_eq!(runtime.scope().snapshot().strategy, Strategy::OneForOne);
     let handle = runtime.spawn().expect("ordered leader-owned scope builds");
     assert_eq!(next_report(&mut reports_rx).await, "some");
@@ -1071,13 +1067,13 @@ async fn leader_owned_scope_uses_explicit_rest_for_one() {
         }
     });
     let worker = worker_spec.actor_ref();
-    let tree = OrderedTree::new().subtree(
-        "owned",
-        OrderedTree::new()
-            .strategy(Strategy::RestForOne)
-            .actor(leader_spec)
-            .subtree("children", OrderedTree::new().actor(worker_spec)),
-    );
+    let mut children = OrderedTree::new();
+    children.add_actor(worker_spec);
+    let mut owned = OrderedTree::new().strategy(Strategy::RestForOne);
+    owned.add_actor(leader_spec);
+    owned.add_subtree("children", children);
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("owned", owned);
     let outline = tree.outline();
     assert!(matches!(
         outline.child("owned"),
@@ -1114,19 +1110,15 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
         }
     });
     let worker = worker_spec.actor_ref();
-    let inner = OrderedTree::new()
-        .actor(worker_spec)
-        .default_restart(Restart::on_failure().limit(1, Duration::from_secs(30)));
-    let handle = OrderedTree::new()
-        .subtree(
-            "owned",
-            OrderedTree::new()
-                .strategy(Strategy::OneForAll)
-                .actor(leader)
-                .subtree("children", inner),
-        )
-        .spawn()
-        .expect("tree builds");
+    let mut inner = OrderedTree::new();
+    inner.add_actor(worker_spec);
+    let inner = inner.default_restart(Restart::on_failure().limit(1, Duration::from_secs(30)));
+    let mut owned = OrderedTree::new().strategy(Strategy::OneForAll);
+    owned.add_actor(leader);
+    owned.add_subtree("children", inner);
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("owned", owned);
+    let handle = tree.spawn().expect("tree builds");
     handle.scope().wait_started().await.expect("tree starts");
 
     worker.send(LeaderMsg::Crash).await.expect("first crash");
@@ -1155,9 +1147,9 @@ async fn consuming_a_tree_builder_preserves_issued_actor_refs() {
 
 #[tokio::test]
 async fn duplicate_actor_bindings_are_rejected_during_tree_lowering() {
-    let tree = OrderedTree::new()
-        .actor(ActorSpec::new("actor", || Idle))
-        .actor(ActorSpec::new("actor", || Idle));
+    let mut tree = OrderedTree::new();
+    tree.add_actor(ActorSpec::new("actor", || Idle));
+    tree.add_actor(ActorSpec::new("actor", || Idle));
     let handle = tree.scope();
 
     assert!(matches!(
@@ -1169,15 +1161,13 @@ async fn duplicate_actor_bindings_are_rejected_during_tree_lowering() {
 
 #[tokio::test]
 async fn sibling_scopes_may_reuse_the_same_local_actor_id() {
-    let tree = OrderedTree::new()
-        .subtree(
-            "left",
-            OrderedTree::new().actor(ActorSpec::new("worker", || Idle)),
-        )
-        .subtree(
-            "right",
-            OrderedTree::new().actor(ActorSpec::new("worker", || Idle)),
-        );
+    let mut left = OrderedTree::new();
+    left.add_actor(ActorSpec::new("worker", || Idle));
+    let mut right = OrderedTree::new();
+    right.add_actor(ActorSpec::new("worker", || Idle));
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("left", left);
+    tree.add_subtree("right", right);
 
     let runtime = tree.spawn().expect("sibling-local ids are independent");
     runtime.scope().wait_started().await.expect("tree starts");

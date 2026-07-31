@@ -1,8 +1,0 @@
-error[E0599]: no associated function or constant named `Ordered` found for struct `TreeNode` in the current scope
- --> tests/ui/single-use-tree/tree_node_variants.rs:4:23
-  |
-4 |     let _ = TreeNode::Ordered(OrderedTree::new());
-  |                       ^^^^^^^ associated function or constant not found in `TreeNode`
-  |
-help: there is a method `deref` with a similar name, but with different arguments
- --> $RUST/core/src/ops/deref.rs

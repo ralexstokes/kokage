@@ -52,9 +52,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         handled: handled_tx.clone(),
     })
     .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
-    let worker = worker_spec.actor_ref();
-
-    let runtime = OrderedTree::new().actor(worker_spec).spawn()?;
+    let mut tree = OrderedTree::new();
+    let worker = tree.add_actor(worker_spec);
+    let runtime = tree.spawn()?;
     worker.send(Msg::Hold).await?;
     started_rx.recv().await.expect("worker entered hold");
 

@@ -310,20 +310,19 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         })
         .mailbox_capacity(VENUE_MAILBOX);
 
-    let venues = OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)))
-        .actor(venue_a_feed_actor)
-        .actor(venue_a_gateway_actor)
-        .actor(venue_b_feed_actor)
-        .actor(venue_b_gateway_actor);
-    let tree = OrderedTree::new()
-        .mailbox_capacity(32)
-        .subtree("venues", venues)
-        .actor(reconciler_actor)
-        .actor(ledger_actor)
-        .actor(router_actor)
-        .actor(control_actor)
-        .actor(health_actor);
+    let mut venues =
+        OrderedTree::new().default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)));
+    venues.add_actor(venue_a_feed_actor);
+    venues.add_actor(venue_a_gateway_actor);
+    venues.add_actor(venue_b_feed_actor);
+    venues.add_actor(venue_b_gateway_actor);
+    let mut tree = OrderedTree::new().mailbox_capacity(32);
+    tree.add_subtree("venues", venues);
+    tree.add_actor(reconciler_actor);
+    tree.add_actor(ledger_actor);
+    tree.add_actor(router_actor);
+    tree.add_actor(control_actor);
+    tree.add_actor(health_actor);
 
     let runtime = tree.spawn()?;
 

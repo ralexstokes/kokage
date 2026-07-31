@@ -70,10 +70,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let frontend = frontend_spec.actor_ref();
 
-    let runtime = OrderedTree::new()
-        .actor(frontend_spec)
-        .actor(worker_spec)
-        .spawn()?;
+    let mut tree = OrderedTree::new();
+    tree.add_actor(frontend_spec);
+    tree.add_actor(worker_spec);
+    let runtime = tree.spawn()?;
     let handle = runtime.scope();
     let mut events = handle.watch_lifecycle();
     let mut snapshots = handle.subscribe_snapshots();

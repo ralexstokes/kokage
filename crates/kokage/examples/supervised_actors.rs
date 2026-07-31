@@ -63,16 +63,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
         delivered: delivered_tx.clone(),
         run: 0,
     });
-    let worker = worker_spec.actor_ref();
+    let mut tree = OrderedTree::new();
+    let worker = tree.add_actor(worker_spec);
     let orders_spec = ActorSpec::new("front-desk", move || Frontend {
         worker: worker.clone(),
     });
-    let orders = orders_spec.actor_ref();
-
-    let runtime = OrderedTree::new()
-        .actor(worker_spec)
-        .actor(orders_spec)
-        .spawn()?;
+    let orders = tree.add_actor(orders_spec);
+    let runtime = tree.spawn()?;
     let handle = runtime.scope();
 
     orders.send("business cards x100".to_owned()).await?;

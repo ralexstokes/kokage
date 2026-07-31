@@ -3,23 +3,23 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let running = OrderedTree::new()
-        .task(TaskSpec::new("http-server", |ctx| async move {
-            println!("http-server started");
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("http-server", |ctx| async move {
+        println!("http-server started");
 
-            loop {
-                tokio::select! {
-                    _ = ctx.shutdown_token().cancelled() => {
-                        println!("http-server received cancellation");
-                        return Ok(());
-                    }
-                    _ = sleep(Duration::from_millis(75)) => {
-                        println!("http-server heartbeat");
-                    }
+        loop {
+            tokio::select! {
+                _ = ctx.shutdown_token().cancelled() => {
+                    println!("http-server received cancellation");
+                    return Ok(());
+                }
+                _ = sleep(Duration::from_millis(75)) => {
+                    println!("http-server heartbeat");
                 }
             }
-        }))
-        .spawn()?;
+        }
+    }));
+    let running = tree.spawn()?;
 
     let app_shutdown = CancellationToken::new();
     app_shutdown.cancel_when(async {

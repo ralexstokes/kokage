@@ -12,5 +12,7 @@ impl Actor for Idle {
 
 fn main() {
     let spec = ActorSpec::new("idle", || Idle);
-    let _tree = OrderedTree::new().actor(spec).actor(spec);
+    let mut tree = OrderedTree::new();
+    tree.add_actor(spec);
+    tree.add_actor(spec);
 }

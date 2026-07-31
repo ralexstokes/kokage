@@ -10,7 +10,7 @@ fn task() -> TaskSpec {
 
 fn main() {
     let _ = DynamicTree::new().strategy(Strategy::OneForAll);
-    let _ = DynamicTree::new().actor(actor());
-    let _ = DynamicTree::new().task(task());
-    let _ = DynamicTree::new().subtree("nested", OrderedTree::new());
+    DynamicTree::new().add_actor(actor());
+    DynamicTree::new().add_task(task());
+    DynamicTree::new().add_subtree("nested", OrderedTree::new());
 }

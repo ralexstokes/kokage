@@ -15,11 +15,10 @@ lifecycle events, and statistics.
 let worker = ActorSpec::new("worker", || Worker)
     .restart(Restart::always())
     .shutdown(Shutdown::drain_for(Duration::from_secs(5)));
-let worker_ref = worker.actor_ref();
+let mut tree = OrderedTree::new();
+let worker_ref = tree.add_actor(worker);
 
-let runtime = OrderedTree::new()
-    .actor(worker)
-    .spawn()?;
+let runtime = tree.spawn()?;
 # let _ = worker_ref;
 runtime.shutdown_and_wait().await?;
 # Ok(())
@@ -81,15 +80,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runs: runs.clone(),
         run: 0,
     });
-    let press = press_actor.actor_ref();
+    let mut tree = OrderedTree::new()
+        .default_restart(Restart::on_failure().limit(5, Duration::from_secs(60)));
+    let press = tree.add_actor(press_actor);
     let orders_actor = ActorSpec::new("front-desk", move || FrontDesk(press.clone()));
-    let orders = orders_actor.actor_ref();
+    let orders = tree.add_actor(orders_actor);
 
-    let runtime = OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(5, Duration::from_secs(60)))
-        .actor(press_actor)
-        .actor(orders_actor)
-        .spawn()?;
+    let runtime = tree.spawn()?;
     let handle = runtime.scope();
 
     orders.send("business cards x100".into()).await?;
@@ -123,14 +120,13 @@ restart boundaries:
 # use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let venues = OrderedTree::new()
-    .strategy(Strategy::OneForAll)
-    .actor(ActorSpec::new("feed", || Worker))
-    .actor(ActorSpec::new("gateway", || Worker));
+let mut venues = OrderedTree::new().strategy(Strategy::OneForAll);
+venues.add_actor(ActorSpec::new("feed", || Worker));
+venues.add_actor(ActorSpec::new("gateway", || Worker));
 
-let tree = OrderedTree::new()
-    .actor(ActorSpec::new("router", || Worker))
-    .subtree("venues", venues);
+let mut tree = OrderedTree::new();
+tree.add_actor(ActorSpec::new("router", || Worker));
+tree.add_subtree("venues", venues);
 # let _ = tree;
 ```
 
@@ -151,7 +147,7 @@ for a successful terminal exit with no pending restart.
 obtain the scope before spawning to avoid racing a fast child, and retain the
 guard.
 
-Use `OrderedTree::task` to mix an arbitrary non-actor `TaskSpec` into the
+Use `OrderedTree::add_task` to mix an arbitrary non-actor `TaskSpec` into the
 same sequence. Policy configured on the child spec is preserved, while unset
 restart and shutdown settings inherit the tree defaults. Task children appear
 in snapshots and lifecycle watches but not actor stats.
