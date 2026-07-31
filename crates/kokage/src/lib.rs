@@ -158,10 +158,7 @@
 //! host, but [`ActorSpec::into_runnable`] exposes one actor for direct hosts:
 //!
 //! ```
-//! use kokage::{
-//!     Actor, ExitResult, ActorSpec, CancellationToken, Context,
-//!     Restart, Shutdown, raw::DEFAULT_SHUTDOWN_BOUND,
-//! };
+//! use kokage::{CancellationToken, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
 //! # struct Worker;
 //! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
 //! # #[tokio::main]

@@ -6,14 +6,16 @@ maps its total result back into an ordinary typed message:
 
 ```rust,no_run
 use std::time::Duration;
-use kokage::raw::RawContext;
+use kokage::prelude::*;
 
 enum Msg {
     Loaded(String),
 }
 
+# struct Loader;
+# impl Actor for Loader { type Msg = Msg; async fn handle(&mut self, _: Msg, _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
 # async fn load() -> String { String::new() }
-# fn start(ctx: &mut RawContext<Msg>) {
+# fn start(ctx: &mut Context<'_, Loader>) {
 ctx.offload(
     Duration::from_millis(250),
     load(),
@@ -49,12 +51,14 @@ concurrent offloads in one incarnation remains part of the message protocol:
 
 ```rust,no_run
 # use std::time::Duration;
-# use kokage::{OffloadDeadline, raw::RawContext};
+# use kokage::{OffloadDeadline, prelude::*};
 enum Msg {
     Fetched { request: u64, value: Result<String, OffloadDeadline> },
 }
+# struct Fetcher;
+# impl Actor for Fetcher { type Msg = Msg; async fn handle(&mut self, _: Msg, _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
 # async fn fetch() -> String { String::new() }
-# fn start(ctx: &mut RawContext<Msg>, request: u64) {
+# fn start(ctx: &mut Context<'_, Fetcher>, request: u64) {
 ctx.offload(Duration::from_secs(1), fetch(), move |value| {
     Msg::Fetched { request, value }
 })
