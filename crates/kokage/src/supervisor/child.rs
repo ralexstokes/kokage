@@ -50,7 +50,8 @@ pub(crate) enum ChildKind {
 ///
 /// Construct one with [`new`](Self::new), then apply restart, shutdown, and
 /// membership-retention policies. Nested scopes are built through Kokage's
-/// tree APIs.
+/// tree APIs. For finite dynamic work backed by a consuming factory, use
+/// [`OneShotTaskSpec`] instead.
 pub struct TaskSpec {
     pub(crate) spec: ChildSpec,
 }
@@ -180,14 +181,6 @@ impl TaskSpec {
     pub fn remove_when_done(self) -> Self {
         Self {
             spec: self.spec.remove_when_done(),
-        }
-    }
-
-    /// Marks finite dynamic work as non-restarting and removable on completion.
-    #[must_use]
-    pub fn temporary(self) -> Self {
-        Self {
-            spec: self.spec.restart(RestartPolicy::never()).remove_when_done(),
         }
     }
 

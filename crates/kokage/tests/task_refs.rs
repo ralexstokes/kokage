@@ -27,7 +27,7 @@ async fn declared_ref_observes_fast_completion() {
 }
 
 #[tokio::test]
-async fn temporary_dynamic_ref_retains_removed_task_exit() {
+async fn one_shot_ref_retains_removed_task_exit() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let task = running_tree
         .scope()
@@ -110,11 +110,11 @@ async fn configured_one_shot_retains_a_consuming_factory() {
 }
 
 #[tokio::test]
-async fn temporary_dynamic_ref_retains_exit_after_sibling_churn() {
+async fn one_shot_ref_retains_exit_after_sibling_churn() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let scope = running_tree.scope();
     let task = scope
-        .add_task_spec(TaskSpec::new("job", |_| async { Ok(()) }).temporary())
+        .spawn_once("job", |_| async { Ok(()) })
         .await
         .expect("task is inserted");
 
@@ -128,9 +128,7 @@ async fn temporary_dynamic_ref_retains_exit_after_sibling_churn() {
 
     for index in 0..40 {
         let sibling = scope
-            .add_task_spec(
-                TaskSpec::new(format!("sibling-{index}"), |_| async { Ok(()) }).temporary(),
-            )
+            .spawn_once(format!("sibling-{index}"), |_| async { Ok(()) })
             .await
             .expect("sibling is inserted");
         assert!(
@@ -156,7 +154,7 @@ async fn old_ref_does_not_follow_same_id_replacement() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let scope = running_tree.scope();
     let first = scope
-        .add_task_spec(TaskSpec::new("job", |_| async { Ok(()) }).temporary())
+        .spawn_once("job", |_| async { Ok(()) })
         .await
         .expect("first task is inserted");
     let first_exit = first.wait().await.expect("first task completes");

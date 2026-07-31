@@ -1,0 +1,5 @@
+error[E0599]: no method named `temporary` found for struct `TaskSpec` in the current scope
+ --> tests/ui/public-api/task_spec_temporary.rs:4:56
+  |
+4 |     let _ = TaskSpec::new("job", |_| async { Ok(()) }).temporary();
+  |                                                        ^^^^^^^^^ method not found in `TaskSpec`
