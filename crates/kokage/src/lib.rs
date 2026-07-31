@@ -63,7 +63,7 @@
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
-//! | [`raw::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
+//! | [`raw::ActorHost`] | Owns one actor's direct execution and stable binding. |
 //!
 //! # Composition modes
 //!
@@ -157,7 +157,7 @@
 //! # Hand-driving actors
 //!
 //! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal
-//! host, but [`ActorSpec::into_runnable`] exposes one actor for direct hosts:
+//! host, but [`ActorSpec::into_host`] exposes one actor for direct hosts:
 //!
 //! ```
 //! use kokage::{CancellationToken, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
@@ -165,15 +165,14 @@
 //! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let actor = ActorSpec::new("worker", || Worker).into_runnable();
+//! let actor = ActorSpec::new("worker", || Worker).into_host();
 //! let stop = CancellationToken::new();
 //! let run = tokio::spawn({
 //!     let stop = stop.clone();
 //!     async move {
 //!         actor
-//!             .run_until(
+//!             .run_once(
 //!                 stop.cancelled(),
-//!                 Restart::never(),
 //!                 Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
 //!             )
 //!             .await
@@ -243,11 +242,11 @@ mod supervisor;
 ///
 /// Most applications use [`ActorSpec`] and a supervision tree.
 /// This module contains the lower-level execution surface for custom receive
-/// loops and directly driven runnable actors. Handler actors, supervised task
+/// loops and directly driven actor hosts. Handler actors, supervised task
 /// declarations, and their shared [`ExitResult`] live at the crate root.
 pub mod raw {
     pub use crate::actor::{
-        ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
+        ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
     };
 }
 

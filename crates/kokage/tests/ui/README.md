@@ -20,7 +20,9 @@ names absent.
 
 `root_export_tier.rs`, `raw_export_tier.rs`, and
 `prelude_export_tier.rs` keep root task types, raw actor execution types, and
-the common prelude vocabulary in their declared tiers. `removed_host_module.rs`
+the common prelude vocabulary in their declared tiers. `actor_host_clone.rs`
+pins direct-host ownership, and `run_once_requires_shutdown.rs` keeps the
+shutdown policy explicit. `removed_host_module.rs`
 pins the replacement of the former `host` module by `raw` and root exports.
 `send_error_types_removed.rs` keeps the superseded `TrySendError` and
 `SendTimeoutError` carriers absent. `actor_slot_configuration_removed.rs`

@@ -129,10 +129,17 @@ directional request flow.
 
 ## Direct hosting
 
-`ActorSpec::into_runnable` materializes one `raw::RunnableActor` for tests or
+`ActorSpec::into_host` materializes one `raw::ActorHost` for tests or
 hosts with their own supervision story without applying supervisor-placement
 validation. Tree placement and dynamic insertion reject an explicit zero
 mailbox capacity through their ordinary error types; direct hosts are
 responsible for validating configuration before running it. Normal
 applications should add the spec to an `OrderedTree` or insert it through a
 dynamic `ScopeRef`.
+
+`ActorHost::run_once` consumes the host and makes its binding terminal on
+return. Custom supervision loops use `ActorHost::run_incarnation`, inspect its
+`IncarnationExit`, and either start another incarnation or drop the host.
+Dropping the host always terminates the binding, including when a `run_once`
+future is cancelled, so senders cannot wait forever for a rebind that will
+never happen.

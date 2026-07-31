@@ -1,13 +1,14 @@
 use std::{error::Error, future::pending, sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ExitResult, Restart, SendError, SendErrorKind, Shutdown,
-    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
+    ActorSpec, ExitResult, SendError, SendErrorKind, Shutdown,
+    raw::{DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext},
 };
 use tokio::{
     sync::{
         Mutex,
         mpsc::{self, UnboundedSender},
+        oneshot,
     },
     time::{sleep, timeout},
 };
@@ -35,18 +36,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         observed: observed_tx.clone(),
     });
     let sink_ref = spec.actor_ref();
-    let sink = spec.into_runnable();
-
-    let first_run = tokio::spawn({
-        let sink = sink.clone();
-        async move {
-            sink.run_until(
-                pending::<()>(),
-                Restart::always(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
+    let mut sink = spec.into_host();
+    let (first_exit_tx, first_exit_rx) = oneshot::channel();
+    let (restart_tx, restart_rx) = oneshot::channel();
+    let sink_task = tokio::spawn(async move {
+        let first_exit = sink
+            .run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .await;
+        let _ = first_exit_tx.send(first_exit);
+        let _ = restart_rx.await;
+        sink.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
-        }
     });
     sink_ref.send("first run".to_owned()).await?;
     println!(
@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .await?
             .expect("first message observed")
     );
-    first_run.await??;
+    assert!(matches!(first_exit_rx.await?, IncarnationExit::Stopped));
 
     match sink_ref.try_send("try during restart".to_owned()) {
         Err(SendError {
@@ -97,17 +97,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert!(send_result.lock().await.is_none());
     println!("send is waiting for the next binding");
 
-    let second_run = tokio::spawn({
-        let sink = sink.clone();
-        async move {
-            sink.run_until(
-                pending::<()>(),
-                Restart::always(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
-            .await
-        }
-    });
+    let _ = restart_tx.send(());
     println!(
         "sink observed `{}`",
         timeout(Duration::from_secs(1), observed_rx.recv())
@@ -120,7 +110,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .take()
         .expect("send task recorded result")?;
-    second_run.await??;
+    sink_task.await??;
 
     Ok(())
 }

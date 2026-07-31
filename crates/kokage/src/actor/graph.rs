@@ -150,17 +150,10 @@ where
     }
 }
 
-/// Errors returned from [`RunnableActor::run_until`].
+/// Errors returned while directly hosting an actor.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ActorRunError {
-    /// Another instance of the same runnable actor is already active.
-    #[error("actor `{actor_id}` is already running")]
-    #[non_exhaustive]
-    AlreadyRunning {
-        /// Stable id of the actor whose existing run is still active.
-        actor_id: String,
-    },
     /// The actor returned an error.
     #[error("actor `{actor_id}` returned an error")]
     #[non_exhaustive]
@@ -192,20 +185,140 @@ pub enum ActorRunError {
 }
 
 /// The shutdown bound a standalone host should pass to
-/// [`RunnableActor::run_until`] when it has no deadline of its own.
+/// [`ActorHost::run_once`] or [`ActorHost::run_incarnation`] when it has no
+/// deadline of its own.
 ///
 /// This matches the default grace of
 /// [`Shutdown`](crate::Shutdown), so an actor behaves the same
 /// whether it is hosted by hand or by an [`OrderedTree`](crate::OrderedTree).
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
-/// A single actor declaration, ready to be run independently.
+/// The result of one directly hosted actor incarnation.
+#[derive(Debug)]
+#[non_exhaustive]
+#[must_use = "inspect the incarnation exit before deciding whether to restart"]
+pub enum IncarnationExit {
+    /// The actor stopped without an error or a shutdown request.
+    Stopped,
+    /// The actor incarnation failed.
+    Failed(ActorRunError),
+    /// The host's shutdown future resolved and the actor stopped cleanly.
+    ShutdownRequested,
+}
+
+impl IncarnationExit {
+    fn into_result(self) -> Result<(), ActorRunError> {
+        match self {
+            Self::Stopped | Self::ShutdownRequested => Ok(()),
+            Self::Failed(error) => Err(error),
+        }
+    }
+}
+
+/// An owning host for directly running one actor declaration.
 ///
-/// Retains a stable mailbox binding, so [`ActorRef`] handles
-/// keep working across restarts. Use [`run_until`](Self::run_until) to drive
-/// one actor incarnation.
+/// The host retains the actor's stable mailbox binding across calls to
+/// [`run_incarnation`](Self::run_incarnation). Dropping it terminates that
+/// binding, so [`ActorRef`] senders never wait for a rebind that cannot occur.
+/// Directly hosted actors receive an unavailable [`ScopeRef`]: control
+/// operations fail and observation streams are closed.
+#[must_use = "dropping the actor host terminates its binding"]
+pub struct ActorHost {
+    actor: RunnableActor,
+}
+
+impl ActorHost {
+    pub(crate) fn new(actor: RunnableActor) -> Self {
+        Self { actor }
+    }
+
+    /// Returns the actor label.
+    pub fn label(&self) -> &str {
+        self.actor.label()
+    }
+
+    /// Runs one actor incarnation and then terminates its binding.
+    ///
+    /// This method consumes the host. The binding therefore becomes terminal
+    /// when the run returns, panics, or is cancelled by dropping its future.
+    /// Use [`run_incarnation`](Self::run_incarnation) when a custom supervision
+    /// loop may start another incarnation.
+    pub async fn run_once<F>(
+        mut self,
+        shutdown: F,
+        shutdown_policy: Shutdown,
+    ) -> Result<(), ActorRunError>
+    where
+        F: Future<Output = ()>,
+    {
+        self.run_incarnation(shutdown, shutdown_policy)
+            .await
+            .into_result()
+    }
+
+    /// Runs one actor incarnation while retaining ownership of its binding.
+    ///
+    /// On return the binding is ready for a later incarnation. Inspect the
+    /// exit and either run another incarnation or drop the host to make the
+    /// binding terminal. Dropping this method's future aborts the active
+    /// incarnation but leaves the host available to the caller.
+    ///
+    /// `shutdown_policy` controls message draining and bounds the complete
+    /// shutdown path. Exceeding that bound returns
+    /// [`IncarnationExit::Failed`] containing
+    /// [`ActorRunError::ShutdownTimedOut`]. Actor panics resume unwinding; a
+    /// custom loop that deliberately recovers from panics must catch that
+    /// unwind around the borrowed run future.
+    pub async fn run_incarnation<F>(
+        &mut self,
+        shutdown: F,
+        shutdown_policy: Shutdown,
+    ) -> IncarnationExit
+    where
+        F: Future<Output = ()>,
+    {
+        let shutdown_observed = CancellationToken::new();
+        let deadline_start = shutdown_observed.clone();
+        let bounded_shutdown = async move {
+            shutdown.await;
+            shutdown_observed.cancel();
+        };
+        let abort = async move {
+            deadline_start.cancelled().await;
+            if let Some(grace) = shutdown_policy.grace() {
+                sleep(grace).await;
+            }
+        };
+        self.actor
+            .run_incarnation_until_ready(
+                bounded_shutdown,
+                abort,
+                Restart::always(),
+                matches!(shutdown_policy, Shutdown::Drain { .. }),
+                ScopeRef::unavailable(),
+                || {},
+            )
+            .await
+    }
+}
+
+impl Drop for ActorHost {
+    fn drop(&mut self) {
+        self.actor.terminate_binding();
+    }
+}
+
+impl std::fmt::Debug for ActorHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActorHost")
+            .field("label", &self.label())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Internal cloneable representation used by supervision machinery.
 #[derive(Clone)]
-pub struct RunnableActor {
+pub(crate) struct RunnableActor {
     inner: Arc<RunnableActorInner>,
 }
 
@@ -249,78 +362,8 @@ impl RunnableActor {
         self.inner.binding_lifecycle.stats()
     }
 
-    /// Marks the actor's binding terminated.
-    ///
-    /// Call this when no further run will be started so senders fail fast with
-    /// [`SendError`](crate::SendError) instead of waiting for a rebind that
-    /// will never come.
-    pub fn terminate_binding(&self) {
+    pub(crate) fn terminate_binding(&self) {
         self.apply_run_disposition(RunDisposition::Terminate);
-    }
-
-    /// Runs this actor with a fresh mailbox until shutdown resolves.
-    ///
-    /// `restart` controls the binding disposition after the run, while
-    /// `shutdown` controls both the actor drain behavior and the bound for the
-    /// drain and stop-hook path, exactly as it does under a supervision tree.
-    ///
-    /// When the shutdown grace expires before the actor finishes draining, the
-    /// inner task is aborted and the run resolves to
-    /// [`ActorRunError::ShutdownTimedOut`] — a timeout is reported rather than
-    /// laundered into a clean exit, so `.expect(..)` on the result will panic
-    /// for an actor that overruns its bound.
-    ///
-    /// - A clean exit leaves the binding rebindable only for
-    ///   [`Restart::always`].
-    /// - Failure, panic, or unexpected task cancellation leaves it rebindable
-    ///   for [`Restart::always`] and [`Restart::on_failure`].
-    /// - Requested shutdown terminates the binding for every policy.
-    /// - Dropping the `run_until` future aborts the incarnation and leaves the
-    ///   binding rebindable for `Always` and `OnFailure`; `Never` terminates it.
-    ///
-    /// [`Restart::default`] uses [`Restart::on_failure`], so
-    /// `run_until(shutdown, Default::default(), shutdown)` leaves a failed run
-    /// rebindable. Pass [`Restart::never`] explicitly for a
-    /// binding that terminates after every exit.
-    ///
-    /// A hand-written host must call
-    /// [`terminate_binding`](Self::terminate_binding) when it gives up after a
-    /// policy that left the binding waiting to rebind.
-    ///
-    /// Actors run through this unsupervised entry point receive a terminal
-    /// [`ScopeRef`] from [`RawContext::scope`](crate::raw::RawContext::scope):
-    /// control operations return `ControlError::Unavailable` and observation
-    /// streams are closed.
-    pub async fn run_until<F>(
-        &self,
-        shutdown: F,
-        restart: Restart,
-        shutdown_policy: Shutdown,
-    ) -> Result<(), ActorRunError>
-    where
-        F: Future<Output = ()>,
-    {
-        let shutdown_observed = CancellationToken::new();
-        let deadline_start = shutdown_observed.clone();
-        let bounded_shutdown = async move {
-            shutdown.await;
-            shutdown_observed.cancel();
-        };
-        let abort = async move {
-            deadline_start.cancelled().await;
-            if let Some(grace) = shutdown_policy.grace() {
-                sleep(grace).await;
-            }
-        };
-        self.run_until_ready(
-            bounded_shutdown,
-            abort,
-            restart,
-            matches!(shutdown_policy, Shutdown::Drain { .. }),
-            ScopeRef::unavailable(),
-            || {},
-        )
-        .await
     }
 
     pub(crate) async fn run_until_ready<F, A, R>(
@@ -337,12 +380,40 @@ impl RunnableActor {
         A: Future<Output = ()>,
         R: FnOnce(),
     {
+        let exit = self
+            .run_incarnation_until_ready(
+                shutdown,
+                abort,
+                restart,
+                drain_messages,
+                supervisor,
+                ready,
+            )
+            .await;
+        self.apply_run_disposition(run_disposition(restart, &exit));
+        exit.into_result()
+    }
+
+    async fn run_incarnation_until_ready<F, A, R>(
+        &self,
+        shutdown: F,
+        abort: A,
+        restart_on_drop: Restart,
+        drain_messages: bool,
+        supervisor: ScopeRef,
+        ready: R,
+    ) -> IncarnationExit
+    where
+        F: Future<Output = ()>,
+        A: Future<Output = ()>,
+        R: FnOnce(),
+    {
         if self.inner.mailbox_capacity == 0 {
-            return Err(ActorRunError::ZeroMailboxCapacity {
+            return IncarnationExit::Failed(ActorRunError::ZeroMailboxCapacity {
                 actor_id: self.inner.actor_id.to_string(),
             });
         }
-        let _active_run = ActiveActorRun::start(&self.inner)?;
+        let _active_run = ActiveActorRun::start(&self.inner);
         let actor_id = self.inner.actor_id.clone();
         let actor_shutdown = CancellationToken::new();
         let mut shutdown = std::pin::pin!(shutdown);
@@ -356,7 +427,7 @@ impl RunnableActor {
                     shutdown: actor_shutdown.clone(),
                     mailbox_capacity: self.inner.mailbox_capacity,
                     observability: self.inner.observability.clone(),
-                    restart_policy: restart,
+                    restart_policy: restart_on_drop,
                     drain_messages,
                     ready: ready_tx,
                     supervisor,
@@ -400,35 +471,28 @@ impl RunnableActor {
                 } else {
                     ActorExitStatus::Stopped
                 };
-                self.apply_run_disposition(run_disposition(restart, shutdown_requested, status));
                 self.inner
                     .observability
                     .emit_actor_exited(&actor_id, status, None);
-                Ok(())
+                if shutdown_requested {
+                    IncarnationExit::ShutdownRequested
+                } else {
+                    IncarnationExit::Stopped
+                }
             }
             Ok(Err(source)) => {
                 let error = ActorRunError::Failed {
                     actor_id: actor_id.to_string(),
                     source,
                 };
-                self.apply_run_disposition(run_disposition(
-                    restart,
-                    shutdown_requested,
-                    ActorExitStatus::Failed,
-                ));
                 self.inner.observability.emit_actor_exited(
                     &actor_id,
                     ActorExitStatus::Failed,
                     Some(&error.to_string()),
                 );
-                Err(error)
+                IncarnationExit::Failed(error)
             }
             Err(err) if err.is_panic() => {
-                self.apply_run_disposition(run_disposition(
-                    restart,
-                    shutdown_requested,
-                    ActorExitStatus::Panicked,
-                ));
                 self.inner.observability.emit_actor_exited(
                     &actor_id,
                     ActorExitStatus::Panicked,
@@ -440,17 +504,12 @@ impl RunnableActor {
                 let error = ActorRunError::ShutdownTimedOut {
                     actor_id: actor_id.to_string(),
                 };
-                self.apply_run_disposition(run_disposition(
-                    restart,
-                    shutdown_requested,
-                    ActorExitStatus::ShutdownTimedOut,
-                ));
                 self.inner.observability.emit_actor_exited(
                     &actor_id,
                     ActorExitStatus::ShutdownTimedOut,
                     Some(&error.to_string()),
                 );
-                Err(error)
+                IncarnationExit::Failed(error)
             }
             Err(_err) => {
                 let source: BoxError = Box::new(IoError::other(format!(
@@ -460,17 +519,12 @@ impl RunnableActor {
                     actor_id: actor_id.to_string(),
                     source,
                 };
-                self.apply_run_disposition(run_disposition(
-                    restart,
-                    shutdown_requested,
-                    ActorExitStatus::Cancelled,
-                ));
                 self.inner.observability.emit_actor_exited(
                     &actor_id,
                     ActorExitStatus::Cancelled,
                     Some(&error.to_string()),
                 );
-                Err(error)
+                IncarnationExit::Failed(error)
             }
         }
     }
@@ -489,16 +543,12 @@ enum RunDisposition {
     Terminate,
 }
 
-fn run_disposition(
-    policy: Restart,
-    shutdown_requested: bool,
-    status: ActorExitStatus,
-) -> RunDisposition {
-    if shutdown_requested || status == ActorExitStatus::Shutdown {
+fn run_disposition(policy: Restart, exit: &IncarnationExit) -> RunDisposition {
+    if matches!(exit, IncarnationExit::ShutdownRequested) {
         return RunDisposition::Terminate;
     }
 
-    let is_failure = !matches!(status, ActorExitStatus::Stopped | ActorExitStatus::Shutdown);
+    let is_failure = matches!(exit, IncarnationExit::Failed(_));
     if policy.should_restart(is_failure) {
         RunDisposition::ExpectRebind
     } else {
@@ -512,42 +562,34 @@ mod tests {
 
     #[test]
     fn run_disposition_matches_documented_restart_semantics() {
+        let stopped = IncarnationExit::Stopped;
         assert_eq!(
-            run_disposition(Restart::always(), false, ActorExitStatus::Stopped),
+            run_disposition(Restart::always(), &stopped),
             RunDisposition::ExpectRebind
         );
         for policy in [Restart::on_failure(), Restart::never()] {
-            assert_eq!(
-                run_disposition(policy, false, ActorExitStatus::Stopped),
-                RunDisposition::Terminate
-            );
+            assert_eq!(run_disposition(policy, &stopped), RunDisposition::Terminate);
         }
 
-        for status in [
-            ActorExitStatus::Failed,
-            ActorExitStatus::Panicked,
-            ActorExitStatus::Cancelled,
-            ActorExitStatus::ShutdownTimedOut,
-        ] {
-            for policy in [Restart::always(), Restart::on_failure()] {
-                assert_eq!(
-                    run_disposition(policy, false, status),
-                    RunDisposition::ExpectRebind
-                );
-            }
+        let failed = IncarnationExit::Failed(ActorRunError::Failed {
+            actor_id: "worker".to_owned(),
+            source: Box::new(IoError::other("boom")),
+        });
+        for policy in [Restart::always(), Restart::on_failure()] {
             assert_eq!(
-                run_disposition(Restart::never(), false, status),
-                RunDisposition::Terminate
+                run_disposition(policy, &failed),
+                RunDisposition::ExpectRebind
             );
         }
+        assert_eq!(
+            run_disposition(Restart::never(), &failed),
+            RunDisposition::Terminate
+        );
 
+        let shutdown = IncarnationExit::ShutdownRequested;
         for policy in [Restart::always(), Restart::on_failure(), Restart::never()] {
             assert_eq!(
-                run_disposition(policy, false, ActorExitStatus::Shutdown),
-                RunDisposition::Terminate
-            );
-            assert_eq!(
-                run_disposition(policy, true, ActorExitStatus::Failed),
+                run_disposition(policy, &shutdown),
                 RunDisposition::Terminate
             );
         }
@@ -613,20 +655,19 @@ struct ActiveActorRun {
 }
 
 impl ActiveActorRun {
-    fn start(inner: &Arc<RunnableActorInner>) -> Result<Self, ActorRunError> {
-        if inner
-            .running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return Err(ActorRunError::AlreadyRunning {
-                actor_id: inner.actor_id.to_string(),
-            });
-        }
+    fn start(inner: &Arc<RunnableActorInner>) -> Self {
+        assert!(
+            inner
+                .running
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok(),
+            "actor `{}` started concurrent incarnations",
+            inner.actor_id,
+        );
 
-        Ok(Self {
+        Self {
             inner: Arc::clone(inner),
-        })
+        }
     }
 }
 

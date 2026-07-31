@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSpec, ExitResult, Restart, Shutdown,
-    raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    ActorSpec, ExitResult, Shutdown,
+    raw::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
     sync::{Notify, oneshot},
@@ -31,15 +31,14 @@ fn send_once<T>(slot: &SenderSlot<T>, value: T) {
     }
 }
 
-fn start_actor(actor: RunnableActor) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
+fn start_actor(actor: ActorHost) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -80,7 +79,7 @@ async fn run_blocking_returns_the_closure_result() {
     let actor = ActorSpec::new("worker", move || ReturnsResult {
         observed: observed.clone(),
     })
-    .into_runnable();
+    .into_host();
     let (stop, task) = start_actor(actor);
 
     assert_eq!(observed_rx.await.expect("result observed"), Ok(Ok(42)));
@@ -124,7 +123,7 @@ async fn run_blocking_token_is_cancelled_on_actor_shutdown() {
             cancelled: cancelled.clone(),
         }
     })
-    .into_runnable();
+    .into_host();
     let (stop, task) = start_actor(actor);
 
     started.notified().await;
@@ -188,7 +187,7 @@ async fn dropping_run_blocking_future_cancels_its_token() {
             cancelled: cancelled.clone(),
         }
     })
-    .into_runnable();
+    .into_host();
     let (stop, task) = start_actor(actor);
 
     started.notified().await;
@@ -242,15 +241,14 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
             finished: finished.clone(),
         }
     })
-    .into_runnable();
+    .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(Duration::from_millis(50)),
                 )
                 .await
@@ -291,16 +289,12 @@ impl RawActor for Panics {
 
 #[tokio::test]
 async fn blocking_panic_propagates_as_actor_panic() {
-    let actor = ActorSpec::new("worker", || Panics).into_runnable();
+    let actor = ActorSpec::new("worker", || Panics).into_host();
     let result = timeout(
         Duration::from_secs(1),
         tokio::spawn(async move {
             actor
-                .run_until(
-                    pending::<()>(),
-                    Restart::never(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-                )
+                .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
                 .await
         }),
     )

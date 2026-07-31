@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let worker = worker_spec.actor_ref();
 
-    let handle = support::ActorTasks::start([worker_spec.into_runnable()]);
+    let handle = support::ActorTasks::start([worker_spec.into_host()]);
 
     worker.send("hello tracing").await?;
     completed_rx.recv().await.expect("message processed");

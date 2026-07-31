@@ -23,8 +23,8 @@ pub use error::{
     BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind, SendRejection,
 };
 pub use factory::ActorFactory;
-pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};
-pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActorBuilder};
+pub use graph::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit};
+pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActor, RunnableActorBuilder};
 pub use handler::Actor;
 pub use monitor::{ExitReason, MonitorEvent};
 pub use raw::{ExitResult, RawActor};

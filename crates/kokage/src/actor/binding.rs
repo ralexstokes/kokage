@@ -987,6 +987,33 @@ impl<M> BindingCore<M> {
         });
     }
 
+    fn unbind_mailbox(&self, mailbox: &MailboxRef<M>) -> bool {
+        self.current.send_if_modified(|state| {
+            if matches!(state, BindingState::Bound(current) if current.same_channel(mailbox)) {
+                *state = BindingState::Unbound;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
+    fn terminate_mailbox(&self, mailbox: &MailboxRef<M>) -> bool {
+        let terminated = self.current.send_if_modified(|state| {
+            if matches!(state, BindingState::Bound(current) if current.same_channel(mailbox)) {
+                *state = BindingState::Terminated;
+                true
+            } else {
+                false
+            }
+        });
+        if terminated {
+            self.monitors.removed();
+            self.outbound_monitors.terminate();
+        }
+        terminated
+    }
+
     pub(crate) fn terminate(&self) {
         self.current.send_replace(BindingState::Terminated);
         self.monitors.removed();
@@ -1019,6 +1046,7 @@ impl<M> Drop for BindingCore<M> {
 /// ends.
 pub(crate) struct BindingGuard<M> {
     core: Arc<BindingCore<M>>,
+    mailbox: MailboxRef<M>,
     observability: ScopeObservability,
     restart_policy: Restart,
 }
@@ -1030,10 +1058,11 @@ impl<M> BindingGuard<M> {
         observability: ScopeObservability,
         restart_policy: Restart,
     ) -> Self {
-        core.bind(mailbox);
+        core.bind(mailbox.clone());
         observability.emit_mailbox_bound(core.actor_id());
         Self {
             core,
+            mailbox,
             observability,
             restart_policy,
         }
@@ -1042,16 +1071,18 @@ impl<M> BindingGuard<M> {
 
 impl<M> Drop for BindingGuard<M> {
     fn drop(&mut self) {
-        if self.restart_policy.is_never() {
-            self.core.terminate();
+        let cleared = if self.restart_policy.is_never() {
+            self.core.terminate_mailbox(&self.mailbox)
         } else {
             // A dropped run is a failure for restart purposes. Unknown future
             // policies remain rebindable until `run_disposition` can make the
             // final decision from the observed exit status.
-            self.core.unbind();
+            self.core.unbind_mailbox(&self.mailbox)
+        };
+        if cleared {
+            self.observability
+                .emit_mailbox_cleared(self.core.actor_id());
         }
-        self.observability
-            .emit_mailbox_cleared(self.core.actor_id());
     }
 }
 

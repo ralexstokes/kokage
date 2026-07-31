@@ -1,8 +1,8 @@
 #![allow(unused_imports)]
 
 use kokage::raw::{
-    ActorRunError as _, RawActor as _, RawContext as _, RunnableActor as _,
-    DEFAULT_SHUTDOWN_BOUND as _,
+    ActorHost as _, ActorRunError as _, DEFAULT_SHUTDOWN_BOUND as _, IncarnationExit as _,
+    RawActor as _, RawContext as _,
 };
 use kokage::observe::{
     ActorStats as _, ChildExitView as _, ChildMembershipView as _, ChildOutline as _,
@@ -29,7 +29,8 @@ use kokage::LifecycleEvent;
 use kokage::LifecycleEventKind;
 use kokage::LifecycleWatch;
 use kokage::RawActor;
-use kokage::RunnableActor;
+use kokage::ActorHost;
+use kokage::IncarnationExit;
 use kokage::ScopeKind;
 use kokage::SnapshotRecvError;
 use kokage::SupervisionOutline;
