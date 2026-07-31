@@ -11,7 +11,7 @@ use std::{
 };
 
 use kokage::{
-    BoxError, DynamicTree, RestartMode, Strategy, TaskSpec, Tree,
+    BoxError, DynamicTree, RestartPolicy, Strategy, TaskSpec, Tree,
     observe::{LifecycleEventKind, LifecycleWatch},
 };
 use tokio::{
@@ -134,7 +134,7 @@ async fn one_for_one_restart_flow() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let mut builder = Tree::new().strategy(Strategy::OneForOne);
     builder.add_task_spec(flaky);
@@ -182,7 +182,7 @@ async fn one_for_all_restart_flow() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let mut builder = Tree::new().strategy(Strategy::OneForAll);
     builder.add_task_spec(trigger);
@@ -192,7 +192,7 @@ async fn one_for_all_restart_flow() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartMode::Always),
+            .restart(RestartPolicy::always()),
         );
     }
 

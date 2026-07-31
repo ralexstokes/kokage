@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartMode,
-    RestartPolicy, RunningTree, ScopeRef, Tree,
+    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartPolicy,
+    RunningTree, ScopeRef, Tree,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
@@ -115,7 +115,7 @@ async fn runtime_with_watched_subtree() -> (
                     observed: observed_tx.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .await
         .expect("sink added");
@@ -362,7 +362,7 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
         .await
         .expect("scope sink added");
     let crasher = support::dynamic_root(&runtime)
-        .add_actor_spec(ActorSpec::new("crasher", || Crasher).restart(RestartMode::OnFailure))
+        .add_actor_spec(ActorSpec::new("crasher", || Crasher).restart(RestartPolicy::on_failure()))
         .await
         .expect("crasher added");
     runtime

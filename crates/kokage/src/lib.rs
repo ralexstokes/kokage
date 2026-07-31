@@ -282,7 +282,7 @@ pub mod observe {
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-        MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
+        MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
         TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
@@ -300,6 +300,5 @@ pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
-    MailboxShutdown, RestartMode, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext,
-    TaskSpec,
+    MailboxShutdown, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext, TaskSpec,
 };

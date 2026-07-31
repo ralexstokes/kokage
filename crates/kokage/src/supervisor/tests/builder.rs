@@ -98,7 +98,7 @@ fn invalid_child_restart_intensity_is_rejected() {
     let err = Supervisor::ordered()
         .child(
             TaskSpec::new("worker", |_| async { Ok(()) })
-                .restart_policy(RestartPolicy::on_failure().limit(1, Duration::ZERO)),
+                .restart(RestartPolicy::on_failure().limit(1, Duration::ZERO)),
         )
         .build()
         .expect_err("zero-width child restart windows should be rejected");

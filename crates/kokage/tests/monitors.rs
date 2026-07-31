@@ -498,7 +498,7 @@ async fn supervised_graceful_shutdown_marks_monitor_exit_cancelled() {
     let peer_spec = ActorSpec::new("peer", move || Peer {
         started: peer_started_tx.clone(),
     })
-    .restart_policy(RestartPolicy::never());
+    .restart(RestartPolicy::never());
     let peer_ref = peer_spec.actor_ref();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
@@ -531,7 +531,7 @@ async fn supervised_natural_completion_is_not_marked_cancelled() {
     let peer_spec = ActorSpec::new("peer", move || Peer {
         started: peer_started_tx.clone(),
     })
-    .restart_policy(RestartPolicy::never());
+    .restart(RestartPolicy::never());
     let peer_ref = peer_spec.actor_ref();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
@@ -576,7 +576,7 @@ async fn assert_supervised_grace_expiry_status(expected: ExitStatus) {
     let peer_spec = ActorSpec::new("peer", move || UncooperativePeer {
         started: peer_started_tx.clone(),
     })
-    .restart_policy(RestartPolicy::never())
+    .restart(RestartPolicy::never())
     .shutdown(policy);
     let peer_ref = peer_spec.actor_ref();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();

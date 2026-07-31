@@ -17,8 +17,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
     DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MailboxShutdown, MonitorEvent,
-    RestartMode, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
-    StopContext, SupervisorError, TaskSpec, Tree,
+    RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext,
+    SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
@@ -720,7 +720,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
@@ -777,7 +777,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
@@ -799,7 +799,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::Always),
+            .restart(RestartPolicy::always()),
         )
         .await
         .expect("permanent actor added");
@@ -953,7 +953,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
@@ -971,7 +971,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .await
         .expect("retained transient actor added");
@@ -988,7 +988,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .await
         .expect("reversed retained transient actor added");
@@ -1005,7 +1005,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::Never),
+            .restart(RestartPolicy::never()),
         )
         .await
         .expect("retained never actor added");
@@ -1029,7 +1029,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await

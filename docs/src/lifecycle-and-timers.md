@@ -50,7 +50,7 @@ other machinery for a world that is ending.
 Inside `handle`, [`Context::stop`] requests a clean stop: the current
 callback finishes, the loop winds down (draining per the actor's mailbox
 shutdown policy), and `on_stop` runs. A cleanly stopped actor is *done* under
-the default `RestartMode::OnFailure` — only `RestartMode::Always` brings it
+the default `RestartPolicy::on_failure()` — only `RestartPolicy::always()` brings it
 back.
 
 [`Context::is_draining`] reports whether work queued by the current callback

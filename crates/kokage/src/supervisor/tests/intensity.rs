@@ -217,7 +217,7 @@ async fn child_restart_intensity_override_controls_backoff() {
     let supervisor = Supervisor::ordered()
         .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(
-            TaskSpec::new("flaky", |_| async { Err(common::test_error("boom")) }).restart_policy(
+            TaskSpec::new("flaky", |_| async { Err(common::test_error("boom")) }).restart(
                 common::restart_with_backoff(
                     1,
                     Duration::from_secs(1),
@@ -314,7 +314,7 @@ async fn child_restart_intensity_override_is_enforced() {
                     Err(common::test_error("boom"))
                 }
             })
-            .restart_policy(RestartPolicy::on_failure().limit(1, Duration::from_secs(1))),
+            .restart(RestartPolicy::on_failure().limit(1, Duration::from_secs(1))),
         )
         .build()
         .expect("valid supervisor")

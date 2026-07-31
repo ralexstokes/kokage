@@ -119,7 +119,7 @@ let mut shop = Tree::new()
 shop.add_subtree_spec(
     "press-room",
     SubtreeSpec::from(press_room)
-        .restart_policy(RestartPolicy::on_failure().limit(2, Duration::from_secs(60))),
+        .restart(RestartPolicy::on_failure().limit(2, Duration::from_secs(60))),
 );
 # let _ = shop;
 ```

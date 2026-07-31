@@ -10,7 +10,7 @@ use std::{
 
 use crate::supervisor::{
     BuildError, ChildSpec, DynamicSupervisorBuilder, MailboxShutdown, OrderedSupervisorBuilder,
-    RestartMode, RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
+    RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
 };
 
 use crate::{
@@ -127,7 +127,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// let mut workers = Tree::new();
 /// workers.add_actor("parse", || Worker);
 /// let mut tree = Tree::new().strategy(Strategy::RestForOne);
-/// tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartMode::Never));
+/// tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::never()));
 /// tree.add_subtree("workers", workers);
 ///
 /// # #[cfg(feature = "serde")]
@@ -195,21 +195,9 @@ impl From<DynamicTree> for SubtreeSpec {
 }
 
 impl SubtreeSpec {
-    /// Sets which exits make the enclosing scope restart this subtree.
-    ///
-    /// This configures the nested scope's edge in its parent. It is distinct
-    /// from [`Tree::default_restart`] and
-    /// [`DynamicTree::default_restart`], which configure children inside the
-    /// nested scope.
-    #[must_use]
-    pub fn restart(mut self, mode: RestartMode) -> Self {
-        self.restart = Some(mode.into());
-        self
-    }
-
     /// Sets the complete policy used by the enclosing scope to restart this subtree.
     #[must_use]
-    pub fn restart_policy(mut self, policy: RestartPolicy) -> Self {
+    pub fn restart(mut self, policy: RestartPolicy) -> Self {
         self.restart = Some(policy);
         self
     }
@@ -378,14 +366,14 @@ impl Tree {
     /// of the subtree's edge in this parent:
     ///
     /// ```
-    /// use kokage::{Tree, RestartMode, Shutdown, SubtreeSpec};
+    /// use kokage::{Tree, RestartPolicy, Shutdown, SubtreeSpec};
     ///
     /// let workers = Tree::new();
     /// let mut app = Tree::new();
     /// app.add_subtree_spec(
     ///     "workers",
     ///     SubtreeSpec::from(workers)
-    ///         .restart(RestartMode::Never)
+    ///         .restart(RestartPolicy::never())
     ///         .shutdown(Shutdown::abort()),
     /// );
     /// ```
@@ -817,7 +805,7 @@ impl SupervisionChild {
                 let (nested, nested_actors) = node.lower(reservations)?;
                 let mut child = ChildSpec::supervisor(id, nested);
                 if let Some(restart) = restart {
-                    child = child.restart_policy(restart);
+                    child = child.restart(restart);
                 }
                 if let Some(shutdown) = shutdown {
                     child = child.shutdown(shutdown);

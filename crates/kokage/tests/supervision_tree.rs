@@ -8,8 +8,8 @@ use tokio::{
 };
 
 use kokage::{
-    ActorSpec, BuildError, DynamicTree, MailboxMode, MailboxShutdown, RestartMode, RestartPolicy,
-    Shutdown, Strategy, SubtreeSpec, TaskSpec,
+    ActorSpec, BuildError, DynamicTree, MailboxMode, MailboxShutdown, RestartPolicy, Shutdown,
+    Strategy, SubtreeSpec, TaskSpec,
     observe::ScopeKind,
     prelude::*,
     raw::{RawActor, RawContext},
@@ -71,12 +71,12 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         })
-        .restart(RestartMode::Always)
+        .restart(RestartPolicy::always())
         .shutdown(Shutdown::abort()),
     );
     tree.add_actor_spec(
         ActorSpec::new("ingest", || Worker)
-            .restart(RestartMode::Never)
+            .restart(RestartPolicy::never())
             .mailbox_shutdown(MailboxShutdown::Drain),
     );
     tree.add_actor_spec(ActorSpec::new("parse", || Worker));
@@ -156,7 +156,7 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     tree.add_task_spec(TaskSpec::new("inherited", |_| async { Ok(()) }));
     tree.add_task_spec(
         TaskSpec::new("explicit", |_| async { Ok(()) })
-            .restart(RestartMode::Never)
+            .restart(RestartPolicy::never())
             .shutdown(explicit_shutdown),
     );
     let outline = tree.outline();
@@ -191,7 +191,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
     declared.add_subtree_spec(
         "declared",
         SubtreeSpec::from(stubborn)
-            .restart(RestartMode::Never)
+            .restart(RestartPolicy::never())
             .shutdown(declared_shutdown),
     );
 
@@ -232,7 +232,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         .add_subtree(
             "inserted",
             SubtreeSpec::from(stubborn)
-                .restart(RestartMode::Never)
+                .restart(RestartPolicy::never())
                 .shutdown(Shutdown::abort()),
         )
         .await
@@ -380,7 +380,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
 #[test]
 fn pre_spawn_projection_preserves_declared_restart_policies() {
     let mut tree = Tree::new().default_restart(RestartPolicy::always());
-    tree.add_actor_spec(ActorSpec::new("explicit", || Worker).restart(RestartMode::Never));
+    tree.add_actor_spec(ActorSpec::new("explicit", || Worker).restart(RestartPolicy::never()));
     tree.add_actor_spec(ActorSpec::new("inherited", || Worker));
     let snapshot = tree.scope().snapshot();
 
@@ -429,7 +429,7 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
 #[tokio::test]
 async fn static_tree_actor_can_remove_itself_when_done() {
     let spec = ActorSpec::new("finite", || Finite)
-        .restart(RestartMode::Never)
+        .restart(RestartPolicy::never())
         .remove_when_done();
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
@@ -543,7 +543,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
                 Err(std::io::Error::other("fatal child failure").into())
             }
         })
-        .restart_policy(RestartPolicy::always().limit(0, Duration::from_secs(60)))
+        .restart(RestartPolicy::always().limit(0, Duration::from_secs(60)))
         .shutdown(Shutdown::abort()),
     );
     let mut owned = Tree::new().default_restart(RestartPolicy::never());

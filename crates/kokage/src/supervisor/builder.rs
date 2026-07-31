@@ -251,7 +251,7 @@ impl Drop for DynamicSupervisorBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::supervisor::RestartMode;
+    use crate::supervisor::RestartPolicy;
 
     use std::time::Duration;
 
@@ -268,7 +268,7 @@ mod tests {
             .child(TaskSpec::new("inherited", |_| async { Ok(()) }))
             .child(
                 TaskSpec::new("explicit", |_| async { Ok(()) })
-                    .restart(RestartMode::Never)
+                    .restart(RestartPolicy::never())
                     .shutdown(explicit_shutdown),
             )
             .build()

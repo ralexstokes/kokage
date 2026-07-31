@@ -12,7 +12,7 @@ use std::{
 
 use crate::supervisor::{
     BoxError, ChildSnapshot, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    RestartMode, RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
     SupervisorSnapshotReceiver, TaskSpec,
 };
 use tokio::{
@@ -363,7 +363,7 @@ pub fn fail_on_generations(
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure)
+    .restart(RestartPolicy::on_failure())
 }
 
 pub fn failing_child(
@@ -379,7 +379,7 @@ pub fn failing_child(
             Err(test_error(error))
         }
     })
-    .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
+    .restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(

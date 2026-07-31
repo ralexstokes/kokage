@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{ChildSpec, RestartMode, RestartPolicy, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{ChildSpec, RestartPolicy, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::common;
@@ -164,7 +164,7 @@ async fn startup_failure_is_skipped_before_later_sequential_children_start() {
     let failed = TaskSpec::new("failed", |_| async {
         Err(std::io::Error::other("init failed").into())
     })
-    .restart(RestartMode::Never)
+    .restart(RestartPolicy::never())
     .wait_for_ready();
     let later = TaskSpec::new("later", {
         let later_started = Arc::clone(&later_started);
@@ -266,7 +266,7 @@ async fn wait_started_accepts_an_immediate_child_that_already_completed() {
                     }
                 }
             })
-            .restart(RestartMode::Never),
+            .restart(RestartPolicy::never()),
         )
         .build()
         .unwrap()
@@ -558,7 +558,7 @@ async fn pre_ready_one_for_all_failure_does_not_duplicate_children() {
             }
         }
     })
-    .restart(RestartMode::Never)
+    .restart(RestartPolicy::never())
     .wait_for_ready();
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -598,7 +598,7 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
     let failed = TaskSpec::new("failed", |_| async {
         Err(std::io::Error::other("nested init failed").into())
     })
-    .restart(RestartMode::Never)
+    .restart(RestartPolicy::never())
     .wait_for_ready();
     let nested = Supervisor::ordered()
         .child(sibling)
@@ -606,7 +606,7 @@ async fn nested_startup_abort_gracefully_stops_ready_siblings() {
         .build()
         .unwrap();
     let handle_owner = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::Never))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartPolicy::never()))
         .build()
         .unwrap()
         .spawn();
@@ -641,7 +641,7 @@ async fn drained_pre_ready_never_child_reports_startup_aborted() {
             }
         }
     })
-    .restart(RestartMode::Never)
+    .restart(RestartPolicy::never())
     .wait_for_ready();
     let failing = TaskSpec::new("failing", {
         let attempts = Arc::clone(&attempts);

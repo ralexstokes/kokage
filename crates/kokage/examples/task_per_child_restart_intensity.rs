@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     })
-    .restart_policy(warm_cache_restart);
+    .restart(warm_cache_restart);
 
     let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());

@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use kokage::{
-    RestartMode, RestartPolicy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -12,7 +11,7 @@ mod coverage_probe {
     mod expected {
         use kokage::prelude::{
             Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-            MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
+            MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
             SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey, Tree,
         };
     }
@@ -20,9 +19,8 @@ mod coverage_probe {
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RestartPolicy,
-            RunningTree, ScopeRef, SendError, SendErrorKind, SubtreeSpec, SupervisorError,
-            TaskContext,
+            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RunningTree, ScopeRef,
+            SendError, SendErrorKind, SubtreeSpec, SupervisorError, TaskContext,
         };
     }
 
@@ -154,7 +152,6 @@ fn policy_values_expose_their_declared_behavior() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_eq!(RestartMode::default(), RestartMode::OnFailure);
     assert_eq!(RestartPolicy::default(), RestartPolicy::on_failure());
     assert_eq!(shutdown_name(kokage::Shutdown::default()), "graceful");
     assert_eq!(shutdown_name(kokage::Shutdown::abort()), "abort");

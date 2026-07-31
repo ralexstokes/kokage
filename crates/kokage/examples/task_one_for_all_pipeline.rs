@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{BoxError, RestartMode, Strategy, TaskSpec, Tree};
+use kokage::{BoxError, RestartPolicy, Strategy, TaskSpec, Tree};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .restart(RestartMode::Always)
+        .restart(RestartPolicy::always())
     };
 
     let decode = {
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         })
-        .restart(RestartMode::Always)
+        .restart(RestartPolicy::always())
     };
 
     let mut tree = Tree::new().strategy(Strategy::OneForAll);

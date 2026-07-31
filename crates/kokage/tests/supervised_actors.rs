@@ -175,7 +175,7 @@ async fn send_waits_during_permanent_restart_window() {
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
     })
-    .restart_policy(restart);
+    .restart(restart);
     let worker_ref = worker.actor_ref();
 
     let mut tree = Tree::new().strategy(Strategy::OneForOne);
@@ -326,7 +326,7 @@ async fn call_succeeds_across_restart_window() {
         runs: runs.clone(),
         failed: failed.clone(),
     })
-    .restart_policy(restart);
+    .restart(restart);
     let rpc_ref = rpc.actor_ref();
 
     let mut tree = Tree::new().strategy(Strategy::OneForOne);

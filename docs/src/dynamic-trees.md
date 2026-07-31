@@ -134,7 +134,7 @@ runtime.wait().await?;
 ```
 
 `wait_for_children` counts a child as done when its current run exited cleanly
-with no restart pending (children under `RestartMode::Always` never qualify —
+with no restart pending (children under `RestartPolicy::always()` never qualify —
 they are services, not jobs). The explicitly named
 `wait_for_future_children` and `shutdown_when_future_children_complete`
 variants accept ids that have not been inserted yet. Shutdown triggers return

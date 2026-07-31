@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use crate::supervisor::{MailboxShutdown, RestartMode, RestartPolicy, Shutdown};
+use crate::supervisor::{MailboxShutdown, RestartPolicy, Shutdown};
 
 use crate::actor::{
     binding::{BindingCore, MailboxMode},
@@ -240,16 +240,9 @@ impl<M: Send + 'static> ActorSpec<M> {
         self
     }
 
-    /// Overrides which exits restart this actor, using the standard budget and backoff.
-    #[must_use]
-    pub fn restart(mut self, mode: RestartMode) -> Self {
-        self.restart = Some(mode.into());
-        self
-    }
-
     /// Overrides the enclosing scope's complete restart policy.
     #[must_use]
-    pub fn restart_policy(mut self, policy: RestartPolicy) -> Self {
+    pub fn restart(mut self, policy: RestartPolicy) -> Self {
         self.restart = Some(policy);
         self
     }
@@ -461,9 +454,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{ActorSlot, ActorSpec, MailboxMode};
-    use crate::{
-        Actor, Context, ExitResult, MailboxShutdown, RestartMode, RestartPolicy, Shutdown,
-    };
+    use crate::{Actor, Context, ExitResult, MailboxShutdown, RestartPolicy, Shutdown};
 
     struct OpaqueMessage;
 
@@ -562,7 +553,7 @@ mod tests {
         let spec = ActorSpec::new("spec", || OpaqueActor);
         let _actor_ref = spec.actor_ref();
         let spec = spec
-            .restart(RestartMode::Never)
+            .restart(RestartPolicy::never())
             .shutdown(Shutdown::abort())
             .remove_when_done();
         assert_eq!(spec.restart, Some(RestartPolicy::never()));
@@ -573,7 +564,7 @@ mod tests {
         let _actor_ref = slot.actor_ref();
         let spec = slot
             .define(|| OpaqueActor)
-            .restart(RestartMode::Always)
+            .restart(RestartPolicy::always())
             .shutdown(Shutdown::graceful_for(Duration::from_secs(1)))
             .mailbox_shutdown(MailboxShutdown::Discard);
         assert_eq!(spec.restart, Some(RestartPolicy::always()));

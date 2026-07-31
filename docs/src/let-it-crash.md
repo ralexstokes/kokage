@@ -98,8 +98,8 @@ not a delivery guarantee.
 
 ## Restart policies
 
-How eagerly should the supervisor restart? [`RestartMode`] selects which
-exits restart, while [`RestartPolicy`] adds a budget and retry backoff:
+How eagerly should the supervisor restart? [`RestartPolicy`] selects which
+exits restart and carries a budget and retry backoff:
 
 ```rust
 # use std::time::Duration;
@@ -114,19 +114,17 @@ let policy = RestartPolicy::on_failure()    // restart on failure only (the defa
 # let _ = policy;
 ```
 
-- `RestartMode::OnFailure` — restart after errors, panics, and aborts; a clean
+- `RestartPolicy::on_failure()` — restart after errors, panics, and aborts; a clean
   exit stays down. This is the default.
-- `RestartMode::Always` — restart even after a clean exit; for children that
+- `RestartPolicy::always()` — restart even after a clean exit; for children that
   should run forever.
-- `RestartMode::Never` — run at most once; failure is recorded, not retried.
+- `RestartPolicy::never()` — run at most once; failure is recorded, not retried.
 
 Every policy carries a restart *budget* — by default 5 restarts within 30
 seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
 `exponential_with_jitter`) spacing the attempts. Attach a policy to one actor
-with `ActorSpec::restart_policy(...)`, or set a scope-wide default with
-`Tree::default_restart(...)`. When only the mode differs, the adjacent
-`ActorSpec::restart(RestartMode::...)` shortcut keeps the ordinary case
-concise.
+with `ActorSpec::restart(...)`, or set a scope-wide default with
+`Tree::default_restart(...)`.
 
 ```rust
 # use std::time::Duration;
@@ -137,7 +135,7 @@ concise.
 #     async fn handle(&mut self, _j: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
 let spec = ActorSpec::new("press", || Press)
-    .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(5)));
+    .restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(5)));
 # let _ = spec;
 ```
 
@@ -155,6 +153,5 @@ level either absorbs it or the root gives up and
 
 Which brings us to shaping those trees.
 
-[`RestartMode`]: https://stokes.io/kokage/api/kokage/enum.RestartMode.html
 [`RestartPolicy`]: https://stokes.io/kokage/api/kokage/struct.RestartPolicy.html
 [`Backoff`]: https://stokes.io/kokage/api/kokage/enum.Backoff.html

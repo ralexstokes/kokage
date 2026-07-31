@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         run: 0,
         processed: processed_tx.clone(),
     })
-    .restart_policy(RestartPolicy::on_failure().limit(2, Duration::from_secs(1)));
+    .restart(RestartPolicy::on_failure().limit(2, Duration::from_secs(1)));
     let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();

@@ -78,7 +78,7 @@ async fn close_full_mailbox_during_bounded_send(
         }
     })
     .mailbox_capacity(1)
-    .restart_policy(restart);
+    .restart(restart);
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);

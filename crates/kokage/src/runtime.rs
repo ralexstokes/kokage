@@ -625,7 +625,7 @@ impl ScopeRef {
         let parts = parts.map_err(ControlError::Rejected)?;
         let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
-            child = child.restart_policy(restart);
+            child = child.restart(restart);
         }
         if let Some(shutdown) = parts.shutdown {
             child = child.shutdown(shutdown);
@@ -887,7 +887,7 @@ pub(crate) fn actor_child_spec(
     .into_spec()
     .attachment(attachment)
     .wait_for_ready()
-    .restart_policy(restart)
+    .restart(restart)
     .shutdown(shutdown);
     if remove_when_done {
         child.remove_when_done()
@@ -907,7 +907,7 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartMode, RunningTree,
+        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartPolicy, RunningTree,
         ScopeRef, Tree,
     };
 
@@ -941,7 +941,8 @@ mod tests {
 
     #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
-        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartMode::Never);
+        let static_spec =
+            ActorSpec::new("static", || FailsOnMessage).restart(RestartPolicy::never());
         let static_ref = static_spec.actor_ref();
         let mut static_tree = Tree::new();
         static_tree.add_actor_spec(static_spec);
@@ -970,7 +971,7 @@ mod tests {
         let dynamic = dynamic_runtime.scope();
         let dynamic_ref = dynamic
             .add_actor_spec(
-                ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartMode::Never),
+                ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartPolicy::never()),
             )
             .await
             .expect("dynamic actor is inserted");
@@ -1005,7 +1006,7 @@ mod tests {
         let actor_ref = dynamic
             .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
-                    .restart(RestartMode::Never)
+                    .restart(RestartPolicy::never())
                     .remove_when_done(),
             )
             .await

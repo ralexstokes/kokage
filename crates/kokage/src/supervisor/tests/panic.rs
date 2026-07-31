@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::supervisor::{RestartMode, Shutdown, Strategy, Supervisor, TaskSpec};
+use crate::supervisor::{RestartPolicy, Shutdown, Strategy, Supervisor, TaskSpec};
 use tokio::sync::{Notify, mpsc};
 
 use super::common;
@@ -30,7 +30,7 @@ async fn transient_child_panic_causes_restart() {
                     Ok(())
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .build()
         .expect("valid supervisor");
@@ -69,7 +69,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
             Ok(())
         }
     })
-    .restart(RestartMode::Always)
+    .restart(RestartPolicy::always())
     .shutdown(Shutdown::abort());
 
     let trigger_failure_for_child = Arc::clone(&trigger_failure);
@@ -86,7 +86,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let handle_owner = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -134,7 +134,7 @@ async fn transient_factory_panic_causes_restart() {
                     Ok(())
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .build()
         .expect("valid supervisor");
@@ -169,7 +169,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -181,7 +181,7 @@ async fn one_for_all_panic_restarts_the_whole_group() {
             Ok(())
         }
     })
-    .restart(RestartMode::Always);
+    .restart(RestartPolicy::always());
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
@@ -219,7 +219,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let peer = TaskSpec::new("peer", move |ctx| {
         let peer_tx = peer_tx.clone();
@@ -231,7 +231,7 @@ async fn one_for_all_factory_panic_restarts_the_whole_group() {
             Ok(())
         }
     })
-    .restart(RestartMode::Always);
+    .restart(RestartPolicy::always());
 
     let supervisor = Supervisor::ordered()
         .strategy(Strategy::OneForAll)

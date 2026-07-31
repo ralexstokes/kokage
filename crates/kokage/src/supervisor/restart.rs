@@ -100,23 +100,18 @@ impl Backoff {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RestartPolicy {
-    mode: RestartMode,
+    mode: RestartCondition,
     max_restarts: usize,
     within: Duration,
     backoff: Backoff,
 }
 
-/// Which child exits trigger a restart.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum RestartMode {
-    /// Restart after every exit, including clean completion.
+enum RestartCondition {
     Always,
-    /// Restart after an error, panic, or abort, but not clean completion.
     #[default]
     OnFailure,
-    /// Never restart; the child runs at most once.
     Never,
 }
 
@@ -126,14 +121,8 @@ impl Default for RestartPolicy {
     }
 }
 
-impl From<RestartMode> for RestartPolicy {
-    fn from(mode: RestartMode) -> Self {
-        Self::with_mode(mode)
-    }
-}
-
 impl RestartPolicy {
-    const fn with_mode(mode: RestartMode) -> Self {
+    const fn with_mode(mode: RestartCondition) -> Self {
         Self {
             mode,
             max_restarts: 5,
@@ -144,17 +133,17 @@ impl RestartPolicy {
 
     /// Restarts after every exit, including clean completion.
     pub const fn always() -> Self {
-        Self::with_mode(RestartMode::Always)
+        Self::with_mode(RestartCondition::Always)
     }
 
     /// Restarts after an error, panic, or abort, but not clean completion.
     pub const fn on_failure() -> Self {
-        Self::with_mode(RestartMode::OnFailure)
+        Self::with_mode(RestartCondition::OnFailure)
     }
 
     /// Never restarts; the child runs at most once.
     pub const fn never() -> Self {
-        Self::with_mode(RestartMode::Never)
+        Self::with_mode(RestartCondition::Never)
     }
 
     /// Sets the sliding restart budget.
@@ -174,18 +163,18 @@ impl RestartPolicy {
 
     pub(crate) const fn should_restart(self, is_failure: bool) -> bool {
         match self.mode {
-            RestartMode::Always => true,
-            RestartMode::OnFailure => is_failure,
-            RestartMode::Never => false,
+            RestartCondition::Always => true,
+            RestartCondition::OnFailure => is_failure,
+            RestartCondition::Never => false,
         }
     }
 
     pub(crate) const fn is_always(self) -> bool {
-        matches!(self.mode, RestartMode::Always)
+        matches!(self.mode, RestartCondition::Always)
     }
 
     pub(crate) const fn is_never(self) -> bool {
-        matches!(self.mode, RestartMode::Never)
+        matches!(self.mode, RestartCondition::Never)
     }
 
     pub(crate) const fn max_restarts(self) -> usize {
