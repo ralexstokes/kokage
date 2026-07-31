@@ -572,6 +572,14 @@ impl std::fmt::Debug for RunningTree {
 pub struct ScopeRef {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
+    parent_membership: Option<ParentScopeMembership>,
+}
+
+#[derive(Clone)]
+struct ParentScopeMembership {
+    parent: SupervisorHandle,
+    id: Arc<str>,
+    lineage: u64,
 }
 
 /// A [`ScopeRef`] that can add and remove runtime children.
@@ -586,7 +594,29 @@ pub struct DynamicScopeRef {
 
 impl ScopeRef {
     pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
-        Self { supervisor, actors }
+        Self {
+            supervisor,
+            actors,
+            parent_membership: None,
+        }
+    }
+
+    fn with_parent_membership(
+        supervisor: SupervisorHandle,
+        actors: Arc<ActorRuntimeState>,
+        parent: SupervisorHandle,
+        id: impl Into<Arc<str>>,
+        lineage: u64,
+    ) -> Self {
+        Self {
+            supervisor,
+            actors,
+            parent_membership: Some(ParentScopeMembership {
+                parent,
+                id: id.into(),
+                lineage,
+            }),
+        }
     }
 
     pub(crate) fn task_ref(&self, id: impl Into<Arc<str>>, lineage: u64) -> TaskRef {
@@ -660,6 +690,7 @@ impl ScopeRef {
         runtime_subtree_membership(
             __private::attached_children::<RuntimeAttachment>(&self.supervisor),
             &self.actors,
+            &self.supervisor,
             id,
             lineage,
         )
@@ -793,6 +824,7 @@ impl Deref for DynamicScopeRef {
 fn runtime_subtree_membership(
     attached_children: Vec<__private::AttachedChild<RuntimeAttachment>>,
     actors: &Arc<ActorRuntimeState>,
+    parent: &SupervisorHandle,
     id: &str,
     lineage: Option<u64>,
 ) -> Option<ScopeRef> {
@@ -809,9 +841,12 @@ fn runtime_subtree_membership(
         let RuntimeAttachmentKind::Subtree(subtree_actors) = &attached.attachment().kind else {
             return None;
         };
-        Some(ScopeRef::new(
+        Some(ScopeRef::with_parent_membership(
             attached.supervisor()?.clone(),
             Arc::clone(subtree_actors),
+            parent.clone(),
+            identity.id.clone(),
+            identity.lineage,
         ))
     })
 }
@@ -883,6 +918,7 @@ impl DynamicScopeRef {
         runtime_subtree_membership(
             __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic),
             &self.actors,
+            &self.supervisor,
             &id,
             Some(lineage),
         )
@@ -1134,28 +1170,22 @@ impl DynamicScopeRef {
     /// Removes the exact direct subtree membership identified by `subtree`.
     ///
     /// A stale or foreign scope handle never removes a same-id replacement.
+    ///
+    /// # Errors
+    ///
+    /// A stopped parent returns [`ControlError::Unavailable`]. A handle that
+    /// does not identify a current direct child of this scope returns
+    /// [`ControlError::UnknownChildId`].
     pub async fn remove_subtree(&self, subtree: &ScopeRef) -> Result<(), ControlError> {
         let dynamic = self.dynamic_supervisor()?;
-        let membership = __private::dynamic_attached_children::<RuntimeAttachment>(&dynamic)
-            .into_iter()
-            .find_map(|attached| {
-                let [identity] = attached.path() else {
-                    return None;
-                };
-                let attachment = attached.attachment();
-                if !attachment.belongs_to(&self.actors)
-                    || !matches!(attachment.kind, RuntimeAttachmentKind::Subtree(_))
-                    || !attached
-                        .supervisor()
-                        .is_some_and(|member| member.same_identity(&subtree.supervisor))
-                {
-                    return None;
-                }
-                Some((identity.id.clone(), identity.lineage))
-            })
-            .ok_or(ControlError::Unavailable)?;
+        let Some(membership) = subtree.parent_membership.as_ref() else {
+            return Err(ControlError::UnknownChildId("<root>".to_owned()));
+        };
+        if !self.supervisor.same_identity(&membership.parent) {
+            return Err(ControlError::UnknownChildId(membership.id.to_string()));
+        }
         dynamic
-            .remove_child_membership(membership.0, membership.1)
+            .remove_child_membership(membership.id.to_string(), membership.lineage)
             .await
     }
 

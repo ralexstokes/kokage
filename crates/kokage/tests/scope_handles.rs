@@ -396,7 +396,7 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .expect("replacement subtree added");
     assert!(matches!(
         scope.remove_subtree(&first_subtree).await,
-        Err(ControlError::Unavailable)
+        Err(ControlError::UnknownChildId(id)) if id == "worker"
     ));
     assert!(scope.snapshot().child("worker").is_some());
     scope
@@ -405,6 +405,40 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
         .expect("replacement subtree removed");
 
     running_tree.shutdown().await.expect("dynamic root stops");
+}
+
+#[tokio::test]
+async fn subtree_removal_rejects_a_foreign_parent_membership() {
+    let first_tree = DynamicTree::new().spawn().expect("first root builds");
+    let first = first_tree.scope();
+    let first_subtree = first
+        .add_subtree("workers", Tree::new())
+        .await
+        .expect("first subtree added");
+
+    let second_tree = DynamicTree::new().spawn().expect("second root builds");
+    let second = second_tree.scope();
+    let second_subtree = second
+        .add_subtree("workers", Tree::new())
+        .await
+        .expect("second subtree added");
+
+    assert!(matches!(
+        second.remove_subtree(&first_subtree).await,
+        Err(ControlError::UnknownChildId(id)) if id == "workers"
+    ));
+    assert!(second.snapshot().child("workers").is_some());
+
+    first
+        .remove_subtree(&first_subtree)
+        .await
+        .expect("first subtree removed by its parent");
+    second
+        .remove_subtree(&second_subtree)
+        .await
+        .expect("second subtree removed by its parent");
+    first_tree.shutdown().await.expect("first root stops");
+    second_tree.shutdown().await.expect("second root stops");
 }
 
 #[tokio::test]
