@@ -49,11 +49,7 @@ pub enum GatewayMsg {
         key: OrderKey,
         reply: Reply<QueryOutcome>,
     },
-    DeliverFill {
-        key: OrderKey,
-        qty: i64,
-        enqueued_at: Instant,
-    },
+    DeliverFills,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

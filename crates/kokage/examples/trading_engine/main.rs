@@ -70,7 +70,7 @@
 //!         +--------------+                              +--------+
 //!              |      ^
 //!              +------+
-//!            DeliverFill (self, delayed)
+//!          DeliverFills (keyed self-timeout)
 //!
 //! safety
 //! ------
