@@ -162,11 +162,11 @@ preserves the issued reference's identity.
 ## Advanced orchestration: scope references inside actors
 
 Actor lifecycle contexts expose the containing scope through
-`ctx.supervisor()`. Resolve a declared nested scope by id:
+`ctx.scope()`. Resolve a declared nested scope by id:
 
 ```rust,ignore
 let children = ctx
-    .supervisor()
+    .scope()
     .subtree("children")
     .expect("declared child scope");
 let worker = children
@@ -174,13 +174,13 @@ let worker = children
     .await?;
 ```
 
-This advanced orchestration surface returns a `RestrictedScopeRef`: observation
-and scheduled insertion are available, while scope-wide readiness and
-termination waits remain withheld. Its completion watches can arm
-`then_shutdown`, but cannot be awaited. The lookup works during `on_start`,
-before the child scope starts. Use `Context::spawn_scope_wait` to create and
-await an unrestricted lifecycle or completion wait outside the callback and
-map its result back through the actor's mailbox.
+This advanced orchestration surface returns a `ScopeRef`. The lookup works
+during `on_start`, before the child scope starts. Do not await lifecycle
+progress that depends on the current callback returning: for example, an actor
+cannot await its own scope's readiness from `on_start`. To receive a lifecycle
+result as a later actor message, clone the scope into an `async move` block and
+pass the bounded future to `Context::offload`, such as
+`ctx.offload(deadline, async move { children.wait_started().await }, map)`.
 
 Declare a leader-owned scope explicitly:
 

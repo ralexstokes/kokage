@@ -1,26 +1,23 @@
-error[E0432]: unresolved imports `kokage::DynamicRestrictedScope`, `kokage::DynamicRuntime`, `kokage::DynamicRuntimeHandle`, `kokage::RestrictedScope`, `kokage::Runtime`, `kokage::RuntimeHandle`, `kokage::Scope`
+error[E0432]: unresolved imports `kokage::DynamicRestrictedScope`, `kokage::DynamicRuntime`, `kokage::DynamicRuntimeHandle`, `kokage::RestrictedScope`, `kokage::RestrictedScopeRef`, `kokage::Runtime`, `kokage::RuntimeHandle`, `kokage::Scope`
  --> tests/ui/public-api/scope_type_names_removed.rs:2:5
   |
-2 |     DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, RestrictedScope, Runtime,
-  |     ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^ no `Runtime` in the root
-  |     |                       |               |                     |
-  |     |                       |               |                     no `RestrictedScope` in the root
+2 |     DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, RestrictedScope,
+  |     ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^ no `RestrictedScope` in the root
+  |     |                       |               |
   |     |                       |               no `DynamicRuntimeHandle` in the root
   |     |                       no `DynamicRuntime` in the root
   |     no `DynamicRestrictedScope` in the root
-3 |     RuntimeHandle, Scope,
-  |     ^^^^^^^^^^^^^  ^^^^^ no `Scope` in the root
-  |     |
-  |     no `RuntimeHandle` in the root
+3 |     RestrictedScopeRef, Runtime, RuntimeHandle, Scope,
+  |     ^^^^^^^^^^^^^^^^^^  ^^^^^^^  ^^^^^^^^^^^^^  ^^^^^ no `Scope` in the root
+  |     |                   |        |
+  |     |                   |        no `RuntimeHandle` in the root
+  |     |                   no `Runtime` in the root
+  |     no `RestrictedScopeRef` in the root
   |
   = help: consider importing this struct instead:
           std::thread::Scope
 help: a similar name exists in the module
   |
-2 |     DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, RestrictedScopeRef, Runtime,
-  |                                                                                  +++
-help: a similar name exists in the module
-  |
-2 -     DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, RestrictedScope, Runtime,
-2 +     DynamicRestrictedScope, DynamicRuntime, DynamicRuntimeHandle, RestrictedScope, runtime,
+3 -     RestrictedScopeRef, Runtime, RuntimeHandle, Scope,
+3 +     RestrictedScopeRef, runtime, RuntimeHandle, Scope,
   |

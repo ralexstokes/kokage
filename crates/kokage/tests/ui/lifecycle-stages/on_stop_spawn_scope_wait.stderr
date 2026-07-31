@@ -1,5 +1,0 @@
-error[E0599]: no method named `spawn_scope_wait` found for mutable reference `&mut StopContext<'_, Worker>` in the current scope
-  --> tests/ui/lifecycle-stages/on_stop_spawn_scope_wait.rs:16:13
-   |
-16 |         ctx.spawn_scope_wait(
-   |         ----^^^^^^^^^^^^^^^^ method not found in `&mut StopContext<'_, Worker>`

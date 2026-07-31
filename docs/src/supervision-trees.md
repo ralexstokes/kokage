@@ -132,9 +132,10 @@ let sessions = OrderedTree::new().subtree(
 ```
 
 Inside the leader, resolve the declared scope explicitly with
-`ctx.supervisor().subtree("children")`. The lookup works during
-`on_start`, before the child scope has started, and returns a
-`RestrictedScopeRef`. Check `kind()` when the tree shape is not already known;
+`ctx.scope().subtree("children")`. The lookup works during `on_start`, before
+the child scope has started, and returns a `ScopeRef`. Do not await that
+scope's readiness from the callback that must return before startup can
+continue. Check `kind()` when the tree shape is not already known;
 membership operations return `ControlError::NotDynamic` on an ordered scope.
 
 The containing strategy states the fate-sharing relationship. For example,
