@@ -1330,9 +1330,9 @@ impl<M> Drop for RawContext<M> {
 /// [`Actor::handle`](crate::Actor::handle).
 ///
 /// It exposes the live incarnation capabilities as inherent methods, including
-/// timers, continuations, watches, and offloads. The
-/// mailbox is absent because the provided receive loop owns it; reading it
-/// directly would bypass drain accounting and the continuation queue.
+/// timers, continuations, watches, and offloads. The mailbox is absent because
+/// the provided receive loop owns it; reading it directly would bypass drain
+/// accounting and the continuation queue.
 ///
 /// [`status`](Context::status) reports `Running` during startup and ordinary
 /// message handling, `Stopping` after a local stop request, and `Draining`
@@ -1387,6 +1387,12 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     }
 
     /// Returns this actor's enclosing scope.
+    ///
+    /// Awaiting scope or child lifecycle progress directly from a callback can
+    /// deadlock when that progress depends on the callback returning; see
+    /// [`ScopeRef::wait_started`](crate::ScopeRef::wait_started). Pass the
+    /// wait to [`offload`](Self::offload) to run it outside the callback and
+    /// receive its result as an ordinary message.
     pub fn scope(&self) -> ScopeRef {
         self.cx.scope()
     }
@@ -1618,6 +1624,12 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 
     /// Returns this actor's enclosing scope.
+    ///
+    /// Cooperative removal detaches this child only after this hook returns,
+    /// so awaiting anything that depends on that detach — scope termination,
+    /// this child's completion, its own removal — resolves only once the
+    /// shutdown grace period expires. Request fire-and-forget control here and
+    /// observe the outcome from outside the scope.
     pub fn scope(&self) -> ScopeRef {
         self.cx.scope()
     }

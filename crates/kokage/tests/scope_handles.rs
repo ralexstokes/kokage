@@ -510,6 +510,50 @@ async fn ordered_context_scope_membership_methods_return_not_dynamic() {
     runtime.shutdown_and_wait().await.expect("runtime stops");
 }
 
+struct StopScopeProbe {
+    observed: mpsc::UnboundedSender<(ScopeKind, bool)>,
+}
+
+impl Actor for StopScopeProbe {
+    type Msg = ();
+
+    async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
+        Ok(())
+    }
+
+    async fn on_stop(&mut self, ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
+        // The shutdown hook holds up its own detach, so observation and
+        // fire-and-forget control are what a scope handle is good for here.
+        let scope: ScopeRef = ctx.scope();
+        let visible = scope.snapshot().child("probe").is_some();
+        scope.shutdown();
+        self.observed
+            .send((scope.kind(), visible))
+            .expect("test receiver open");
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn stop_context_scope_observes_and_controls_its_scope() {
+    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+    let runtime = OrderedTree::new()
+        .actor(ActorSpec::new("probe", move || StopScopeProbe {
+            observed: observed_tx.clone(),
+        }))
+        .spawn()
+        .expect("ordered tree builds");
+
+    runtime.shutdown_and_wait().await.expect("runtime stops");
+
+    let (kind, visible) = timeout(WAIT, observed_rx.recv())
+        .await
+        .expect("stop hook reports")
+        .expect("report channel remains open");
+    assert_eq!(kind, ScopeKind::Ordered);
+    assert!(visible, "the stopping child is still visible to its scope");
+}
+
 #[tokio::test]
 async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running() {
     let (lifecycle_tx, mut lifecycle_rx) = mpsc::unbounded_channel();
