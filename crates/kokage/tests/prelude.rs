@@ -200,7 +200,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.lifecycle_events();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -279,7 +279,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
         }
     }));
     let handle = tree.scope();
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.lifecycle_events();
     let runtime = tree.spawn().expect("task tree spawns");
 
     assert_eq!(

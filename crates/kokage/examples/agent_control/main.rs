@@ -315,14 +315,18 @@ async fn build_app() -> Result<App, AnyError> {
     // lookup would return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
-    let lifecycle_watch = gateway.watch_lifecycle_to(&guard, move |event| {
-        if let Some(total) = lifecycle_total_restarts(&event) {
-            bridge_restarts = total;
-        }
-        GuardMsg::BridgeRestarts {
-            total: bridge_restarts,
-        }
-    });
+    let lifecycle_watch =
+        gateway
+            .lifecycle_events()
+            .direct_children()
+            .forward_to(&guard, move |event| {
+                if let Some(total) = lifecycle_total_restarts(&event) {
+                    bridge_restarts = total;
+                }
+                GuardMsg::BridgeRestarts {
+                    total: bridge_restarts,
+                }
+            });
 
     Ok(App {
         runtime,

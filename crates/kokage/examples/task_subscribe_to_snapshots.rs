@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SubtreeSpec::from(nested).restart(RestartPolicy::never()),
     );
     let running = tree.spawn()?;
-    let mut snapshots = running.subscribe_snapshots();
+    let mut snapshots = running.snapshots();
 
     println!("initial snapshot:");
     print_snapshot(&running.snapshot(), 0);

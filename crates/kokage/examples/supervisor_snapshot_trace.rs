@@ -75,8 +75,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tree.add_actor_spec(worker_spec);
     let runtime = tree.spawn()?;
     let handle = runtime.scope();
-    let mut events = handle.watch_lifecycle();
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut events = handle.lifecycle_events();
+    let mut snapshots = handle.snapshots();
 
     let event_task = tokio::spawn(async move {
         while let Some(event) = events.next().await {

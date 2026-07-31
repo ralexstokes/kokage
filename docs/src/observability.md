@@ -5,8 +5,8 @@ fixed* without anyone noticing. That is only a virtue if, when you do look,
 the system can tell you exactly what has been happening. Kokage exposes three
 observation contracts:
 
-1. `snapshot()` / `subscribe_snapshots()` for conflated current state;
-2. `observe_lifecycle()` / `watch_lifecycle()` for ordered structural history;
+1. `snapshot()` / `snapshots()` for conflated current state;
+2. `observe_children()` / `lifecycle_events()` for ordered structural history;
 3. `Context::watch()` for one actor's mailbox-ordered view of a peer.
 
 Tracing, actor stats, metrics, and `kokage-console` project those contracts for
@@ -34,7 +34,7 @@ payloads are never formatted into logs.
 ## Snapshots: what is true right now
 
 Any [`ScopeRef`] can answer "what does the tree look like?" —
-[`snapshot`] for one point in time, [`subscribe_snapshots`] for a
+[`snapshot`] for one point in time, [`snapshots`] for a
 conflating, never-lagging feed of changes:
 
 ```rust
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tree.spawn()?;
 
     // Readiness: wait until every child is running.
-    let mut snapshots = runtime.subscribe_snapshots();
+    let mut snapshots = runtime.snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;
@@ -88,13 +88,13 @@ You saw this pattern in [Let It Crash](let-it-crash.md).
 
 ## Aligned state and events
 
-The common lifecycle entry point is [`observe_lifecycle`]. It registers a
+The common lifecycle entry point is [`observe_children`]. It registers a
 direct-child event stream and reads a snapshot at one sequence boundary, so
 startup and lag resynchronization do not require a hand-written race-avoidance
 recipe:
 
 ```rust,ignore
-let observation = runtime.observe_lifecycle();
+let observation = runtime.observe_children();
 let initial = observation.snapshot;
 let mut events = observation.events;
 ```
@@ -106,7 +106,7 @@ methods remain available independently.
 ## The recursive lifecycle stream: what happened, in order
 
 Snapshots tell you *now*; the lifecycle stream tells you *the story*.
-[`watch_lifecycle`] on any `ScopeRef` yields every transition in the scope —
+[`lifecycle_events`] on any `ScopeRef` yields every transition in the scope —
 recursively for the whole subtree by default, or `.direct_children()` for
 one level:
 
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
     let runtime = tree.spawn()?;
-    let mut events = runtime.watch_lifecycle();
+    let mut events = runtime.lifecycle_events();
 
     runtime.shutdown();
     while let Some(event) = events.next().await {
@@ -145,10 +145,11 @@ enum is `#[non_exhaustive]`; always match with a catch-all arm.
 Delivery is buffered, not conflated. A consumer that falls far behind gets
 the oldest details collapsed into one `Lagged { dropped }` marker — the
 stream never lies by omission. On direct-child lag, use a fresh
-`observe_lifecycle()` pair to realign. Recursive streams have per-scope
+`observe_children()` pair to realign. Recursive streams have per-scope
 sequence spaces, so resynchronize each affected scope from its snapshot. To
-feed events into an actor instead of a loop, [`watch_lifecycle_to`] pumps them
-into any `ActorRef` through a mapping closure, returning a `Guard`.
+feed events into an actor instead of a loop, choose the desired stream and
+call [`LifecycleWatch::forward_to`]. It maps events into any `ActorRef` and
+returns a `Guard`.
 
 Note how this differs from a peer [`MonitorEvent`] watch
 ([Watching Peers](watching-peers.md)): monitors give one actor a typed,
@@ -206,14 +207,14 @@ serves a web dashboard over a running tree
 
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`snapshot`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.snapshot
-[`subscribe_snapshots`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.subscribe_snapshots
+[`snapshots`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.snapshots
 [`SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html
 [`ChildSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildSnapshot.html
 [`ExitStatus`]: https://stokes.io/kokage/api/kokage/observe/enum.ExitStatus.html
-[`observe_lifecycle`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.observe_lifecycle
-[`watch_lifecycle`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.watch_lifecycle
+[`observe_children`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.observe_children
+[`lifecycle_events`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.lifecycle_events
 [`LifecycleEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html
-[`watch_lifecycle_to`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.watch_lifecycle_to
+[`LifecycleWatch::forward_to`]: https://stokes.io/kokage/api/kokage/observe/struct.LifecycleWatch.html#method.forward_to
 [`MonitorEvent`]: https://stokes.io/kokage/api/kokage/enum.MonitorEvent.html
 [`ActorRef::stats`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.stats
 [`ScopeRef::actor_stats`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.actor_stats

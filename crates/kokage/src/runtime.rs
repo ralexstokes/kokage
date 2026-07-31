@@ -158,10 +158,7 @@ where
                 return;
             };
             if !event.is_child_transition()
-                && !matches!(
-                    event.kind,
-                    crate::supervisor::LifecycleEventKind::Lagged { .. }
-                )
+                && !matches!(event.kind, LifecycleEventKind::Lagged { .. })
             {
                 continue;
             }
@@ -181,6 +178,27 @@ where
 
     std::mem::drop(task);
     guard_from_tokens(cancellation, finished)
+}
+
+impl LifecycleWatch {
+    /// Forwards child transitions from this stream into `target` using its
+    /// ordinary mailbox policy.
+    ///
+    /// Apply [`LifecycleWatch::direct_children`] before this method when only
+    /// the watched scope's own events should be delivered. The pump follows
+    /// the target through ordinary actor restarts, but never replays events to
+    /// Lag markers are forwarded as well; supervisor-level transitions are
+    /// skipped. The pump follows the target through ordinary actor restarts,
+    /// but never replays events to a fresh incarnation. It stops when the
+    /// returned guard is dropped or cancelled, when this stream ends, or when
+    /// the target permanently terminates.
+    pub fn forward_to<M, F>(self, target: &ActorRef<M>, map: F) -> Guard
+    where
+        M: Send + 'static,
+        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    {
+        spawn_lifecycle_watch_to(self, target.clone(), map)
+    }
 }
 
 /// Error returned when a [`TaskRef`] can no longer observe its task membership.
@@ -499,27 +517,18 @@ impl RunningTree {
     }
 
     /// Returns a receiver that updates when the root snapshot changes.
-    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
-        self.scope.subscribe_snapshots()
+    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
+        self.scope.snapshots()
     }
 
     /// Returns an aligned root snapshot and direct-child lifecycle stream.
-    pub fn observe_lifecycle(&self) -> LifecycleObservation {
-        self.scope.observe_lifecycle()
+    pub fn observe_children(&self) -> LifecycleObservation {
+        self.scope.observe_children()
     }
 
     /// Returns the ordered lifecycle stream for the complete root tree.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
-        self.scope.watch_lifecycle()
-    }
-
-    /// Pumps direct-child lifecycle events from the root into `target`.
-    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
-    where
-        M: Send + 'static,
-        F: FnMut(LifecycleEvent) -> M + Send + 'static,
-    {
-        self.scope.watch_lifecycle_to(target, map)
+    pub fn lifecycle_events(&self) -> LifecycleWatch {
+        self.scope.lifecycle_events()
     }
 
     /// Returns point-in-time actor stats for the root and all nested subtrees.
@@ -670,43 +679,18 @@ impl ScopeRef {
     /// Initialize state from [`LifecycleObservation::snapshot`], then consume
     /// events whose direct-child sequence exceeds the snapshot's
     /// [`SupervisorSnapshot::lifecycle_seq`].
-    pub fn observe_lifecycle(&self) -> LifecycleObservation {
+    pub fn observe_children(&self) -> LifecycleObservation {
         self.supervisor.observe_lifecycle()
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
-    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for a gap-free
+    /// Use [`observe_children`](Self::observe_children) for a gap-free
     /// direct-child state-plus-stream setup. This lower-level method is useful
     /// when recursive transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    pub fn lifecycle_events(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()
-    }
-
-    /// Pumps this scope's direct-child lifecycle events into `target` using
-    /// its ordinary mailbox policy.
-    ///
-    /// The pump follows the target through ordinary actor restarts, but never
-    /// replays an event to a fresh incarnation: lifecycle events are discrete
-    /// history, so replay would fabricate a transition. A restarted consumer
-    /// should rehydrate using watch → snapshot → `lifecycle_seq` filtering in
-    /// `on_start`. FIFO mailboxes are recommended when every transition must
-    /// be observed; a conflating mailbox may discard intermediate messages.
-    ///
-    /// The pump stops when the returned guard is dropped or cancelled, when
-    /// this runtime's identity becomes terminal after draining its staged
-    /// events, or when the target actor permanently terminates.
-    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
-    where
-        M: Send + 'static,
-        F: FnMut(LifecycleEvent) -> M + Send + 'static,
-    {
-        spawn_lifecycle_watch_to(
-            self.watch_lifecycle().direct_children(),
-            target.clone(),
-            map,
-        )
     }
 
     /// Returns a clone of the latest supervisor snapshot.
@@ -762,7 +746,7 @@ impl ScopeRef {
     }
 
     /// Returns a watch receiver that updates when the snapshot changes.
-    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
+    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
         self.supervisor.subscribe_snapshots()
     }
 }
@@ -1179,7 +1163,7 @@ mod tests {
             .wait_started()
             .await
             .expect("static actor starts");
-        let mut static_snapshots = static_runtime.scope().subscribe_snapshots();
+        let mut static_snapshots = static_runtime.scope().snapshots();
         static_ref.send(()).await.expect("static message accepted");
         static_snapshots
             .wait_for(|snapshot| {
@@ -1207,7 +1191,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut dynamic_snapshots = dynamic_runtime.scope().subscribe_snapshots();
+        let mut dynamic_snapshots = dynamic_runtime.scope().snapshots();
         dynamic_ref
             .send(())
             .await
@@ -1243,7 +1227,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut snapshots = runtime.scope().subscribe_snapshots();
+        let mut snapshots = runtime.scope().snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots

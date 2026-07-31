@@ -162,7 +162,7 @@ pub struct SupervisorSnapshot {
     /// published.
     ///
     /// For a gap-free direct-child state-plus-stream view, use
-    /// [`ScopeRef::observe_lifecycle`](crate::ScopeRef::observe_lifecycle), then
+    /// [`ScopeRef::observe_children`](crate::ScopeRef::observe_children), then
     /// discard watched events whose `seq` is less than or equal to this value.
     /// A pre-spawn snapshot projects statically configured children before
     /// their first `Added` transition; reducers should apply `Added` as an

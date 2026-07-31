@@ -441,7 +441,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
             .expect("finite actor is projected")
             .remove_when_done
     );
-    let mut snapshots = tree.scope().subscribe_snapshots();
+    let mut snapshots = tree.scope().snapshots();
     let runtime = tree.spawn().expect("tree builds");
 
     tokio::time::timeout(
@@ -561,7 +561,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     fail.notify_one();
     handle
         .scope()
-        .subscribe_snapshots()
+        .snapshots()
         .wait_for(|snapshot| {
             snapshot
                 .child("owned")

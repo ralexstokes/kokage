@@ -140,7 +140,7 @@ impl RawActor for Watcher {
 
 async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
+        let mut snapshots = handle.snapshots();
         loop {
             if snapshots.latest().child(id).is_some() == present {
                 return;
@@ -161,7 +161,7 @@ async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
 // and only then is the surviving entry a retention decision.
 async fn wait_for_retained_terminal_child(handle: &ScopeRef, id: &str) {
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
+        let mut snapshots = handle.snapshots();
         loop {
             if snapshots
                 .latest()
@@ -514,7 +514,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = runtime.scope().subscribe_snapshots();
+    let mut snapshots = runtime.scope().snapshots();
     let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("removable").await });
     timeout(Duration::from_secs(1), async {
@@ -636,7 +636,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = runtime.scope().subscribe_snapshots();
+    let mut snapshots = runtime.scope().snapshots();
     let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("discarding").await });
     timeout(Duration::from_secs(1), async {
@@ -1036,7 +1036,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
         .expect("restartable actor added");
 
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = runtime.scope().subscribe_snapshots();
+        let mut snapshots = runtime.scope().snapshots();
         loop {
             if snapshots
                 .latest()
@@ -1211,7 +1211,7 @@ async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
         .await
         .expect("drain count queued");
 
-    let mut snapshots = runtime.subscribe_snapshots();
+    let mut snapshots = runtime.snapshots();
     runtime.shutdown();
     timeout(
         Duration::from_secs(2),

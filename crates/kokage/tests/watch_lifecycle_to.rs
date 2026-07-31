@@ -82,7 +82,9 @@ impl Actor for ScopeSink {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.watch = Some(
             ctx.scope()
-                .watch_lifecycle_to(&ctx.myself(), ScopeSinkMsg::Lifecycle),
+                .lifecycle_events()
+                .direct_children()
+                .forward_to(&ctx.myself(), ScopeSinkMsg::Lifecycle),
         );
         Ok(())
     }
@@ -149,7 +151,7 @@ async fn recv_event(
 }
 
 async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut snapshots = handle.snapshots();
     timeout(Duration::from_secs(2), async {
         loop {
             if snapshots
@@ -221,7 +223,10 @@ async fn assert_no_buffered_lifecycle(
 #[tokio::test]
 async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_restart() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
-    let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let guard = watched
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&sink, SinkMsg::Lifecycle);
 
     let first = crash_and_receive_events(&crasher, &mut observed).await;
     assert!(matches!(
@@ -270,14 +275,20 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
 #[tokio::test]
 async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
     let (handle, watched, sink, crasher, mut observed) = runtime_with_watched_subtree().await;
-    let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let guard = watched
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&sink, SinkMsg::Lifecycle);
     guard.cancel();
     assert!(guard.is_cancelled());
 
     crasher.send(()).await.expect("crash request delivered");
     wait_for_generation(&watched, "crasher", 1).await;
 
-    let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let guard = watched
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&sink, SinkMsg::Lifecycle);
     drop(guard);
     crasher
         .send(())
@@ -285,7 +296,10 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
         .expect("second crash request delivered");
     wait_for_generation(&watched, "crasher", 2).await;
 
-    let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let guard = watched
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&sink, SinkMsg::Lifecycle);
     let later = crash_and_receive_events(&crasher, &mut observed).await;
     assert!(matches!(
         &later[0].1.kind,
@@ -309,7 +323,10 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
 #[tokio::test]
 async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
     let (handle, watched, sink, _crasher, mut observed) = runtime_with_watched_subtree().await;
-    let guard = watched.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let guard = watched
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
         .remove_child("watched")
@@ -333,7 +350,10 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .add_subtree("replacement", Tree::new())
         .await
         .expect("replacement subtree added");
-    let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
+    let guard = replacement
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&sink, SinkMsg::Lifecycle);
     handle
         .scope()
         .remove_child("sink")

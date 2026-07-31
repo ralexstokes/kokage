@@ -18,7 +18,7 @@ use kokage::{
 use tokio::sync::mpsc;
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     let child = handle
         .snapshot()
         .child(id)

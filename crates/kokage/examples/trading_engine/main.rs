@@ -351,14 +351,17 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree");
     let mut venue_restarts = venues_runtime.snapshot().total_restarts;
-    let lifecycle_watch = venues_runtime.watch_lifecycle_to(&health, move |event| {
-        if let Some(total) = lifecycle_total_restarts(&event) {
-            venue_restarts = total;
-        }
-        HealthMsg::RestartsObserved {
-            total: venue_restarts,
-        }
-    });
+    let lifecycle_watch = venues_runtime
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&health, move |event| {
+            if let Some(total) = lifecycle_total_restarts(&event) {
+                venue_restarts = total;
+            }
+            HealthMsg::RestartsObserved {
+                total: venue_restarts,
+            }
+        });
 
     Ok(App {
         runtime,
@@ -785,7 +788,7 @@ where
 }
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     let generation = handle
         .snapshot()
         .child(id)

@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = running_owner.scope();
     running.add_task_spec(metrics).await?;
     let nested_handle = running.add_subtree("nested-pipeline", nested_tree).await?;
-    let mut nested_snapshots = nested_handle.subscribe_snapshots();
+    let mut nested_snapshots = nested_handle.snapshots();
     timeout(
         Duration::from_secs(2),
         nested_snapshots.wait_for_child("nested-worker", |child| {

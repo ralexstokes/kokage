@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
     let running = tree.spawn()?;
-    let mut events = running.watch_lifecycle();
+    let mut events = running.lifecycle_events();
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {

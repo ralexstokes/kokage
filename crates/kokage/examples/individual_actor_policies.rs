@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .child("worker")
         .expect("worker is declared")
         .generation;
-    let mut restarted = handle.subscribe_snapshots();
+    let mut restarted = handle.snapshots();
     frontend.send("fail-worker".to_owned()).await?;
     restarted
         .wait_for_child("worker", |child| {

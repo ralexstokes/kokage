@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tree.add_task_spec(sink);
     let running_owner = tree.spawn()?;
     let running = running_owner.scope();
-    let mut snapshots = running.subscribe_snapshots();
+    let mut snapshots = running.snapshots();
     let restarted = timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| {

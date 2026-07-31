@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Jam the press, then wait until the supervisor has restarted it.
     let baseline = runtime.snapshot().child("press").expect("declared").generation;
-    let mut snapshots = runtime.subscribe_snapshots();
+    let mut snapshots = runtime.snapshots();
     press.send("jam".to_owned()).await?;
     snapshots
         .wait_for_child("press", |child| {
