@@ -605,7 +605,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 });
                 factory_fields.push(quote! {
                     #[doc = #field_doc]
-                    #field_vis #ident: #param
+                    #vis #ident: #param
                 });
                 factory_bounds.push(quote_spanned! {ty.span()=>
                     #param: ::kokage::ActorFactory<Actor = #ty>
@@ -639,7 +639,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 });
                 factory_fields.push(quote! {
                     #[doc = #field_doc]
-                    #field_vis #ident: #param
+                    #vis #ident: #param
                 });
                 factory_bounds.push(quote_spanned! {ty.span()=>
                     #param: ::kokage::SupervisionFactories<#ty>

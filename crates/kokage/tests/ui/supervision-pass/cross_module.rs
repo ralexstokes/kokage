@@ -13,7 +13,7 @@ mod component {
 
     #[derive(kokage::Supervision)]
     pub struct Workers {
-        pub worker: Worker,
+        worker: Worker,
     }
 }
 
@@ -28,5 +28,5 @@ fn main() {
         workers: component::WorkersFactories { worker: || component::Worker },
     });
     let _: kokage::Tree = tree;
-    let _: kokage::ActorRef<()> = handles.workers.worker;
+    let _: kokage::ScopeRef = handles.workers.scope();
 }
