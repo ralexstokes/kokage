@@ -17,8 +17,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
     DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MailboxShutdown, MonitorEvent,
-    OrderedTree, RestartMode, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind,
-    Shutdown, StopContext, SupervisorError, TaskSpec,
+    RestartMode, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
+    StopContext, SupervisorError, TaskSpec, Tree,
     observe::ChildMembershipView,
     raw::{RawActor, RawContext},
 };
@@ -180,7 +180,7 @@ async fn wait_for_retained_terminal_child(handle: &ScopeRef, id: &str) {
     .expect("terminal child remains in membership");
 
     handle
-        .add_actor(ActorSpec::new("settle", Drain::<()>::new))
+        .add_actor_spec(ActorSpec::new("settle", Drain::<()>::new))
         .await
         .expect("settling actor added");
     handle
@@ -308,7 +308,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .expect("graphless runtime builds");
     assert!(runtime.scope().snapshot().children.is_empty());
     let sink = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", {
+        .add_actor_spec(ActorSpec::new("sink", {
             let observed_tx = observed_tx.clone();
             move || Observe {
                 observed: observed_tx.clone(),
@@ -349,7 +349,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     ));
 
     let replacement = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", move || Observe {
+        .add_actor_spec(ActorSpec::new("sink", move || Observe {
             observed: observed_tx.clone(),
         }))
         .await
@@ -395,7 +395,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
         .spawn()
         .expect("graphless runtime builds");
     let actor = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("ordered", move || ObserveOrder {
+        .add_actor_spec(ActorSpec::new("ordered", move || ObserveOrder {
             observed: observed_tx.clone(),
         }))
         .await
@@ -493,7 +493,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .spawn()
         .expect("graphless runtime builds");
     let actor = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("removable", {
                 let release_handler = release_handler.clone();
                 let release_on_stop = release_on_stop.clone();
@@ -590,7 +590,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
     assert!(runtime.scope().snapshot().child("removable").is_none());
 
     let replacement = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("removable", Drain::<RemovalMsg>::new))
+        .add_actor_spec(ActorSpec::new("removable", Drain::<RemovalMsg>::new))
         .await
         .expect("id reused with a fresh membership");
     assert!(matches!(
@@ -614,7 +614,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         .spawn()
         .expect("graphless runtime builds");
     let actor = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("discarding", {
                 let release_handler = release_handler.clone();
                 let release_on_stop = release_on_stop.clone();
@@ -713,7 +713,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .expect("dynamic subtree is available");
     let starts = Arc::new(AtomicUsize::new(0));
     let target = dynamic
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("temporary", {
                 let starts = starts.clone();
                 move || CleanStop {
@@ -757,7 +757,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     ));
 
     dynamic
-        .add_actor(ActorSpec::new("temporary", Drain::<()>::new))
+        .add_actor_spec(ActorSpec::new("temporary", Drain::<()>::new))
         .await
         .expect("auto-removed actor id is reusable");
     shutdown_runtime(&handle.scope(), "remove-on-exit monitor test shutdown").await;
@@ -770,7 +770,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
         .expect("graphless runtime builds");
     let transient_starts = Arc::new(AtomicUsize::new(0));
     let transient = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("transient", {
                 let starts = transient_starts.clone();
                 move || CleanStop {
@@ -792,7 +792,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
 
     let permanent_starts = Arc::new(AtomicUsize::new(0));
     let permanent = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("permanent", {
                 let starts = permanent_starts.clone();
                 move || CleanStop {
@@ -831,7 +831,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
         .expect("dynamic runtime builds");
     let inherited_starts = Arc::new(AtomicUsize::new(0));
     let inherited = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("inherited", {
+        .add_actor_spec(ActorSpec::new("inherited", {
             let starts = Arc::clone(&inherited_starts);
             move || CleanStop {
                 starts: Arc::clone(&starts),
@@ -841,7 +841,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
         .expect("inherited actor added");
     let explicit_starts = Arc::new(AtomicUsize::new(0));
     let explicit = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("explicit", {
                 let starts = Arc::clone(&explicit_starts);
                 move || CleanStop {
@@ -877,7 +877,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
         .expect("dynamic tree builds");
     let starts = Arc::new(AtomicUsize::new(0));
     let actor = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("inherited-restart", {
+        .add_actor_spec(ActorSpec::new("inherited-restart", {
             let starts = Arc::clone(&starts);
             move || CleanStop {
                 starts: Arc::clone(&starts),
@@ -895,7 +895,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     .expect("supplied supervisor restart default is inherited");
 
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("inherited-shutdown", || PendingActor))
+        .add_actor_spec(ActorSpec::new("inherited-shutdown", || PendingActor))
         .await
         .expect("pending actor added");
     timeout(
@@ -916,7 +916,7 @@ async fn temporary_actor_auto_removes_after_failure() {
         .expect("graphless runtime builds");
     let release = Arc::new(Notify::new());
     let target = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("temporary", {
                 let release = release.clone();
                 move || GatedExit {
@@ -945,7 +945,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
         .expect("graphless runtime builds");
     let default_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("transient-removed", {
                 let release = default_release.clone();
                 move || GatedExit {
@@ -963,7 +963,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
 
     let transient_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("transient-retained", {
                 let release = transient_release.clone();
                 move || GatedExit {
@@ -980,7 +980,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
 
     let reversed_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("transient-retained-reversed", {
                 let release = reversed_release.clone();
                 move || GatedExit {
@@ -997,7 +997,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
 
     let never_release = Arc::new(Notify::new());
     support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("never-retained", {
                 let release = never_release.clone();
                 move || GatedExit {
@@ -1022,7 +1022,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
         .expect("graphless runtime builds");
     let starts = Arc::new(AtomicUsize::new(0));
     support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("restart-once", {
                 let starts = starts.clone();
                 move || RestartOnce {
@@ -1078,7 +1078,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     let second_ref = sink_spec.actor_ref();
     let sink_spec = sink_spec.message_size(sized_message_size);
     let inserted = support::dynamic_root(&runtime)
-        .add_actor(sink_spec)
+        .add_actor_spec(sink_spec)
         .await
         .expect("sized actor added");
 
@@ -1122,7 +1122,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
         .expect("graphless runtime builds");
     let release = Arc::new(Notify::new());
     let sink = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("sink", {
                 let release = release.clone();
                 move || GatedDrain {
@@ -1152,7 +1152,7 @@ async fn runtime_added_actor_can_override_mailbox_capacity() {
         .spawn()
         .expect("graphless runtime builds");
     let sink = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(9))
+        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(9))
         .await
         .expect("actor with a capacity override is added");
 
@@ -1168,7 +1168,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
         .spawn()
         .expect("graphless runtime builds");
     let result = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(0))
+        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(0))
         .await;
 
     assert!(matches!(
@@ -1187,7 +1187,7 @@ async fn runtime_added_actor_uses_its_actor_id_as_the_child_id() {
         .spawn()
         .expect("graphless runtime builds");
     let actor = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("local-actor", Drain::<u64>::new))
+        .add_actor_spec(ActorSpec::new("local-actor", Drain::<u64>::new))
         .await
         .expect("actor is added");
 
@@ -1216,7 +1216,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
         .expect("dynamic subtree is available");
 
     let sink = dynamic
-        .add_actor(ActorSpec::new("sink", move || Observe {
+        .add_actor_spec(ActorSpec::new("sink", move || Observe {
             observed: observed_tx.clone(),
         }))
         .await
@@ -1276,7 +1276,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
         .expect("dynamic subtree is available");
 
     let dynamic = dynamic_scope
-        .add_actor(ActorSpec::new("dynamic", move || ForwardTo {
+        .add_actor_spec(ActorSpec::new("dynamic", move || ForwardTo {
             target: sink.clone(),
         }))
         .await
@@ -1313,7 +1313,7 @@ impl RawActor for PendingActor {
 async fn timed_out_removal_terminates_the_typed_ref() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let actor_ref = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("dynamic", || PendingActor)
                 .shutdown(Shutdown::graceful_for(Duration::from_millis(20))),
         )
@@ -1339,7 +1339,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
     ));
 
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("dynamic", Drain::<()>::new))
+        .add_actor_spec(ActorSpec::new("dynamic", Drain::<()>::new))
         .await
         .expect("label reusable after timed-out removal");
     shutdown_dynamic_runtime(&runtime, "timed-out removal test shutdown").await;
@@ -1347,8 +1347,8 @@ async fn timed_out_removal_terminates_the_typed_ref() {
 
 #[tokio::test]
 async fn ordered_tree_has_no_runtime_membership_capability() {
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("seed", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task_spec(TaskSpec::new("seed", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));
@@ -1358,7 +1358,7 @@ async fn ordered_tree_has_no_runtime_membership_capability() {
     assert!(matches!(
         handle
             .scope()
-            .add_actor(ActorSpec::new("rejected", Drain::<()>::new))
+            .add_actor_spec(ActorSpec::new("rejected", Drain::<()>::new))
             .await,
         Err(ControlError::NotDynamic)
     ));

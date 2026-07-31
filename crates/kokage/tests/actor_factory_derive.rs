@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, RestartPolicy,
-    ScopeRef, observe::SupervisorSnapshotReceiver,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, RestartPolicy, ScopeRef, Tree,
+    observe::SupervisorSnapshotReceiver,
 };
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
@@ -74,8 +74,8 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     assert_factory::<DerivedActorFactory>();
 
     let starts = Arc::new(AtomicUsize::new(0));
-    let mut builder = OrderedTree::new();
-    let actor_ref = builder.add_actor(ActorSpec::new(
+    let mut builder = Tree::new();
+    let actor_ref = builder.add_actor_spec(ActorSpec::new(
         "derived",
         DerivedActorFactory {
             starts: starts.clone(),

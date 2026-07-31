@@ -51,21 +51,21 @@ impl RawActor for Parked {
 }
 
 #[cfg(feature = "serde")]
-fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
-    let mut builder = OrderedTree::new();
-    let ingest = builder.add_actor(ActorSpec::new("ingest", || Worker).remove_when_done());
-    let parse = builder.add_actor(ActorSpec::new("parse", || Worker));
+fn two_actor_tree() -> (Tree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
+    let mut builder = Tree::new();
+    let ingest = builder.add_actor_spec(ActorSpec::new("ingest", || Worker).remove_when_done());
+    let parse = builder.add_actor_spec(ActorSpec::new("parse", || Worker));
     (builder, ingest, parse)
 }
 
 #[test]
 #[cfg(feature = "serde")]
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
-    let mut tree = OrderedTree::new()
+    let mut tree = Tree::new()
         .strategy(Strategy::RestForOne)
         .default_restart(RestartPolicy::always());
-    tree.add_subtree("workers", OrderedTree::new().strategy(Strategy::OneForAll));
-    tree.add_task(
+    tree.add_subtree("workers", Tree::new().strategy(Strategy::OneForAll));
+    tree.add_task_spec(
         TaskSpec::new("clock", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -73,8 +73,8 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
         .restart(RestartMode::Always)
         .shutdown(Shutdown::abort()),
     );
-    tree.add_actor(ActorSpec::new("ingest", || Worker).restart(RestartMode::Never));
-    tree.add_actor(ActorSpec::new("parse", || Worker));
+    tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartMode::Never));
+    tree.add_actor_spec(ActorSpec::new("parse", || Worker));
     let outline = tree.outline();
 
     assert_eq!(outline.kind, ScopeKind::Ordered);
@@ -121,11 +121,11 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 #[cfg(feature = "serde")]
 fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     let explicit_shutdown = Shutdown::graceful_for(Duration::from_millis(17));
-    let mut tree = OrderedTree::new()
+    let mut tree = Tree::new()
         .default_restart(RestartPolicy::always())
         .default_shutdown(Shutdown::abort());
-    tree.add_task(TaskSpec::new("inherited", |_| async { Ok(()) }));
-    tree.add_task(
+    tree.add_task_spec(TaskSpec::new("inherited", |_| async { Ok(()) }));
+    tree.add_task_spec(
         TaskSpec::new("explicit", |_| async { Ok(()) })
             .restart(RestartMode::Never)
             .shutdown(explicit_shutdown),
@@ -153,13 +153,13 @@ fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
 #[tokio::test]
 async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_membership() {
     let declared_shutdown = Shutdown::abort();
-    let mut stubborn = OrderedTree::new();
-    stubborn.add_task(TaskSpec::new("stubborn", |_| async {
+    let mut stubborn = Tree::new();
+    stubborn.add_task_spec(TaskSpec::new("stubborn", |_| async {
         std::future::pending::<()>().await;
         Ok(())
     }));
-    let mut declared = OrderedTree::new().default_restart(RestartPolicy::always());
-    declared.add_subtree(
+    let mut declared = Tree::new().default_restart(RestartPolicy::always());
+    declared.add_subtree_spec(
         "declared",
         SubtreeSpec::from(stubborn)
             .restart(RestartMode::Never)
@@ -193,14 +193,14 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         .expect("declared tree shuts down");
 
     let dynamic = DynamicTree::new().spawn().expect("dynamic tree builds");
-    let mut stubborn = OrderedTree::new();
-    stubborn.add_task(TaskSpec::new("stubborn", |_| async {
+    let mut stubborn = Tree::new();
+    stubborn.add_task_spec(TaskSpec::new("stubborn", |_| async {
         std::future::pending::<()>().await;
         Ok(())
     }));
     let inserted = dynamic
         .scope()
-        .add_subtree(
+        .add_subtree_spec(
             "inserted",
             SubtreeSpec::from(stubborn)
                 .restart(RestartMode::Never)
@@ -234,10 +234,10 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
 async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
     let ingest_actor = ActorSpec::new("ingest", || Worker);
     let parse_actor = ActorSpec::new("parse", || Worker);
-    let mut workers = OrderedTree::new().strategy(Strategy::OneForAll);
-    let parse = workers.add_actor(parse_actor);
-    let mut tree = OrderedTree::new();
-    let ingest = tree.add_actor(ingest_actor);
+    let mut workers = Tree::new().strategy(Strategy::OneForAll);
+    let parse = workers.add_actor_spec(parse_actor);
+    let mut tree = Tree::new();
+    let ingest = tree.add_actor_spec(ingest_actor);
     tree.add_subtree("workers", workers);
     let handle = tree.spawn().expect("tree builds");
 
@@ -268,8 +268,8 @@ async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
 
 #[test]
 fn tree_placement_rejects_zero_actor_mailbox_capacity() {
-    let mut tree = OrderedTree::new();
-    tree.add_actor(ActorSpec::new("worker", || Worker).mailbox_capacity(0));
+    let mut tree = Tree::new();
+    tree.add_actor_spec(ActorSpec::new("worker", || Worker).mailbox_capacity(0));
     let result = tree.spawn();
 
     assert!(matches!(
@@ -282,8 +282,8 @@ fn tree_placement_rejects_zero_actor_mailbox_capacity() {
 
 #[test]
 fn tree_placement_rejects_zero_scope_mailbox_capacity() {
-    let mut tree = OrderedTree::new().mailbox_capacity(0);
-    tree.add_actor(ActorSpec::new("worker", || Worker));
+    let mut tree = Tree::new().mailbox_capacity(0);
+    tree.add_actor_spec(ActorSpec::new("worker", || Worker));
     let result = tree.spawn();
 
     assert!(matches!(
@@ -300,9 +300,9 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
     let first_actor = first.actor_ref();
     let direct = ActorSpec::new("direct-actor", || Worker);
     let direct_actor = direct.actor_ref();
-    let mut tree = OrderedTree::new().mailbox_capacity(9);
-    tree.add_actor(first);
-    tree.add_actor(direct);
+    let mut tree = Tree::new().mailbox_capacity(9);
+    tree.add_actor_spec(first);
+    tree.add_actor_spec(direct);
     let runtime = tree.spawn().expect("tree builds");
     runtime.scope().wait_started().await.expect("actors start");
 
@@ -315,9 +315,9 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
 async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     let nested = ActorSpec::new("nested", || Worker);
     let nested_ref = nested.actor_ref();
-    let mut nested_tree = OrderedTree::new();
-    nested_tree.add_actor(nested);
-    let mut tree = OrderedTree::new().mailbox_capacity(9);
+    let mut nested_tree = Tree::new();
+    nested_tree.add_actor_spec(nested);
+    let mut tree = Tree::new().mailbox_capacity(9);
     tree.add_subtree("nested", nested_tree);
     let runtime = tree.spawn().expect("tree builds");
     runtime.scope().wait_started().await.expect("actors start");
@@ -332,13 +332,13 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let peer_ref = peer.actor_ref();
     let leader = ActorSpec::new("leader", || Worker);
     let leader_ref = leader.actor_ref();
-    let mut owned = OrderedTree::new()
+    let mut owned = Tree::new()
         .mailbox_capacity(9)
         .strategy(Strategy::OneForAll);
-    owned.add_actor(leader);
+    owned.add_actor_spec(leader);
     owned.add_subtree("children", DynamicTree::new());
-    let mut tree = OrderedTree::new();
-    tree.add_actor(peer);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(peer);
     tree.add_subtree("owned", owned);
     let runtime = tree.spawn().expect("tree builds");
     runtime.scope().wait_started().await.expect("actors start");
@@ -350,9 +350,9 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
 
 #[test]
 fn pre_spawn_projection_preserves_declared_restart_policies() {
-    let mut tree = OrderedTree::new().default_restart(RestartPolicy::always());
-    tree.add_actor(ActorSpec::new("explicit", || Worker).restart(RestartMode::Never));
-    tree.add_actor(ActorSpec::new("inherited", || Worker));
+    let mut tree = Tree::new().default_restart(RestartPolicy::always());
+    tree.add_actor_spec(ActorSpec::new("explicit", || Worker).restart(RestartMode::Never));
+    tree.add_actor_spec(ActorSpec::new("inherited", || Worker));
     let snapshot = tree.scope().snapshot();
 
     assert_eq!(
@@ -376,8 +376,8 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
     let spec = ActorSpec::new("buffered", || Parked).mailbox(MailboxMode::conflate());
     let actor = spec.actor_ref();
     let spec = spec.message_size(|message: &Vec<u8>| message.len());
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     runtime.scope().wait_started().await.expect("actor starts");
 
@@ -403,8 +403,8 @@ async fn static_tree_actor_can_remove_itself_when_done() {
         .restart(RestartMode::Never)
         .remove_when_done();
     let actor = spec.actor_ref();
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(spec);
     assert!(
         tree.scope()
             .snapshot()
@@ -452,10 +452,10 @@ fn dynamic_outlines_include_future_member_policy_defaults() {
 #[tokio::test]
 async fn leader_owned_scope_is_an_explicit_subtree() {
     let ingest = ActorSpec::new("ingest", || Worker);
-    let mut owned = OrderedTree::new().strategy(Strategy::RestForOne);
-    owned.add_actor(ingest);
+    let mut owned = Tree::new().strategy(Strategy::RestForOne);
+    owned.add_actor_spec(ingest);
     owned.add_subtree("children", DynamicTree::new());
-    let mut tree = OrderedTree::new();
+    let mut tree = Tree::new();
     tree.add_subtree("owned", owned);
     #[cfg(feature = "serde")]
     {
@@ -499,9 +499,9 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     let ingest = ActorSpec::new("ingest", || Worker);
     let fail = Arc::new(Notify::new());
     let fail_child = Arc::clone(&fail);
-    let mut children = OrderedTree::new()
-        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
-    children.add_task(
+    let mut children =
+        Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
+    children.add_task_spec(
         TaskSpec::new("fatal", move |_| {
             let fail = Arc::clone(&fail_child);
             async move {
@@ -512,10 +512,10 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
         .restart_policy(RestartPolicy::always().limit(0, Duration::from_secs(60)))
         .shutdown(Shutdown::abort()),
     );
-    let mut owned = OrderedTree::new().default_restart(RestartPolicy::never());
-    owned.add_actor(ingest);
+    let mut owned = Tree::new().default_restart(RestartPolicy::never());
+    owned.add_actor_spec(ingest);
     owned.add_subtree("children", children);
-    let mut tree = OrderedTree::new();
+    let mut tree = Tree::new();
     tree.add_subtree("owned", owned);
     let handle = tree.spawn().expect("leader-owned scope builds");
     handle
@@ -574,7 +574,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
             .default_restart(RestartPolicy::never())
             .default_shutdown(Shutdown::abort()),
     );
-    graph.add_task(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
+    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
     let outline = graph.outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     assert!(
@@ -613,7 +613,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
     let (graph, _ingest, _parse) = two_actor_tree();
     let mut graph = graph;
-    graph.add_task(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
+    graph.add_task_spec(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
     graph.add_subtree("workers", DynamicTree::new());
     let mut value = serde_json::to_value(graph.outline()).expect("outline serializes");
     let children = value["children"]

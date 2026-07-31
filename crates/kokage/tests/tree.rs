@@ -1613,7 +1613,7 @@ mod actor_host {
     async fn dynamic_actor_uses_its_supervisor_child_shutdown_grace() {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         crate::support::dynamic_root(&runtime)
-            .add_actor(
+            .add_actor_spec(
                 ActorSpec::new("worker", || NeverStops)
                     .shutdown(Shutdown::graceful_for(Duration::from_millis(100))),
             )

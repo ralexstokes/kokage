@@ -19,7 +19,7 @@ fn main() {
     let first_ref = slot.actor_ref();
     let second_ref = slot.actor_ref();
     let spec = slot.define(|| Idle).message_size(message_size);
-    let mut tree = kokage::OrderedTree::new();
-    tree.add_actor(spec);
+    let mut tree = kokage::Tree::new();
+    tree.add_actor_spec(spec);
     assert_eq!(first_ref.id(), second_ref.id());
 }

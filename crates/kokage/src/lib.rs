@@ -4,8 +4,8 @@
 //! async scheduler (Tokio today), with an owning [`RunningTree`] and integrated
 //! non-owning [`ScopeRef`] values.
 //!
-//! Declare each actor with [`ActorSpec`], place the specs directly in an
-//! [`OrderedTree`], and spawn the tree:
+//! Add each actor's id and factory directly to a [`Tree`], then spawn it.
+//! Use [`ActorSpec`] when a declaration needs explicit policy overrides:
 //!
 //! ```no_run
 //! use kokage::prelude::*;
@@ -27,8 +27,8 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut tree = OrderedTree::new();
-//! let echo_ref = tree.add_actor(ActorSpec::new("echo", || Echo));
+//! let mut tree = Tree::new();
+//! let echo_ref = tree.add_actor("echo", || Echo);
 //! let runtime = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
@@ -53,7 +53,7 @@
 //! |------|------|
 //! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
 //! | [`ActorSlot`] | Typed cyclic actor wiring. |
-//! | [`OrderedTree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
+//! | [`Tree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
 //! | [`RunningTree`] | Owns a spawned supervision tree and requests graceful shutdown when dropped. |
 //! | [`ScopeRef`] | Cheaply cloneable, non-owning reference and control capability for a supervision scope; [`ScopeRef::kind`] reports ordered or dynamic membership. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
@@ -67,7 +67,7 @@
 //!
 //! # Composition modes
 //!
-//! - **Ordered actor trees** via [`OrderedTree::new`]: per-actor supervision,
+//! - **Ordered actor trees** via [`Tree::new`]: per-actor supervision,
 //!   recursive actor-aware subtrees, arbitrary task children, and explicit
 //!   leader-owned scopes.
 //! - **Dynamic actor membership** via [`DynamicTree::new`]: an initially empty
@@ -148,15 +148,15 @@
 //!
 //! let left_actor = left_slot.define({ let right = right.clone(); move || Left(right.clone()) });
 //! let right_actor = right_slot.define({ let left = left.clone(); move || Right(left.clone()) });
-//! let mut tree = OrderedTree::new();
-//! tree.add_actor(left_actor);
-//! tree.add_actor(right_actor);
+//! let mut tree = Tree::new();
+//! tree.add_actor_spec(left_actor);
+//! tree.add_actor_spec(right_actor);
 //! # let _ = (left, right, tree);
 //! ```
 //!
 //! # Hand-driving actors
 //!
-//! Supervision through [`OrderedTree`] or [`DynamicTree`] is the normal
+//! Supervision through [`Tree`] or [`DynamicTree`] is the normal
 //! host, but [`ActorSpec::into_host`] exposes one actor for direct hosts:
 //!
 //! ```
@@ -282,8 +282,8 @@ pub mod observe {
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-        MailboxShutdown, MonitorEvent, OrderedTree, Reply, RestartMode, Shutdown, StopContext,
-        Strategy, TaskSpec, TimerKey,
+        MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
+        TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -297,7 +297,7 @@ pub use actor::{
     SendErrorKind, StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef};
-pub use supervision::{DynamicTree, OrderedTree, SubtreeSpec};
+pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
     MailboxShutdown, RestartMode, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext,

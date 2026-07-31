@@ -1,4 +1,4 @@
-use kokage::{ActorSpec, DynamicTree, OrderedTree, Strategy, TaskSpec};
+use kokage::{ActorSpec, DynamicTree, Tree, Strategy, TaskSpec};
 
 fn actor() -> ActorSpec<()> {
     loop {}
@@ -10,7 +10,7 @@ fn task() -> TaskSpec {
 
 fn main() {
     let _ = DynamicTree::new().strategy(Strategy::OneForAll);
-    DynamicTree::new().add_actor(actor());
-    DynamicTree::new().add_task(task());
-    DynamicTree::new().add_subtree("nested", OrderedTree::new());
+    DynamicTree::new().add_actor_spec(actor());
+    DynamicTree::new().add_task_spec(task());
+    DynamicTree::new().add_subtree("nested", Tree::new());
 }

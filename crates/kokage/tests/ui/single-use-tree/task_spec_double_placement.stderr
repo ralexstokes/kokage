@@ -1,10 +1,10 @@
 error[E0382]: use of moved value: `spec`
- --> tests/ui/single-use-tree/task_spec_double_placement.rs:7:19
+ --> tests/ui/single-use-tree/task_spec_double_placement.rs:7:24
   |
 4 |     let spec = TaskSpec::new("task", |_| async { Ok(()) });
   |         ---- move occurs because `spec` has type `TaskSpec`, which does not implement the `Copy` trait
-5 |     let mut tree = OrderedTree::new();
-6 |     tree.add_task(spec);
-  |                   ---- value moved here
-7 |     tree.add_task(spec);
-  |                   ^^^^ value used here after move
+5 |     let mut tree = Tree::new();
+6 |     tree.add_task_spec(spec);
+  |                        ---- value moved here
+7 |     tree.add_task_spec(spec);
+  |                        ^^^^ value used here after move

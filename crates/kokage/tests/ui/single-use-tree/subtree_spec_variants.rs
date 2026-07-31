@@ -1,5 +1,5 @@
-use kokage::{OrderedTree, SubtreeSpec};
+use kokage::{Tree, SubtreeSpec};
 
 fn main() {
-    let _ = SubtreeSpec::Ordered(OrderedTree::new());
+    let _ = SubtreeSpec::Ordered(Tree::new());
 }

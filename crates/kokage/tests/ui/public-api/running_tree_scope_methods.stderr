@@ -1,73 +1,37 @@
-error[E0599]: no method named `kind` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:17:21
+error[E0599]: no method named `add_actor_spec` found for reference `&RunningTree` in the current scope
+  --> tests/ui/public-api/running_tree_scope_methods.rs:15:10
    |
-17 |     let _ = running.kind();
-   |                     ^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `snapshot` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:18:21
-   |
-18 |     let _ = running.snapshot();
-   |                     ^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `wait_started` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:19:21
-   |
-19 |     let _ = running.wait_started().await;
-   |                     ^^^^^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `completions` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:20:21
-   |
-20 |     let _ = running.completions(["child"]);
-   |                     ^^^^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `watch_lifecycle` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:21:21
-   |
-21 |     let _ = running.watch_lifecycle();
-   |                     ^^^^^^^^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `actor_stats` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:22:21
-   |
-22 |     let _ = running.actor_stats();
-   |                     ^^^^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `subtree` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:23:21
-   |
-23 |     let _ = running.subtree("child");
-   |                     ^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `add_actor` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:25:10
-   |
-24 |       let _ = running
+14 |       let _ = running
    |  _____________-
-25 | |         .add_actor(ActorSpec::new("actor", || Actor))
-   | |         -^^^^^^^^^ method not found in `&RunningTree`
+15 | |         .add_actor_spec(ActorSpec::new("actor", || Actor))
+   | |         -^^^^^^^^^^^^^^ method not found in `&RunningTree`
    | |_________|
    |
 
-error[E0599]: no method named `add_task` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:28:10
+error[E0599]: no method named `add_task_spec` found for reference `&RunningTree` in the current scope
+  --> tests/ui/public-api/running_tree_scope_methods.rs:18:10
    |
-27 |       let _ = running
+17 |       let _ = running
    |  _____________-
-28 | |         .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
-   | |         -^^^^^^^^ method not found in `&RunningTree`
+18 | |         .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
+   | |         -^^^^^^^^^^^^^ method not found in `&RunningTree`
    | |_________|
    |
 
 error[E0599]: no method named `add_subtree` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:30:21
+  --> tests/ui/public-api/running_tree_scope_methods.rs:20:21
    |
-30 |     let _ = running.add_subtree("tree", OrderedTree::new()).await;
-   |                     ^^^^^^^^^^^ method not found in `&RunningTree`
+20 |     let _ = running.add_subtree("tree", Tree::new()).await;
+   |                     ^^^^^^^^^^^
+   |
+help: there is a method `subtree` with a similar name, but with different arguments
+  --> src/runtime.rs
+   |
+   |     pub fn subtree(&self, id: &str) -> Option<ScopeRef> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error[E0599]: no method named `remove_child` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:31:21
+  --> tests/ui/public-api/running_tree_scope_methods.rs:21:21
    |
-31 |     let _ = running.remove_child("child").await;
+21 |     let _ = running.remove_child("child").await;
    |                     ^^^^^^^^^^^^ method not found in `&RunningTree`

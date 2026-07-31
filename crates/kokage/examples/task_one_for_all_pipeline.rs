@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{BoxError, OrderedTree, RestartMode, Strategy, TaskSpec};
+use kokage::{BoxError, RestartMode, Strategy, TaskSpec, Tree};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -65,10 +65,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(RestartMode::Always)
     };
 
-    let mut tree = OrderedTree::new().strategy(Strategy::OneForAll);
-    tree.add_task(fetch);
-    tree.add_task(decode);
-    tree.add_task(sink);
+    let mut tree = Tree::new().strategy(Strategy::OneForAll);
+    tree.add_task_spec(fetch);
+    tree.add_task_spec(decode);
+    tree.add_task_spec(sink);
     let running_owner = tree.spawn()?;
     let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();

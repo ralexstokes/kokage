@@ -285,17 +285,17 @@ async fn build_app() -> Result<App, AnyError> {
         .define(Journal::default)
         .message_size(messages::journal_message_size);
 
-    let mut gateway_tree = OrderedTree::new().strategy(Strategy::RestForOne);
-    gateway_tree.add_actor(outbound_actor);
-    gateway_tree.add_actor(progress_actor);
-    gateway_tree.add_actor(inbound_actor);
-    let mut core_tree = OrderedTree::new();
-    core_tree.add_actor(journal_actor);
-    core_tree.add_actor(budget_actor);
-    core_tree.add_actor(guard_actor);
-    core_tree.add_actor(tool_host_actor);
-    core_tree.add_actor(router_actor);
-    let mut tree = OrderedTree::new();
+    let mut gateway_tree = Tree::new().strategy(Strategy::RestForOne);
+    gateway_tree.add_actor_spec(outbound_actor);
+    gateway_tree.add_actor_spec(progress_actor);
+    gateway_tree.add_actor_spec(inbound_actor);
+    let mut core_tree = Tree::new();
+    core_tree.add_actor_spec(journal_actor);
+    core_tree.add_actor_spec(budget_actor);
+    core_tree.add_actor_spec(guard_actor);
+    core_tree.add_actor_spec(tool_host_actor);
+    core_tree.add_actor_spec(router_actor);
+    let mut tree = Tree::new();
     // The router captures this pre-spawn identity, so make the sessions
     // scope ready before the core subtree starts the router.
     tree.add_subtree("sessions", sessions_runtime);

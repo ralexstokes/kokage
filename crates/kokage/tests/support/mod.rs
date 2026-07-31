@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree, RunningTree, ScopeRef,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, RunningTree, ScopeRef, Tree,
     raw::{ActorHost, RawActor},
 };
 
@@ -12,10 +12,10 @@ pub(crate) fn dynamic_root(runtime: &RunningTree) -> ScopeRef {
 /// Small test fixture for incrementally assembling heterogeneous actor specs.
 ///
 /// Production code should add each `ActorSpec` directly through
-/// `OrderedTree::add_actor`. Tests with many unrelated fixture actors use this
+/// `Tree::add_actor`. Tests with many unrelated fixture actors use this
 /// wrapper to keep slot definition and tree configuration compact.
 pub(crate) struct TreeBuilder {
-    tree: OrderedTree,
+    tree: Tree,
 }
 
 pub(crate) struct ActorHostBuilder {
@@ -69,9 +69,7 @@ impl ActorHostNode {
 
 impl TreeBuilder {
     pub(crate) fn new() -> Self {
-        Self {
-            tree: OrderedTree::new(),
-        }
+        Self { tree: Tree::new() }
     }
 
     pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
@@ -80,7 +78,7 @@ impl TreeBuilder {
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
     {
-        self.tree.add_actor(slot.define(factory))
+        self.tree.add_actor_spec(slot.define(factory))
     }
 
     pub(crate) fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
@@ -88,7 +86,7 @@ impl TreeBuilder {
         self
     }
 
-    pub(crate) fn build(self) -> OrderedTree {
+    pub(crate) fn build(self) -> Tree {
         self.tree
     }
 

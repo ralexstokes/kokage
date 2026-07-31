@@ -108,7 +108,7 @@ impl Session {
             .subtree("children")
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
-            .add_actor(
+            .add_actor_spec(
                 ActorSpec::new(
                     id.clone(),
                     AgentRunFactory {

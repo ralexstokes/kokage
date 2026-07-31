@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, time::Duration};
 
-use kokage::{Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, OrderedTree, Reply};
+use kokage::{Actor, ActorRef, Context, DynamicTree, ExitResult, Reply, Tree};
 use tokio::sync::mpsc;
 
 enum DirectoryMsg<M> {
@@ -54,13 +54,12 @@ impl Actor for Printer {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let directory_spec = ActorSpec::new("directory", || Directory::<String> {
-        entries: HashMap::new(),
-    });
     let dynamic_tree = DynamicTree::new();
     let dynamic = dynamic_tree.scope();
-    let mut tree = OrderedTree::new();
-    let directory = tree.add_actor(directory_spec);
+    let mut tree = Tree::new();
+    let directory = tree.add_actor("directory", || Directory::<String> {
+        entries: HashMap::new(),
+    });
     tree.add_subtree("dynamic", dynamic_tree);
     let runtime = tree.spawn()?;
     let handle = runtime.scope();
@@ -68,9 +67,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (printed, mut output) = mpsc::unbounded_channel();
     let printer = dynamic
-        .add_actor(ActorSpec::new("printer", move || Printer {
+        .add_actor("printer", move || Printer {
             printed: printed.clone(),
-        }))
+        })
         .await?;
     directory
         .send(DirectoryMsg::Insert("receipts".to_owned(), printer))

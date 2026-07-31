@@ -12,7 +12,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let runtime = OrderedTree::new().spawn()?;
+//! # let runtime = Tree::new().spawn()?;
 //! let root = runtime.scope();
 //! let console = ConsoleBuilder::for_runtime(&root)
 //!     .spawn()

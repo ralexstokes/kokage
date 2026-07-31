@@ -1,8 +1,11 @@
 //! Supervision trees expressed as opaque, inspectable recursive data.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use crate::supervisor::{
@@ -11,8 +14,8 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorRef, ActorSpec, RunningTree, ScopeRef,
-    actor::{ActorNode, RunnableActorBuilder},
+    ActorFactory, ActorRef, ActorSpec, ExitResult, RunningTree, ScopeRef, TaskContext,
+    actor::{ActorNode, RawActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
 
@@ -119,13 +122,10 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let ingest = ActorSpec::new("ingest", || Worker).restart(RestartMode::Never);
-/// let parse = ActorSpec::new("parse", || Worker);
-///
-/// let mut workers = OrderedTree::new();
-/// workers.add_actor(parse);
-/// let mut tree = OrderedTree::new().strategy(Strategy::RestForOne);
-/// tree.add_actor(ingest);
+/// let mut workers = Tree::new();
+/// workers.add_actor("parse", || Worker);
+/// let mut tree = Tree::new().strategy(Strategy::RestForOne);
+/// tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartMode::Never));
 /// tree.add_subtree("workers", workers);
 ///
 /// # #[cfg(feature = "serde")]
@@ -135,7 +135,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// # Ok(())
 /// # }
 /// ```
-pub struct OrderedTree {
+pub struct Tree {
     inner: IdentityTree<false>,
 }
 
@@ -151,7 +151,7 @@ pub struct DynamicTree {
 /// Opaque ownership of either kind of supervision tree.
 ///
 /// Public APIs use `impl Into<SubtreeSpec>` so callers can pass an
-/// [`OrderedTree`] or [`DynamicTree`] directly. `SubtreeSpec` has no public
+/// [`Tree`] or [`DynamicTree`] directly. `SubtreeSpec` has no public
 /// constructor or variants; this keeps the set of supported tree kinds
 /// extensible without exposing the runtime's internal representation.
 pub struct SubtreeSpec {
@@ -161,7 +161,7 @@ pub struct SubtreeSpec {
 }
 
 enum SubtreeKind {
-    Ordered(OrderedTree),
+    Ordered(Tree),
     Dynamic(DynamicTree),
 }
 
@@ -172,8 +172,8 @@ pub(crate) struct LoweredSubtreeSpec {
     pub(crate) shutdown: Option<Shutdown>,
 }
 
-impl From<OrderedTree> for SubtreeSpec {
-    fn from(tree: OrderedTree) -> Self {
+impl From<Tree> for SubtreeSpec {
+    fn from(tree: Tree) -> Self {
         Self {
             kind: SubtreeKind::Ordered(tree),
             restart: None,
@@ -196,7 +196,7 @@ impl SubtreeSpec {
     /// Sets which exits make the enclosing scope restart this subtree.
     ///
     /// This configures the nested scope's edge in its parent. It is distinct
-    /// from [`OrderedTree::default_restart`] and
+    /// from [`Tree::default_restart`] and
     /// [`DynamicTree::default_restart`], which configure children inside the
     /// nested scope.
     #[must_use]
@@ -215,7 +215,7 @@ impl SubtreeSpec {
     /// Sets the policy used by the enclosing scope to stop this subtree.
     ///
     /// This configures the nested scope's edge in its parent. It is distinct
-    /// from [`OrderedTree::default_shutdown`] and
+    /// from [`Tree::default_shutdown`] and
     /// [`DynamicTree::default_shutdown`], which configure children inside the
     /// nested scope.
     #[must_use]
@@ -290,13 +290,13 @@ macro_rules! tree_common_methods {
     };
 }
 
-impl Default for OrderedTree {
+impl Default for Tree {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl OrderedTree {
+impl Tree {
     tree_common_methods!();
 
     /// Returns the stable actor-aware reference reserved for this root scope.
@@ -322,33 +322,53 @@ impl OrderedTree {
         self
     }
 
-    /// Appends an actor declaration and returns its stable typed ref.
+    /// Appends an actor with default configuration and returns its stable typed ref.
+    pub fn add_actor<M, F>(&mut self, id: impl Into<String>, factory: F) -> ActorRef<M>
+    where
+        M: Send + 'static,
+        F: ActorFactory,
+        F::Actor: RawActor<Msg = M>,
+    {
+        self.add_actor_spec(ActorSpec::new(id, factory))
+    }
+
+    /// Appends an explicitly configured actor declaration and returns its stable typed ref.
     ///
     /// The returned ref is the same restart-stable handle
     /// [`ActorSpec::actor_ref`] mints before placement; call that when a
     /// factory declared earlier in this scope needs the ref.
-    pub fn add_actor<M: Send + 'static>(&mut self, actor: ActorSpec<M>) -> ActorRef<M> {
+    pub fn add_actor_spec<M: Send + 'static>(&mut self, actor: ActorSpec<M>) -> ActorRef<M> {
         let actor_ref = actor.actor_ref();
         self.inner.add_actor(actor);
         actor_ref
     }
 
-    /// Appends an arbitrary task node with its resolved policies.
-    pub fn add_task(&mut self, task: TaskSpec) {
+    /// Appends a task with default configuration.
+    pub fn add_task<F, Fut>(&mut self, id: impl Into<String>, task: F)
+    where
+        F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ExitResult> + Send + 'static,
+    {
+        self.add_task_spec(TaskSpec::new(id, task));
+    }
+
+    /// Appends an explicitly configured task declaration.
+    pub fn add_task_spec(&mut self, task: TaskSpec) {
         self.inner.add_task(task);
     }
 
     /// Appends a named ordered or dynamic nested scope.
     ///
-    /// Pass [`SubtreeSpec::from`] to override the restart or shutdown policy
+    /// Use [`add_subtree_spec`](Self::add_subtree_spec) to override the restart
+    /// or shutdown policy
     /// of the subtree's edge in this parent:
     ///
     /// ```
-    /// use kokage::{OrderedTree, RestartMode, Shutdown, SubtreeSpec};
+    /// use kokage::{Tree, RestartMode, Shutdown, SubtreeSpec};
     ///
-    /// let workers = OrderedTree::new();
-    /// let mut app = OrderedTree::new();
-    /// app.add_subtree(
+    /// let workers = Tree::new();
+    /// let mut app = Tree::new();
+    /// app.add_subtree_spec(
     ///     "workers",
     ///     SubtreeSpec::from(workers)
     ///         .restart(RestartMode::Never)
@@ -356,12 +376,17 @@ impl OrderedTree {
     /// );
     /// ```
     pub fn add_subtree(&mut self, id: impl Into<String>, tree: impl Into<SubtreeSpec>) {
+        self.add_subtree_spec(id, tree.into());
+    }
+
+    /// Appends an explicitly configured subtree declaration.
+    pub fn add_subtree_spec(&mut self, id: impl Into<String>, tree: SubtreeSpec) {
         let id = id.into();
         let SubtreeSpec {
             kind,
             restart,
             shutdown,
-        } = tree.into();
+        } = tree;
         match kind {
             SubtreeKind::Ordered(tree) => {
                 self.inner.add_subtree(id, tree.inner, restart, shutdown);
@@ -434,7 +459,7 @@ impl DynamicTree {
     }
 }
 
-impl std::fmt::Debug for OrderedTree {
+impl std::fmt::Debug for Tree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
     }
@@ -926,7 +951,7 @@ impl IdentityTree<false> {
     /// Appends an arbitrary task node with its resolved policies.
     ///
     /// Explicit policies on `task` survive lowering; unset policies inherit
-    /// the enclosing scope defaults. See [`OrderedTree::add_task`].
+    /// the enclosing scope defaults. See [`Tree::add_task`].
     fn add_task(&mut self, task: TaskSpec) {
         self.tree.add_task(task);
         self.refresh_root();

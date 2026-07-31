@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Errors returned when validating or spawning an [`OrderedTree`](crate::OrderedTree),
+/// Errors returned when validating or spawning an [`Tree`](crate::Tree),
 /// a [`DynamicTree`](crate::DynamicTree), or a dynamic subtree insertion.
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]

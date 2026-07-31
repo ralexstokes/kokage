@@ -637,10 +637,10 @@ async fn shutdown_case(policy: MailboxShutdown) -> Vec<&'static str> {
     let release = Arc::new(Notify::new());
     let entered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = OrderedTree::new().mailbox_capacity(1);
+    let mut graph = Tree::new().mailbox_capacity(1);
     let actor_slot = ActorSlot::new("ShutdownActor");
     let actor = actor_slot.actor_ref();
-    graph.add_actor(
+    graph.add_actor_spec(
         actor_slot
             .define({
                 let release = release.clone();
@@ -782,10 +782,10 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let offload_release = Arc::new(Notify::new());
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = OrderedTree::new();
+    let mut graph = Tree::new();
     let actor_slot = ActorSlot::new("conflating-offload");
     let actor = actor_slot.actor_ref();
-    graph.add_actor(
+    graph.add_actor_spec(
         actor_slot
             .define({
                 let handler_release = handler_release.clone();

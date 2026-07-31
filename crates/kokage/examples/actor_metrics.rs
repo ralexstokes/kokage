@@ -43,8 +43,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let worker_spec = ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
     });
-    let mut tree = OrderedTree::new();
-    let worker = tree.add_actor(worker_spec);
+    let mut tree = Tree::new();
+    let worker = tree.add_actor_spec(worker_spec);
     let runtime = tree.spawn()?;
 
     let sampler_stop = CancellationToken::new();

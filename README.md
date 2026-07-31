@@ -56,14 +56,12 @@ impl Actor for FrontDesk {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Add declarations in startup order and retain the typed refs returned for actors.
-    let press_actor = ActorSpec::new("press", Press::default);
-    let mut tree = OrderedTree::new();
-    let press = tree.add_actor(press_actor);
-    let orders_actor = ActorSpec::new("front-desk", move || FrontDesk {
+    // Add actors in startup order and retain their typed refs.
+    let mut tree = Tree::new();
+    let press = tree.add_actor("press", Press::default);
+    let orders = tree.add_actor("front-desk", move || FrontDesk {
         press: press.clone(),
     });
-    let orders = tree.add_actor(orders_actor);
 
     // Compose the supervision tree, then run it.
     let runtime = tree.spawn()?;
@@ -76,13 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `spawn()` returns the owning `RunningTree`; keep it alive for as long as the
-application should run. `running.scope()` returns a cheaply cloneable
-`ScopeRef`, the non-owning reference/control capability for a supervision
-scope, parallel to an `ActorRef`. Bind `let root = running.scope();` when a
-component performs repeated root operations. A `ScopeRef` does not keep its
-`RunningTree` alive; dropping references has no lifecycle effect, while
-dropping the owner requests graceful shutdown—so a discarded
-`let _ = tree.spawn()?;` shuts down immediately.
+application should run. Routine root observation and shutdown are available
+directly on it. `running.scope()` returns a cheaply cloneable `ScopeRef` for
+passing non-owning control elsewhere or changing dynamic membership, parallel
+to an `ActorRef`. A `ScopeRef` does not keep its `RunningTree` alive; dropping
+references has no lifecycle effect, while dropping the owner requests graceful
+shutdown—so a discarded `let _ = tree.spawn()?;` shuts down immediately.
 
 Background actor operations such as watches, mailbox timers, offloads, scope
 waits, and lifecycle/completion pumps return one `kokage::Guard` type. A guard

@@ -12,8 +12,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, OrderedTree, RestartMode,
-    RestartPolicy, RunningTree, ScopeRef,
+    Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartMode,
+    RestartPolicy, RunningTree, ScopeRef, Tree,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
@@ -111,7 +111,7 @@ async fn runtime_with_watched_subtree() -> (
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
     let sink = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("sink", move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
                 Sink {
@@ -334,7 +334,7 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
 
     let replacement = handle
         .scope()
-        .add_subtree("replacement", OrderedTree::new())
+        .add_subtree("replacement", Tree::new())
         .await
         .expect("replacement subtree added");
     let guard = replacement.watch_lifecycle_to(&sink, SinkMsg::Lifecycle);
@@ -359,14 +359,14 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", move || ScopeSink {
+        .add_actor_spec(ActorSpec::new("sink", move || ScopeSink {
             observed: observed_tx.clone(),
             watch: None,
         }))
         .await
         .expect("scope sink added");
     let crasher = support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("crasher", || Crasher).restart(RestartMode::OnFailure))
+        .add_actor_spec(ActorSpec::new("crasher", || Crasher).restart(RestartMode::OnFailure))
         .await
         .expect("crasher added");
     runtime

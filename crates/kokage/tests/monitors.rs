@@ -1472,7 +1472,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
     let peer_ref = support::dynamic_root(&runtime)
-        .add_actor(
+        .add_actor_spec(
             ActorSpec::new("peer", move || StubbornPeer {
                 started: peer_started_tx.clone(),
             })
@@ -1483,7 +1483,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("observer", {
+        .add_actor_spec(ActorSpec::new("observer", {
             let peer_ref = peer_ref.clone();
             move || UnitObserver {
                 peer: peer_ref.clone(),

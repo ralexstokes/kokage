@@ -66,7 +66,7 @@ async fn spawn_console_with_stats(
         .expect("test snapshot tree spawns");
     let snapshots_handle = snapshots.scope();
     snapshots_handle
-        .add_task(TaskSpec::new("worker", |ctx| async move {
+        .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -442,7 +442,7 @@ async fn ws_streams_snapshot_updates() {
 
     snapshots
         .scope()
-        .add_task(TaskSpec::new("updated", |ctx| async move {
+        .add_task_spec(TaskSpec::new("updated", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -477,7 +477,7 @@ async fn ws_streams_events() {
 
     lifecycle
         .scope()
-        .add_task(TaskSpec::new("worker", |ctx| async move {
+        .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -518,7 +518,7 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .scope()
-        .add_task(TaskSpec::new("worker", |ctx| async move {
+        .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -527,7 +527,7 @@ async fn dynamic_tree_wires_public_observability() {
 
     runtime
         .scope()
-        .add_actor(ActorSpec::new("tracked", || IdleActor))
+        .add_actor_spec(ActorSpec::new("tracked", || IdleActor))
         .await
         .expect("failed to add runtime actor");
 

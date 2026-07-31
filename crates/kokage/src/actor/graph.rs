@@ -195,7 +195,7 @@ pub enum ActorRunError {
 ///
 /// This matches the default grace of
 /// [`Shutdown`](crate::Shutdown), so an actor behaves the same
-/// whether it is hosted by hand or by an [`OrderedTree`](crate::OrderedTree).
+/// whether it is hosted by hand or by an [`Tree`](crate::Tree).
 pub const DEFAULT_SHUTDOWN_BOUND: Duration = Duration::from_secs(5);
 
 /// The result of one directly hosted actor incarnation.

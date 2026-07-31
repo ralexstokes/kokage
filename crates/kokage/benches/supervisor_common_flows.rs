@@ -11,7 +11,7 @@ use std::{
 };
 
 use kokage::{
-    BoxError, DynamicTree, OrderedTree, RestartMode, Strategy, TaskSpec,
+    BoxError, DynamicTree, RestartMode, Strategy, TaskSpec, Tree,
     observe::{LifecycleEventKind, LifecycleWatch},
 };
 use tokio::{
@@ -98,9 +98,9 @@ fn bench_async<F, Fut>(
 }
 
 async fn spawn_shutdown_flow(children: usize) {
-    let mut builder = OrderedTree::new();
+    let mut builder = Tree::new();
     for index in 0..children {
-        builder.add_task(TaskSpec::new(format!("worker-{index}"), |ctx| async move {
+        builder.add_task_spec(TaskSpec::new(format!("worker-{index}"), |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -136,10 +136,10 @@ async fn one_for_one_restart_flow() {
     })
     .restart(RestartMode::OnFailure);
 
-    let mut builder = OrderedTree::new().strategy(Strategy::OneForOne);
-    builder.add_task(flaky);
+    let mut builder = Tree::new().strategy(Strategy::OneForOne);
+    builder.add_task_spec(flaky);
     for index in 0..3 {
-        builder.add_task(TaskSpec::new(format!("peer-{index}"), |ctx| async move {
+        builder.add_task_spec(TaskSpec::new(format!("peer-{index}"), |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }));
@@ -184,10 +184,10 @@ async fn one_for_all_restart_flow() {
     })
     .restart(RestartMode::OnFailure);
 
-    let mut builder = OrderedTree::new().strategy(Strategy::OneForAll);
-    builder.add_task(trigger);
+    let mut builder = Tree::new().strategy(Strategy::OneForAll);
+    builder.add_task_spec(trigger);
     for index in 0..3 {
-        builder.add_task(
+        builder.add_task_spec(
             TaskSpec::new(format!("peer-{index}"), |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -214,7 +214,7 @@ async fn dynamic_add_remove_flow() {
     let mut events = handle.watch_lifecycle();
 
     handle
-        .add_task(TaskSpec::new("seed", |ctx| async move {
+        .add_task_spec(TaskSpec::new("seed", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))
@@ -224,7 +224,7 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "seed").await;
 
     handle
-        .add_task(TaskSpec::new("dynamic", |ctx| async move {
+        .add_task_spec(TaskSpec::new("dynamic", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
         }))

@@ -12,8 +12,8 @@ mod coverage_probe {
     mod expected {
         use kokage::prelude::{
             Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-            MailboxShutdown, MonitorEvent, OrderedTree, Reply, RestartMode, Shutdown, StopContext,
-            Strategy, SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey,
+            MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey, Tree,
         };
     }
 
@@ -44,15 +44,12 @@ mod coverage_probe {
 }
 
 #[test]
-fn prelude_constructs_actor_and_task_declarations() {
-    let spec = ActorSpec::new("direct", || BlockingWorker {
+fn prelude_adds_default_config_actor_and_task_declarations() {
+    let mut tree = Tree::new();
+    tree.add_actor("direct", || BlockingWorker {
         observed: mpsc::unbounded_channel().0,
     });
-    let task = TaskSpec::new("task", |_| async { Ok(()) });
-
-    let mut tree = OrderedTree::new();
-    tree.add_actor(spec);
-    tree.add_task(task);
+    tree.add_task("task", |_| async { Ok(()) });
 }
 
 #[test]
@@ -63,8 +60,8 @@ fn root_actor_slot_constructs_a_cyclic_declaration() {
         observed: mpsc::unbounded_channel().0,
     });
 
-    let mut tree = OrderedTree::new();
-    tree.add_actor(cyclic);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(cyclic);
 }
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -206,16 +203,16 @@ impl Actor for BlockingWorker {
 #[tokio::test]
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph = OrderedTree::new();
-    let worker = graph.add_actor(ActorSpec::new("worker", move || BlockingWorker {
+    let mut graph = Tree::new();
+    let worker = graph.add_actor("worker", move || BlockingWorker {
         observed: observed_tx.clone(),
-    }));
+    });
 
     let handle = graph
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.scope().watch_lifecycle();
+    let mut events = handle.watch_lifecycle();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -243,7 +240,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     ));
     assert!(child_id_is(&started, "worker"));
 
-    let snapshot = handle.scope().snapshot();
+    let snapshot = handle.snapshot();
     assert!(
         snapshot
             .child("worker")
@@ -282,8 +279,8 @@ fn task_policy_sets_remain_nameable_from_the_single_crate() {
 #[tokio::test]
 async fn prelude_observes_raw_task_events_and_snapshots() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("worker", move |ctx| {
+    let mut tree = Tree::new();
+    tree.add_task_spec(TaskSpec::new("worker", move |ctx| {
         let started_tx = started_tx.clone();
         async move {
             started_tx
@@ -336,8 +333,8 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
 #[tokio::test]
 async fn prelude_snapshots_walk_nested_task_children() {
     let (leaf_started_tx, mut leaf_started_rx) = mpsc::unbounded_channel();
-    let mut nested = OrderedTree::new();
-    nested.add_task(TaskSpec::new("leaf", move |ctx| {
+    let mut nested = Tree::new();
+    nested.add_task_spec(TaskSpec::new("leaf", move |ctx| {
         let leaf_started_tx = leaf_started_tx.clone();
         async move {
             leaf_started_tx.send(()).expect("test receiver dropped");
@@ -345,8 +342,8 @@ async fn prelude_snapshots_walk_nested_task_children() {
             Ok(())
         }
     }));
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("anchor", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task_spec(TaskSpec::new("anchor", |ctx| async move {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     }));

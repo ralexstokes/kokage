@@ -7,9 +7,7 @@ use std::{
     },
 };
 
-use kokage::{
-    Actor, ActorRef, ActorSpec, BoxError, Context, ExitResult, OrderedTree, RestartPolicy,
-};
+use kokage::{Actor, ActorRef, ActorSpec, BoxError, Context, ExitResult, RestartPolicy, Tree};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -70,9 +68,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let frontend = frontend_spec.actor_ref();
 
-    let mut tree = OrderedTree::new();
-    tree.add_actor(frontend_spec);
-    tree.add_actor(worker_spec);
+    let mut tree = Tree::new();
+    tree.add_actor_spec(frontend_spec);
+    tree.add_actor_spec(worker_spec);
     let runtime = tree.spawn()?;
     let handle = runtime.scope();
 

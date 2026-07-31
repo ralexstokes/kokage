@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use kokage::{
-    ActorSlot, ActorSpec, BuildError, ExitResult, OrderedTree,
+    ActorSlot, ActorSpec, BuildError, ExitResult, Tree,
     raw::{RawActor, RawContext},
 };
 
@@ -31,17 +31,17 @@ fn report(label: &str, result: Result<kokage::RunningTree, BuildError>) {
 
 #[tokio::main]
 async fn main() {
-    let mut zero_capacity = OrderedTree::new().mailbox_capacity(0);
-    zero_capacity.add_actor(ActorSpec::new("worker", Idle::<()>::new));
+    let mut zero_capacity = Tree::new().mailbox_capacity(0);
+    zero_capacity.add_actor_spec(ActorSpec::new("worker", Idle::<()>::new));
     report("zero mailbox capacity", zero_capacity.spawn());
 
-    let mut duplicate_ids = OrderedTree::new();
-    duplicate_ids.add_actor(ActorSpec::new("worker", Idle::<()>::new));
-    duplicate_ids.add_actor(ActorSpec::new("worker", Idle::<()>::new));
+    let mut duplicate_ids = Tree::new();
+    duplicate_ids.add_actor_spec(ActorSpec::new("worker", Idle::<()>::new));
+    duplicate_ids.add_actor_spec(ActorSpec::new("worker", Idle::<()>::new));
     report("duplicate actor ids", duplicate_ids.spawn());
 
-    let mut empty_id = OrderedTree::new();
-    empty_id.add_actor(ActorSpec::new("", Idle::<()>::new));
+    let mut empty_id = Tree::new();
+    empty_id.add_actor_spec(ActorSpec::new("", Idle::<()>::new));
     report("empty actor id", empty_id.spawn());
 
     // Message-type mismatches now fail at compile time:

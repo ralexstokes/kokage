@@ -1,21 +1,20 @@
 use kokage::{
-    OrderedTree, TaskSpec,
+    Tree,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::time::{Duration, sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut tree = OrderedTree::new();
-    tree.add_task(TaskSpec::new("worker", |ctx| async move {
+    let mut tree = Tree::new();
+    tree.add_task("worker", |ctx| async move {
         println!("worker started");
         ctx.shutdown_token().cancelled().await;
         println!("worker shutting down");
         Ok(())
-    }));
+    });
     let running = tree.spawn()?;
-    let handle = running.scope();
-    let mut events = handle.watch_lifecycle();
+    let mut events = running.watch_lifecycle();
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
@@ -28,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    handle.shutdown_and_wait().await?;
+    running.shutdown_and_wait().await?;
     observer.await?;
 
     Ok(())

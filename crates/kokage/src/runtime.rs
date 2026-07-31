@@ -1,12 +1,13 @@
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{Arc, Mutex, OnceLock, PoisonError, Weak},
 };
 
 use crate::{
-    ActorRef, ActorSpec,
+    ActorFactory, ActorRef, ActorSpec, ExitResult,
     actor::{
-        ActorNode, ActorOptionsValidationError, RunnableActor, RunnableActorBuilder,
+        ActorNode, ActorOptionsValidationError, RawActor, RunnableActor, RunnableActorBuilder,
         ScopedActorStats,
     },
     supervisor::{
@@ -174,12 +175,11 @@ where
 
 /// Owns a spawned supervision tree.
 ///
-/// `RunningTree` exposes only owner-lifecycle operations. Use
-/// [`scope`](Self::scope) to obtain the cheaply cloneable, non-owning
-/// [`ScopeRef`] used for root or nested control and observation. Dropping a
-/// `ScopeRef` is inert and it does not keep this owner alive; dropping this
-/// owner requests graceful shutdown. Bind `let root = running.scope();` when
-/// performing repeated root operations.
+/// Routine root observation and lifecycle operations delegate directly to the
+/// root scope. Use [`scope`](Self::scope) when a cheaply cloneable, non-owning
+/// [`ScopeRef`] must be passed elsewhere or used for membership mutation.
+/// Dropping a `ScopeRef` is inert and does not keep this owner alive; dropping
+/// this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
 pub struct RunningTree {
     supervisor: RunningSupervisor,
@@ -197,6 +197,50 @@ impl RunningTree {
         self.scope.clone()
     }
 
+    /// Returns whether the root scope has ordered or dynamic membership.
+    pub fn kind(&self) -> ScopeKind {
+        self.scope.kind()
+    }
+
+    /// Returns the actor-aware handle for a direct runtime subtree.
+    pub fn subtree(&self, id: &str) -> Option<ScopeRef> {
+        self.scope.subtree(id)
+    }
+
+    /// Returns a clone of the latest root supervisor snapshot.
+    pub fn snapshot(&self) -> SupervisorSnapshot {
+        self.scope.snapshot()
+    }
+
+    /// Returns a receiver that updates when the root snapshot changes.
+    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
+        self.scope.subscribe_snapshots()
+    }
+
+    /// Returns an aligned root snapshot and lifecycle stream.
+    pub fn observe_lifecycle(&self) -> LifecycleObservation {
+        self.scope.observe_lifecycle()
+    }
+
+    /// Returns the ordered lifecycle stream for the complete root tree.
+    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+        self.scope.watch_lifecycle()
+    }
+
+    /// Pumps direct-child lifecycle events from the root into `target`.
+    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
+    where
+        M: Send + 'static,
+        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    {
+        self.scope.watch_lifecycle_to(target, map)
+    }
+
+    /// Returns point-in-time actor stats for the root and all nested subtrees.
+    pub fn actor_stats(&self) -> Vec<ScopedActorStats> {
+        self.scope.actor_stats()
+    }
+
     /// Requests graceful shutdown without waiting for completion.
     pub fn shutdown(&self) {
         self.supervisor.shutdown();
@@ -210,6 +254,11 @@ impl RunningTree {
     /// Waits for the running tree to stop.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
+    }
+
+    /// Waits until every current actor child of the root has completed `on_start`.
+    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
+        self.scope.wait_started().await
     }
 }
 
@@ -560,9 +609,18 @@ impl ScopeRef {
         id: impl Into<String>,
         tree: impl Into<crate::SubtreeSpec>,
     ) -> Result<ScopeRef, ControlError> {
+        self.add_subtree_spec(id, tree.into()).await
+    }
+
+    /// Builds and adds an explicitly configured actor-aware runtime subtree.
+    pub async fn add_subtree_spec(
+        &self,
+        id: impl Into<String>,
+        tree: crate::SubtreeSpec,
+    ) -> Result<ScopeRef, ControlError> {
         let dynamic = self.dynamic_supervisor()?;
         let id = id.into();
-        let parts = tree.into().into_parts();
+        let parts = tree.into_parts();
         let parts = parts.map_err(ControlError::Rejected)?;
         let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
@@ -586,7 +644,16 @@ impl ScopeRef {
         .ok_or(ControlError::Unavailable)
     }
 
-    /// Adds an arbitrary supervised task child to this scope.
+    /// Adds a supervised task child with default configuration to this scope.
+    pub async fn add_task<F, Fut>(&self, id: impl Into<String>, task: F) -> Result<(), ControlError>
+    where
+        F: Fn(crate::TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ExitResult> + Send + 'static,
+    {
+        self.add_task_spec(TaskSpec::new(id, task)).await
+    }
+
+    /// Adds an explicitly configured supervised task child to this scope.
     ///
     /// This is the task-level counterpart to adding an actor. Success means
     /// the membership was inserted and startup was scheduled. Task children do
@@ -597,11 +664,25 @@ impl ScopeRef {
     ///
     /// Returns [`ControlError::NotDynamic`] when this scope has ordered
     /// membership. Other failures are reported by the dynamic supervisor.
-    pub async fn add_task(&self, task: TaskSpec) -> Result<(), ControlError> {
+    pub async fn add_task_spec(&self, task: TaskSpec) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.add_child(task).await.map(|_| ())
     }
 
-    /// Adds one actor declaration and returns its stable typed ref.
+    /// Adds an actor with default configuration and returns its stable typed ref.
+    pub async fn add_actor<M, F>(
+        &self,
+        id: impl Into<String>,
+        factory: F,
+    ) -> Result<ActorRef<M>, ControlError>
+    where
+        M: Send + 'static,
+        F: ActorFactory,
+        F::Actor: RawActor<Msg = M>,
+    {
+        self.add_actor_spec(ActorSpec::new(id, factory)).await
+    }
+
+    /// Adds one explicitly configured actor declaration and returns its stable typed ref.
     ///
     /// The actor id is its direct supervisor child id, so it can be removed
     /// later through [`ScopeRef::remove_child`]. See [`crate::ActorFactory`] for
@@ -618,7 +699,7 @@ impl ScopeRef {
     /// membership. Invalid actor configuration and insertion failures are
     /// returned as [`ControlError::Rejected`]; a stopped scope returns
     /// [`ControlError::Unavailable`].
-    pub async fn add_actor<M: Send + 'static>(
+    pub async fn add_actor_spec<M: Send + 'static>(
         &self,
         spec: ActorSpec<M>,
     ) -> Result<ActorRef<M>, ControlError> {
@@ -818,14 +899,14 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, OrderedTree, RestartMode,
-        RunningTree, ScopeRef,
+        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartMode, RunningTree,
+        ScopeRef, Tree,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
-        let ordered_spawn: fn(OrderedTree) -> Result<RunningTree, BuildError> = OrderedTree::spawn;
-        let ordered_scope: fn(&OrderedTree) -> ScopeRef = OrderedTree::scope;
+        let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
+        let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
         let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree, BuildError> = DynamicTree::spawn;
         let dynamic_scope: fn(&DynamicTree) -> ScopeRef = DynamicTree::scope;
 
@@ -854,8 +935,8 @@ mod tests {
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
         let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartMode::Never);
         let static_ref = static_spec.actor_ref();
-        let mut static_tree = OrderedTree::new();
-        static_tree.add_actor(static_spec);
+        let mut static_tree = Tree::new();
+        static_tree.add_actor_spec(static_spec);
         let static_runtime = static_tree.spawn().expect("static runtime builds");
         static_runtime
             .scope()
@@ -880,7 +961,9 @@ mod tests {
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic = dynamic_runtime.scope();
         let dynamic_ref = dynamic
-            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartMode::Never))
+            .add_actor_spec(
+                ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartMode::Never),
+            )
             .await
             .expect("dynamic actor is inserted");
         dynamic_runtime
@@ -912,7 +995,7 @@ mod tests {
         let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic = runtime.scope();
         let actor_ref = dynamic
-            .add_actor(
+            .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
                     .restart(RestartMode::Never)
                     .remove_when_done(),
@@ -942,7 +1025,7 @@ mod tests {
         let root = DynamicTree::new().spawn().expect("runtime builds");
         let dynamic = root.scope();
         dynamic
-            .add_subtree("workers", OrderedTree::new())
+            .add_subtree("workers", Tree::new())
             .await
             .expect("first subtree added");
         let first_lineage = root
@@ -957,7 +1040,7 @@ mod tests {
             .await
             .expect("first subtree removed");
         dynamic
-            .add_subtree("workers", OrderedTree::new())
+            .add_subtree("workers", Tree::new())
             .await
             .expect("replacement subtree added");
         let replacement_lineage = root

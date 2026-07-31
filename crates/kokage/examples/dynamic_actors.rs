@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kokage::{Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult};
+use kokage::{Actor, ActorRef, Context, DynamicTree, ExitResult};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -53,12 +53,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let scope = runtime.scope();
     let orders = scope
-        .add_actor(ActorSpec::new("front-desk", || Frontend { rush: None }))
+        .add_actor("front-desk", || Frontend { rush: None })
         .await?;
     let rush = scope
-        .add_actor(ActorSpec::new("rush-press", move || RushPress {
+        .add_actor("rush-press", move || RushPress {
             observed: observed_tx.clone(),
-        }))
+        })
         .await?;
 
     orders.send(FrontendMsg::SetRushPress(rush.clone())).await?;
