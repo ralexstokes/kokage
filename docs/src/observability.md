@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_tree = tree.spawn()?;
 
     // Readiness: wait until every child is running.
-    let mut snapshots = running_tree.snapshots();
+    let mut snapshots = running_tree.scope().snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;

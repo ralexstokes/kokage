@@ -99,6 +99,9 @@ return `DynamicScopeRef`, which adds membership operations such as `add_actor`,
 escape hatch. A scope found through untyped tree traversal can request that
 capability with `scope.dynamic()`.
 
+The owning `RunningTree` stays deliberately small: obtain `scope()`, or consume
+the owner with `shutdown().await` / `wait().await` to join the runtime.
+
 The common actor operations own their natural lifetimes:
 
 - `watch` is owned by the two restart-stable actor memberships and follows

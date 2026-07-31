@@ -516,21 +516,6 @@ impl RunningTree {
         self.scope.clone()
     }
 
-    /// Waits until the root scope has completed startup.
-    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
-        self.scope.wait_started().await
-    }
-
-    /// Returns the root scope's latest snapshot.
-    pub fn snapshot(&self) -> SupervisorSnapshot {
-        self.scope.snapshot()
-    }
-
-    /// Returns a receiver for root-scope snapshot updates.
-    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
-        self.scope.snapshots()
-    }
-
     /// Requests graceful shutdown and waits for completion, consuming the owner.
     pub async fn shutdown(self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
@@ -550,21 +535,6 @@ impl RunningDynamicTree {
     /// Returns the dynamic root scope reference.
     pub fn scope(&self) -> DynamicScopeRef {
         DynamicScopeRef::new(self.inner.scope())
-    }
-
-    /// Waits until the root scope has completed startup.
-    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
-        self.inner.wait_started().await
-    }
-
-    /// Returns the root scope's latest snapshot.
-    pub fn snapshot(&self) -> SupervisorSnapshot {
-        self.inner.snapshot()
-    }
-
-    /// Returns a receiver for root-scope snapshot updates.
-    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
-        self.inner.snapshots()
     }
 
     /// Requests graceful shutdown and waits for completion, consuming the owner.
