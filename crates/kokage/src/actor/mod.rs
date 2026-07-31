@@ -18,9 +18,7 @@ mod raw;
 pub use binding::{ActorStats, MailboxMode};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
-pub use context::{
-    ActorRef, ActorStatus, Context, RawContext, Reply, RestrictedScopeRef, StopContext, TimerKey,
-};
+pub use context::{ActorRef, ActorStatus, Context, RawContext, Reply, StopContext, TimerKey};
 pub use error::{
     BlockingCancelled, CallError, OffloadDeadline, SendError, SendRejection, SendTimeoutError,
     TrySendError,

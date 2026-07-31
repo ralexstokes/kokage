@@ -61,7 +61,7 @@
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
 //! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
-//! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, scope waits, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
+//! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
 //! | [`host::RunnableActor`] | One actor plus stable binding — the unit of direct execution. |
 //!
 //! # Composition modes
@@ -118,8 +118,8 @@
 //! [`host::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
 //! both actors; [`Guard::cancel`] stops future delivery, and permanent removal
-//! of either membership ends the watch. Watches, mailbox timers, offloads,
-//! scope waits, and lifecycle/completion pumps return a [`Guard`]. Dropping it
+//! of either membership ends the watch. Watches, mailbox timers, offloads, and
+//! lifecycle/completion pumps return a [`Guard`]. Dropping it
 //! cancels the operation; retain it or call [`Guard::detach`] to keep the work
 //! alive.
 //!
@@ -300,9 +300,8 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
-    Context, ExitReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply,
-    RestrictedScopeRef, SendError, SendRejection, SendTimeoutError, StopContext, TimerKey,
-    TrySendError,
+    Context, ExitReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError,
+    SendRejection, SendTimeoutError, StopContext, TimerKey, TrySendError,
 };
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, TreeNode};

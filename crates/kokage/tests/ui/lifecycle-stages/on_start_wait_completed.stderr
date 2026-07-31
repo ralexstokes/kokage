@@ -1,7 +1,0 @@
-error[E0599]: no method named `wait` found for struct `CompletionWatch<false>` in the current scope
-  --> tests/ui/lifecycle-stages/on_start_wait_completed.rs:11:58
-   |
-11 |         let _ = ctx.supervisor().completions(["worker"]).wait().await;
-   |                                                          ^^^^ method not found in `CompletionWatch<false>`
-   |
-   = note: the method was found for `CompletionWatch`

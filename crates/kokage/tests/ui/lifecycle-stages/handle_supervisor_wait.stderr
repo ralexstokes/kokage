@@ -1,5 +1,0 @@
-error[E0599]: no method named `wait` found for struct `RestrictedScopeRef` in the current scope
-  --> tests/ui/lifecycle-stages/handle_supervisor_wait.rs:11:26
-   |
-11 |         ctx.supervisor().wait().await?;
-   |                          ^^^^ method not found in `RestrictedScopeRef`

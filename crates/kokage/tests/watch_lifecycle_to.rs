@@ -60,31 +60,31 @@ impl Actor for Crasher {
     }
 }
 
-enum RestrictedSinkMsg {
+enum ScopeSinkMsg {
     Lifecycle(LifecycleEvent),
 }
 
-struct RestrictedSink {
+struct ScopeSink {
     observed: mpsc::UnboundedSender<LifecycleEvent>,
     watch: Option<Guard>,
 }
 
-impl Actor for RestrictedSink {
-    type Msg = RestrictedSinkMsg;
+impl Actor for ScopeSink {
+    type Msg = ScopeSinkMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.watch = Some(
-            ctx.supervisor()
-                .watch_lifecycle_to(&ctx.myself(), RestrictedSinkMsg::Lifecycle),
+            ctx.scope()
+                .watch_lifecycle_to(&ctx.myself(), ScopeSinkMsg::Lifecycle),
         );
         Ok(())
     }
 
     async fn handle(&mut self, message: Self::Msg, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        let RestrictedSinkMsg::Lifecycle(event) = message;
+        let ScopeSinkMsg::Lifecycle(event) = message;
         self.observed
             .send(event)
-            .expect("restricted-scope observer remains live");
+            .expect("scope observer remains live");
         Ok(())
     }
 }
@@ -344,16 +344,16 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
 }
 
 #[tokio::test]
-async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
+async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
     let runtime = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     support::dynamic_root(&runtime)
-        .add_actor(ActorSpec::new("sink", move || RestrictedSink {
+        .add_actor(ActorSpec::new("sink", move || ScopeSink {
             observed: observed_tx.clone(),
             watch: None,
         }))
         .await
-        .expect("restricted sink added");
+        .expect("scope sink added");
     let crasher = support::dynamic_root(&runtime)
         .add_actor(ActorSpec::new("crasher", || Crasher).restart(Restart::on_failure()))
         .await
@@ -377,12 +377,12 @@ async fn restricted_scope_can_start_a_lifecycle_pump_from_on_start() {
         }
     })
     .await
-    .expect("restricted-scope lifecycle event arrives");
+    .expect("context-scope lifecycle event arrives");
     assert!(matches!(
         scheduled.kind,
         LifecycleEventKind::ChildRestartScheduled { ref child_id, .. } if child_id == "crasher"
     ));
 
     let handle = runtime.scope();
-    shutdown_runtime(&handle, "restricted-scope lifecycle pump shutdown").await;
+    shutdown_runtime(&handle, "context-scope lifecycle pump shutdown").await;
 }

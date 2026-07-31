@@ -24,7 +24,6 @@ enum LoopEvent<M> {
 /// Handler actors do not receive the mailbox-owning [`RawContext`]. The
 /// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
 /// hook a [`Context`] instead. It provides loop-owned timers, continuations,
-/// and actor-owned scope waits that a custom raw loop must express directly.
 /// Watches and offloads remain available on [`RawContext`].
 ///
 /// A [`Context::stop`] exit is normal for monitoring and supervision. A
@@ -86,9 +85,6 @@ pub trait Actor: Send + 'static {
     /// [`ScopeRef::remove_child`](crate::ScopeRef::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
     /// can abort this hook and detach the child without waiting for it. The
-    /// hook's scope references are
-    /// [`RestrictedScopeRef`](crate::RestrictedScopeRef), which withholds the
-    /// operations that would wait on that detach.
     /// It is not called when
     /// [`handle`](Self::handle) or [`on_start`](Self::on_start) returns an
     /// error.
@@ -184,9 +180,6 @@ impl<H: Actor> RawActor for H {
             }
         }
 
-        // Detached scope waits are incarnation-owned but are not actor work to
-        // drain. Stop them before applying the mailbox/offload drain policy.
-        ctx.abort_scope_waits();
         ctx.close_external_intake();
         if ctx.drain_messages {
             // Completions and the mailbox are independent loop-owned sources.

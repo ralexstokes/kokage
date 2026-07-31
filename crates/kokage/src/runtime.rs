@@ -260,6 +260,11 @@ impl ScopeRef {
     }
 
     /// Requests a graceful shutdown and waits for the supervisor to stop.
+    ///
+    /// Awaiting this from an actor callback in the same scope can block on that
+    /// callback returning. The cycle ends only if the actor's shutdown grace
+    /// expires and aborts it. Use [`Context::offload`](crate::Context::offload)
+    /// when the result must return to an actor as a later message.
     pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
@@ -286,11 +291,22 @@ impl ScopeRef {
     }
 
     /// Waits for the supervisor to stop.
+    ///
+    /// Awaiting this from an actor callback in the same scope can deadlock when
+    /// stopping the scope depends on that callback returning. Use
+    /// [`Context::offload`](crate::Context::offload) when the result must return
+    /// to an actor as a later message.
     pub async fn wait(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
     }
 
     /// Waits until all current actor children have completed `on_start`.
+    ///
+    /// An actor must not await its enclosing scope's readiness from its own
+    /// `on_start`: its readiness is reported only after that callback returns.
+    /// Ordered startup can create the same cycle through a later sibling scope.
+    /// Use [`Context::offload`](crate::Context::offload) when readiness must
+    /// return to the actor as a later message.
     pub async fn wait_started(&self) -> Result<(), SupervisorError> {
         self.supervisor.wait_started().await
     }
@@ -307,14 +323,6 @@ impl ScopeRef {
         S: Into<String>,
     {
         self.supervisor.completions(ids)
-    }
-
-    pub(crate) fn restricted_completions<I, S>(&self, ids: I) -> CompletionWatch<false>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        CompletionWatch::new(self.supervisor.clone(), self.kind(), ids)
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
@@ -611,6 +619,9 @@ impl ScopeRef {
     /// recover a message that was not accepted before the bound.
     /// Removal does not return queued messages: end-to-end delivery ownership
     /// belongs in an application acknowledgement and replay protocol.
+    ///
+    /// Awaiting removal of the current actor from one of its own lifecycle
+    /// callbacks can deadlock until the shutdown grace period expires.
     ///
     /// # Errors
     ///

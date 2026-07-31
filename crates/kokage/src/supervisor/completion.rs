@@ -50,12 +50,9 @@ pub enum CompletionError {
 /// membership. [`allow_future_members`](Self::allow_future_members) opts a
 /// dynamic scope into waiting for later insertion, and
 /// [`then_shutdown`](Self::then_shutdown) arms shutdown without awaiting the
-/// result directly. Watches obtained from a
-/// [`RestrictedScopeRef`](crate::RestrictedScopeRef) have `AWAITABLE` set to `false`:
-/// they retain the non-blocking configuration and shutdown operations, but do
-/// not expose [`wait`](CompletionWatch::wait).
+/// result directly.
 #[must_use = "a completion watch must be awaited or armed"]
-pub struct CompletionWatch<const AWAITABLE: bool = true> {
+pub struct CompletionWatch {
     handle: SupervisorHandle,
     kind: ScopeKind,
     set: CompletionSet,
@@ -63,7 +60,7 @@ pub struct CompletionWatch<const AWAITABLE: bool = true> {
     error: Option<CompletionError>,
 }
 
-impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
+impl CompletionWatch {
     pub(crate) fn new<I, S>(handle: SupervisorHandle, kind: ScopeKind, ids: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -81,9 +78,8 @@ impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
     /// Treats absent ids as membership that may be inserted later.
     ///
     /// This mode is valid only for a dynamic scope. On an ordered scope,
-    /// awaiting an awaitable watch returns [`CompletionError::NotDynamic`]. An
-    /// armed shutdown watch logs the error and completes without requesting
-    /// shutdown.
+    /// awaiting the watch returns [`CompletionError::NotDynamic`]. An armed
+    /// shutdown watch logs the error and completes without requesting shutdown.
     pub fn allow_future_members(mut self) -> Self {
         if self.kind == ScopeKind::Dynamic {
             self.allow_future_members = true;
@@ -151,9 +147,7 @@ impl<const AWAITABLE: bool> CompletionWatch<AWAITABLE> {
         std::mem::drop(task);
         Guard::from_tokens(cancellation, finished)
     }
-}
 
-impl CompletionWatch<true> {
     /// Waits until every named child is simultaneously completed.
     ///
     /// A child counts as completed once its current generation has exited with
@@ -179,6 +173,11 @@ impl CompletionWatch<true> {
     /// watch reports [`LifecycleEventKind::Lagged`]. Calling it on a pre-spawn
     /// handle is well defined — statically configured children are projected
     /// before the scope starts.
+    ///
+    /// Awaiting a set that contains the current actor from one of that actor's
+    /// callbacks can deadlock when completion depends on the callback returning.
+    /// Use [`Context::offload`](crate::Context::offload) when the result must
+    /// return to an actor as a later message.
     pub async fn wait(self) -> Result<CompletionOutcome, CompletionError> {
         self.outcome().await
     }

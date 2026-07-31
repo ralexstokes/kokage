@@ -103,7 +103,7 @@ impl Session {
         };
         let id = format!("run:{task}:{role_name}:{attempt}");
         let children = ctx
-            .supervisor()
+            .scope()
             .subtree("children")
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children

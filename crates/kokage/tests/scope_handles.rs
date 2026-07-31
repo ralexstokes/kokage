@@ -12,7 +12,7 @@ use std::{
 
 use kokage::{
     Actor, ActorSpec, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
-    OrderedTree, Restart, RestrictedScopeRef, ScopeRef, StopContext, Strategy,
+    OrderedTree, Restart, ScopeRef, StopContext, Strategy,
     host::{BoxError, TaskSpec},
     observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
 };
@@ -51,8 +51,8 @@ impl Actor for ScopeProbe {
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         self.starts.fetch_add(1, Ordering::SeqCst);
         let Some(children_id) = self.children_id else {
-            let supervisor = ctx.supervisor();
-            assert_eq!(supervisor.kind(), ScopeKind::Ordered);
+            let scope = ctx.scope();
+            assert_eq!(scope.kind(), ScopeKind::Ordered);
             self.reports
                 .send("ordered-supervisor")
                 .expect("test receiver open");
@@ -60,7 +60,7 @@ impl Actor for ScopeProbe {
             return Ok(());
         };
         let children = ctx
-            .supervisor()
+            .scope()
             .subtree(children_id)
             .expect("declared child scope resolves before startup");
         self.reports.send("some").expect("test receiver open");
@@ -70,8 +70,7 @@ impl Actor for ScopeProbe {
                 .expect("test receiver open");
             return Ok(());
         }
-        // Task insertion schedules startup rather than awaiting readiness, so
-        // it remains available on the restricted startup-stage handle.
+        // Task insertion schedules startup rather than awaiting readiness.
         let before_ready = children
             .add_task(TaskSpec::new("too-early", |_| async { Ok(()) }))
             .await;
@@ -84,11 +83,11 @@ impl Actor for ScopeProbe {
             return Ok(());
         }
 
-        // The wait is detached from startup but remains owned by this actor
-        // incarnation. Its mapped result returns through the actor mailbox.
-        ctx.spawn_scope_wait(
-            &children,
-            |children| async move {
+        // The bounded wait runs outside startup and returns as a later
+        // loop-owned offload completion.
+        ctx.offload(
+            WAIT,
+            async move {
                 children.wait_started().await.map_err(|_| ())?;
                 children
                     .add_actor(ActorSpec::new("from-on-start", || Idle))
@@ -96,7 +95,7 @@ impl Actor for ScopeProbe {
                     .map_err(|_| ())?;
                 Ok::<_, ()>(())
             },
-            |result| LeaderMsg::OnStartAdded(result.is_ok()),
+            |result| LeaderMsg::OnStartAdded(matches!(result, Ok(Ok(())))),
         )
         .detach();
         Ok(())
@@ -106,7 +105,7 @@ impl Actor for ScopeProbe {
         match message {
             LeaderMsg::AddFromHandler => {
                 let children = ctx
-                    .supervisor()
+                    .scope()
                     .subtree(self.children_id.expect("leader declares a child scope"))
                     .expect("declared child scope remains registered");
                 children
@@ -174,9 +173,9 @@ impl Actor for BuilderHandleOwner {
     }
 }
 
-struct RestrictedTaskAdder {
+struct TaskAdder {
     lineage: mpsc::UnboundedSender<u64>,
-    subtree: mpsc::UnboundedSender<RestrictedScopeRef>,
+    subtree: mpsc::UnboundedSender<ScopeRef>,
 }
 
 struct DynamicCompletionLeader {
@@ -188,7 +187,7 @@ impl Actor for DynamicCompletionLeader {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        let dynamic = ctx.supervisor();
+        let dynamic = ctx.scope();
         self.completion = Some(
             dynamic
                 .completions(["first", "second"])
@@ -217,12 +216,12 @@ impl Actor for DynamicCompletionLeader {
     }
 }
 
-impl Actor for RestrictedTaskAdder {
+impl Actor for TaskAdder {
     type Msg = ();
 
     async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
         let children = ctx
-            .supervisor()
+            .scope()
             .subtree("children")
             .expect("actor's declared child scope is registered");
         let lineage = children
@@ -232,9 +231,7 @@ impl Actor for RestrictedTaskAdder {
             }))
             .await?;
         self.lineage.send(lineage).expect("test receiver open");
-        let subtree: RestrictedScopeRef = children
-            .add_subtree("restricted-subtree", OrderedTree::new())
-            .await?;
+        let subtree = children.add_subtree("subtree", OrderedTree::new()).await?;
         self.subtree.send(subtree).expect("test receiver open");
         Ok(())
     }
@@ -459,15 +456,15 @@ async fn ordered_scope_membership_methods_return_not_dynamic() {
     runtime.shutdown_and_wait().await.expect("runtime stops");
 }
 
-struct OrderedRestrictedProbe {
+struct OrderedScopeProbe {
     checked: mpsc::UnboundedSender<()>,
 }
 
-impl Actor for OrderedRestrictedProbe {
+impl Actor for OrderedScopeProbe {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        let scope = ctx.supervisor();
+        let scope = ctx.scope();
         assert!(matches!(
             scope.add_actor(ActorSpec::new("actor", || Idle)).await,
             Err(ControlError::NotDynamic)
@@ -496,9 +493,9 @@ impl Actor for OrderedRestrictedProbe {
 }
 
 #[tokio::test]
-async fn ordered_restricted_scope_membership_methods_return_not_dynamic() {
+async fn ordered_context_scope_membership_methods_return_not_dynamic() {
     let (checked, mut checked_rx) = mpsc::unbounded_channel();
-    let probe = ActorSpec::new("probe", move || OrderedRestrictedProbe {
+    let probe = ActorSpec::new("probe", move || OrderedScopeProbe {
         checked: checked.clone(),
     });
     let runtime = OrderedTree::new()
@@ -508,8 +505,8 @@ async fn ordered_restricted_scope_membership_methods_return_not_dynamic() {
 
     timeout(WAIT, checked_rx.recv())
         .await
-        .expect("restricted probe runs")
-        .expect("restricted probe reports");
+        .expect("scope probe runs")
+        .expect("scope probe reports");
     runtime.shutdown_and_wait().await.expect("runtime stops");
 }
 
@@ -871,10 +868,10 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
 }
 
 #[tokio::test]
-async fn restricted_scope_add_task_returns_the_inserted_lineage() {
+async fn context_scope_add_task_returns_the_inserted_lineage() {
     let (lineage_tx, mut lineage_rx) = mpsc::unbounded_channel();
     let (subtree_tx, mut subtree_rx) = mpsc::unbounded_channel();
-    let adder_spec = ActorSpec::new("adder", move || RestrictedTaskAdder {
+    let adder_spec = ActorSpec::new("adder", move || TaskAdder {
         lineage: lineage_tx.clone(),
         subtree: subtree_tx.clone(),
     });
@@ -895,11 +892,11 @@ async fn restricted_scope_add_task_returns_the_inserted_lineage() {
         .await
         .expect("timed out waiting for lineage")
         .expect("lineage channel remains open");
-    let restricted_subtree = timeout(WAIT, subtree_rx.recv())
+    let subtree = timeout(WAIT, subtree_rx.recv())
         .await
-        .expect("timed out waiting for restricted subtree")
+        .expect("timed out waiting for subtree")
         .expect("subtree channel remains open");
-    assert_eq!(restricted_subtree.kind(), ScopeKind::Ordered);
+    assert_eq!(subtree.kind(), ScopeKind::Ordered);
     let children = handle
         .scope()
         .subtree("owned")
@@ -918,7 +915,7 @@ async fn restricted_scope_add_task_returns_the_inserted_lineage() {
 }
 
 #[tokio::test]
-async fn dynamic_restricted_scope_arms_completion_before_inserting_children() {
+async fn dynamic_context_scope_arms_completion_before_inserting_children() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic root builds");
     support::dynamic_root(&runtime)

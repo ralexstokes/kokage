@@ -15,22 +15,16 @@ derive attributes and visibility.
 lifecycle operations and requires explicit `.scope()` access for control or
 observation. `scope_type_names_removed.rs` keeps the retired `Runtime`,
 `DynamicRuntime`, `RuntimeHandle`, `DynamicRuntimeHandle`, `Scope`,
-`RestrictedScope`, and `DynamicRestrictedScope` root names absent.
+`RestrictedScope`, `RestrictedScopeRef`, and `DynamicRestrictedScope` root
+names absent.
 
 `declaration-unsealed/` contains compile-pass probes proving actor and slot
 mailbox configuration remains available after one or more `actor_ref()` calls.
 
 `lifecycle-stages/` covers the capabilities withheld from actor callbacks.
-The shared live `Context` cannot await its own readiness or a completion watch
-through `RestrictedScopeRef`, while `StopContext` cannot await a scope lifecycle,
-queue a continuation that would be dropped, or start an actor-owned scope wait
-after the receive loop has ended. A handler cannot read the mailbox the
-provided loop owns, and a `RawActor` cannot queue a continuation nothing
-drains.
-
-Restricted scope references must also stay restricted under navigation, so
-`on_start_subtree_wait_started.rs` pins that `subtree()` returns another
-restricted reference rather than handing the withheld waits back.
+`StopContext` cannot queue a continuation after the receive loop has ended, a
+handler cannot read the mailbox the provided loop owns, and a `RawActor` cannot
+queue a continuation nothing drains.
 
 ## Updating snapshots on a toolchain bump
 

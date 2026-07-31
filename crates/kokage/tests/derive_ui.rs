@@ -8,9 +8,9 @@ fn derive_ui() {
     t.compile_fail("tests/ui/actor-factory/*.rs");
     t.pass("tests/ui/actor-factory-pass/*.rs");
 
-    // The lifecycle-stage contexts exist to turn documented hazards into
-    // compile errors. Each case here was legal — and either deadlocking or a
-    // silent no-op — before handler lifecycle capabilities were restricted.
+    // The lifecycle-stage contexts keep stage-specific no-op operations out of
+    // the API, such as receiving through a handler context or queuing work from
+    // a shutdown hook after the receive loop has ended.
     t.compile_fail("tests/ui/lifecycle-stages/*.rs");
 
     // Trees own live pre-spawn identities. The type system prevents both
