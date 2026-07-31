@@ -114,8 +114,9 @@ impl<M> ActorRef<M> {
     /// Returns a point-in-time snapshot of this actor's message counters and
     /// current mailbox usage.
     ///
-    /// A ref has no enclosing runtime context, so
-    /// [`ActorStats::scope_path`] and [`ActorStats::lineage`] are `None`.
+    /// A ref has no enclosing runtime context, so this local sample contains
+    /// no scope path or supervisor membership lineage. Use
+    /// [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats) for scoped samples.
     /// Mailbox depth and capacity are zero while the ref is unbound between
     /// incarnations or permanently terminated.
     pub fn stats(&self) -> ActorStats {

@@ -113,7 +113,7 @@ impl LifecycleEventTestExt for LifecycleEvent {
     fn total_restarts(&self) -> Option<u64> {
         try_child_identity(self)
             .map(|child| child.total_restarts)
-            .or_else(|| match self.kind {
+            .or(match self.kind {
                 LifecycleEventKind::RestartIntensityExceeded { total_restarts } => {
                     Some(total_restarts)
                 }
@@ -890,8 +890,8 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     );
     let _leaf_finished = leaf_builder
         .handle()
-        .completions(["worker"])
-        .then_shutdown();
+        .shutdown_when_children_complete(["worker"])
+        .expect("completion condition is valid");
     let leaf = leaf_builder.build().expect("leaf supervisor builds");
     let sibling_crash = Arc::clone(&crash_sibling);
     let running = Supervisor::ordered()
@@ -1228,7 +1228,10 @@ fn completing_supervisor(complete: &Arc<Notify>) -> (crate::supervisor::Supervis
         })
         .restart(Restart::on_failure()),
     );
-    let finished = builder.handle().completions(["worker"]).then_shutdown();
+    let finished = builder
+        .handle()
+        .shutdown_when_children_complete(["worker"])
+        .expect("completion condition is valid");
     (
         builder.build().expect("completing supervisor builds"),
         finished,

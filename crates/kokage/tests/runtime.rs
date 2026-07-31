@@ -16,9 +16,7 @@ use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context,
     ControlError, DynamicTree, ExitResult, OrderedTree, Reply, Restart, ScopeRef, SendError,
     Shutdown, Strategy, SupervisorError, TaskSpec,
-    observe::{
-        CompletionOutcome, LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView,
-    },
+    observe::{LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
 use tokio::{
@@ -163,11 +161,11 @@ async fn runtime_handle_waits_for_actor_completion() {
     assert_eq!(
         timeout(
             Duration::from_secs(1),
-            handle.scope().completions(["worker"]).wait()
+            handle.scope().wait_for_children(["worker"])
         )
         .await
         .expect("completion observed within timeout"),
-        Ok(CompletionOutcome::Completed)
+        Ok(())
     );
     handle.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -179,7 +177,9 @@ async fn pre_spawn_scope_can_arm_shutdown_on_completion() {
         observed: observed_tx.clone(),
     });
     let pre_spawn = runtime.scope();
-    let _completion = pre_spawn.completions(["worker"]).then_shutdown();
+    let _completion = pre_spawn
+        .shutdown_when_children_complete(["worker"])
+        .expect("completion condition is valid");
     let handle = runtime.spawn().expect("runtime builds");
 
     worker_ref

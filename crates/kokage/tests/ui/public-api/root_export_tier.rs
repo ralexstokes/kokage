@@ -6,9 +6,9 @@ use kokage::raw::{
 };
 use kokage::observe::{
     ActorStats as _, ChildMembershipView as _, ChildOutline as _, ChildSnapshot as _,
-    ChildStateView as _, CompletionError as _, ExitStatus as _,
-    CompletionOutcome as _, LifecycleEvent as _, LifecycleEventKind as _,
-    LifecycleWatch as _, ScopePathSegment as _, ScopedActorStats as _, SnapshotRecvError as _,
+    ChildStateView as _, CompletionError as _, ExitStatus as _, LifecycleEvent as _,
+    LifecycleEventKind as _, LifecycleObservation as _, LifecycleWatch as _, ScopePathSegment as _,
+    ScopedActorStats as _, SnapshotRecvError as _,
     SupervisionOutline as _, SupervisorSnapshot as _,
     SupervisorSnapshotReceiver as _, SupervisorStateView as _,
 };
@@ -23,10 +23,10 @@ use kokage::ChildOutline;
 use kokage::ChildSnapshot;
 use kokage::ChildStateView;
 use kokage::CompletionError;
-use kokage::CompletionOutcome;
 use kokage::DEFAULT_SHUTDOWN_BOUND;
 use kokage::LifecycleEvent;
 use kokage::LifecycleEventKind;
+use kokage::LifecycleObservation;
 use kokage::LifecycleWatch;
 use kokage::RawActor;
 use kokage::ActorHost;

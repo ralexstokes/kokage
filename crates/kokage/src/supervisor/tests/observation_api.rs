@@ -1,12 +1,44 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildSpec, CompletionError, CompletionOutcome, LifecycleEventKind, Restart, SnapshotRecvError,
-    Supervisor, TaskSpec,
+    ChildSpec, CompletionError, LifecycleEventKind, Restart, SnapshotRecvError, Supervisor,
+    TaskSpec,
 };
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(2);
+
+#[tokio::test]
+async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
+    let supervisor = Supervisor::ordered().child(TaskSpec::new("worker", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    let handle = supervisor.handle();
+    let observation = handle.observe_lifecycle();
+    let baseline = observation.snapshot.lifecycle_seq;
+    assert!(observation.snapshot.child("worker").is_some());
+    let mut events = observation.events.direct_children();
+    let running = supervisor.build().expect("supervisor builds").spawn();
+
+    let added_seq = timeout(WAIT, async {
+        loop {
+            let event = events.next().await.expect("lifecycle remains open");
+            if let LifecycleEventKind::ChildAdded {
+                seq, ref child_id, ..
+            } = event.kind
+                && child_id == "worker"
+            {
+                break seq;
+            }
+        }
+    })
+    .await
+    .expect("the projected child is added");
+    assert!(added_seq > baseline);
+
+    running.shutdown_and_wait().await.expect("clean shutdown");
+}
 
 #[tokio::test]
 async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter() {
@@ -127,11 +159,16 @@ async fn static_completion_wait_rejects_unknown_children() {
     let handle = supervisor.handle();
 
     assert_eq!(
-        handle.completions(["missing"]).wait().await,
+        handle.wait_for_children(["missing"]).await,
         Err(CompletionError::UnknownChild {
             child_id: "missing".to_owned(),
         })
     );
+
+    assert!(matches!(
+        handle.shutdown_when_children_complete(["missing"]),
+        Err(CompletionError::UnknownChild { child_id }) if child_id == "missing"
+    ));
 }
 
 #[tokio::test]
@@ -142,13 +179,7 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
         .spawn();
     let waiter = tokio::spawn({
         let handle = running.handle();
-        async move {
-            handle
-                .completions(["job"])
-                .allow_future_members()
-                .wait()
-                .await
-        }
+        async move { handle.wait_for_future_children(["job"]).await }
     });
 
     running
@@ -164,7 +195,7 @@ async fn explicitly_dynamic_completion_wait_accepts_future_membership() {
             .await
             .expect("completion wait finishes")
             .expect("completion task joins"),
-        Ok(CompletionOutcome::Completed)
+        Ok(())
     );
     running.shutdown_and_wait().await.expect("clean shutdown");
 }

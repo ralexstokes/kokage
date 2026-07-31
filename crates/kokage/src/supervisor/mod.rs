@@ -68,12 +68,12 @@ pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub(crate) use child::ChildSpec;
 pub use child::{BoxError, TaskSpec};
-pub use completion::{CompletionError, CompletionOutcome, CompletionWatch};
+pub use completion::CompletionError;
 pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
-pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
+pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
 #[cfg(feature = "serde")]
 pub(crate) use restart::RestartWire;

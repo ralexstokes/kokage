@@ -40,16 +40,8 @@ impl SupervisorSnapshotReceiver {
         self.inner.borrow().clone()
     }
 
-    /// Returns a clone of the latest snapshot and marks it observed by this receiver.
-    pub fn take_latest(&mut self) -> SupervisorSnapshot {
+    fn latest_observed(&mut self) -> SupervisorSnapshot {
         self.inner.borrow_and_update().clone()
-    }
-
-    /// Returns whether this receiver has an unobserved snapshot version.
-    pub fn has_changed(&self) -> Result<bool, SnapshotRecvError> {
-        self.inner
-            .has_changed()
-            .map_err(|_| SnapshotRecvError::Closed)
     }
 
     /// Waits for a new snapshot, marks it observed, and returns a clone.
@@ -58,7 +50,7 @@ impl SupervisorSnapshotReceiver {
             .changed()
             .await
             .map_err(|_| SnapshotRecvError::Closed)?;
-        Ok(self.take_latest())
+        Ok(self.latest_observed())
     }
 
     /// Waits until the latest snapshot satisfies `predicate`.
@@ -70,7 +62,7 @@ impl SupervisorSnapshotReceiver {
         mut predicate: impl FnMut(&SupervisorSnapshot) -> bool,
     ) -> Result<SupervisorSnapshot, SnapshotRecvError> {
         loop {
-            let snapshot = self.take_latest();
+            let snapshot = self.latest_observed();
             if predicate(&snapshot) {
                 return Ok(snapshot);
             }
@@ -101,7 +93,7 @@ impl SupervisorSnapshotReceiver {
     ) -> Result<ChildSnapshot, SnapshotRecvError> {
         let mut seen = false;
         loop {
-            let snapshot = self.take_latest();
+            let snapshot = self.latest_observed();
             match snapshot.child(child_id) {
                 Some(child) => {
                     seen = true;
@@ -635,13 +627,9 @@ mod tests {
         sender.send(snapshot(2)).expect("receivers remain open");
 
         assert_eq!(first.latest().total_restarts, 2);
-        assert_eq!(first.has_changed(), Ok(true));
         assert_eq!(first.changed().await.unwrap().total_restarts, 2);
-        assert_eq!(first.has_changed(), Ok(false));
 
-        assert_eq!(second.has_changed(), Ok(true));
-        assert_eq!(second.take_latest().total_restarts, 2);
-        assert_eq!(second.has_changed(), Ok(false));
+        assert_eq!(second.changed().await.unwrap().total_restarts, 2);
     }
 
     #[tokio::test]
@@ -656,11 +644,9 @@ mod tests {
             .await
             .expect("matching snapshot is available");
         assert_eq!(matched.total_restarts, 3);
-        assert_eq!(receiver.has_changed(), Ok(false));
 
         drop(sender);
         assert_eq!(receiver.changed().await, Err(SnapshotRecvError::Closed));
-        assert_eq!(receiver.has_changed(), Err(SnapshotRecvError::Closed));
     }
 
     #[test]

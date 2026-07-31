@@ -98,9 +98,8 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// Actor declarations can be placed directly at different scope levels while
 /// retaining their typed wiring.
 ///
-/// [`outline`](Self::outline) removes executable payloads, producing a
-/// [`SupervisionOutline`] that can be compared, debug-printed, and, with the
-/// `serde` feature, serialized. It is the declaration-time companion to a
+/// With the `serde` feature, [`outline`](Self::outline) removes executable
+/// payloads and produces a serializable declaration-time companion to a
 /// running [`SupervisorSnapshot`](crate::observe::SupervisorSnapshot).
 ///
 /// # Example
@@ -129,6 +128,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// tree.add_actor(ingest);
 /// tree.add_subtree("workers", workers);
 ///
+/// # #[cfg(feature = "serde")]
 /// assert_eq!(tree.outline().child_ids(), ["ingest", "workers"]);
 /// let runtime = tree.spawn()?;
 /// runtime.shutdown_and_wait().await?;
@@ -271,7 +271,8 @@ macro_rules! tree_common_methods {
             self
         }
 
-        /// Projects the executable scope to comparable, payload-free data.
+        /// Projects the executable scope to serializable, payload-free data.
+        #[cfg(feature = "serde")]
         pub fn outline(&self) -> SupervisionOutline {
             self.inner.outline()
         }
@@ -549,6 +550,7 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
     }
 
     /// Projects the executable scope to comparable, payload-free data.
+    #[cfg(feature = "serde")]
     fn outline(&self) -> SupervisionOutline {
         self.node.outline()
     }
@@ -568,6 +570,7 @@ impl ScopeNode {
         }
     }
 
+    #[cfg(feature = "serde")]
     fn outline(&self) -> SupervisionOutline {
         let config = self.config();
         let children = match self {
@@ -669,6 +672,7 @@ impl SupervisionChild {
         }
     }
 
+    #[cfg(feature = "serde")]
     fn outline(&self, default_restart: Restart, default_shutdown: Shutdown) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
@@ -878,6 +882,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
     }
 
     /// Projects the executable scope to comparable, payload-free data.
+    #[cfg(feature = "serde")]
     fn outline(&self) -> SupervisionOutline {
         self.tree.outline()
     }
@@ -940,17 +945,28 @@ impl<const DYNAMIC: bool> std::fmt::Debug for IdentityTree<DYNAMIC> {
 
 impl<const DYNAMIC: bool> std::fmt::Debug for TreeData<DYNAMIC> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.outline().fmt(f)
+        let config = self.node.config();
+        let children = match &self.node {
+            ScopeNode::Ordered { children, .. } => children
+                .iter()
+                .map(SupervisionChild::declared_id)
+                .collect::<Vec<_>>(),
+            ScopeNode::Dynamic { .. } => Vec::new(),
+        };
+        f.debug_struct("SupervisionTree")
+            .field("kind", &self.node.kind())
+            .field("strategy", &config.strategy)
+            .field("default_restart", &config.default_restart)
+            .field("default_shutdown", &config.default_shutdown)
+            .field("children", &children)
+            .finish()
     }
 }
 
 /// Payload-free declaration tree suitable for comparison and serialization.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(from = "outline_wire::WireOutline")
-)]
+#[cfg(feature = "serde")]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "outline_wire::WireOutline")]
 #[non_exhaustive]
 pub struct SupervisionOutline {
     /// Immutable scope kind.
@@ -958,18 +974,18 @@ pub struct SupervisionOutline {
     /// Restart strategy.
     pub strategy: Strategy,
     /// Restart policy inherited by children without an explicit override.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[serde(default)]
     pub default_restart: Restart,
     /// Shutdown policy inherited by children without an explicit override.
-    #[cfg_attr(feature = "serde", serde(default))]
+    #[serde(default)]
     pub default_shutdown: Shutdown,
     /// Declared children in semantic order; empty for a dynamic scope.
     pub children: Vec<ChildOutline>,
 }
 
 /// One payload-free child declaration.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg(feature = "serde")]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ChildOutline {
     /// An actor with resolved policies.
@@ -981,7 +997,7 @@ pub enum ChildOutline {
         /// Resolved shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[serde(default)]
         remove_when_done: bool,
     },
     /// An arbitrary task child.
@@ -993,7 +1009,7 @@ pub enum ChildOutline {
         /// Shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[serde(default)]
         remove_when_done: bool,
     },
     /// A nested ordered or dynamic scope.
@@ -1001,10 +1017,10 @@ pub enum ChildOutline {
         /// Scope child id.
         id: String,
         /// Resolved policy used by the parent to restart this scope.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[serde(default)]
         restart: Restart,
         /// Resolved policy used by the parent to stop this scope.
-        #[cfg_attr(feature = "serde", serde(default))]
+        #[serde(default)]
         shutdown: Shutdown,
         /// Nested declaration.
         outline: SupervisionOutline,
@@ -1124,6 +1140,7 @@ mod outline_wire {
     }
 }
 
+#[cfg(feature = "serde")]
 impl SupervisionOutline {
     /// Returns direct child ids in declaration order.
     pub fn child_ids(&self) -> Vec<&str> {
@@ -1136,6 +1153,7 @@ impl SupervisionOutline {
     }
 }
 
+#[cfg(feature = "serde")]
 impl ChildOutline {
     /// Returns this node's id within its parent.
     pub fn id(&self) -> &str {

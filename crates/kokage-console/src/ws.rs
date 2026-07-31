@@ -72,7 +72,7 @@ fn stats_message(stats: &[ScopedActorStats]) -> Message {
 }
 
 async fn send_snapshot(socket: &mut WebSocket, snapshots: &mut SupervisorSnapshotReceiver) -> bool {
-    let snapshot = snapshots.take_latest();
+    let snapshot = snapshots.latest();
     socket.send(snapshot_message(snapshot)).await.is_ok()
 }
 

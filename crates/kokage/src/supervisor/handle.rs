@@ -1742,14 +1742,19 @@ impl SupervisorHandle {
         }
     }
 
+    /// Returns a snapshot and lifecycle stream with gap-free registration.
+    pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
+        let events = self.watch_lifecycle();
+        let snapshot = self.snapshot();
+        crate::supervisor::LifecycleObservation { snapshot, events }
+    }
+
     /// Returns the ordered lifecycle stream for this entire supervisor tree.
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
-    /// To obtain a gap-free state-plus-stream view, create the watch first,
-    /// then read [`snapshot`](Self::snapshot), then discard watched child
-    /// transitions whose [`LifecycleEvent::seq`](crate::supervisor::LifecycleEvent::seq)
-    /// is at most
-    /// [`SupervisorSnapshot::lifecycle_seq`].
+    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
+    /// gap-free state-plus-stream setup. This lower-level method is useful
+    /// when only transitions after subscription are needed.
     /// Pre-spawn snapshots already project configured children as `Starting`,
     /// so apply a later `Added` for that membership as an idempotent upsert
     /// keyed by `(child_id, lineage)`. Lineage allocation continues across

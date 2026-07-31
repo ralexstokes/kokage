@@ -63,29 +63,29 @@ error[E0432]: unresolved import `kokage::CompletionError`
 25 | use kokage::CompletionError;
    |     ^^^^^^^^^^^^^^^^^^^^^^^ no `CompletionError` in the root
 
-error[E0432]: unresolved import `kokage::CompletionOutcome`
+error[E0432]: unresolved import `kokage::DEFAULT_SHUTDOWN_BOUND`
   --> tests/ui/public-api/root_export_tier.rs:26:5
    |
-26 | use kokage::CompletionOutcome;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `CompletionOutcome` in the root
-
-error[E0432]: unresolved import `kokage::DEFAULT_SHUTDOWN_BOUND`
-  --> tests/ui/public-api/root_export_tier.rs:27:5
-   |
-27 | use kokage::DEFAULT_SHUTDOWN_BOUND;
+26 | use kokage::DEFAULT_SHUTDOWN_BOUND;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `DEFAULT_SHUTDOWN_BOUND` in the root
 
 error[E0432]: unresolved import `kokage::LifecycleEvent`
-  --> tests/ui/public-api/root_export_tier.rs:28:5
+  --> tests/ui/public-api/root_export_tier.rs:27:5
    |
-28 | use kokage::LifecycleEvent;
+27 | use kokage::LifecycleEvent;
    |     ^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleEvent` in the root
 
 error[E0432]: unresolved import `kokage::LifecycleEventKind`
+  --> tests/ui/public-api/root_export_tier.rs:28:5
+   |
+28 | use kokage::LifecycleEventKind;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleEventKind` in the root
+
+error[E0432]: unresolved import `kokage::LifecycleObservation`
   --> tests/ui/public-api/root_export_tier.rs:29:5
    |
-29 | use kokage::LifecycleEventKind;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleEventKind` in the root
+29 | use kokage::LifecycleObservation;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `LifecycleObservation` in the root
 
 error[E0432]: unresolved import `kokage::LifecycleWatch`
   --> tests/ui/public-api/root_export_tier.rs:30:5

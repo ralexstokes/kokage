@@ -11,7 +11,7 @@ use std::{
 use kokage::{
     Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
     OrderedTree, Restart, ScopeRef, StopContext, Strategy, TaskSpec,
-    observe::{ChildStateView, CompletionOutcome, ScopeKind, SupervisorSnapshotReceiver},
+    observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -187,9 +187,8 @@ impl Actor for DynamicCompletionLeader {
         let dynamic = ctx.scope();
         self.completion = Some(
             dynamic
-                .completions(["first", "second"])
-                .allow_future_members()
-                .then_shutdown(),
+                .shutdown_when_future_children_complete(["first", "second"])
+                .expect("completion condition is valid"),
         );
         self.reports.send("armed").expect("test receiver open");
 
@@ -337,13 +336,7 @@ async fn dynamic_completion_names_wait_for_future_members() {
     let dynamic = tree.scope();
     let mut waiter = tokio::spawn({
         let dynamic = dynamic.clone();
-        async move {
-            dynamic
-                .completions(["future"])
-                .allow_future_members()
-                .wait()
-                .await
-        }
+        async move { dynamic.wait_for_future_children(["future"]).await }
     });
     let runtime = tree.spawn().expect("dynamic root builds");
 
@@ -363,7 +356,7 @@ async fn dynamic_completion_names_wait_for_future_members() {
             .await
             .expect("completion wait resolves")
             .expect("completion task joins"),
-        Ok(CompletionOutcome::Completed)
+        Ok(())
     );
 
     runtime
@@ -377,9 +370,8 @@ async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
     let _completion = dynamic
-        .completions(["future"])
-        .allow_future_members()
-        .then_shutdown();
+        .shutdown_when_future_children_complete(["future"])
+        .expect("completion condition is valid");
     let runtime = tree.spawn().expect("dynamic root builds");
 
     dynamic
@@ -398,11 +390,7 @@ async fn ordered_scope_rejects_future_member_completion_mode() {
     let scope = tree.scope();
 
     assert_eq!(
-        scope
-            .completions(["future"])
-            .allow_future_members()
-            .wait()
-            .await,
+        scope.wait_for_future_children(["future"]).await,
         Err(kokage::observe::CompletionError::NotDynamic)
     );
 }
@@ -411,13 +399,16 @@ async fn ordered_scope_rejects_future_member_completion_mode() {
 async fn pre_spawn_completion_shutdown_beats_a_fast_child() {
     let mut tree = OrderedTree::new();
     tree.add_task(TaskSpec::new("fast", |_| async { Ok(()) }));
-    let shutdown = tree.scope().completions(["fast"]).then_shutdown();
+    let shutdown = tree
+        .scope()
+        .shutdown_when_children_complete(["fast"])
+        .expect("completion condition is valid");
     assert!(!shutdown.is_finished());
 
     let runtime = tree.spawn().expect("ordered tree builds");
     timeout(WAIT, runtime.wait())
         .await
-        .expect("pre-spawn completion watch shuts the scope down")
+        .expect("pre-spawn completion operation shuts the scope down")
         .expect("scope stops cleanly");
 }
 
@@ -1071,12 +1062,15 @@ async fn leader_owned_scope_uses_explicit_rest_for_one() {
     owned.add_subtree("children", children);
     let mut tree = OrderedTree::new();
     tree.add_subtree("owned", owned);
-    let outline = tree.outline();
-    assert!(matches!(
-        outline.child("owned"),
-        Some(kokage::observe::ChildOutline::Scope { outline, .. })
-            if outline.strategy == Strategy::RestForOne
-    ));
+    #[cfg(feature = "serde")]
+    {
+        let outline = tree.outline();
+        assert!(matches!(
+            outline.child("owned"),
+            Some(kokage::observe::ChildOutline::Scope { outline, .. })
+                if outline.strategy == Strategy::RestForOne
+        ));
+    }
     let handle = tree.spawn().expect("tree builds");
     handle.scope().wait_started().await.expect("tree starts");
 

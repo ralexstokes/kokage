@@ -11,10 +11,10 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildSpec, CompletionOnDrop, CompletionWatch, ControlError,
-        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleWatch, Restart, RunningSupervisor,
-        ScopeKind, ScopePathSegment, Shutdown, SupervisorError, SupervisorHandle,
-        SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec,
+        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOnDrop, ControlError,
+        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleObservation, LifecycleWatch,
+        Restart, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, SupervisorError,
+        SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec,
     },
 };
 
@@ -318,27 +318,87 @@ impl ScopeRef {
         self.supervisor.wait_started().await
     }
 
-    /// Creates a completion watch for direct children of this scope.
+    /// Waits until every named direct child has completed successfully.
     ///
-    /// The watch validates ids when [`CompletionWatch::wait`] begins. Call
-    /// [`CompletionWatch::allow_future_members`] when ids may be inserted into
-    /// a dynamic scope later, or [`CompletionWatch::then_shutdown`] to arm
-    /// scope shutdown at the completion boundary.
-    pub fn completions<I, S>(&self, ids: I) -> CompletionWatch
+    /// Completion means the current generation exited with
+    /// [`ExitStatus::Completed`](crate::observe::ExitStatus::Completed) and no
+    /// restart is pending. Removed children drop out of the set. Unknown ids
+    /// return [`CompletionError::UnknownChild`], while a terminal scope that
+    /// cannot satisfy the condition returns [`CompletionError::ScopeClosed`].
+    /// The wait installs its lifecycle stream before reading state, so children
+    /// that finish immediately or before the call are handled correctly.
+    pub async fn wait_for_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.supervisor.completions(ids)
+        self.supervisor.wait_for_children(ids).await
+    }
+
+    /// Waits for named direct children that may be inserted into a dynamic scope later.
+    ///
+    /// Returns [`CompletionError::NotDynamic`] for an ordered scope. Once a
+    /// named membership has appeared, its removal drops it out of the set.
+    pub async fn wait_for_future_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.wait_for_future_children(ids).await
+    }
+
+    /// Requests shutdown once every named direct child has completed successfully.
+    ///
+    /// Ids are validated before this method returns. The returned guard
+    /// cancels the operation when dropped; consume it with [`Guard::detach`]
+    /// for fire-and-forget behavior. The background task does not keep the
+    /// supervision tree alive.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime.
+    pub fn shutdown_when_children_complete<I, S>(&self, ids: I) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.shutdown_when_children_complete(ids)
+    }
+
+    /// Requests shutdown after future named members of a dynamic scope complete.
+    ///
+    /// Returns [`CompletionError::NotDynamic`] for an ordered scope. The
+    /// returned guard cancels the operation when dropped; consume it with
+    /// [`Guard::detach`] for fire-and-forget behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called outside a Tokio runtime.
+    pub fn shutdown_when_future_children_complete<I, S>(
+        &self,
+        ids: I,
+    ) -> Result<Guard, CompletionError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.supervisor.shutdown_when_future_children_complete(ids)
+    }
+
+    /// Returns a snapshot and lifecycle stream with gap-free registration.
+    ///
+    /// Initialize state from [`LifecycleObservation::snapshot`], then consume
+    /// events whose direct-child sequence exceeds the snapshot's
+    /// [`SupervisorSnapshot::lifecycle_seq`].
+    pub fn observe_lifecycle(&self) -> LifecycleObservation {
+        self.supervisor.observe_lifecycle()
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
-    /// Create the watch before reading [`snapshot`](Self::snapshot), then
-    /// discard child transitions whose `seq()` is at most the snapshot's
-    /// `lifecycle_seq` to obtain a gap-free state-plus-stream view. Pre-spawn snapshots
-    /// already project configured children, so reducers should apply their
-    /// later `ChildAdded` events as idempotent membership upserts. Call
+    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
+    /// gap-free state-plus-stream setup. This lower-level method is useful when
+    /// only transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
     pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()

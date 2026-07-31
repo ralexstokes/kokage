@@ -10,13 +10,13 @@ use tokio::{
 use kokage::{
     ActorSpec, BuildError, DynamicTree, MailboxMode, Restart, Shutdown, Strategy, SubtreeSpec,
     TaskSpec,
-    observe::{ChildOutline, ScopeKind},
+    observe::ScopeKind,
     prelude::*,
     raw::{RawActor, RawContext},
 };
 
 #[cfg(feature = "serde")]
-use kokage::Backoff;
+use kokage::{Backoff, observe::ChildOutline};
 
 struct Worker;
 
@@ -59,6 +59,7 @@ fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>)
 }
 
 #[test]
+#[cfg(feature = "serde")]
 fn a_tree_expresses_recursive_composition_and_actor_overrides() {
     let mut tree = OrderedTree::new()
         .strategy(Strategy::RestForOne)
@@ -117,6 +118,7 @@ fn a_tree_expresses_recursive_composition_and_actor_overrides() {
 }
 
 #[test]
+#[cfg(feature = "serde")]
 fn task_specs_preserve_explicit_policies_and_inherit_unset_defaults() {
     let explicit_shutdown = Shutdown::drain_for(Duration::from_millis(17));
     let mut tree = OrderedTree::new()
@@ -164,6 +166,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
             .shutdown(declared_shutdown),
     );
 
+    #[cfg(feature = "serde")]
     assert!(matches!(
         declared.outline().child("declared"),
         Some(ChildOutline::Scope {
@@ -433,6 +436,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
 }
 
 #[test]
+#[cfg(feature = "serde")]
 fn dynamic_outlines_include_future_member_policy_defaults() {
     let standard = DynamicTree::new().outline();
     let customized = DynamicTree::new()
@@ -453,14 +457,17 @@ async fn leader_owned_scope_is_an_explicit_subtree() {
     owned.add_subtree("children", DynamicTree::new());
     let mut tree = OrderedTree::new();
     tree.add_subtree("owned", owned);
-    let outline = tree.outline();
-    let ChildOutline::Scope { outline: owned, .. } =
-        outline.child("owned").expect("owned node exists")
-    else {
-        panic!("expected explicit owned scope");
-    };
-    assert_eq!(owned.strategy, Strategy::RestForOne);
-    assert_eq!(owned.child_ids(), ["ingest", "children"]);
+    #[cfg(feature = "serde")]
+    {
+        let outline = tree.outline();
+        let ChildOutline::Scope { outline: owned, .. } =
+            outline.child("owned").expect("owned node exists")
+        else {
+            panic!("expected explicit owned scope");
+        };
+        assert_eq!(owned.strategy, Strategy::RestForOne);
+        assert_eq!(owned.child_ids(), ["ingest", "children"]);
+    }
 
     let handle = tree.spawn().expect("leader-owned scope lowers");
     handle

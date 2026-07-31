@@ -255,14 +255,15 @@ pub mod raw {
 /// Control remains on [`ScopeRef`]; this module groups the values and
 /// streams returned by that handle without injecting them into the crate root.
 pub mod observe {
+    #[cfg(feature = "serde")]
+    pub use crate::supervision::{ChildOutline, SupervisionOutline};
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
-        supervision::{ChildOutline, SupervisionOutline},
         supervisor::{
-            ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError, CompletionOutcome,
-            CompletionWatch, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
-            SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError, ExitStatus,
+            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind,
+            ScopePathSegment, SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver,
+            SupervisorStateView,
         },
     };
 }

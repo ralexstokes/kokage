@@ -10,7 +10,7 @@ use std::{
 
 use tokio::sync::{Notify, futures::Notified};
 
-use crate::supervisor::{ExitStatus, ScopePathSegment};
+use crate::supervisor::{ExitStatus, ScopePathSegment, SupervisorSnapshot};
 
 const LIFECYCLE_BUFFER_CAPACITY: usize = 128;
 
@@ -25,6 +25,19 @@ pub struct LifecycleEvent {
     pub scope_path: Vec<ScopePathSegment>,
     /// Transition that occurred in the emitting scope.
     pub kind: LifecycleEventKind,
+}
+
+/// Gap-free starting point for stateful lifecycle observation.
+///
+/// The event subscription is installed before `snapshot` is read. Consumers
+/// can initialize from the snapshot, then discard direct-child events whose
+/// sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
+#[derive(Debug)]
+pub struct LifecycleObservation {
+    /// Point-in-time state aligned with the event subscription.
+    pub snapshot: SupervisorSnapshot,
+    /// Lifecycle events staged from before the snapshot was read onward.
+    pub events: LifecycleWatch,
 }
 
 impl LifecycleEvent {
