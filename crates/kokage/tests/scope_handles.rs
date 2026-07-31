@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
+    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult,
     RestartPolicy, ScopeRef, StopContext, Strategy, TaskSpec, Tree,
     observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
@@ -176,7 +176,6 @@ struct TaskAdder {
 }
 
 struct DynamicCompletionLeader {
-    completion: Option<Guard>,
     reports: mpsc::UnboundedSender<&'static str>,
 }
 
@@ -185,29 +184,21 @@ impl Actor for DynamicCompletionLeader {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let dynamic = ctx.scope();
-        self.completion = Some(
-            dynamic
-                .shutdown_when_future_children_complete(["first", "second"])
-                .expect("completion condition is valid"),
-        );
-        self.reports.send("armed").expect("test receiver open");
-
-        dynamic
+        let first = dynamic
             .add_task_spec(TaskSpec::new("first", |_| async { Ok(()) }))
             .await?;
-        dynamic
+        let second = dynamic
             .add_task_spec(TaskSpec::new("second", |_| async { Ok(()) }))
             .await?;
         self.reports.send("inserted").expect("test receiver open");
+        first.wait().await?;
+        second.wait().await?;
+        self.reports.send("completed").expect("test receiver open");
+        dynamic.shutdown();
         Ok(())
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
-        assert!(self.completion.is_some(), "completion guard was retained");
         Ok(())
     }
 }
@@ -253,7 +244,7 @@ async fn next_report(reports: &mut mpsc::UnboundedReceiver<&'static str>) -> &'s
 }
 
 async fn assert_snapshot_stream_closes(handle: &ScopeRef) {
-    assert_snapshot_receiver_closes(handle.subscribe_snapshots()).await;
+    assert_snapshot_receiver_closes(handle.snapshots()).await;
 }
 
 async fn assert_snapshot_receiver_closes(mut snapshots: SupervisorSnapshotReceiver) {
@@ -301,7 +292,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     assert_eq!(ordered.kind(), ScopeKind::Ordered);
     assert_eq!(dynamic.kind(), ScopeKind::Dynamic);
 
-    runtime.shutdown_and_wait().await.expect("runtime stops");
+    runtime.shutdown().await.expect("runtime stops");
 
     let dynamic_tree = DynamicTree::new();
     let pre_spawn = dynamic_tree.scope();
@@ -324,60 +315,39 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     assert!(pre_spawn.snapshot().child("worker").is_none());
     assert_eq!(pre_spawn.snapshot(), post_spawn.snapshot());
 
-    dynamic_root
-        .shutdown_and_wait()
-        .await
-        .expect("dynamic root stops");
+    dynamic_root.shutdown().await.expect("dynamic root stops");
 }
 
 #[tokio::test]
-async fn dynamic_completion_names_wait_for_future_members() {
+async fn dynamic_task_ref_waits_for_completion() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
-    let mut waiter = tokio::spawn({
-        let dynamic = dynamic.clone();
-        async move { dynamic.wait_for_future_children(["future"]).await }
-    });
     let runtime = tree.spawn().expect("dynamic root builds");
-
-    assert!(
-        timeout(Duration::from_millis(50), &mut waiter)
-            .await
-            .is_err(),
-        "an absent dynamic member remains pending"
-    );
-
-    dynamic
+    let task = dynamic
         .add_task_spec(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
         .expect("future member added");
-    assert_eq!(
-        timeout(WAIT, waiter)
-            .await
-            .expect("completion wait resolves")
-            .expect("completion task joins"),
-        Ok(())
-    );
-
-    runtime
-        .shutdown_and_wait()
+    let exit = timeout(WAIT, task.wait())
         .await
-        .expect("dynamic root stops");
+        .expect("completion wait resolves")
+        .expect("task remains observable");
+    assert!(exit.is_completed());
+
+    runtime.shutdown().await.expect("dynamic root stops");
 }
 
 #[tokio::test]
-async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
+async fn completed_dynamic_task_can_trigger_explicit_scope_shutdown() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
-    let _completion = dynamic
-        .shutdown_when_future_children_complete(["future"])
-        .expect("completion condition is valid");
     let runtime = tree.spawn().expect("dynamic root builds");
 
-    dynamic
+    let task = dynamic
         .add_task_spec(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
         .expect("future member added");
+    task.wait().await.expect("task completion observed");
+    dynamic.shutdown();
     timeout(WAIT, runtime.wait())
         .await
         .expect("completion requests shutdown")
@@ -385,30 +355,21 @@ async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
 }
 
 #[tokio::test]
-async fn ordered_scope_rejects_future_member_completion_mode() {
-    let tree = Tree::new();
+async fn pre_spawn_task_ref_observes_a_fast_child() {
+    let mut tree = Tree::new();
+    let task = tree.add_task_spec(TaskSpec::new("fast", |_| async { Ok(()) }));
     let scope = tree.scope();
 
-    assert_eq!(
-        scope.wait_for_future_children(["future"]).await,
-        Err(kokage::observe::CompletionError::NotDynamic)
-    );
-}
-
-#[tokio::test]
-async fn pre_spawn_completion_shutdown_beats_a_fast_child() {
-    let mut tree = Tree::new();
-    tree.add_task_spec(TaskSpec::new("fast", |_| async { Ok(()) }));
-    let shutdown = tree
-        .scope()
-        .shutdown_when_children_complete(["fast"])
-        .expect("completion condition is valid");
-    assert!(!shutdown.is_finished());
-
     let runtime = tree.spawn().expect("ordered tree builds");
+    let exit = timeout(WAIT, task.wait())
+        .await
+        .expect("fast completion remains observable")
+        .expect("task ref remains available");
+    assert!(exit.is_completed());
+    scope.shutdown();
     timeout(WAIT, runtime.wait())
         .await
-        .expect("pre-spawn completion operation shuts the scope down")
+        .expect("scope shutdown completes")
         .expect("scope stops cleanly");
 }
 
@@ -439,7 +400,7 @@ async fn ordered_scope_membership_methods_return_not_dynamic() {
         Err(ControlError::NotDynamic)
     ));
 
-    runtime.shutdown_and_wait().await.expect("runtime stops");
+    runtime.shutdown().await.expect("runtime stops");
 }
 
 struct OrderedScopeProbe {
@@ -492,7 +453,7 @@ async fn ordered_context_scope_membership_methods_return_not_dynamic() {
         .await
         .expect("scope probe runs")
         .expect("scope probe reports");
-    runtime.shutdown_and_wait().await.expect("runtime stops");
+    runtime.shutdown().await.expect("runtime stops");
 }
 
 struct StopScopeProbe {
@@ -528,7 +489,7 @@ async fn stop_context_scope_observes_and_controls_its_scope() {
     }));
     let runtime = tree.spawn().expect("ordered tree builds");
 
-    runtime.shutdown_and_wait().await.expect("runtime stops");
+    runtime.shutdown().await.expect("runtime stops");
 
     let (kind, visible) = timeout(WAIT, observed_rx.recv())
         .await
@@ -567,7 +528,7 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
         "dropping non-owning handles must leave the runtime alive"
     );
 
-    runtime.shutdown();
+    runtime.scope().shutdown();
     assert_eq!(next_report(&mut lifecycle_rx).await, "cancelled");
     runtime.wait().await.expect("runtime stops cleanly");
 }
@@ -624,7 +585,7 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
         Ok(())
     }));
     let handle = tree.scope();
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut snapshots = handle.snapshots();
     let declared = snapshots
         .latest()
         .child("worker")
@@ -646,17 +607,14 @@ async fn pre_spawn_snapshot_subscription_follows_the_spawned_identity() {
     .expect("same snapshot stream remains open");
 
     assert_eq!(handle.snapshot(), spawned.scope().snapshot());
-    spawned
-        .shutdown_and_wait()
-        .await
-        .expect("spawned tree stops");
+    spawned.shutdown().await.expect("spawned tree stops");
 }
 
 #[tokio::test]
 async fn trees_terminalize_handles_when_dropped() {
     let builder = Tree::new();
     let handle = builder.scope();
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Ordered);
     assert_eq!(handle.kind(), ScopeKind::Ordered);
     let builder = builder.strategy(Strategy::RestForOne);
@@ -666,7 +624,7 @@ async fn trees_terminalize_handles_when_dropped() {
 
     let builder = DynamicTree::new();
     let handle = builder.scope();
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
     let _: ScopeRef = handle.clone();
     drop(builder);
@@ -674,7 +632,7 @@ async fn trees_terminalize_handles_when_dropped() {
 
     let child = DynamicTree::new();
     let child_handle = child.scope();
-    let child_snapshots = child_handle.subscribe_snapshots();
+    let child_snapshots = child_handle.snapshots();
     let mut parent = Tree::new();
     parent.add_subtree("child", child);
     drop(parent);
@@ -716,23 +674,20 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     tree.add_task_spec(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     tree.add_task_spec(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     let failed_ordered = tree.scope();
-    let failed_ordered_snapshots = failed_ordered.subscribe_snapshots();
+    let failed_ordered_snapshots = failed_ordered.snapshots();
     assert!(tree.spawn().is_err());
     assert_snapshot_receiver_closes(failed_ordered_snapshots).await;
 
     let builder =
         DynamicTree::new().default_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO));
     let failed_dynamic = builder.scope();
-    let failed_dynamic_snapshots = failed_dynamic.subscribe_snapshots();
+    let failed_dynamic_snapshots = failed_dynamic.snapshots();
     assert!(builder.spawn().is_err());
     assert_snapshot_receiver_closes(failed_dynamic_snapshots).await;
 
     let parent = Tree::new().spawn().expect("ordered parent builds");
     assert_eq!(parent.scope().kind(), ScopeKind::Ordered);
-    parent
-        .shutdown_and_wait()
-        .await
-        .expect("ordered parent stops");
+    parent.shutdown().await.expect("ordered parent stops");
 
     let parent = DynamicTree::new().spawn().expect("dynamic parent builds");
     parent
@@ -745,7 +700,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
     invalid.add_actor_spec(ActorSpec::new("duplicate-binding", || Idle));
     invalid.add_actor_spec(ActorSpec::new("duplicate-binding", || Idle));
     let rejected = invalid.scope();
-    let rejected_snapshots = rejected.subscribe_snapshots();
+    let rejected_snapshots = rejected.snapshots();
     assert!(matches!(
         support::dynamic_root(&parent)
             .add_subtree("invalid", invalid)
@@ -762,7 +717,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
         .expect("first subtree inserts");
     let duplicate = DynamicTree::new();
     let rejected = duplicate.scope();
-    let rejected_snapshots = rejected.subscribe_snapshots();
+    let rejected_snapshots = rejected.snapshots();
     assert!(matches!(
         support::dynamic_root(&parent)
             .add_subtree("occupied", duplicate)
@@ -771,10 +726,7 @@ async fn spawn_errors_and_rejected_subtrees_terminalize_tree_handles() {
             if id == "occupied"
     ));
     assert_snapshot_receiver_closes(rejected_snapshots).await;
-    parent
-        .shutdown_and_wait()
-        .await
-        .expect("dynamic parent stops");
+    parent.shutdown().await.expect("dynamic parent stops");
 }
 
 #[tokio::test]
@@ -810,7 +762,7 @@ async fn pre_spawn_mount_handle_supports_awaited_and_pipelined_subtree_adds() {
         .expect("pipelined insertion task joins")
         .expect("pipelined subtree inserts");
 
-    outer.shutdown_and_wait().await.expect("outer stops");
+    outer.shutdown().await.expect("outer stops");
 }
 
 #[tokio::test]
@@ -828,7 +780,7 @@ async fn ordinary_actor_gets_its_scope_but_no_owned_children() {
     handle.scope().wait_started().await.expect("actor starts");
     assert_eq!(next_report(&mut reports_rx).await, "ordered-supervisor");
     assert_eq!(next_report(&mut reports_rx).await, "none");
-    handle.shutdown_and_wait().await.expect("runtime stops");
+    handle.shutdown().await.expect("runtime stops");
 }
 
 #[tokio::test]
@@ -891,7 +843,7 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
         "root.owned.children.from-handler exists"
     );
 
-    handle.shutdown_and_wait().await.expect("runtime stops");
+    handle.shutdown().await.expect("runtime stops");
 }
 
 #[tokio::test]
@@ -928,26 +880,25 @@ async fn context_scope_add_task_reports_insertion_success() {
         .expect("owned dynamic scope is registered");
     assert!(children.snapshot().child("task").is_some());
 
-    handle.shutdown_and_wait().await.expect("tree stops");
+    handle.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
-async fn dynamic_context_scope_arms_completion_before_inserting_children() {
+async fn dynamic_context_scope_uses_task_refs_for_completion() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic root builds");
     support::dynamic_root(&runtime)
         .add_actor_spec(ActorSpec::new("leader", move || DynamicCompletionLeader {
-            completion: None,
             reports: reports_tx.clone(),
         }))
         .await
         .expect("leader inserted");
 
-    assert_eq!(next_report(&mut reports_rx).await, "armed");
     assert_eq!(next_report(&mut reports_rx).await, "inserted");
+    assert_eq!(next_report(&mut reports_rx).await, "completed");
     timeout(WAIT, runtime.wait())
         .await
-        .expect("future-member completion requests shutdown")
+        .expect("task completion requests shutdown")
         .expect("dynamic root stops");
 }
 
@@ -999,7 +950,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
         inner.child("worker").is_some(),
         "root.owned.children.worker exists"
     );
-    handle.shutdown_and_wait().await.expect("runtime stops");
+    handle.shutdown().await.expect("runtime stops");
     assert!(child_stopped.load(Ordering::SeqCst));
 }
 
@@ -1078,7 +1029,7 @@ async fn leader_owned_scope_uses_explicit_rest_for_one() {
     leader.send(LeaderMsg::Crash).await.expect("leader crashes");
     wait_count(&leader_starts, 2).await;
     wait_count(&worker_starts, 3).await;
-    handle.shutdown_and_wait().await.expect("tree stops");
+    handle.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -1115,7 +1066,7 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
     worker.send(LeaderMsg::Crash).await.expect("second crash");
     wait_count(&leader_starts, 2).await;
 
-    handle.shutdown_and_wait().await.expect("tree stops");
+    handle.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -1128,10 +1079,7 @@ async fn consuming_a_tree_builder_preserves_issued_actor_refs() {
     spawned.scope().wait_started().await.expect("tree starts");
     actor_ref.send(()).await.expect("issued ref remains bound");
 
-    spawned
-        .shutdown_and_wait()
-        .await
-        .expect("tree stops cleanly");
+    spawned.shutdown().await.expect("tree stops cleanly");
 }
 
 #[tokio::test]
@@ -1171,5 +1119,5 @@ async fn sibling_scopes_may_reuse_the_same_local_actor_id() {
             "{scope}.worker exists"
         );
     }
-    runtime.shutdown_and_wait().await.expect("tree stops");
+    runtime.shutdown().await.expect("tree stops");
 }

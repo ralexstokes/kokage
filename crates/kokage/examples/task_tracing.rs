@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             }
         })
-        .restart_policy(nested_restart),
+        .restart(nested_restart),
     );
 
     let mut tree = Tree::new();
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = tree.spawn()?;
 
     sleep(Duration::from_millis(300)).await;
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
 
     Ok(())
 }

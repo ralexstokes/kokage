@@ -14,8 +14,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, Guard, MailboxMode, MailboxShutdown, OffloadDeadline, RestartPolicy, ScopeRef,
-    Shutdown,
+    ActorSlot, Guard, Mailbox, MailboxShutdown, OffloadDeadline, RestartPolicy, ScopeRef, Shutdown,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -577,7 +576,7 @@ async fn drain_reaps_an_offload_aborted_during_shutdown() {
     wait_runtime_started(&runtime.scope(), "drain-abort runtime startup").await;
     actor.send(DrainAbortMsg::Start).await.unwrap();
     let offload = recv_test_event(&mut handle_rx, "drain-abort offload handle").await;
-    let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
+    let shutdown = tokio::spawn(async move { runtime.shutdown().await });
     wait_notification(&shutdown_seen, "drain-abort offload observing shutdown").await;
     tokio::task::yield_now().await;
     offload.cancel();
@@ -659,7 +658,7 @@ async fn shutdown_case(policy: MailboxShutdown) -> Vec<&'static str> {
     actor.send(DrainMsg::Start).await.unwrap();
     wait_notification(&entered, "draining actor handler entry").await;
     actor.send(DrainMsg::Queued).await.unwrap();
-    let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
+    let shutdown = tokio::spawn(async move { runtime.shutdown().await });
     tokio::task::yield_now().await;
     if policy == MailboxShutdown::Drain {
         release.notify_waiters();
@@ -798,7 +797,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
                     observed: observed.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
     );
     let runtime = graph.spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "conflating completion runtime startup").await;
@@ -877,7 +876,7 @@ async fn drain_waits_for_offload_deadline_and_handles_its_completion() {
     wait_runtime_started(&runtime.scope(), "deadline-drain runtime startup").await;
     actor.send(DeadlineDrainMsg::Start).await.unwrap();
     wait_notification(&registered, "deadline-drain offload registration").await;
-    let shutdown = tokio::spawn(async move { runtime.shutdown_and_wait().await });
+    let shutdown = tokio::spawn(async move { runtime.shutdown().await });
     let outcome = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
         .unwrap()

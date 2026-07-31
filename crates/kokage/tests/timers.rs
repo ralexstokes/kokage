@@ -71,7 +71,7 @@ async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     assert_eq!(stats.messages_accepted, 0);
     assert_eq!(stats.messages_received, 1);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct MailboxOneShot {
@@ -111,7 +111,7 @@ async fn context_send_after_delivers_once_through_the_self_mailbox() {
     assert_eq!(stats.messages_accepted, 1);
     assert_eq!(stats.messages_received, 1);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct ChainedTimeout {
@@ -167,7 +167,7 @@ async fn rearming_a_timeout_from_its_own_handler_fires_it_again() {
     assert_eq!(stats.messages_accepted, 0);
     assert_eq!(stats.messages_received, 3);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct CancelledTimer {
@@ -206,7 +206,7 @@ async fn clearing_a_keyed_timeout_prevents_delivery() {
         "cancelled timer delivered a message"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 const REPLACEABLE: TimerKey = TimerKey::new("replaceable");
@@ -247,7 +247,7 @@ async fn setting_a_timeout_replaces_the_previous_entry_at_its_key() {
     );
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -322,7 +322,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
         "elapsed timeout survived a pre-fire clear"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -358,7 +358,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
     );
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct KeyedTimeouts {
@@ -397,7 +397,7 @@ async fn keyed_timeouts_replace_per_key_and_remain_independent() {
     assert_eq!(observed_rx.recv().await, Some("second"));
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct FarFutureTimers {
@@ -441,7 +441,7 @@ async fn far_future_delays_saturate_instead_of_panicking() {
     );
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct IntervalActor {
@@ -488,7 +488,7 @@ async fn self_interval_repeats_until_cancelled() {
         "interval continued after cancellation"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct SlowInterval {
@@ -545,7 +545,7 @@ async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
     assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(120)));
     assert!(observed_rx.try_recv().is_err(), "missed ticks piled up");
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct RestartingTimer {
@@ -595,7 +595,7 @@ async fn restart_drops_the_previous_incarnations_timer_table() {
         "a previous incarnation delivered a stale timer"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct Sink {
@@ -698,7 +698,7 @@ async fn raw_context_can_schedule_cross_actor_timers() {
 
     assert_eq!(observed_rx.recv().await, Some("raw-cross"));
     assert_eq!(observed_rx.recv().await, Some("raw-cross-tick"));
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct RawSelfScheduler {
@@ -730,7 +730,7 @@ async fn raw_context_can_schedule_self_timers() {
 
     assert_eq!(observed_rx.recv().await, Some("raw-self"));
     assert_eq!(observed_rx.recv().await, Some("raw-self-tick"));
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -750,7 +750,7 @@ async fn detached_send_after_delivers_through_the_public_target_ref() {
         "one-shot cross-actor timer fired twice"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -769,7 +769,7 @@ async fn dropped_send_after_guard_cancels_delivery() {
         "a dropped send-after guard delivered its message"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct RestartingCrossScheduler {
@@ -816,7 +816,7 @@ async fn restart_ends_cross_actor_timer_lifetime() {
         "a previous scheduler incarnation delivered a stale message"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct CrossInterval {
@@ -914,7 +914,7 @@ async fn cross_actor_interval_repeats_until_cancelled() {
         "cross-actor interval continued after cancellation"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -930,7 +930,7 @@ async fn detached_interval_keeps_delivering() {
         assert_eq!(observed_rx.recv().await, Some("detached-tick"));
     }
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -967,7 +967,7 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
         "target termination is environmental, not explicit cancellation"
     );
 
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -989,7 +989,7 @@ async fn zero_period_interval_is_finished_without_cancellation() {
         "invalid interval period did not explicitly cancel the guard"
     );
 
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -1008,5 +1008,5 @@ async fn dropped_interval_guard_cancels_delivery() {
         "a dropped interval guard delivered a tick"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }

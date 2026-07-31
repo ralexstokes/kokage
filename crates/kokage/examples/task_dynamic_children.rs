@@ -5,7 +5,7 @@ use tokio::time::{Duration, sleep, timeout};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running_owner = DynamicTree::new().spawn()?;
     let running = running_owner.scope();
-    let mut snapshots = running.subscribe_snapshots();
+    let mut snapshots = running.snapshots();
 
     running
         .add_task("api", |ctx| async move {
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshots.wait_for_child("nested", |child| child.state.is_running()),
     )
     .await??;
-    let mut nested_snapshots = nested.subscribe_snapshots();
+    let mut nested_snapshots = nested.snapshots();
     nested
         .add_task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());

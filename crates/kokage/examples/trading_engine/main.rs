@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, Guard, MailboxMode, RestartPolicy, ScopeRef,
+    ActorSlot, CancellationToken, Guard, Mailbox, RestartPolicy, ScopeRef,
     observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -179,8 +179,7 @@ const VENUE_MAILBOX: usize = 16;
 /// Both venue feeds share one configuration: the shallower venue mailbox,
 /// per-symbol conflation, and accepted-byte observation.
 fn feed_spec(spec: ActorSpec<FeedMsg>) -> ActorSpec<FeedMsg> {
-    spec.mailbox_capacity(VENUE_MAILBOX)
-        .mailbox(MailboxMode::conflate_by_key(feed_message_key))
+    spec.mailbox(Mailbox::latest_by_key(VENUE_MAILBOX, feed_message_key))
         .message_size(messages::feed_message_size)
 }
 
@@ -307,7 +306,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
             ledger: ledger.clone(),
             latency: latency.clone(),
         })
-        .mailbox_capacity(VENUE_MAILBOX);
+        .mailbox(Mailbox::queue(VENUE_MAILBOX));
     let venue_b_feed_actor = feed_spec(venue_b_feed_slot.define(VenueFeedFactory {
         venue: VENUE_B,
         exchange: venue_b.clone(),
@@ -321,7 +320,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
             ledger: ledger.clone(),
             latency: latency.clone(),
         })
-        .mailbox_capacity(VENUE_MAILBOX);
+        .mailbox(Mailbox::queue(VENUE_MAILBOX));
 
     let mut venues =
         Tree::new().default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(10)));
@@ -352,14 +351,17 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         .subtree("venues")
         .expect("venues runtime subtree");
     let mut venue_restarts = venues_runtime.snapshot().total_restarts;
-    let lifecycle_watch = venues_runtime.watch_lifecycle_to(&health, move |event| {
-        if let Some(total) = lifecycle_total_restarts(&event) {
-            venue_restarts = total;
-        }
-        HealthMsg::RestartsObserved {
-            total: venue_restarts,
-        }
-    });
+    let lifecycle_watch = venues_runtime
+        .lifecycle_events()
+        .direct_children()
+        .forward_to(&health, move |event| {
+            if let Some(total) = lifecycle_total_restarts(&event) {
+                venue_restarts = total;
+            }
+            HealthMsg::RestartsObserved {
+                total: venue_restarts,
+            }
+        });
 
     Ok(App {
         runtime,
@@ -731,7 +733,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
     app.background_stop.cancel();
     app.sampler.await?;
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
+    let runtime_scope = app.runtime.scope();
+    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown()).await??;
 
     let latency = latency.snapshot();
     for series in [
@@ -762,14 +765,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
             >= 2
     );
     println!("selected metrics: {selected_metrics:#?}");
-    println!(
-        "final supervisor snapshot: {:#?}",
-        app.runtime.scope().snapshot()
-    );
-    println!(
-        "final actor stats: {:#?}",
-        app.runtime.scope().actor_stats()
-    );
+    println!("final supervisor snapshot: {:#?}", runtime_scope.snapshot());
+    println!("final actor stats: {:#?}", runtime_scope.actor_stats());
     println!("PHASE 8 OK — staged shutdown and observability");
     Ok(())
 }
@@ -786,7 +783,7 @@ where
 }
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     let generation = handle
         .snapshot()
         .child(id)

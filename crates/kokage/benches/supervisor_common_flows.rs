@@ -11,7 +11,7 @@ use std::{
 };
 
 use kokage::{
-    BoxError, DynamicTree, RestartMode, Strategy, TaskSpec, Tree,
+    BoxError, DynamicTree, RestartPolicy, Strategy, TaskSpec, Tree,
     observe::{LifecycleEventKind, LifecycleWatch},
 };
 use tokio::{
@@ -108,7 +108,7 @@ async fn spawn_shutdown_flow(children: usize) {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.lifecycle_events();
     let started = wait_for_child_start_count(&mut events, children).await;
     black_box(started);
 
@@ -134,7 +134,7 @@ async fn one_for_one_restart_flow() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let mut builder = Tree::new().strategy(Strategy::OneForOne);
     builder.add_task_spec(flaky);
@@ -147,7 +147,7 @@ async fn one_for_one_restart_flow() {
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut snapshots = handle.snapshots();
     let baseline = handle
         .snapshot()
         .child("flaky")
@@ -182,7 +182,7 @@ async fn one_for_all_restart_flow() {
             Ok(())
         }
     })
-    .restart(RestartMode::OnFailure);
+    .restart(RestartPolicy::on_failure());
 
     let mut builder = Tree::new().strategy(Strategy::OneForAll);
     builder.add_task_spec(trigger);
@@ -192,13 +192,13 @@ async fn one_for_all_restart_flow() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartMode::Always),
+            .restart(RestartPolicy::always()),
         );
     }
 
     let handle_owner = builder.spawn().expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.lifecycle_events();
     let restarted = wait_for_restart_count(&mut events, 4).await;
     black_box(restarted);
 
@@ -211,7 +211,7 @@ async fn dynamic_add_remove_flow() {
         .spawn()
         .expect("benchmark tree should spawn");
     let handle = handle_owner.scope();
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.lifecycle_events();
 
     handle
         .add_task_spec(TaskSpec::new("seed", |ctx| async move {

@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use kokage::{
-    ActorSpec, ExitResult, SendError, SendErrorKind,
+    ActorSpec, ExitResult, Mailbox, SendError, SendErrorKind,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::Notify;
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let worker_spec = ActorSpec::new("ParkBeforeRecv", move || ParkBeforeRecv {
         release: actor_release.clone(),
     })
-    .mailbox_capacity(1);
+    .mailbox(Mailbox::queue(1));
     let worker = worker_spec.actor_ref();
 
     let handle = support::ActorTasks::start([worker_spec.into_host()]);

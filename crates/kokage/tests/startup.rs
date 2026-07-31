@@ -99,7 +99,7 @@ async fn actor_on_start_can_await_add_task_on_its_own_dynamic_supervisor() {
     tokio::time::timeout(Duration::from_secs(1), added_started.notified())
         .await
         .expect("self-scope add_task should not deadlock actor startup");
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -150,7 +150,7 @@ async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() 
         .unwrap();
     let mailbox = observed.iter().position(|item| *item == "mailbox").unwrap();
     assert!(continuation < mailbox);
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[derive(Clone)]
@@ -195,7 +195,7 @@ async fn failed_actor_start_disarms_readiness_without_panicking() {
             .last_exit()
             .is_some_and(|exit| exit.failure_message().is_some())
     );
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[derive(Clone)]
@@ -248,9 +248,9 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
     actor.send("hold").await.unwrap();
     started.notified().await;
     actor.send("trigger").await.unwrap();
-    handle.shutdown();
+    handle.scope().shutdown();
     release.notify_one();
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
     assert_eq!(&*handled.lock().await, &["hold", "trigger"]);
 }
 
@@ -275,9 +275,9 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     actor.send("hold-and-continue").await.unwrap();
     started.notified().await;
     actor.send("mailbox").await.unwrap();
-    handle.shutdown();
+    handle.scope().shutdown();
     release.notify_one();
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 
     assert_eq!(&*handled.lock().await, &["hold-and-continue", "mailbox"]);
 }
@@ -356,9 +356,9 @@ async fn is_draining_separates_the_drain_phase_from_ordinary_handling() {
     actor.send("hold").await.unwrap();
     started.notified().await;
     actor.send("queued").await.unwrap();
-    handle.shutdown();
+    handle.scope().shutdown();
     release.notify_one();
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 
     assert_eq!(
         &*observed.lock().await,
@@ -396,7 +396,7 @@ async fn is_draining_after_a_self_stop_that_never_shuts_the_graph_down() {
         &*observed.lock().await,
         &[("stop", false, false), ("queued", true, false)]
     );
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[derive(Clone)]
@@ -442,13 +442,13 @@ async fn is_draining_changes_only_after_the_stopping_callback_returns() {
     actor.send("hold").await.unwrap();
     assert_eq!(statuses.recv().await, Some(false));
     actor.send("queued").await.unwrap();
-    handle.shutdown();
+    handle.scope().shutdown();
 
     assert_eq!(statuses.recv().await, Some(false));
     assert_eq!(statuses.recv().await, Some(false));
     assert_eq!(statuses.recv().await, Some(true));
     assert_eq!(statuses.recv().await, Some(true));
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[derive(Clone)]
@@ -523,7 +523,7 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
     .unwrap();
 
     assert_eq!(&*events.lock().await, &["stopped"]);
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -566,7 +566,7 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     .unwrap();
 
     assert_eq!(&*events.lock().await, &["mailbox", "stopped"]);
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 #[derive(Clone)]
@@ -598,7 +598,7 @@ async fn prompt_raw_actor_delivers_readiness_before_completion() {
             .last_exit()
             .is_some_and(|exit| exit.is_completed())
     );
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 }
 
 /// Overrides nothing: exercises the [`Actor`] trait's default drain policy.
@@ -661,9 +661,9 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
     actor.send("queued-first").await.unwrap();
     actor.send("queued-second").await.unwrap();
 
-    handle.shutdown();
+    handle.scope().shutdown();
     release.notify_one();
-    handle.shutdown_and_wait().await.unwrap();
+    handle.shutdown().await.unwrap();
 
     assert_eq!(
         &*handled.lock().await,

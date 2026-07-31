@@ -1,6 +1,8 @@
 //! Compile-fail and compile-pass coverage for actor-factory derive guarantees,
 //! lifecycle-stage restrictions, and single-use construction tokens.
 
+#![cfg(feature = "derive")]
+
 #[test]
 fn derive_ui() {
     let t = trybuild::TestCases::new();

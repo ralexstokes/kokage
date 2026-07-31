@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use kokage::{
-    RestartMode, RestartPolicy,
     observe::{LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
@@ -11,32 +10,36 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-            MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey, Tree,
+            Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
+            MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskRef, TaskSpec, TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RestartPolicy,
-            RunningTree, ScopeRef, SendError, SendErrorKind, SubtreeSpec, SupervisorError,
-            TaskContext,
+            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RunningTree, ScopeRef,
+            SendError, SendErrorKind, SubtreeSpec, SupervisorError, TaskContext, TaskError,
         };
     }
 
-    mod raw {
+    #[cfg(feature = "host")]
+    mod host {
         use kokage::raw::{
             ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
         };
     }
 
+    mod raw {
+        use kokage::raw::{RawActor, RawContext};
+    }
+
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-            ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
-            ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
+            ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus,
+            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind,
+            ScopePathSegment, ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};
@@ -154,7 +157,6 @@ fn policy_values_expose_their_declared_behavior() {
     }
 
     assert_eq!(strategy_name(Strategy::default()), "one-for-one");
-    assert_eq!(RestartMode::default(), RestartMode::OnFailure);
     assert_eq!(RestartPolicy::default(), RestartPolicy::on_failure());
     assert_eq!(shutdown_name(kokage::Shutdown::default()), "graceful");
     assert_eq!(shutdown_name(kokage::Shutdown::abort()), "abort");
@@ -203,7 +205,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.scope().lifecycle_events();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -231,7 +233,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     ));
     assert!(child_id_is(&started, "worker"));
 
-    let snapshot = handle.snapshot();
+    let snapshot = handle.scope().snapshot();
     assert!(
         snapshot
             .child("worker")
@@ -240,10 +242,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             .is_running()
     );
 
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown should succeed");
+    handle.shutdown().await.expect("shutdown should succeed");
 }
 
 #[test]
@@ -282,7 +281,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
         }
     }));
     let handle = tree.scope();
-    let mut events = handle.watch_lifecycle();
+    let mut events = handle.lifecycle_events();
     let runtime = tree.spawn().expect("task tree spawns");
 
     assert_eq!(
@@ -315,10 +314,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             .is_running()
     );
 
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown succeeds");
+    runtime.shutdown().await.expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -349,10 +345,7 @@ async fn prelude_snapshots_walk_nested_task_children() {
     let snapshot = handle.snapshot();
     assert!(snapshot.descendant(["nested", "leaf"]).is_some());
 
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown succeeds");
+    runtime.shutdown().await.expect("shutdown succeeds");
 }
 
 #[test]

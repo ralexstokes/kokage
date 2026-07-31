@@ -1,3 +1,5 @@
+#![cfg(feature = "derive")]
+
 use std::{
     io,
     sync::{
@@ -13,7 +15,7 @@ use kokage::{
 };
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     let child = handle
         .snapshot()
         .child(id)
@@ -122,5 +124,5 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     );
     assert_eq!(starts.load(Ordering::SeqCst), 2);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }

@@ -1,5 +1,5 @@
 use kokage::{
-    RestartMode, SubtreeSpec, Tree,
+    RestartPolicy, SubtreeSpec, Tree,
     observe::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError, SupervisorSnapshot,
         SupervisorStateView,
@@ -26,13 +26,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     tree.add_subtree_spec(
         "nested",
-        SubtreeSpec::from(nested).restart(RestartMode::Never),
+        SubtreeSpec::from(nested).restart(RestartPolicy::never()),
     );
     let running = tree.spawn()?;
-    let mut snapshots = running.subscribe_snapshots();
+    let scope = running.scope();
+    let mut snapshots = scope.snapshots();
 
     println!("initial snapshot:");
-    print_snapshot(&running.snapshot(), 0);
+    print_snapshot(&scope.snapshot(), 0);
 
     let observer = tokio::spawn(async move {
         loop {
@@ -49,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     observer.await??;
 
     Ok(())

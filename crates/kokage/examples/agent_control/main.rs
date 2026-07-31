@@ -131,7 +131,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent, ScopeRef, Strategy,
+    ActorSlot, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEvent, ScopeRef, Strategy,
     prelude::*,
 };
 use tokio::time::Instant;
@@ -263,16 +263,16 @@ async fn build_app() -> Result<App, AnyError> {
             let chat = chat.clone();
             move || Outbound::new(chat.clone())
         })
-        .mailbox_capacity(GATEWAY_MAILBOX);
+        .mailbox(Mailbox::queue(GATEWAY_MAILBOX));
     let progress_actor = progress_slot
         .define({
             let chat = chat.clone();
             move || Progress::new(chat.clone())
         })
-        .mailbox_capacity(GATEWAY_MAILBOX)
-        .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| {
-            message.chat()
-        }));
+        .mailbox(Mailbox::latest_by_key(
+            GATEWAY_MAILBOX,
+            |message: &ProgressMsg| message.chat(),
+        ));
     let inbound_actor = inbound_slot
         .define({
             let chat = chat.clone();
@@ -280,7 +280,7 @@ async fn build_app() -> Result<App, AnyError> {
             let router = router.clone();
             move || Inbound::new(chat.clone(), journal.clone(), router.clone())
         })
-        .mailbox_capacity(GATEWAY_MAILBOX);
+        .mailbox(Mailbox::queue(GATEWAY_MAILBOX));
     let journal_actor = journal_slot
         .define(Journal::default)
         .message_size(messages::journal_message_size);
@@ -315,14 +315,18 @@ async fn build_app() -> Result<App, AnyError> {
     // lookup would return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
-    let lifecycle_watch = gateway.watch_lifecycle_to(&guard, move |event| {
-        if let Some(total) = lifecycle_total_restarts(&event) {
-            bridge_restarts = total;
-        }
-        GuardMsg::BridgeRestarts {
-            total: bridge_restarts,
-        }
-    });
+    let lifecycle_watch =
+        gateway
+            .lifecycle_events()
+            .direct_children()
+            .forward_to(&guard, move |event| {
+                if let Some(total) = lifecycle_total_restarts(&event) {
+                    bridge_restarts = total;
+                }
+                GuardMsg::BridgeRestarts {
+                    total: bridge_restarts,
+                }
+            });
 
     Ok(App {
         runtime,
@@ -763,7 +767,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
     let session_stats = app.sessions.actor_stats();
     let final_snapshot = app.runtime.scope().snapshot();
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
+    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown()).await??;
     let latency = latency.snapshot();
     assert!(
         latency

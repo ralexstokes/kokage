@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", log_rx.recv().await.expect("event")); // press down: failure
     println!("{}", log_rx.recv().await.expect("event")); // press up (run 1)
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

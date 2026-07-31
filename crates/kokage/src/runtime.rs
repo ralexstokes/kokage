@@ -1,7 +1,9 @@
+#[cfg(any(feature = "host", test))]
+use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     future::Future,
-    sync::{Arc, Mutex, OnceLock, PoisonError, Weak},
+    sync::{Arc, Mutex, PoisonError, Weak},
 };
 
 use crate::{
@@ -12,11 +14,12 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOnDrop, ControlError,
-        DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleObservation, LifecycleWatch,
-        MailboxShutdown, RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown,
+        BuildError, CancellationToken, ChildMembershipView, ChildSnapshot, ChildSpec,
+        ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle, ExitStatus, Guard,
+        LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, MailboxShutdown,
+        RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, Strategy,
         SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
-        TaskSpec,
+        SupervisorStateView, TaskSpec,
     },
 };
 
@@ -157,10 +160,7 @@ where
                 return;
             };
             if !event.is_child_transition()
-                && !matches!(
-                    event.kind,
-                    crate::supervisor::LifecycleEventKind::Lagged { .. }
-                )
+                && !matches!(event.kind, LifecycleEventKind::Lagged { .. })
             {
                 continue;
             }
@@ -182,13 +182,320 @@ where
     guard_from_tokens(cancellation, finished)
 }
 
+impl LifecycleWatch {
+    /// Forwards child transitions from this stream into `target` using its
+    /// ordinary mailbox policy.
+    ///
+    /// Apply [`LifecycleWatch::direct_children`] before this method when only
+    /// the watched scope's own events should be delivered. Lag markers are
+    /// forwarded as well; supervisor-level transitions are skipped. The pump
+    /// follows the target through ordinary actor restarts, but delivery is
+    /// at-most-once: an event accepted by one incarnation is never replayed to
+    /// its replacement. The pump stops when the returned guard is dropped or
+    /// cancelled, when this stream ends, or when the target permanently
+    /// terminates.
+    pub fn forward_to<M, F>(self, target: &ActorRef<M>, map: F) -> Guard
+    where
+        M: Send + 'static,
+        F: FnMut(LifecycleEvent) -> M + Send + 'static,
+    {
+        spawn_lifecycle_watch_to(self, target.clone(), map)
+    }
+}
+
+/// Error returned when a [`TaskRef`] can no longer observe its task membership.
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum TaskError {
+    /// The task stopped before reporting explicit startup readiness.
+    #[error("task `{task_id}` stopped before reporting readiness")]
+    StoppedBeforeReady {
+        /// Id of the task that stopped.
+        task_id: String,
+    },
+    /// The task membership ended without an observable exit.
+    #[error("task `{task_id}` is no longer available")]
+    Unavailable {
+        /// Id of the unavailable task.
+        task_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Default)]
+struct TaskTrackingState {
+    started: bool,
+    outcome: Option<Result<ExitStatus, TaskError>>,
+}
+
+struct TaskRefInner {
+    id: Arc<str>,
+    lineage: u64,
+    scope: ScopeRef,
+    events: Mutex<Option<LifecycleWatch>>,
+    state: tokio::sync::watch::Sender<TaskTrackingState>,
+}
+
+/// Cloneable, restart-stable handle for one supervised task membership.
+///
+/// A task ref follows restarts of the membership that created it, but is tied
+/// to that membership's lineage. Removing a dynamic task and adding another
+/// task with the same id therefore never retargets an existing ref.
+#[derive(Clone)]
+pub struct TaskRef {
+    inner: Arc<TaskRefInner>,
+}
+
+impl TaskRef {
+    fn new(scope: ScopeRef, id: impl Into<Arc<str>>, lineage: u64, events: LifecycleWatch) -> Self {
+        let id = id.into();
+        let events = events.direct_child(Arc::clone(&id), lineage);
+        let (state, _) = tokio::sync::watch::channel(TaskTrackingState::default());
+        Self {
+            inner: Arc::new(TaskRefInner {
+                id,
+                lineage,
+                scope,
+                events: Mutex::new(Some(events)),
+                state,
+            }),
+        }
+    }
+
+    /// Returns the task id within its enclosing scope.
+    pub fn id(&self) -> &str {
+        &self.inner.id
+    }
+
+    /// Returns the latest snapshot for this exact task membership.
+    ///
+    /// `None` means the membership has been removed or its scope is no longer
+    /// available. A later task with the same id is deliberately ignored.
+    pub fn snapshot(&self) -> Option<ChildSnapshot> {
+        task_snapshot(
+            &self.inner.scope.snapshot(),
+            &self.inner.id,
+            self.inner.lineage,
+        )
+        .cloned()
+    }
+
+    /// Waits until this task reports startup readiness.
+    ///
+    /// Ordinary tasks are ready as soon as their future is spawned. A task
+    /// configured with [`TaskSpec::wait_for_ready`] becomes ready when it calls
+    /// [`crate::TaskContext::mark_ready`].
+    pub async fn wait_started(&self) -> Result<(), TaskError> {
+        self.ensure_tracking();
+        let mut state = self.inner.state.subscribe();
+        loop {
+            let current = state.borrow().clone();
+            if current.started {
+                return Ok(());
+            }
+            if let Some(outcome) = current.outcome {
+                return match outcome {
+                    Ok(_) => Err(TaskError::StoppedBeforeReady {
+                        task_id: self.id().to_owned(),
+                    }),
+                    Err(error) => Err(error),
+                };
+            }
+            state.changed().await.map_err(|_| TaskError::Unavailable {
+                task_id: self.id().to_owned(),
+            })?;
+        }
+    }
+
+    /// Waits for this task membership's terminal exit.
+    ///
+    /// Intermediate exits followed by the task's restart policy are skipped.
+    /// The returned [`ExitStatus`] distinguishes clean completion, failure,
+    /// panic, and supervisor-driven cancellation or abortion.
+    pub async fn wait(&self) -> Result<ExitStatus, TaskError> {
+        self.ensure_tracking();
+        let mut state = self.inner.state.subscribe();
+        loop {
+            if let Some(outcome) = state.borrow().outcome.clone() {
+                return outcome;
+            }
+            state.changed().await.map_err(|_| TaskError::Unavailable {
+                task_id: self.id().to_owned(),
+            })?;
+        }
+    }
+
+    fn ensure_tracking(&self) {
+        let events = self
+            .inner
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let Some(events) = events else {
+            return;
+        };
+        let inner = Arc::clone(&self.inner);
+        let tracker = tokio::spawn(track_task(inner, events));
+        std::mem::drop(tracker);
+    }
+}
+
+impl std::fmt::Debug for TaskRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskRef")
+            .field("id", &self.inner.id)
+            .finish_non_exhaustive()
+    }
+}
+
+async fn track_task(inner: Arc<TaskRefInner>, mut events: LifecycleWatch) {
+    let mut last_exit = None;
+    if let Some(state) = task_state_from_snapshot(&inner.scope.snapshot(), &inner.id, inner.lineage)
+    {
+        if let Some(Ok(exit)) = &state.outcome {
+            last_exit = Some(exit.clone());
+        }
+        let finished = state.outcome.is_some();
+        inner.state.send_replace(state);
+        if finished {
+            return;
+        }
+    }
+
+    while let Some(event) = events.next().await {
+        let matches_task = match &event.kind {
+            LifecycleEventKind::ChildAdded {
+                child_id, lineage, ..
+            }
+            | LifecycleEventKind::ChildStarted {
+                child_id, lineage, ..
+            }
+            | LifecycleEventKind::ChildRestartScheduled {
+                child_id, lineage, ..
+            }
+            | LifecycleEventKind::ChildExited {
+                child_id, lineage, ..
+            }
+            | LifecycleEventKind::ChildRemoved {
+                child_id, lineage, ..
+            } => child_id == inner.id.as_ref() && *lineage == inner.lineage,
+            _ => false,
+        };
+
+        if matches_task {
+            match &event.kind {
+                LifecycleEventKind::ChildExited { exit, .. } => {
+                    last_exit = Some(exit.clone());
+                }
+                LifecycleEventKind::ChildRemoved { .. } => {
+                    let outcome = last_exit.clone().map_or_else(
+                        || {
+                            Err(TaskError::Unavailable {
+                                task_id: inner.id.to_string(),
+                            })
+                        },
+                        Ok,
+                    );
+                    let started = inner.state.borrow().started;
+                    inner.state.send_replace(TaskTrackingState {
+                        started,
+                        outcome: Some(outcome),
+                    });
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if matches_task || matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
+            match task_state_from_snapshot(&inner.scope.snapshot(), &inner.id, inner.lineage) {
+                Some(state) => {
+                    let finished = state.outcome.is_some();
+                    inner.state.send_replace(state);
+                    if finished {
+                        return;
+                    }
+                }
+                // This is a task-filtered stream, so the retained suffix still
+                // contains this membership's latest transition. Keep draining
+                // it when an unusually restart-heavy task overruns the queue.
+                None if matches!(event.kind, LifecycleEventKind::Lagged { .. }) => {}
+                None => {}
+            }
+        }
+    }
+
+    let outcome = last_exit.map_or_else(
+        || {
+            Err(TaskError::Unavailable {
+                task_id: inner.id.to_string(),
+            })
+        },
+        Ok,
+    );
+    let started = inner.state.borrow().started;
+    inner.state.send_replace(TaskTrackingState {
+        started,
+        outcome: Some(outcome),
+    });
+}
+
+fn task_snapshot<'a>(
+    snapshot: &'a SupervisorSnapshot,
+    id: &str,
+    lineage: u64,
+) -> Option<&'a ChildSnapshot> {
+    snapshot
+        .children
+        .iter()
+        .find(|child| child.id == id && child.lineage == lineage)
+}
+
+fn task_state_from_snapshot(
+    snapshot: &SupervisorSnapshot,
+    id: &str,
+    lineage: u64,
+) -> Option<TaskTrackingState> {
+    let child = task_snapshot(snapshot, id, lineage)?;
+    let started = match child.state {
+        ChildStateView::Running { .. } => true,
+        ChildStateView::Stopping { started, .. } | ChildStateView::Stopped { started, .. } => {
+            started
+        }
+        ChildStateView::Starting { .. } | ChildStateView::StartupAborted { .. } => false,
+    };
+    let exit = child.state.last_exit().cloned();
+    let outcome = exit.and_then(|exit| {
+        let can_restart = snapshot.state == SupervisorStateView::Running
+            && child.membership == ChildMembershipView::Active
+            && (child.restart_policy.should_restart(exit.is_failure())
+                || task_is_revivable_by_group(snapshot, child));
+        (child.state.is_terminal() && !can_restart && child.next_restart_in.is_none())
+            .then_some(Ok(exit))
+    });
+    Some(TaskTrackingState { started, outcome })
+}
+
+fn task_is_revivable_by_group(snapshot: &SupervisorSnapshot, child: &ChildSnapshot) -> bool {
+    if child.restart_policy.is_never() {
+        return false;
+    }
+
+    match snapshot.strategy {
+        Strategy::OneForOne => false,
+        Strategy::OneForAll => true,
+        Strategy::RestForOne => snapshot
+            .children
+            .first()
+            .is_some_and(|first| first.lineage != child.lineage),
+    }
+}
+
 /// Owns a spawned supervision tree.
 ///
-/// Routine root observation and lifecycle operations delegate directly to the
-/// root scope. Use [`scope`](Self::scope) when a cheaply cloneable, non-owning
-/// [`ScopeRef`] must be passed elsewhere or used for membership mutation.
-/// Dropping a `ScopeRef` is inert and does not keep this owner alive; dropping
-/// this owner requests graceful shutdown.
+/// Use [`scope`](Self::scope) for observation and control through a cheaply
+/// cloneable, non-owning [`ScopeRef`]. Dropping a `ScopeRef` is inert and does
+/// not keep this owner alive; dropping this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
 pub struct RunningTree {
     supervisor: RunningSupervisor,
@@ -206,68 +513,14 @@ impl RunningTree {
         self.scope.clone()
     }
 
-    /// Returns whether the root scope has ordered or dynamic membership.
-    pub fn kind(&self) -> ScopeKind {
-        self.scope.kind()
-    }
-
-    /// Returns the actor-aware handle for a direct runtime subtree.
-    pub fn subtree(&self, id: &str) -> Option<ScopeRef> {
-        self.scope.subtree(id)
-    }
-
-    /// Returns a clone of the latest root supervisor snapshot.
-    pub fn snapshot(&self) -> SupervisorSnapshot {
-        self.scope.snapshot()
-    }
-
-    /// Returns a receiver that updates when the root snapshot changes.
-    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
-        self.scope.subscribe_snapshots()
-    }
-
-    /// Returns an aligned root snapshot and direct-child lifecycle stream.
-    pub fn observe_lifecycle(&self) -> LifecycleObservation {
-        self.scope.observe_lifecycle()
-    }
-
-    /// Returns the ordered lifecycle stream for the complete root tree.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
-        self.scope.watch_lifecycle()
-    }
-
-    /// Pumps direct-child lifecycle events from the root into `target`.
-    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
-    where
-        M: Send + 'static,
-        F: FnMut(LifecycleEvent) -> M + Send + 'static,
-    {
-        self.scope.watch_lifecycle_to(target, map)
-    }
-
-    /// Returns point-in-time actor stats for the root and all nested subtrees.
-    pub fn actor_stats(&self) -> Vec<ScopedActorStats> {
-        self.scope.actor_stats()
-    }
-
-    /// Requests graceful shutdown without waiting for completion.
-    pub fn shutdown(&self) {
-        self.supervisor.shutdown();
-    }
-
-    /// Requests graceful shutdown and waits for completion.
-    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+    /// Requests graceful shutdown and waits for completion, consuming the owner.
+    pub async fn shutdown(self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
-    /// Waits for the running tree to stop.
-    pub async fn wait(&self) -> Result<(), SupervisorError> {
+    /// Waits for the running tree to stop, consuming the owner.
+    pub async fn wait(self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
-    }
-
-    /// Waits until every current actor child of the root has completed `on_start`.
-    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
-        self.scope.wait_started().await
     }
 }
 
@@ -296,6 +549,11 @@ impl ScopeRef {
         Self { supervisor, actors }
     }
 
+    pub(crate) fn task_ref(&self, id: impl Into<Arc<str>>, lineage: u64) -> TaskRef {
+        TaskRef::new(self.clone(), id, lineage, self.supervisor.watch_lifecycle())
+    }
+
+    #[cfg(any(feature = "host", test))]
     pub(crate) fn unavailable() -> Self {
         static UNAVAILABLE: OnceLock<ScopeRef> = OnceLock::new();
 
@@ -379,115 +637,23 @@ impl ScopeRef {
         self.supervisor.wait_started().await
     }
 
-    /// Waits until every named direct child has completed successfully.
-    ///
-    /// Completion means the current generation exited with
-    /// [`ExitStatus::Completed`](crate::observe::ExitStatus::Completed) and no
-    /// restart is pending. Removed children drop out of the set. Unknown ids
-    /// return [`CompletionError::UnknownChild`], while a terminal scope that
-    /// cannot satisfy the condition returns [`CompletionError::ScopeClosed`].
-    /// The wait installs its lifecycle stream before reading state, so children
-    /// that finish immediately or before the call are handled correctly.
-    pub async fn wait_for_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.supervisor.wait_for_children(ids).await
-    }
-
-    /// Waits for named direct children that may be inserted into a dynamic scope later.
-    ///
-    /// Returns [`CompletionError::NotDynamic`] for an ordered scope. Once a
-    /// named membership has appeared, its removal drops it out of the set.
-    pub async fn wait_for_future_children<I, S>(&self, ids: I) -> Result<(), CompletionError>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.supervisor.wait_for_future_children(ids).await
-    }
-
-    /// Requests shutdown once every named direct child has completed successfully.
-    ///
-    /// Ids are validated before this method returns. The returned guard
-    /// cancels the operation when dropped; consume it with [`Guard::detach`]
-    /// for fire-and-forget behavior. The background task does not keep the
-    /// supervision tree alive.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_when_children_complete<I, S>(&self, ids: I) -> Result<Guard, CompletionError>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.supervisor.shutdown_when_children_complete(ids)
-    }
-
-    /// Requests shutdown after future named members of a dynamic scope complete.
-    ///
-    /// Returns [`CompletionError::NotDynamic`] for an ordered scope. The
-    /// returned guard cancels the operation when dropped; consume it with
-    /// [`Guard::detach`] for fire-and-forget behavior.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a Tokio runtime.
-    pub fn shutdown_when_future_children_complete<I, S>(
-        &self,
-        ids: I,
-    ) -> Result<Guard, CompletionError>
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.supervisor.shutdown_when_future_children_complete(ids)
-    }
-
     /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
     ///
     /// Initialize state from [`LifecycleObservation::snapshot`], then consume
     /// events whose direct-child sequence exceeds the snapshot's
     /// [`SupervisorSnapshot::lifecycle_seq`].
-    pub fn observe_lifecycle(&self) -> LifecycleObservation {
+    pub fn observe_children(&self) -> LifecycleObservation {
         self.supervisor.observe_lifecycle()
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
-    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for a gap-free
+    /// Use [`observe_children`](Self::observe_children) for a gap-free
     /// direct-child state-plus-stream setup. This lower-level method is useful
     /// when recursive transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
-    pub fn watch_lifecycle(&self) -> LifecycleWatch {
+    pub fn lifecycle_events(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()
-    }
-
-    /// Pumps this scope's direct-child lifecycle events into `target` using
-    /// its ordinary mailbox policy.
-    ///
-    /// The pump follows the target through ordinary actor restarts, but never
-    /// replays an event to a fresh incarnation: lifecycle events are discrete
-    /// history, so replay would fabricate a transition. A restarted consumer
-    /// should rehydrate using watch → snapshot → `lifecycle_seq` filtering in
-    /// `on_start`. FIFO mailboxes are recommended when every transition must
-    /// be observed; a conflating mailbox may discard intermediate messages.
-    ///
-    /// The pump stops when the returned guard is dropped or cancelled, when
-    /// this runtime's identity becomes terminal after draining its staged
-    /// events, or when the target actor permanently terminates.
-    pub fn watch_lifecycle_to<M, F>(&self, target: &ActorRef<M>, map: F) -> Guard
-    where
-        M: Send + 'static,
-        F: FnMut(LifecycleEvent) -> M + Send + 'static,
-    {
-        spawn_lifecycle_watch_to(
-            self.watch_lifecycle().direct_children(),
-            target.clone(),
-            map,
-        )
     }
 
     /// Returns a clone of the latest supervisor snapshot.
@@ -543,7 +709,7 @@ impl ScopeRef {
     }
 
     /// Returns a watch receiver that updates when the snapshot changes.
-    pub fn subscribe_snapshots(&self) -> SupervisorSnapshotReceiver {
+    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
         self.supervisor.subscribe_snapshots()
     }
 }
@@ -625,7 +791,7 @@ impl ScopeRef {
         let parts = parts.map_err(ControlError::Rejected)?;
         let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
-            child = child.restart_policy(restart);
+            child = child.restart(restart);
         }
         if let Some(shutdown) = parts.shutdown {
             child = child.shutdown(shutdown);
@@ -646,7 +812,11 @@ impl ScopeRef {
     }
 
     /// Adds a supervised task child with default configuration to this scope.
-    pub async fn add_task<F, Fut>(&self, id: impl Into<String>, task: F) -> Result<(), ControlError>
+    pub async fn add_task<F, Fut>(
+        &self,
+        id: impl Into<String>,
+        task: F,
+    ) -> Result<TaskRef, ControlError>
     where
         F: Fn(crate::TaskContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ExitResult> + Send + 'static,
@@ -665,8 +835,15 @@ impl ScopeRef {
     ///
     /// Returns [`ControlError::NotDynamic`] when this scope has ordered
     /// membership. Other failures are reported by the dynamic supervisor.
-    pub async fn add_task_spec(&self, task: TaskSpec) -> Result<(), ControlError> {
-        self.dynamic_supervisor()?.add_child(task).await.map(|_| ())
+    pub async fn add_task_spec(&self, task: TaskSpec) -> Result<TaskRef, ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
+        let id: Arc<str> = Arc::from(task.id());
+        let events = self
+            .supervisor
+            .watch_lifecycle()
+            .pending_direct_child(Arc::clone(&id));
+        let lineage = dynamic.add_child(task).await?;
+        Ok(TaskRef::new(self.clone(), id, lineage, events))
     }
 
     /// Adds an actor with default configuration and returns its stable typed ref.
@@ -691,7 +868,7 @@ impl ScopeRef {
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
     /// the stronger readiness contract. A zero
-    /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity) is rejected with
+    /// A zero-capacity [`Mailbox::queue`](crate::Mailbox::queue) is rejected with
     /// [`ControlError::Rejected`].
     ///
     /// # Errors
@@ -887,7 +1064,7 @@ pub(crate) fn actor_child_spec(
     .into_spec()
     .attachment(attachment)
     .wait_for_ready()
-    .restart_policy(restart)
+    .restart(restart)
     .shutdown(shutdown);
     if remove_when_done {
         child.remove_when_done()
@@ -907,7 +1084,7 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartMode, RunningTree,
+        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartPolicy, RunningTree,
         ScopeRef, Tree,
     };
 
@@ -941,7 +1118,8 @@ mod tests {
 
     #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
-        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartMode::Never);
+        let static_spec =
+            ActorSpec::new("static", || FailsOnMessage).restart(RestartPolicy::never());
         let static_ref = static_spec.actor_ref();
         let mut static_tree = Tree::new();
         static_tree.add_actor_spec(static_spec);
@@ -951,7 +1129,7 @@ mod tests {
             .wait_started()
             .await
             .expect("static actor starts");
-        let mut static_snapshots = static_runtime.scope().subscribe_snapshots();
+        let mut static_snapshots = static_runtime.scope().snapshots();
         static_ref.send(()).await.expect("static message accepted");
         static_snapshots
             .wait_for(|snapshot| {
@@ -962,7 +1140,7 @@ mod tests {
             .await
             .expect("static terminal membership remains visible");
         static_runtime
-            .shutdown_and_wait()
+            .shutdown()
             .await
             .expect("static runtime shuts down");
 
@@ -970,7 +1148,7 @@ mod tests {
         let dynamic = dynamic_runtime.scope();
         let dynamic_ref = dynamic
             .add_actor_spec(
-                ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartMode::Never),
+                ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartPolicy::never()),
             )
             .await
             .expect("dynamic actor is inserted");
@@ -979,7 +1157,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut dynamic_snapshots = dynamic_runtime.scope().subscribe_snapshots();
+        let mut dynamic_snapshots = dynamic_runtime.scope().snapshots();
         dynamic_ref
             .send(())
             .await
@@ -993,7 +1171,7 @@ mod tests {
             .await
             .expect("dynamic terminal membership remains visible");
         dynamic_runtime
-            .shutdown_and_wait()
+            .shutdown()
             .await
             .expect("dynamic runtime shuts down");
     }
@@ -1005,7 +1183,7 @@ mod tests {
         let actor_ref = dynamic
             .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
-                    .restart(RestartMode::Never)
+                    .restart(RestartPolicy::never())
                     .remove_when_done(),
             )
             .await
@@ -1015,7 +1193,7 @@ mod tests {
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut snapshots = runtime.scope().subscribe_snapshots();
+        let mut snapshots = runtime.scope().snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots
@@ -1023,7 +1201,7 @@ mod tests {
             .await
             .expect("explicitly ephemeral membership is removed");
         runtime
-            .shutdown_and_wait()
+            .shutdown()
             .await
             .expect("dynamic runtime shuts down");
     }
@@ -1071,6 +1249,6 @@ mod tests {
                 .is_some()
         );
 
-        root.shutdown_and_wait().await.expect("clean shutdown");
+        root.shutdown().await.expect("clean shutdown");
     }
 }

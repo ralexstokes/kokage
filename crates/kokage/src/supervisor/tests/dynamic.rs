@@ -1,7 +1,7 @@
 use std::{ops::Deref, sync::Arc, time::Duration};
 
 use crate::supervisor::{
-    BuildError, ChildSpec, ControlError, DynamicSupervisorBuilder, RestartMode, RestartPolicy,
+    BuildError, ChildSpec, ControlError, DynamicSupervisorBuilder, RestartPolicy,
     RunningSupervisor, ScopeKind, Shutdown, Supervisor, SupervisorError, SupervisorHandle,
     TaskSpec,
 };
@@ -95,7 +95,7 @@ async fn empty_supervisor_starts_empty_and_accepts_children() {
         .dynamic()
         .expect("dynamic supervisor")
         .add_child(
-            TaskSpec::new("dynamic", |_ctx| async move { Ok(()) }).restart(RestartMode::Never),
+            TaskSpec::new("dynamic", |_ctx| async move { Ok(()) }).restart(RestartPolicy::never()),
         )
         .await
         .expect("empty supervisor accepts a child");
@@ -152,7 +152,7 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
             Ok(())
         }
     })
-    .restart(RestartMode::Never);
+    .restart(RestartPolicy::never());
     let handle_owner = Supervisor::dynamic()
         .default_restart(RestartPolicy::always())
         .build()
@@ -232,7 +232,7 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(RestartMode::Never)
+            .restart(RestartPolicy::never())
             .remove_when_done(),
         )
         .child(
@@ -291,7 +291,7 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
                     }
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .child(TaskSpec::new("trigger", {
@@ -360,7 +360,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     Ok(())
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .child(
@@ -378,7 +378,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     }
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .build()
         .expect("ordered group supervisor builds");
@@ -545,7 +545,7 @@ async fn terminal_failure_remains_visible_while_idle() {
                 Err(common::test_error("terminal failure"))
             }
         })
-        .restart(RestartMode::Never)],
+        .restart(RestartPolicy::never())],
     )
     .await;
     let mut events = common::event_watch(&handle);
@@ -755,7 +755,7 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
                     Ok(())
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
             TaskSpec::new("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -827,7 +827,7 @@ async fn shutdown_completes_a_pending_removal_and_preserves_its_timeout() {
                     Ok(())
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .shutdown(fast_shutdown),
             TaskSpec::new("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -1120,7 +1120,7 @@ async fn cooperative_removal_reports_timeout_after_the_abort_join() {
 async fn control_plane_remains_available_after_all_children_exit() {
     let handle = spawn_dynamic(
         Supervisor::dynamic(),
-        [TaskSpec::new("done", |_ctx| async move { Ok(()) }).restart(RestartMode::Never)],
+        [TaskSpec::new("done", |_ctx| async move { Ok(()) }).restart(RestartPolicy::never())],
     )
     .await;
 

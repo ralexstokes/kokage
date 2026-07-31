@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 
-use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, RunningTree, ScopeRef, Tree,
-    raw::{ActorHost, RawActor},
-};
+use kokage::{ActorFactory, ActorRef, ActorSlot, RunningTree, ScopeRef, Tree, raw::RawActor};
+#[cfg(feature = "host")]
+use kokage::{ActorSpec, raw::ActorHost};
 
 pub(crate) fn dynamic_root(runtime: &RunningTree) -> ScopeRef {
     runtime.scope()
@@ -18,10 +17,12 @@ pub(crate) struct TreeBuilder {
     tree: Tree,
 }
 
+#[cfg(feature = "host")]
 pub(crate) struct ActorHostBuilder {
     actors: Vec<ActorHost>,
 }
 
+#[cfg(feature = "host")]
 impl ActorHostBuilder {
     pub(crate) fn new() -> Self {
         Self { actors: Vec::new() }
@@ -47,16 +48,20 @@ impl ActorHostBuilder {
     }
 }
 
+#[cfg(feature = "host")]
 pub(crate) struct ActorHosts(Vec<ActorHost>);
 
+#[cfg(feature = "host")]
 impl ActorHosts {
     pub(crate) fn into_nodes(self) -> Vec<ActorHostNode> {
         self.0.into_iter().map(ActorHostNode).collect()
     }
 }
 
+#[cfg(feature = "host")]
 pub(crate) struct ActorHostNode(ActorHost);
 
+#[cfg(feature = "host")]
 impl ActorHostNode {
     pub(crate) fn label(&self) -> &str {
         self.0.label()

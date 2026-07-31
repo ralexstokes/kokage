@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     press.send("business cards x100".to_owned()).await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

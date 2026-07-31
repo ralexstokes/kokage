@@ -7,7 +7,7 @@ error[E0599]: no method named `mailbox_capacity` found for struct `ActorSlot<M>`
 error[E0599]: no method named `mailbox` found for struct `ActorSlot<M>` in the current scope
   --> tests/ui/public-api/actor_slot_configuration_removed.rs:11:49
    |
-11 |     let _ = ActorSlot::<String>::new("mailbox").mailbox(MailboxMode::conflate());
+11 |     let _ = ActorSlot::<String>::new("mailbox").mailbox(Mailbox::latest());
    |                                                 ^^^^^^^ method not found in `ActorSlot<String>`
 
 error[E0599]: no method named `message_size` found for struct `ActorSlot<M>` in the current scope
@@ -19,7 +19,7 @@ error[E0599]: no method named `message_size` found for struct `ActorSlot<M>` in 
 error[E0599]: no method named `restart` found for struct `ActorSlot<M>` in the current scope
   --> tests/ui/public-api/actor_slot_configuration_removed.rs:13:49
    |
-13 |     let _ = ActorSlot::<String>::new("restart").restart(RestartMode::Always);
+13 |     let _ = ActorSlot::<String>::new("restart").restart(RestartPolicy::always());
    |                                                 ^^^^^^^ method not found in `ActorSlot<String>`
 
 error[E0599]: no method named `shutdown` found for struct `ActorSlot<M>` in the current scope

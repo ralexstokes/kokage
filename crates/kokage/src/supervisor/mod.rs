@@ -4,6 +4,7 @@ mod attachment;
 mod builder;
 mod cancellation;
 mod child;
+#[cfg(test)]
 mod completion;
 mod context;
 mod error;
@@ -68,6 +69,7 @@ pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub(crate) use child::ChildSpec;
 pub use child::{BoxError, TaskSpec};
+#[cfg(test)]
 pub use completion::CompletionError;
 pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
@@ -75,7 +77,7 @@ pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
-pub use restart::{Backoff, RestartMode, RestartPolicy};
+pub use restart::{Backoff, RestartPolicy};
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::{MailboxShutdown, Shutdown};
 pub use snapshot::{

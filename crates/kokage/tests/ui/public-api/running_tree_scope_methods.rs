@@ -21,4 +21,15 @@ async fn membership_operations_require_scope_ref(running: &RunningTree) {
     let _ = running.remove_child("child").await;
 }
 
+async fn observation_and_control_require_scope_ref(running: &RunningTree) {
+    let _ = running.kind();
+    let _ = running.subtree("tree");
+    let _ = running.snapshot();
+    let _ = running.snapshots();
+    let _ = running.observe_children();
+    let _ = running.lifecycle_events();
+    let _ = running.actor_stats();
+    let _ = running.wait_started().await;
+}
+
 fn main() {}

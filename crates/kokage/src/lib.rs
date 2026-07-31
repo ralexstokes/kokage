@@ -32,7 +32,7 @@
 //! let runtime = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
-//! runtime.shutdown_and_wait().await?;
+//! runtime.shutdown().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -59,11 +59,11 @@
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`raw::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
+//! | [`TaskRef`] | Cloneable, restart-stable task completion and readiness handle. |
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
-//! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
+//! | [`Mailbox`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
-//! | [`raw::ActorHost`] | Owns one actor's direct execution and stable binding. |
 //!
 //! # Composition modes
 //!
@@ -125,8 +125,9 @@
 //!
 //! # Static declarations
 //!
-//! Use `#[derive(ActorFactory)]` on named-field actors to generate reusable
-//! factory structs without repeating configuration fields or clone code.
+//! Enable the opt-in `derive` feature and use `#[derive(ActorFactory)]` on
+//! named-field actors to generate reusable factory structs without repeating
+//! configuration fields or clone code.
 //! Derive macros are intentionally not part of [`prelude`]; import
 //! [`ActorFactory`] from the crate root or use
 //! `#[derive(kokage::ActorFactory)]`.
@@ -152,36 +153,6 @@
 //! tree.add_actor_spec(left_actor);
 //! tree.add_actor_spec(right_actor);
 //! # let _ = (left, right, tree);
-//! ```
-//!
-//! # Hand-driving actors
-//!
-//! Supervision through [`Tree`] or [`DynamicTree`] is the normal
-//! host, but [`ActorSpec::into_host`] exposes one actor for direct hosts:
-//!
-//! ```
-//! use kokage::{CancellationToken, prelude::*, raw::DEFAULT_SHUTDOWN_BOUND};
-//! # struct Worker;
-//! # impl Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult { Ok(()) } }
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let actor = ActorSpec::new("worker", || Worker).into_host();
-//! let stop = CancellationToken::new();
-//! let run = tokio::spawn({
-//!     let stop = stop.clone();
-//!     async move {
-//!         actor
-//!             .run_once(
-//!                 stop.cancelled(),
-//!                 Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
-//!             )
-//!             .await
-//!     }
-//! });
-//! stop.cancel();
-//! run.await??;
-//! # Ok(())
-//! # }
 //! ```
 //!
 //! # Observability
@@ -229,7 +200,8 @@
 //!
 //! | Feature | Default | Description |
 //! |---------|---------|-------------|
-//! | `derive` | yes | Re-exports `#[derive(ActorFactory)]`. |
+//! | `derive` | no | Re-exports `#[derive(ActorFactory)]`. |
+//! | `host` | no | Direct single-actor hosting through `ActorSpec::into_host` and `raw::ActorHost`. |
 //! | `metrics` | no | Supervisor lifecycle metrics plus opt-in actor message-size metrics. |
 //! | `serde` | no | Serialization support for outlines, actor stats, and view types. |
 
@@ -242,15 +214,16 @@ mod supervisor;
 ///
 /// Most applications use [`ActorSpec`] and a supervision tree.
 /// This module contains the lower-level execution surface for custom receive
-/// loops and directly driven actor hosts. Handler actors, supervised task
-/// declarations, and their shared [`ExitResult`] live at the crate root.
+/// loops and, with the `host` feature, directly driven actor hosts. Handler
+/// actors, supervised task declarations, and their shared [`ExitResult`] live
+/// at the crate root.
 pub mod raw {
-    pub use crate::actor::{
-        ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
-    };
+    #[cfg(feature = "host")]
+    pub use crate::actor::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit};
+    pub use crate::actor::{RawActor, RawContext};
 }
 
-/// Runtime observation, lifecycle, topology, and completion types.
+/// Runtime observation, lifecycle, and topology types.
 ///
 /// Control remains on [`ScopeRef`]; this module groups the values and
 /// streams returned by that handle without injecting them into the crate root.
@@ -260,10 +233,9 @@ pub mod observe {
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
         supervisor::{
-            ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError, ExitStatus,
-            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind,
-            ScopePathSegment, SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver,
-            SupervisorStateView,
+            ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
+            LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
+            SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
 }
@@ -276,14 +248,15 @@ pub mod observe {
 /// code. Errors, cyclic-wiring declarations, lifecycle-history types, and raw
 /// actor hosting remain at the crate root or in [`observe`] and [`raw`].
 ///
-/// Derive macros are explicit root imports rather than prelude members. Add
-/// `use kokage::ActorFactory;` for an unqualified `#[derive(ActorFactory)]`,
-/// or use its fully qualified `kokage::ActorFactory` name.
+/// With the `derive` feature enabled, derive macros are explicit root imports
+/// rather than prelude members. Add `use kokage::ActorFactory;` for an
+/// unqualified `#[derive(ActorFactory)]`, or use its fully qualified
+/// `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-        MailboxShutdown, MonitorEvent, Reply, RestartMode, Shutdown, StopContext, Strategy,
-        TaskSpec, TimerKey, Tree,
+        Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
+        MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
+        TaskRef, TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -293,13 +266,12 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
-    ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
+    ExitResult, Mailbox, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
     StopContext, TimerKey,
 };
-pub use runtime::{RunningTree, ScopeRef};
+pub use runtime::{RunningTree, ScopeRef, TaskError, TaskRef};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
-    MailboxShutdown, RestartMode, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext,
-    TaskSpec,
+    MailboxShutdown, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext, TaskSpec,
 };

@@ -50,7 +50,7 @@ other machinery for a world that is ending.
 Inside `handle`, [`Context::stop`] requests a clean stop: the current
 callback finishes, the loop winds down (draining per the actor's mailbox
 shutdown policy), and `on_stop` runs. A cleanly stopped actor is *done* under
-the default `RestartMode::OnFailure` — only `RestartMode::Always` brings it
+the default `RestartPolicy::on_failure()` — only `RestartPolicy::always()` brings it
 back.
 
 [`Context::is_draining`] reports whether work queued by the current callback
@@ -148,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     press.send(PressMsg::Job("posters x20".to_owned())).await?;
     maintained_rx.recv().await; // observe one maintenance pass
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

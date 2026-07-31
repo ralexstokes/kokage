@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, Reply,
-    RestartPolicy, SendError, SendErrorKind, Tree,
+    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, Mailbox, Reply, RestartPolicy,
+    SendError, SendErrorKind, Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -77,8 +77,8 @@ async fn close_full_mailbox_during_bounded_send(
             fail: Arc::clone(&fail),
         }
     })
-    .mailbox_capacity(1)
-    .restart_policy(restart);
+    .mailbox(Mailbox::queue(1))
+    .restart(restart);
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -98,7 +98,7 @@ async fn close_full_mailbox_during_bounded_send(
 
     let result = bounded.await.expect("bounded send task joins");
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
     result
@@ -191,7 +191,7 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
         .try_send("one immediate attempt".to_owned())
         .expect("try_send is the immediate-attempt API");
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -207,7 +207,7 @@ async fn full_mailbox_rejections_return_the_message() {
             release: release.clone(),
         }
     })
-    .mailbox_capacity(1);
+    .mailbox(Mailbox::queue(1));
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -265,7 +265,7 @@ async fn full_mailbox_rejections_return_the_message() {
     assert_eq!(stats.sends_rejected, 2);
 
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -281,7 +281,7 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
             release: release.clone(),
         }
     })
-    .mailbox(MailboxMode::conflate());
+    .mailbox(Mailbox::latest());
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -302,7 +302,7 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
 
     release.notify_one();
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -321,8 +321,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
             received: received_tx.clone(),
         }
     })
-    .mailbox_capacity(1)
-    .mailbox(MailboxMode::conflate_by_key({
+    .mailbox(Mailbox::latest_by_key(1, {
         let key_extractions = Arc::clone(&key_extractions);
         move |message: &String| {
             key_extractions.fetch_add(1, Ordering::SeqCst);
@@ -372,7 +371,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
         "the timed-out replacement was not accepted"
     );
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -436,7 +435,7 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
     tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 

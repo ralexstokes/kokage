@@ -131,7 +131,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     assert!(worker_starts.load(Ordering::SeqCst) >= 2);
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -175,7 +175,7 @@ async fn send_waits_during_permanent_restart_window() {
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
     })
-    .restart_policy(restart);
+    .restart(restart);
     let worker_ref = worker.actor_ref();
 
     let mut tree = Tree::new().strategy(Strategy::OneForOne);
@@ -209,7 +209,7 @@ async fn send_waits_during_permanent_restart_window() {
         .expect("send completed");
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -257,7 +257,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         Err(SendError { actor_id , .. }) if actor_id == "worker"
     ));
 
-    let mut snapshots = handle.scope().subscribe_snapshots();
+    let mut snapshots = handle.scope().snapshots();
     let completed = timeout(
         Duration::from_secs(1),
         snapshots.wait_for(|snapshot| {
@@ -279,7 +279,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         Some(exit) if exit.is_completed()
     ));
 
-    handle.shutdown();
+    handle.scope().shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
@@ -326,7 +326,7 @@ async fn call_succeeds_across_restart_window() {
         runs: runs.clone(),
         failed: failed.clone(),
     })
-    .restart_policy(restart);
+    .restart(restart);
     let rpc_ref = rpc.actor_ref();
 
     let mut tree = Tree::new().strategy(Strategy::OneForOne);
@@ -362,7 +362,7 @@ async fn call_succeeds_across_restart_window() {
     );
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }

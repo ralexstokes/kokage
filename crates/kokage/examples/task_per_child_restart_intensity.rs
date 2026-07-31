@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     })
-    .restart_policy(warm_cache_restart);
+    .restart(warm_cache_restart);
 
     let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tree.add_task_spec(metrics);
     let running_owner = tree.spawn()?;
     let running = running_owner.scope();
-    let mut snapshots = running.subscribe_snapshots();
+    let mut snapshots = running.snapshots();
     let scheduled = timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("warm-cache", |child| child.next_restart_in.is_some()),

@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         run: 0,
         processed: processed_tx.clone(),
     })
-    .restart_policy(RestartPolicy::on_failure().limit(2, Duration::from_secs(1)));
+    .restart(RestartPolicy::on_failure().limit(2, Duration::from_secs(1)));
     let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
@@ -75,8 +75,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tree.add_actor_spec(worker_spec);
     let runtime = tree.spawn()?;
     let handle = runtime.scope();
-    let mut events = handle.watch_lifecycle();
-    let mut snapshots = handle.subscribe_snapshots();
+    let mut events = handle.lifecycle_events();
+    let mut snapshots = handle.snapshots();
 
     let event_task = tokio::spawn(async move {
         while let Some(event) = events.next().await {
@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let snapshot = snapshots.changed().await?;
     println!("snapshot: {:?}", snapshot.state);
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     event_task.abort();
     Ok(())
 }

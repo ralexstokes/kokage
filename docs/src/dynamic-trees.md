@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Contract over: the press drains its queue and leaves the tree.
     scope.remove_child("acme-press").await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -89,14 +89,14 @@ shop.add_subtree("sessions", dynamic_tree);
 let runtime = shop.spawn()?;
 // `spawn` returns while children are still starting; wait for the tree to
 // come up before the dynamic scope can accept members.
-runtime.wait_started().await?;
+runtime.scope().wait_started().await?;
 
 // Later, as clients arrive:
 let session = sessions
     .add_actor("session-1", || Session)
     .await?;
 # let _ = session;
-# runtime.shutdown_and_wait().await?;
+# runtime.shutdown().await?;
 # Ok(())
 # }
 ```
@@ -108,9 +108,9 @@ client leaves.
 
 ## Job scopes: run to completion, then clean up
 
-Dynamic trees plus two direct scope operations give you batch semantics.
-`temporary()` makes a finished child leave the scope, while a completion
-operation waits for the work or shuts the scope down:
+`TaskRef` gives dynamic trees straightforward batch semantics. `temporary()`
+makes finished work leave the scope; the ref remains tied to that exact
+membership and preserves its completion even when the task exits quickly:
 
 ```rust
 # use kokage::prelude::*;
@@ -120,25 +120,21 @@ let batch = DynamicTree::new();
 let scope = batch.scope();
 let runtime = batch.spawn()?;
 
-// Arm shutdown first so no fast completion can slip past it.
-let done = scope.shutdown_when_future_children_complete(["job-42"])?;
-
-scope
+let job = scope
     .add_task_spec(TaskSpec::new("job-42", |_ctx| async move { Ok(()) }).temporary())
     .await?;
 
-done.finished().await;
+let exit = job.wait().await?;
+assert!(exit.is_completed());
+scope.shutdown();
 runtime.wait().await?;
 # Ok(())
 # }
 ```
 
-`wait_for_children` counts a child as done when its current run exited cleanly
-with no restart pending (children under `RestartMode::Always` never qualify —
-they are services, not jobs). The explicitly named
-`wait_for_future_children` and `shutdown_when_future_children_complete`
-variants accept ids that have not been inserted yet. Shutdown triggers return
-a [`Guard`], so dropping the owner revokes the operation.
+`TaskRef::wait` skips exits followed by the task's restart policy and returns
+the terminal `ExitStatus`. Use `tokio::try_join!` or a task set when several
+jobs must finish, then request the enclosing scope's shutdown explicitly.
 
 ## What restarts cannot restore
 
@@ -159,5 +155,4 @@ mechanism.
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
 [`ControlError`]: https://stokes.io/kokage/api/kokage/enum.ControlError.html
-[`wait_for_children`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.wait_for_children
-[`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
+[`TaskRef`]: https://stokes.io/kokage/api/kokage/struct.TaskRef.html

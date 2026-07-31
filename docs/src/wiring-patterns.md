@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     desk_ref.send(DeskMsg::Order("menus x50".to_owned())).await?;
     println!("receipt for: {}", receipts_rx.recv().await.expect("printed"));
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -103,6 +103,8 @@ small directory actor; that's a userland protocol, and the repository's
 `directory.rs` example shows one.)
 
 ## Factories without boilerplate: `#[derive(ActorFactory)]`
+
+Enable kokage's opt-in `derive` Cargo feature to use this macro.
 
 Every `ActorSpec` needs a factory — something that builds a fresh actor per
 incarnation. Closures work (`ActorFactory` is implemented for any
@@ -149,7 +151,7 @@ let spec = ActorSpec::new("press", PressFactory {
   for per-run working state that must *not* leak across restarts.
 
 The derive works on non-generic structs with named fields, and lives behind
-the (default-on) `derive` feature. It is intentionally not in the prelude:
+the opt-in `derive` feature. It is intentionally not in the prelude:
 write `#[derive(kokage::ActorFactory)]` or `use kokage::ActorFactory;`.
 
 One design note that applies to *all* factories, closure or derived: a

@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     desk.send("posters x20".to_owned()).await?;
     desk.send("stickers x300".to_owned()).await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -119,7 +119,7 @@ let mut shop = Tree::new()
 shop.add_subtree_spec(
     "press-room",
     SubtreeSpec::from(press_room)
-        .restart_policy(RestartPolicy::on_failure().limit(2, Duration::from_secs(60))),
+        .restart(RestartPolicy::on_failure().limit(2, Duration::from_secs(60))),
 );
 # let _ = shop;
 ```

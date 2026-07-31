@@ -181,6 +181,31 @@ pub enum LifecycleEventKind {
 }
 
 impl LifecycleEventKind {
+    fn child_identity(&self) -> Option<(&str, u64)> {
+        match self {
+            Self::ChildAdded {
+                child_id, lineage, ..
+            }
+            | Self::ChildStarted {
+                child_id, lineage, ..
+            }
+            | Self::ChildExited {
+                child_id, lineage, ..
+            }
+            | Self::ChildRemoved {
+                child_id, lineage, ..
+            }
+            | Self::ChildRestartScheduled {
+                child_id, lineage, ..
+            } => Some((child_id, *lineage)),
+            Self::SupervisorStarted
+            | Self::SupervisorStopping
+            | Self::SupervisorStopped
+            | Self::RestartIntensityExceeded { .. }
+            | Self::Lagged { .. } => None,
+        }
+    }
+
     /// Returns the emitting supervisor's monotonic child-transition sequence.
     ///
     /// Supervisor-level events and lag markers are not aligned to a snapshot
@@ -234,7 +259,7 @@ impl LifecycleEventKind {
 }
 
 /// Lifecycle stream created by
-/// [`ScopeRef::watch_lifecycle`](crate::ScopeRef::watch_lifecycle).
+/// [`ScopeRef::lifecycle_events`](crate::ScopeRef::lifecycle_events).
 pub struct LifecycleWatch {
     watcher: Arc<LifecycleWatcher>,
     watcher_count: Option<Arc<AtomicUsize>>,
@@ -257,6 +282,20 @@ impl LifecycleWatch {
     /// The subscription still participates in recursive forwarding internally,
     /// but nested events never enter or consume capacity in its direct queue.
     pub fn direct_children(mut self) -> Self {
+        self.direct_only = true;
+        self
+    }
+
+    pub(crate) fn direct_child(mut self, id: Arc<str>, lineage: u64) -> Self {
+        self.watcher
+            .retain_direct_child(DirectChildFilter::exact(id, lineage));
+        self.direct_only = true;
+        self
+    }
+
+    pub(crate) fn pending_direct_child(mut self, id: Arc<str>) -> Self {
+        self.watcher
+            .retain_direct_child(DirectChildFilter::pending(id));
         self.direct_only = true;
         self
     }
@@ -334,6 +373,36 @@ type RecursiveLifecycleQueue = LifecycleEventQueue<LifecycleEvent>;
 struct LifecycleWatcher {
     recursive: Arc<RecursiveLifecycleQueue>,
     direct: Arc<RecursiveLifecycleQueue>,
+    direct_child: Mutex<Option<DirectChildFilter>>,
+}
+
+struct DirectChildFilter {
+    id: Arc<str>,
+    lineage: Option<u64>,
+}
+
+impl DirectChildFilter {
+    fn pending(id: Arc<str>) -> Self {
+        Self { id, lineage: None }
+    }
+
+    fn exact(id: Arc<str>, lineage: u64) -> Self {
+        Self {
+            id,
+            lineage: Some(lineage),
+        }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.lineage.is_none()
+    }
+
+    fn matches(&self, event: &LifecycleEvent) -> bool {
+        event.scope_path.is_empty()
+            && event.kind.child_identity().is_some_and(|(id, lineage)| {
+                id == self.id.as_ref() && self.lineage.is_none_or(|expected| lineage == expected)
+            })
+    }
 }
 
 impl LifecycleWatcher {
@@ -341,14 +410,46 @@ impl LifecycleWatcher {
         Arc::new(Self {
             recursive: LifecycleEventQueue::new(),
             direct: LifecycleEventQueue::new(),
+            direct_child: Mutex::new(None),
         })
     }
 
     fn push(&self, event: LifecycleEvent) {
         if event.scope_path.is_empty() {
-            self.direct.push(event.clone());
+            let direct_child = self
+                .direct_child
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if direct_child
+                .as_ref()
+                .is_none_or(|filter| filter.matches(&event))
+            {
+                if direct_child
+                    .as_ref()
+                    .is_some_and(DirectChildFilter::is_pending)
+                {
+                    // A dynamic TaskRef begins filtering by id before the add
+                    // command returns its lineage. Keep that short handoff
+                    // lossless, then compact when the exact filter is set.
+                    self.direct.push_unbounded(event.clone());
+                } else {
+                    self.direct.push(event.clone());
+                }
+            }
         }
         self.recursive.push(event);
+    }
+
+    fn retain_direct_child(&self, filter: DirectChildFilter) {
+        let mut direct_child = self
+            .direct_child
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.direct.retain(|event| filter.matches(event));
+        if !filter.is_pending() {
+            self.direct.enforce_capacity();
+        }
+        *direct_child = Some(filter);
     }
 
     fn mark_terminal(&self) {
@@ -410,6 +511,11 @@ impl<T: Laggable> LifecycleEventQueue<T> {
         self.notify.notify_one();
     }
 
+    fn push_unbounded(&self, event: T) {
+        self.events().push_back(event);
+        self.notify.notify_one();
+    }
+
     fn record_drop(events: &mut VecDeque<T>) {
         if events.front().is_some_and(Laggable::is_lagged) {
             if let Some(newest_dropped) = events.remove(1)
@@ -424,6 +530,17 @@ impl<T: Laggable> LifecycleEventQueue<T> {
 
     fn pop(&self) -> Option<T> {
         self.events().pop_front()
+    }
+
+    fn retain(&self, predicate: impl FnMut(&T) -> bool) {
+        self.events().retain(predicate);
+    }
+
+    fn enforce_capacity(&self) {
+        let mut events = self.events();
+        while events.len() > LIFECYCLE_BUFFER_CAPACITY {
+            Self::record_drop(&mut events);
+        }
     }
 
     fn waiter(&self) -> Notified<'_> {

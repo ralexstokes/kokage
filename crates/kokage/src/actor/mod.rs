@@ -15,12 +15,13 @@ mod monitor;
 mod observability;
 mod raw;
 
-pub use binding::{ActorStats, MailboxMode, ScopedActorStats};
+pub use binding::{ActorStats, Mailbox, ScopedActorStats};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
 pub use context::{ActorRef, Context, RawContext, Reply, StopContext, TimerKey};
 pub use error::{BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind};
 pub use factory::ActorFactory;
+#[cfg(feature = "host")]
 pub use graph::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActor, RunnableActorBuilder};
 pub use handler::Actor;

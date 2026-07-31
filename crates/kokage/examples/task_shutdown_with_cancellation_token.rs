@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     app_shutdown.cancelled().await;
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

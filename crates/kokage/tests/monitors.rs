@@ -1,3 +1,5 @@
+#![cfg(feature = "host")]
+
 mod support;
 
 use support::ActorHostBuilder;
@@ -498,7 +500,7 @@ async fn supervised_graceful_shutdown_marks_monitor_exit_cancelled() {
     let peer_spec = ActorSpec::new("peer", move || Peer {
         started: peer_started_tx.clone(),
     })
-    .restart_policy(RestartPolicy::never());
+    .restart(RestartPolicy::never());
     let peer_ref = peer_spec.actor_ref();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
@@ -512,11 +514,11 @@ async fn supervised_graceful_shutdown_marks_monitor_exit_cancelled() {
     }));
     tree.add_actor_spec(peer_spec);
     let running = tree.spawn().expect("tree builds");
-    running.wait_started().await.expect("actors start");
+    running.scope().wait_started().await.expect("actors start");
 
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     running
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("cooperative shutdown succeeds");
     assert_eq!(
@@ -531,7 +533,7 @@ async fn supervised_natural_completion_is_not_marked_cancelled() {
     let peer_spec = ActorSpec::new("peer", move || Peer {
         started: peer_started_tx.clone(),
     })
-    .restart_policy(RestartPolicy::never());
+    .restart(RestartPolicy::never());
     let peer_ref = peer_spec.actor_ref();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
@@ -548,7 +550,7 @@ async fn supervised_natural_completion_is_not_marked_cancelled() {
     }));
     tree.add_actor_spec(peer_spec);
     let running = tree.spawn().expect("tree builds");
-    running.wait_started().await.expect("actors start");
+    running.scope().wait_started().await.expect("actors start");
 
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     peer_ref
@@ -565,7 +567,7 @@ async fn supervised_natural_completion_is_not_marked_cancelled() {
     );
 
     running
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("remaining tree stops cleanly");
 }
@@ -576,7 +578,7 @@ async fn assert_supervised_grace_expiry_status(expected: ExitStatus) {
     let peer_spec = ActorSpec::new("peer", move || UncooperativePeer {
         started: peer_started_tx.clone(),
     })
-    .restart_policy(RestartPolicy::never())
+    .restart(RestartPolicy::never())
     .shutdown(policy);
     let peer_ref = peer_spec.actor_ref();
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
@@ -591,11 +593,11 @@ async fn assert_supervised_grace_expiry_status(expected: ExitStatus) {
     }));
     tree.add_actor_spec(peer_spec);
     let running = tree.spawn().expect("tree builds");
-    running.wait_started().await.expect("actors start");
+    running.scope().wait_started().await.expect("actors start");
 
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     assert!(matches!(
-        running.shutdown_and_wait().await,
+        running.shutdown().await,
         Err(SupervisorError::ShutdownTimedOut(_))
     ));
     assert_eq!(
@@ -1827,10 +1829,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
         "removing the child terminates the binding"
     );
 
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("runtime stopped cleanly");
+    runtime.shutdown().await.expect("runtime stopped cleanly");
 }
 
 #[derive(Clone)]

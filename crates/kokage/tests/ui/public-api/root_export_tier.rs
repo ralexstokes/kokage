@@ -6,7 +6,7 @@ use kokage::raw::{
 };
 use kokage::observe::{
     ActorStats as _, ChildMembershipView as _, ChildOutline as _, ChildSnapshot as _,
-    ChildStateView as _, CompletionError as _, ExitStatus as _, LifecycleEvent as _,
+    ChildStateView as _, ExitStatus as _, LifecycleEvent as _,
     LifecycleEventKind as _, LifecycleObservation as _, LifecycleWatch as _, ScopePathSegment as _,
     ScopedActorStats as _, SnapshotRecvError as _,
     SupervisionOutline as _, SupervisorSnapshot as _,

@@ -3,10 +3,7 @@ use std::{any::Any, future::Future, pin::Pin, sync::Arc};
 use crate::{
     actor::ExitResult,
     supervisor::{
-        context::TaskContext,
-        owner::Supervisor,
-        restart::{RestartMode, RestartPolicy},
-        shutdown::Shutdown,
+        context::TaskContext, owner::Supervisor, restart::RestartPolicy, shutdown::Shutdown,
     },
 };
 
@@ -118,19 +115,11 @@ impl TaskSpec {
         }
     }
 
-    /// Overrides which exits restart this task, using the standard budget and backoff.
-    #[must_use]
-    pub fn restart(self, mode: RestartMode) -> Self {
-        Self {
-            spec: self.spec.restart(mode),
-        }
-    }
-
     /// Overrides the enclosing scope's complete restart policy.
     #[must_use]
-    pub fn restart_policy(self, policy: RestartPolicy) -> Self {
+    pub fn restart(self, policy: RestartPolicy) -> Self {
         Self {
-            spec: self.spec.restart_policy(policy),
+            spec: self.spec.restart(policy),
         }
     }
 
@@ -158,10 +147,7 @@ impl TaskSpec {
     #[must_use]
     pub fn temporary(self) -> Self {
         Self {
-            spec: self
-                .spec
-                .restart_policy(RestartPolicy::never())
-                .remove_when_done(),
+            spec: self.spec.restart(RestartPolicy::never()).remove_when_done(),
         }
     }
 
@@ -236,14 +222,7 @@ impl ChildSpec {
     /// Sets this child's complete restart declaration, replacing any
     /// inherited scope default.
     #[must_use]
-    pub(crate) fn restart(self, mode: RestartMode) -> Self {
-        self.restart_policy(mode.into())
-    }
-
-    /// Sets this child's complete restart declaration, replacing any
-    /// inherited scope default.
-    #[must_use]
-    pub(crate) fn restart_policy(self, restart: RestartPolicy) -> Self {
+    pub(crate) fn restart(self, restart: RestartPolicy) -> Self {
         self.map_inner(|inner| {
             inner.restart = restart;
             inner.restart_is_default = false;

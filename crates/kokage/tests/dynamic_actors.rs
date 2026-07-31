@@ -16,9 +16,9 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
-    DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MailboxShutdown, MonitorEvent,
-    RestartMode, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown,
-    StopContext, SupervisorError, TaskSpec, Tree,
+    DynamicTree, ExitResult, ExitStatus, Guard, Mailbox, MailboxShutdown, MonitorEvent,
+    RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext,
+    SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
@@ -140,7 +140,7 @@ impl RawActor for Watcher {
 
 async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
+        let mut snapshots = handle.snapshots();
         loop {
             if snapshots.latest().child(id).is_some() == present {
                 return;
@@ -161,7 +161,7 @@ async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
 // and only then is the surviving entry a retention decision.
 async fn wait_for_retained_terminal_child(handle: &ScopeRef, id: &str) {
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = handle.subscribe_snapshots();
+        let mut snapshots = handle.snapshots();
         loop {
             if snapshots
                 .latest()
@@ -226,8 +226,8 @@ async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_dynamic_runtime(runtime: &RunningTree, phase: &str) {
-    timeout(Duration::from_secs(2), runtime.shutdown_and_wait())
+async fn shutdown_dynamic_runtime(runtime: RunningTree, phase: &str) {
+    timeout(Duration::from_secs(2), runtime.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
@@ -383,7 +383,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
     assert_eq!(replacement_lineage, replacement_snapshot_lineage);
     assert!(replacement_lineage > initial_lineage);
 
-    shutdown_dynamic_runtime(&runtime, "dynamic actor reference test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "dynamic actor reference test shutdown").await;
 }
 
 #[tokio::test]
@@ -429,7 +429,7 @@ async fn fifo_mailbox_preserves_each_senders_enqueue_order() {
     }
     assert_eq!(next, [MESSAGES_PER_SENDER; 2]);
 
-    shutdown_dynamic_runtime(&runtime, "FIFO mailbox test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "FIFO mailbox test shutdown").await;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -514,7 +514,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = runtime.scope().subscribe_snapshots();
+    let mut snapshots = runtime.scope().snapshots();
     let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("removable").await });
     timeout(Duration::from_secs(1), async {
@@ -602,7 +602,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .await
         .expect("fresh ref addresses replacement membership");
 
-    shutdown_dynamic_runtime(&runtime, "cooperative removal test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "cooperative removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -636,7 +636,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         RemovalEvent::Holding
     );
 
-    let mut snapshots = runtime.scope().subscribe_snapshots();
+    let mut snapshots = runtime.scope().snapshots();
     let remover = support::dynamic_root(&runtime);
     let removal = tokio::spawn(async move { remover.remove_child("discarding").await });
     timeout(Duration::from_secs(1), async {
@@ -691,7 +691,7 @@ async fn discard_closes_intake_and_drops_racing_messages() {
         "messages accepted around Discard removal were not handled"
     );
 
-    shutdown_dynamic_runtime(&runtime, "shutdown-during-removal test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "shutdown-during-removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -720,7 +720,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
@@ -777,7 +777,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
@@ -799,7 +799,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::Always),
+            .restart(RestartPolicy::always()),
         )
         .await
         .expect("permanent actor added");
@@ -819,7 +819,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
             .is_some_and(|child| child.generation >= 1)
     );
 
-    shutdown_dynamic_runtime(&runtime, "restart policy test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "restart policy test shutdown").await;
 }
 
 #[tokio::test]
@@ -865,7 +865,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     wait_for_child(&runtime.scope(), "explicit", false).await;
     assert_eq!(explicit_starts.load(Ordering::SeqCst), 1);
 
-    shutdown_dynamic_runtime(&runtime, "dynamic default options test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "dynamic default options test shutdown").await;
 }
 
 #[tokio::test]
@@ -906,7 +906,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     .expect("supplied abort default makes removal immediate")
     .expect("pending actor removed");
 
-    shutdown_dynamic_runtime(&runtime, "supplied supervisor defaults test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "supplied supervisor defaults test shutdown").await;
 }
 
 #[tokio::test]
@@ -935,7 +935,7 @@ async fn temporary_actor_auto_removes_after_failure() {
         target.send(()).await,
         Err(SendError { actor_id, .. }) if actor_id == "temporary"
     ));
-    shutdown_dynamic_runtime(&runtime, "temporary-actor removal test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "temporary-actor removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -953,7 +953,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
@@ -971,7 +971,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .await
         .expect("retained transient actor added");
@@ -988,7 +988,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::OnFailure),
+            .restart(RestartPolicy::on_failure()),
         )
         .await
         .expect("reversed retained transient actor added");
@@ -1005,14 +1005,14 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(RestartMode::Never),
+            .restart(RestartPolicy::never()),
         )
         .await
         .expect("retained never actor added");
     never_release.notify_one();
     wait_for_retained_terminal_child(&runtime.scope(), "never-retained").await;
 
-    shutdown_dynamic_runtime(&runtime, "terminal-membership ordering test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "terminal-membership ordering test shutdown").await;
 }
 
 #[tokio::test]
@@ -1029,14 +1029,14 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
                     starts: starts.clone(),
                 }
             })
-            .restart(RestartMode::OnFailure)
+            .restart(RestartPolicy::on_failure())
             .remove_when_done(),
         )
         .await
         .expect("restartable actor added");
 
     timeout(Duration::from_secs(1), async {
-        let mut snapshots = runtime.scope().subscribe_snapshots();
+        let mut snapshots = runtime.scope().snapshots();
         loop {
             if snapshots
                 .latest()
@@ -1064,7 +1064,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
         "a live snapshot reports the spec-level retention declaration"
     );
 
-    shutdown_dynamic_runtime(&runtime, "restarting removal test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "restarting removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -1072,8 +1072,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let sink_spec =
-        ActorSpec::new("sink", Drain::<SizedMessage>::new).mailbox(MailboxMode::conflate());
+    let sink_spec = ActorSpec::new("sink", Drain::<SizedMessage>::new).mailbox(Mailbox::latest());
     let sink = sink_spec.actor_ref();
     let second_ref = sink_spec.actor_ref();
     let sink_spec = sink_spec.message_size(sized_message_size);
@@ -1097,7 +1096,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     assert_eq!(second_ref.stats().message_bytes_accepted, Some(12));
     assert_eq!(stats.stats.mailbox_capacity, 1);
 
-    shutdown_dynamic_runtime(&runtime, "message-size observation test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "message-size observation test shutdown").await;
 }
 
 #[derive(Clone)]
@@ -1212,8 +1211,9 @@ async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
         .await
         .expect("drain count queued");
 
-    let mut snapshots = runtime.subscribe_snapshots();
-    runtime.shutdown();
+    let scope = runtime.scope();
+    let mut snapshots = scope.snapshots();
+    scope.shutdown();
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.state == SupervisorStateView::Stopping),
@@ -1223,7 +1223,7 @@ async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
     .expect("snapshot stream remains open");
     discard_release.notify_one();
     drain_release.notify_one();
-    shutdown_dynamic_runtime(&runtime, "mailbox shutdown default test").await;
+    shutdown_dynamic_runtime(runtime, "mailbox shutdown default test").await;
 
     assert_eq!(handled_rx.recv().await, Some("drained"));
     assert!(handled_rx.try_recv().is_err());
@@ -1243,7 +1243,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
                     release: release.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
         )
         .await
         .expect("conflating actor added");
@@ -1257,7 +1257,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
     assert_eq!(stats.mailbox_capacity, 1);
 
     release.notify_one();
-    shutdown_dynamic_runtime(&runtime, "conflating dynamic actor test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "conflating dynamic actor test shutdown").await;
 }
 
 #[tokio::test]
@@ -1266,14 +1266,14 @@ async fn runtime_added_actor_can_override_mailbox_capacity() {
         .spawn()
         .expect("graphless runtime builds");
     let sink = support::dynamic_root(&runtime)
-        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(9))
+        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox(Mailbox::queue(9)))
         .await
         .expect("actor with a capacity override is added");
 
     sink.send(1).await.expect("message accepted");
     assert_eq!(sink.stats().mailbox_capacity, 9);
 
-    shutdown_dynamic_runtime(&runtime, "mailbox capacity override test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "mailbox capacity override test shutdown").await;
 }
 
 #[tokio::test]
@@ -1282,7 +1282,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
         .spawn()
         .expect("graphless runtime builds");
     let result = support::dynamic_root(&runtime)
-        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(0))
+        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox(Mailbox::queue(0)))
         .await;
 
     assert!(matches!(
@@ -1292,7 +1292,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
         )))
     ));
 
-    shutdown_dynamic_runtime(&runtime, "zero mailbox capacity test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "zero mailbox capacity test shutdown").await;
 }
 
 #[tokio::test]
@@ -1310,7 +1310,7 @@ async fn runtime_added_actor_uses_its_actor_id_as_the_child_id() {
     assert!(snapshot.child("local-actor").is_some());
     assert_eq!(actor.id(), "local-actor");
 
-    shutdown_dynamic_runtime(&runtime, "child id test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "child id test shutdown").await;
 }
 
 #[tokio::test]
@@ -1456,7 +1456,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
         .add_actor_spec(ActorSpec::new("dynamic", Drain::<()>::new))
         .await
         .expect("label reusable after timed-out removal");
-    shutdown_dynamic_runtime(&runtime, "timed-out removal test shutdown").await;
+    shutdown_dynamic_runtime(runtime, "timed-out removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -1477,7 +1477,7 @@ async fn ordered_tree_has_no_runtime_membership_capability() {
         Err(ControlError::NotDynamic)
     ));
 
-    timeout(Duration::from_secs(1), handle.shutdown_and_wait())
+    timeout(Duration::from_secs(1), handle.shutdown())
         .await
         .expect("shutdown completed")
         .expect("clean shutdown");

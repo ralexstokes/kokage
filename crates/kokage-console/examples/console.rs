@@ -24,8 +24,8 @@
 use std::{error::Error, io, time::Duration};
 
 use kokage::{
-    Actor, ActorRef, ActorSpec, Backoff, BoxError, Context, DynamicTree, ExitResult, RestartMode,
-    RestartPolicy, Strategy, TaskSpec, Tree,
+    Actor, ActorRef, ActorSpec, Backoff, BoxError, Context, DynamicTree, ExitResult, RestartPolicy,
+    Strategy, TaskSpec, Tree,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
 use tokio::time::sleep;
@@ -94,7 +94,7 @@ fn pipeline_runtime() -> Tree {
             }
         }
     })
-    .restart_policy(transform_restart);
+    .restart(transform_restart);
 
     let mut tree = Tree::new()
         .strategy(Strategy::OneForAll)
@@ -134,9 +134,9 @@ fn telemetry_runtime() -> Tree {
     let mut tree =
         Tree::new().default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
     tree.add_task_spec(
-        heartbeat.restart_policy(RestartPolicy::always().limit(60, Duration::from_secs(60))),
+        heartbeat.restart(RestartPolicy::always().limit(60, Duration::from_secs(60))),
     );
-    tree.add_task_spec(migration.restart(RestartMode::Never));
+    tree.add_task_spec(migration.restart(RestartPolicy::never()));
     tree.add_subtree("exporters", exporters);
     tree
 }
@@ -146,7 +146,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let worker_restart = RestartPolicy::on_failure()
         .limit(60, Duration::from_secs(60))
         .backoff(Backoff::fixed(Duration::from_millis(1500)));
-    let worker_spec = ActorSpec::new("worker", || Worker).restart_policy(worker_restart);
+    let worker_spec = ActorSpec::new("worker", || Worker).restart(worker_restart);
     let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
@@ -228,7 +228,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!("shutting down");
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     if let Some(console) = console {
         console.shutdown();
     }

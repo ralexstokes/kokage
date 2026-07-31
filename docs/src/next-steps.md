@@ -29,7 +29,7 @@ Every feature in this book has a runnable counterpart under
 Two larger examples put everything together the way this book did, and are
 kept compiling and running in CI: **`trading_engine`** (feeds, venues, a
 reconciler, telemetry) and **`agent_control`** (an LLM-agent control loop
-with offloaded model calls) — both run with `--features metrics`.
+with offloaded model calls) — both run with `--features metrics,derive`.
 
 ## Watch a tree live
 

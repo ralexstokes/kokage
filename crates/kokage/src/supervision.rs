@@ -10,11 +10,11 @@ use std::{
 
 use crate::supervisor::{
     BuildError, ChildSpec, DynamicSupervisorBuilder, MailboxShutdown, OrderedSupervisorBuilder,
-    RestartMode, RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
+    RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
 };
 
 use crate::{
-    ActorFactory, ActorRef, ActorSpec, ExitResult, RunningTree, ScopeRef, TaskContext,
+    ActorFactory, ActorRef, ActorSpec, ExitResult, RunningTree, ScopeRef, TaskContext, TaskRef,
     actor::{ActorNode, RawActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -127,13 +127,13 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// let mut workers = Tree::new();
 /// workers.add_actor("parse", || Worker);
 /// let mut tree = Tree::new().strategy(Strategy::RestForOne);
-/// tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartMode::Never));
+/// tree.add_actor_spec(ActorSpec::new("ingest", || Worker).restart(RestartPolicy::never()));
 /// tree.add_subtree("workers", workers);
 ///
 /// # #[cfg(feature = "serde")]
 /// assert_eq!(tree.outline().child_ids(), ["ingest", "workers"]);
 /// let runtime = tree.spawn()?;
-/// runtime.shutdown_and_wait().await?;
+/// runtime.shutdown().await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -195,21 +195,9 @@ impl From<DynamicTree> for SubtreeSpec {
 }
 
 impl SubtreeSpec {
-    /// Sets which exits make the enclosing scope restart this subtree.
-    ///
-    /// This configures the nested scope's edge in its parent. It is distinct
-    /// from [`Tree::default_restart`] and
-    /// [`DynamicTree::default_restart`], which configure children inside the
-    /// nested scope.
-    #[must_use]
-    pub fn restart(mut self, mode: RestartMode) -> Self {
-        self.restart = Some(mode.into());
-        self
-    }
-
     /// Sets the complete policy used by the enclosing scope to restart this subtree.
     #[must_use]
-    pub fn restart_policy(mut self, policy: RestartPolicy) -> Self {
+    pub fn restart(mut self, policy: RestartPolicy) -> Self {
         self.restart = Some(policy);
         self
     }
@@ -279,11 +267,9 @@ macro_rules! tree_common_methods {
         /// inherit this value; configure each subtree explicitly when it needs
         /// a different default.
         ///
-        /// This is the FIFO queue capacity and the maximum number of distinct
-        /// unread keys for keyed conflation. Unkeyed conflation always has
-        /// capacity 1 and ignores this setting. Individual actors can override
-        /// it with
-        /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity).
+        /// This applies only to actors that do not select an explicit
+        /// [`Mailbox`](crate::Mailbox). Individual queue and keyed latest-wins
+        /// mailboxes carry their own capacities.
         /// The value is validated when the tree is spawned or dynamically
         /// inserted.
         #[must_use]
@@ -357,18 +343,27 @@ impl Tree {
         actor_ref
     }
 
-    /// Appends a task with default configuration.
-    pub fn add_task<F, Fut>(&mut self, id: impl Into<String>, task: F)
+    /// Appends a task with default configuration and returns its stable ref.
+    pub fn add_task<F, Fut>(&mut self, id: impl Into<String>, task: F) -> TaskRef
     where
         F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ExitResult> + Send + 'static,
     {
-        self.add_task_spec(TaskSpec::new(id, task));
+        self.add_task_spec(TaskSpec::new(id, task))
     }
 
-    /// Appends an explicitly configured task declaration.
-    pub fn add_task_spec(&mut self, task: TaskSpec) {
+    /// Appends an explicitly configured task declaration and returns its stable ref.
+    pub fn add_task_spec(&mut self, task: TaskSpec) -> TaskRef {
+        let id: Arc<str> = Arc::from(task.id());
         self.inner.add_task(task);
+        let scope = self.scope();
+        let lineage = scope
+            .snapshot()
+            .children
+            .last()
+            .expect("the appended task is present in the declared snapshot")
+            .lineage;
+        scope.task_ref(id, lineage)
     }
 
     /// Appends a named ordered or dynamic nested scope.
@@ -378,14 +373,14 @@ impl Tree {
     /// of the subtree's edge in this parent:
     ///
     /// ```
-    /// use kokage::{Tree, RestartMode, Shutdown, SubtreeSpec};
+    /// use kokage::{Tree, RestartPolicy, Shutdown, SubtreeSpec};
     ///
     /// let workers = Tree::new();
     /// let mut app = Tree::new();
     /// app.add_subtree_spec(
     ///     "workers",
     ///     SubtreeSpec::from(workers)
-    ///         .restart(RestartMode::Never)
+    ///         .restart(RestartPolicy::never())
     ///         .shutdown(Shutdown::abort()),
     /// );
     /// ```
@@ -817,7 +812,7 @@ impl SupervisionChild {
                 let (nested, nested_actors) = node.lower(reservations)?;
                 let mut child = ChildSpec::supervisor(id, nested);
                 if let Some(restart) = restart {
-                    child = child.restart_policy(restart);
+                    child = child.restart(restart);
                 }
                 if let Some(shutdown) = shutdown {
                     child = child.shutdown(shutdown);

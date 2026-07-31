@@ -1,3 +1,5 @@
+#![cfg(feature = "host")]
+
 use std::{
     sync::{
         Arc,
@@ -7,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSpec, CallError, ExitResult, Reply, Shutdown,
+    ActorSpec, CallError, ExitResult, Mailbox, Reply, Shutdown,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
@@ -130,7 +132,7 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
             observed: observed_tx.clone(),
         }
     })
-    .mailbox_capacity(1);
+    .mailbox(Mailbox::queue(1));
     let rpc = spec.actor_ref();
     let (stop_token, task) = start(spec.into_host());
     started_rx.recv().await.expect("actor started");

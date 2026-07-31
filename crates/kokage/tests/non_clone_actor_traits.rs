@@ -1,6 +1,5 @@
 use std::{
     cell::Cell,
-    future::pending,
     io,
     sync::{
         Arc, Mutex,
@@ -10,15 +9,19 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, RestartPolicy, ScopeRef, Shutdown,
-    Tree,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, RestartPolicy, ScopeRef, Tree,
     observe::SupervisorSnapshotReceiver,
-    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
+    raw::{RawActor, RawContext},
 };
 use tokio::sync::mpsc;
+#[cfg(feature = "host")]
+use {
+    kokage::{Shutdown, raw::DEFAULT_SHUTDOWN_BOUND},
+    std::future::pending,
+};
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
-    let snapshots = handle.subscribe_snapshots();
+    let snapshots = handle.snapshots();
     let child = handle
         .snapshot()
         .child(id)
@@ -175,7 +178,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     );
     assert_eq!(constructions.load(Ordering::SeqCst), 2);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct NonCloneRaw {
@@ -237,10 +240,11 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     assert_eq!(observed_rx.recv().await, Some((1, 1)));
     assert_eq!(constructions.load(Ordering::SeqCst), 2);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
+#[cfg(feature = "host")]
 async fn constructor_panic_uses_the_actor_panic_path() {
     struct PanickingFactory;
 
@@ -285,5 +289,5 @@ async fn default_constructor_path_is_an_actor_factory() {
 
     handle.scope().wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }

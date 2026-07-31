@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         observed: observed_tx.clone(),
         run: 0,
     })
-    .restart_policy(RestartPolicy::on_failure().limit(5, std::time::Duration::from_secs(5)));
+    .restart(RestartPolicy::on_failure().limit(5, std::time::Duration::from_secs(5)));
     let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .child("worker")
         .expect("worker is declared")
         .generation;
-    let mut restarted = handle.subscribe_snapshots();
+    let mut restarted = handle.snapshots();
     frontend.send("fail-worker".to_owned()).await?;
     restarted
         .wait_for_child("worker", |child| {
@@ -90,6 +90,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     frontend.send("after-restart".to_owned()).await?;
     println!("observed {}", observed_rx.recv().await.expect("message"));
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
