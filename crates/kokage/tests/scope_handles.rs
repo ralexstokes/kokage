@@ -223,13 +223,13 @@ impl Actor for TaskAdder {
             .scope()
             .subtree("children")
             .expect("actor's declared child scope is registered");
-        let inserted = children
+        children
             .add_task(TaskSpec::new("task", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
             .await?;
-        self.inserted.send(inserted).expect("test receiver open");
+        self.inserted.send(()).expect("test receiver open");
         let subtree = children.add_subtree("subtree", OrderedTree::new()).await?;
         self.subtree.send(subtree).expect("test receiver open");
         Ok(())
