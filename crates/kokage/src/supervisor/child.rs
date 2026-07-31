@@ -21,6 +21,7 @@ pub(crate) struct ChildDefinition {
     restart_is_default: bool,
     pub(crate) shutdown_policy: Shutdown,
     shutdown_is_default: bool,
+    pub(crate) remove_when_done: bool,
     pub(crate) readiness: ChildReadiness,
     pub(crate) attachment: Option<OpaqueAttachment>,
     pub(crate) kind: ChildKind,
@@ -40,8 +41,9 @@ pub(crate) enum ChildKind {
 
 /// Specification for a supervised task.
 ///
-/// Construct one with [`new`](Self::new), then apply restart and shutdown
-/// policies. Nested scopes are built through Kokage's tree APIs.
+/// Construct one with [`new`](Self::new), then apply restart, shutdown, and
+/// membership-retention policies. Nested scopes are built through Kokage's
+/// tree APIs.
 pub struct TaskSpec {
     pub(crate) spec: ChildSpec,
 }
@@ -102,6 +104,7 @@ impl TaskSpec {
                     restart_is_default: true,
                     shutdown_policy: Shutdown::default(),
                     shutdown_is_default: true,
+                    remove_when_done: false,
                     readiness: ChildReadiness::Immediate,
                     attachment: None,
                     kind: ChildKind::Task(make_child_factory(f)),
@@ -113,8 +116,8 @@ impl TaskSpec {
     /// Sets this task's complete restart declaration. See [`Restart`] for
     /// options.
     ///
-    /// This replaces the inherited mode, budget, backoff, and terminal-removal
-    /// behavior. Restate any scope-level values this task should retain.
+    /// This replaces the inherited mode, budget, and backoff. Restate any
+    /// scope-level values this task should retain.
     #[must_use]
     pub fn restart(self, restart: Restart) -> Self {
         Self {
@@ -128,6 +131,17 @@ impl TaskSpec {
     pub fn shutdown(self, policy: Shutdown) -> Self {
         Self {
             spec: self.spec.shutdown(policy),
+        }
+    }
+
+    /// Removes this membership after an exit its restart policy does not restart.
+    ///
+    /// By default a terminal child remains visible as an inactive membership.
+    /// This setting is independent of the selected [`Restart`] policy.
+    #[must_use]
+    pub fn remove_when_done(self) -> Self {
+        Self {
+            spec: self.spec.remove_when_done(),
         }
     }
 
@@ -167,6 +181,10 @@ impl TaskSpec {
         self.spec
             .resolved_policies(default_restart, default_shutdown)
     }
+
+    pub(crate) fn removes_when_done(&self) -> bool {
+        self.spec.inner.remove_when_done
+    }
 }
 
 impl ChildSpec {
@@ -187,6 +205,7 @@ impl ChildSpec {
                 restart_is_default: true,
                 shutdown_policy: Shutdown::default(),
                 shutdown_is_default: true,
+                remove_when_done: false,
                 readiness: ChildReadiness::Explicit,
                 attachment: None,
                 kind: ChildKind::Supervisor(supervisor),
@@ -212,6 +231,11 @@ impl ChildSpec {
             inner.shutdown_policy = policy;
             inner.shutdown_is_default = false;
         })
+    }
+
+    #[must_use]
+    pub(crate) fn remove_when_done(self) -> Self {
+        self.map_inner(|inner| inner.remove_when_done = true)
     }
 
     /// Attaches process-local metadata to this supervised child.

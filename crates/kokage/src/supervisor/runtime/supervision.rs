@@ -920,12 +920,7 @@ impl SupervisorRuntime {
         }
         // Skipped by the group respawn and never restarted afterwards; if
         // this supervisor is the root, that judgment is final.
-        if self.children[key]
-            .runtime
-            .definition
-            .restart
-            .remove_on_exit()
-        {
+        if self.children[key].runtime.definition.remove_when_done {
             self.finalize_removed_child(key, false);
         } else {
             self.mark_child_terminal(key);
@@ -1393,8 +1388,7 @@ impl SupervisorRuntime {
             if self.children[classified.key]
                 .runtime
                 .definition
-                .restart
-                .remove_on_exit()
+                .remove_when_done
             {
                 let startup_result = if startup_aborted {
                     self.terminal_start_member(classified.key, lineage)
@@ -1975,6 +1969,7 @@ impl SupervisorRuntime {
                 },
                 restart_count: entry.runtime.restart_tracker.total_restarts(),
                 restart_policy: entry.runtime.definition.restart,
+                remove_when_done: entry.runtime.definition.remove_when_done,
                 next_restart_in: entry
                     .runtime
                     .next_restart_deadline

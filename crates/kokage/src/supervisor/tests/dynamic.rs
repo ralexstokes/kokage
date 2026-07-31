@@ -192,7 +192,8 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
         .expect("dynamic supervisor")
         .add_child(
             TaskSpec::new("temporary", |_ctx| async move { Ok(()) })
-                .restart(Restart::never().remove_when_done()),
+                .restart(Restart::never())
+                .remove_when_done(),
         )
         .await
         .expect("temporary child added");
@@ -232,7 +233,8 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(Restart::never().remove_when_done()),
+            .restart(Restart::never())
+            .remove_when_done(),
         )
         .child(
             TaskSpec::new("trigger", {
@@ -290,7 +292,8 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
                     }
                 }
             })
-            .restart(Restart::on_failure().remove_when_done()),
+            .restart(Restart::on_failure())
+            .remove_when_done(),
         )
         .child(TaskSpec::new("trigger", {
             let fail_trigger = fail_trigger.clone();
@@ -358,7 +361,8 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     Ok(())
                 }
             })
-            .restart(Restart::on_failure().remove_when_done()),
+            .restart(Restart::on_failure())
+            .remove_when_done(),
         )
         .child(
             TaskSpec::new("trigger", {

@@ -724,7 +724,8 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::on_failure().remove_when_done()),
+            .restart(Restart::on_failure())
+            .remove_when_done(),
         )
         .await
         .expect("temporary actor added");
@@ -776,7 +777,8 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::on_failure().remove_when_done()),
+            .restart(Restart::on_failure())
+            .remove_when_done(),
         )
         .await
         .expect("transient actor added");
@@ -846,7 +848,8 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
                     starts: Arc::clone(&starts),
                 }
             })
-            .restart(Restart::never().remove_when_done()),
+            .restart(Restart::never())
+            .remove_when_done(),
         )
         .await
         .expect("explicit actor added");
@@ -922,7 +925,8 @@ async fn never_actor_auto_removes_after_failure() {
                     fail: true,
                 }
             })
-            .restart(Restart::never().remove_when_done()),
+            .restart(Restart::never())
+            .remove_when_done(),
         )
         .await
         .expect("temporary actor added");
@@ -937,7 +941,7 @@ async fn never_actor_auto_removes_after_failure() {
 }
 
 #[tokio::test]
-async fn completed_membership_is_retained_unless_restart_removes_it() {
+async fn completed_membership_is_retained_unless_spec_removes_it() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -951,7 +955,8 @@ async fn completed_membership_is_retained_unless_restart_removes_it() {
                     fail: false,
                 }
             })
-            .restart(Restart::on_failure().remove_when_done()),
+            .restart(Restart::on_failure())
+            .remove_when_done(),
         )
         .await
         .expect("transient actor added");
@@ -1026,7 +1031,8 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::on_failure().remove_when_done()),
+            .restart(Restart::on_failure())
+            .remove_when_done(),
         )
         .await
         .expect("restartable actor added");

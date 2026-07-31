@@ -59,7 +59,7 @@ impl RawActor for Parked {
 #[cfg(feature = "serde")]
 fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
     let mut builder = TreeBuilder::new();
-    let ingest = builder.actor(ActorSpec::new("ingest", || Worker));
+    let ingest = builder.actor(ActorSpec::new("ingest", || Worker).remove_when_done());
     let parse = builder.actor(ActorSpec::new("parse", || Worker));
     (builder.build(), ingest, parse)
 }
@@ -402,10 +402,19 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
 
 #[tokio::test]
 async fn static_tree_actor_can_remove_itself_when_done() {
-    let spec = ActorSpec::new("finite", || Finite).restart(Restart::never().remove_when_done());
+    let spec = ActorSpec::new("finite", || Finite)
+        .restart(Restart::never())
+        .remove_when_done();
     let actor = spec.actor_ref();
     let mut tree = OrderedTree::new();
     tree.add_actor(spec);
+    assert!(
+        tree.scope()
+            .snapshot()
+            .child("finite")
+            .expect("finite actor is projected")
+            .remove_when_done
+    );
     let mut snapshots = tree.scope().subscribe_snapshots();
     let runtime = tree.spawn().expect("tree builds");
 
@@ -564,7 +573,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
             .default_restart(Restart::never())
             .default_shutdown(Shutdown::abort()),
     );
-    graph.add_task(TaskSpec::new("clock", |_ctx| async { Ok(()) }));
+    graph.add_task(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
     let outline = graph.outline();
     let json = serde_json::to_string(&outline).expect("outline serializes");
     assert!(
@@ -584,13 +593,26 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
     assert_eq!(workers.default_shutdown, Shutdown::abort());
     assert!(matches!(
         decoded.child("clock"),
-        Some(ChildOutline::Task { .. })
+        Some(ChildOutline::Task {
+            remove_when_done: true,
+            ..
+        })
+    ));
+    assert!(matches!(
+        decoded.child("ingest"),
+        Some(ChildOutline::Actor {
+            remove_when_done: true,
+            ..
+        })
     ));
 }
 
 #[cfg(feature = "serde")]
 #[test]
 fn policy_enums_use_their_direct_wire_shape() {
+    let restart = serde_json::to_value(Restart::on_failure()).expect("restart serializes");
+    assert!(restart.get("remove_when_done").is_none());
+
     let exponential =
         Backoff::exponential_with_jitter(Duration::from_millis(25), 3, Duration::from_secs(2));
     let backoff = serde_json::to_value(exponential).expect("backoff serializes");

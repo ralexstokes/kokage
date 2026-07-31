@@ -102,11 +102,11 @@ restart delay.
 
 Call `OrderedTree::default_restart` or `DynamicTree::default_restart` to set a
 scope-wide declaration, and `TaskSpec::restart` when one task needs its own
-mode, budget, backoff, or terminal-removal behavior. To configure the parent
-edge of a nested scope, wrap it with
-`SubtreeSpec::from(subtree).restart(policy).shutdown(policy)` before passing it
-to `OrderedTree::add_subtree` or `ScopeRef::add_subtree`. The nested
-tree's own defaults still configure its children independently.
+mode, budget, or backoff. Use `TaskSpec::remove_when_done` when a terminal task
+should remove its own membership. To configure the parent edge of a nested
+scope, wrap it with `SubtreeSpec::from(subtree).restart(policy).shutdown(policy)`
+before passing it to `OrderedTree::add_subtree` or `ScopeRef::add_subtree`. The
+nested tree's own defaults still configure its children independently.
 
 ## Ordered startup and readiness
 
