@@ -117,6 +117,15 @@ struct AppTree {
     probe: Probe,
 }
 
+#[derive(kokage::Supervision)]
+struct HygieneTree {
+    __scope: Session,
+    __tree: Session,
+    __kokage_scope: Session,
+    __kokage_tree: Session,
+    r#type: Session,
+}
+
 fn child_ids(scope: &ScopeRef) -> Vec<String> {
     scope
         .snapshot()
@@ -204,4 +213,32 @@ async fn nested_declaration_reserves_every_ref_before_wiring() {
     session.send(()).await.expect("dynamic actor should run");
 
     runtime.shutdown().await.expect("tree should stop cleanly");
+}
+
+#[test]
+fn generated_state_does_not_reserve_field_names_or_raw_identifier_prefixes() {
+    let (tree, handles) = HygieneTree::tree(|_| HygieneTreeFactories {
+        __scope: || Session,
+        __tree: || Session,
+        __kokage_scope: || Session,
+        __kokage_tree: || Session,
+        r#type: || Session,
+    });
+
+    assert_eq!(
+        child_ids(&handles.scope()),
+        [
+            "__scope",
+            "__tree",
+            "__kokage_scope",
+            "__kokage_tree",
+            "type",
+        ]
+    );
+    let _: ActorRef<()> = handles.__scope;
+    let _: ActorRef<()> = handles.__tree;
+    let _: ActorRef<()> = handles.__kokage_scope;
+    let _: ActorRef<()> = handles.__kokage_tree;
+    let _: ActorRef<()> = handles.r#type;
+    drop(tree);
 }

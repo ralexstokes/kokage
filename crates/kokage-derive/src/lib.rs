@@ -8,7 +8,9 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
-use syn::{Data, DeriveInput, Expr, Field, Fields, parse_macro_input, spanned::Spanned};
+use syn::{
+    Data, DeriveInput, Expr, Field, Fields, Ident, LitStr, parse_macro_input, spanned::Spanned,
+};
 
 /// Derives a reusable factory from an actor's named fields.
 ///
@@ -264,7 +266,7 @@ enum SupervisionFieldKind {
 
 struct SupervisionFieldAttrs {
     kind: SupervisionFieldKind,
-    id: Option<String>,
+    id: Option<LitStr>,
     restart: Option<Expr>,
     shutdown: Option<Expr>,
     mailbox_shutdown: Option<Expr>,
@@ -386,7 +388,7 @@ fn parse_supervision_field_attrs(field: &Field) -> syn::Result<SupervisionFieldA
                         "supervision child id must not be empty",
                     ));
                 }
-                parsed.id = Some(literal.value());
+                parsed.id = Some(literal);
                 return Ok(());
             }
             if meta.path.is_ident("restart") {
@@ -515,9 +517,10 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         .map(parse_supervision_field_attrs)
         .collect::<syn::Result<Vec<_>>>()?;
 
-    let handles = format_ident!("{declaration}Handles");
-    let factories = format_ident!("{declaration}Factories");
-    let slots = format_ident!("{declaration}Slots");
+    let declaration_name = unraw_ident_name(&declaration);
+    let handles = format_ident!("{declaration_name}Handles");
+    let factories = format_ident!("{declaration_name}Factories");
+    let slots = format_ident!("{declaration_name}Slots");
     let field_idents: Vec<_> = fields
         .iter()
         .map(|field| field.ident.as_ref().expect("named field"))
@@ -525,8 +528,26 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     let child_ids: Vec<_> = field_idents
         .iter()
         .zip(&field_attrs)
-        .map(|(ident, attrs)| attrs.id.clone().unwrap_or_else(|| ident.to_string()))
+        .map(|(ident, attrs)| {
+            attrs
+                .id
+                .clone()
+                .unwrap_or_else(|| LitStr::new(&unraw_ident_name(ident), ident.span()))
+        })
         .collect();
+    for (index, id) in child_ids.iter().enumerate() {
+        if child_ids[..index]
+            .iter()
+            .any(|previous| previous.value() == id.value())
+        {
+            return Err(syn::Error::new_spanned(
+                id,
+                format!("duplicate supervision child id `{}`", id.value()),
+            ));
+        }
+    }
+    let scope_field = fresh_supervision_ident("__kokage_scope", &field_idents);
+    let tree_field = fresh_supervision_ident("__kokage_tree", &field_idents);
 
     let mut factory_params = Vec::with_capacity(fields.len());
     let mut next_param = 0usize;
@@ -562,8 +583,9 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         let ty = &field.ty;
         let attrs = &field_attrs[index];
         let id = &child_ids[index];
-        let slot_local = format_ident!("__kokage_{ident}_slot");
-        let handle_local = format_ident!("__kokage_{ident}_handle");
+        let ident_name = unraw_ident_name(ident);
+        let slot_local = format_ident!("__kokage_{ident_name}_slot");
+        let handle_local = format_ident!("__kokage_{ident_name}_handle");
         let field_doc = format!("Handle state generated for the `{ident}` child.");
 
         clone_fields.push(quote! { #ident: self.#ident.clone() });
@@ -598,7 +620,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
 
                 let spec = configured_actor_spec(
                     quote! {
-                        slots.#ident.define(self.#ident)
+                        slots.#ident.define(factories.#ident)
                     },
                     attrs,
                 );
@@ -632,7 +654,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 let subtree = configured_subtree(
                     quote! {
                         <#param as ::kokage::SupervisionFactories<#ty>>::__define(
-                            self.#ident,
+                            factories.#ident,
                             slots.#ident,
                         )
                     },
@@ -643,7 +665,7 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
                 });
             }
             SupervisionFieldKind::Dynamic => {
-                let assertion = format_ident!("__kokage_assert_{ident}_is_dynamic_scope");
+                let assertion = format_ident!("__kokage_assert_{ident_name}_is_dynamic_scope");
                 marker_assertions.push(quote_spanned! {ty.span()=>
                     #[allow(non_snake_case, dead_code)]
                     fn #assertion(value: #ty) -> ::kokage::DynamicScope { value }
@@ -699,14 +721,14 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
     Ok(quote! {
         #[doc = #handles_doc]
         #vis struct #handles {
-            __scope: ::kokage::ScopeRef,
+            #scope_field: ::kokage::ScopeRef,
             #(#handle_fields,)*
         }
 
         impl ::core::clone::Clone for #handles {
             fn clone(&self) -> Self {
                 Self {
-                    __scope: self.__scope.clone(),
+                    #scope_field: self.#scope_field.clone(),
                     #(#clone_fields,)*
                 }
             }
@@ -715,14 +737,14 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
         impl #handles {
             /// Returns the stable handle for this generated ordered scope.
             #vis fn scope(&self) -> ::kokage::ScopeRef {
-                self.__scope.clone()
+                self.#scope_field.clone()
             }
         }
 
         #[doc(hidden)]
         #[doc = #slots_doc]
         #vis struct #slots {
-            __tree: ::kokage::Tree,
+            #tree_field: ::kokage::Tree,
             #(#slot_fields,)*
         }
 
@@ -731,19 +753,41 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             #(#factory_fields,)*
         }
 
-        impl #generics ::kokage::SupervisionFactories<#declaration>
-            for #factories #generics
-        #where_clause
-        {
-            fn __define(
-                self,
-                slots: <#declaration as ::kokage::Supervision>::Slots,
-            ) -> ::kokage::Tree {
-                let mut tree = slots.__tree;
-                #(#define_stmts)*
-                tree
+        const _: () = {
+            trait __KokageSupervisionDefine #generics {
+                fn __define(
+                    factories: #factories #generics,
+                    slots: #slots,
+                ) -> ::kokage::Tree;
             }
-        }
+
+            impl #generics __KokageSupervisionDefine #generics for #declaration
+            #where_clause
+            {
+                fn __define(
+                    factories: #factories #generics,
+                    slots: #slots,
+                ) -> ::kokage::Tree {
+                    let _ = &factories;
+                    let mut tree = slots.#tree_field;
+                    #(#define_stmts)*
+                    tree
+                }
+            }
+
+            impl #generics ::kokage::SupervisionFactories<#declaration>
+                for #factories #generics
+            #where_clause
+            {
+                fn __define(
+                    self,
+                    slots: <#declaration as ::kokage::Supervision>::Slots,
+                ) -> ::kokage::Tree {
+                    <#declaration as __KokageSupervisionDefine #generics>::
+                        __define(self, slots)
+                }
+            }
+        };
 
         impl ::kokage::Supervision for #declaration {
             type Handles = #handles;
@@ -752,16 +796,16 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             fn __open() -> (Self::Slots, Self::Handles) {
                 #mark_fields
                 #(#marker_assertions)*
-                let __tree = #tree_expr;
-                let __scope = __tree.scope();
+                let #tree_field = #tree_expr;
+                let #scope_field = #tree_field.scope();
                 #(#open_stmts)*
                 (
                     #slots {
-                        __tree,
+                        #tree_field,
                         #(#slot_values,)*
                     },
                     #handles {
-                        __scope,
+                        #scope_field,
                         #(#handle_values,)*
                     },
                 )
@@ -783,6 +827,29 @@ fn expand_supervision(input: DeriveInput) -> syn::Result<proc_macro2::TokenStrea
             }
         }
     })
+}
+
+fn fresh_supervision_ident(base: &str, fields: &[&Ident]) -> Ident {
+    let is_available = |candidate: &str| {
+        fields
+            .iter()
+            .all(|field| unraw_ident_name(field) != candidate)
+    };
+    if is_available(base) {
+        return format_ident!("{base}");
+    }
+    for suffix in 0usize.. {
+        let candidate = format!("{base}_{suffix}");
+        if is_available(&candidate) {
+            return format_ident!("{candidate}");
+        }
+    }
+    unreachable!("the generated identifier suffix space is inexhaustible")
+}
+
+fn unraw_ident_name(ident: &Ident) -> String {
+    let ident = ident.to_string();
+    ident.strip_prefix("r#").unwrap_or(&ident).to_owned()
 }
 
 fn configured_tree(attrs: &SupervisionScopeAttrs) -> proc_macro2::TokenStream {
