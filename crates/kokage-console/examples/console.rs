@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 sleep(Duration::from_millis(150)).await;
             }
             sleep(Duration::from_secs(4)).await;
-            if dynamic.remove_child("burst").await.is_err() {
+            if dynamic.remove_child_named("burst").await.is_err() {
                 break;
             }
         }

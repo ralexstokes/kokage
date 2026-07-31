@@ -233,7 +233,7 @@ async fn dynamic_add_remove_flow() {
     wait_for_named_child_started(&mut events, "dynamic").await;
 
     handle
-        .remove_child("dynamic")
+        .remove_child_named("dynamic")
         .await
         .expect("dynamic child should be removable");
     wait_for_named_child_removed(&mut events, "dynamic").await;
