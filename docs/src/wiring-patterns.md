@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     desk_ref.send(DeskMsg::Order("menus x50".to_owned())).await?;
     println!("receipt for: {}", receipts_rx.recv().await.expect("printed"));
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

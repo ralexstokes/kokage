@@ -57,8 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     press.send("flyers x500".to_owned()).await?;
 
     // Jam the press, then wait until the supervisor has restarted it.
-    let baseline = runtime.snapshot().child("press").expect("declared").generation;
-    let mut snapshots = runtime.snapshots();
+    let scope = runtime.scope();
+    let baseline = scope.snapshot().child("press").expect("declared").generation;
+    let mut snapshots = scope.snapshots();
     press.send("jam".to_owned()).await?;
     snapshots
         .wait_for_child("press", |child| {
@@ -69,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The same ref now reaches the replacement.
     press.send("business cards x100".to_owned()).await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -148,7 +149,7 @@ failed child and applies *its* policy. This escalation is the heart of
 supervision-tree design: a persistent failure climbs the tree, taking out
 progressively larger (but still bounded) parts of the system, until some
 level either absorbs it or the root gives up and
-`RunningTree::wait`/`shutdown_and_wait` returns
+`RunningTree::wait`/`shutdown` returns
 `SupervisorError::RestartIntensityExceeded`.
 
 Which brings us to shaping those trees.

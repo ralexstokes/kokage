@@ -228,7 +228,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!("shutting down");
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     if let Some(console) = console {
         console.shutdown();
     }

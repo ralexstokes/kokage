@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     desk.send(DeskMsg::RestockPaper { reams: 40 }).await?;
     println!("supplier says: {:?}", quotes_rx.recv().await.expect("quote"));
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

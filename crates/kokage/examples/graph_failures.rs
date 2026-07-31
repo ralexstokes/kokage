@@ -87,7 +87,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         failing_runs.load(Ordering::SeqCst),
         healthy_runs.load(Ordering::SeqCst),
     );
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(counts)
 }
 

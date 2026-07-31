@@ -1634,7 +1634,7 @@ mod actor_host {
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"
         ));
-        runtime.shutdown_and_wait().await.expect("clean shutdown");
+        runtime.shutdown().await.expect("clean shutdown");
     }
 
     #[derive(Clone)]

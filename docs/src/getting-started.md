@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     press.send("100 business cards".to_owned()).await?;
     press.send("flyers, glossy".to_owned()).await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -116,7 +116,7 @@ That short `main` demonstrates the two handle types you will use constantly:
   graceful shutdown. In particular, `let _ = tree.spawn()?;` shuts the tree
   down immediately — bind it to a real name.
 
-`shutdown_and_wait` asks every child to stop and waits until they have. By
+`shutdown().await` asks every child to stop and waits until they have. By
 default each actor *drains*: it finishes the messages already in its mailbox
 (within a 5-second grace period) before stopping, which is why both jobs
 print. Shutdown policy is configurable per actor — see

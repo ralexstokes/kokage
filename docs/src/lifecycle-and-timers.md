@@ -148,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     press.send(PressMsg::Job("posters x20".to_owned())).await?;
     maintained_rx.recv().await; // observe one maintenance pass
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

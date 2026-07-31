@@ -95,6 +95,6 @@ async fn run() -> Result<(), Box<dyn Error>> {
     orders.send("flyers x500".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

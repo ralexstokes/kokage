@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     desk.send(DeskMsg::Order("250-page manual".to_owned())).await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -109,7 +109,7 @@ enum CounterMsg {
 # let runtime = tree.spawn()?;
 let total = counter.call(Duration::from_secs(1), CounterMsg::Total).await?;
 # assert_eq!(total, 0);
-# runtime.shutdown_and_wait().await?;
+# runtime.shutdown().await?;
 # Ok(())
 # }
 ```

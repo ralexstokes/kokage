@@ -84,6 +84,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     receipts.send("order #42".to_owned()).await?;
     println!("{}", output.recv().await.expect("printed receipt"));
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

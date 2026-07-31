@@ -20,7 +20,7 @@
 //!     .expect("failed to start console");
 //!
 //! println!("Console at http://{}", console.local_addr());
-//! # runtime.shutdown_and_wait().await?;
+//! # runtime.shutdown().await?;
 //! # Ok(())
 //! # }
 //! ```

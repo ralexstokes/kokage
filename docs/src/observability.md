@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tree.spawn()?;
 
     // Readiness: wait until every child is running.
-    let mut snapshots = runtime.snapshots();
+    let mut snapshots = runtime.scope().snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ready.total_restarts
     );
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -94,7 +94,7 @@ startup and lag resynchronization do not require a hand-written race-avoidance
 recipe:
 
 ```rust,ignore
-let observation = runtime.observe_children();
+let observation = runtime.scope().observe_children();
 let initial = observation.snapshot;
 let mut events = observation.events;
 ```
@@ -121,9 +121,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
     let runtime = tree.spawn()?;
-    let mut events = runtime.lifecycle_events();
+    let scope = runtime.scope();
+    let mut events = scope.lifecycle_events();
 
-    runtime.shutdown();
+    scope.shutdown();
     while let Some(event) = events.next().await {
         println!("{:?} at {:?}", event.kind, event.scope_path);
         if matches!(event.kind, LifecycleEventKind::SupervisorStopped) {

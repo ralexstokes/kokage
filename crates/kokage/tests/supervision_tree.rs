@@ -216,7 +216,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
         .child("declared")
         .expect("declared subtree is present");
     assert_eq!(declared_child.restart_policy, RestartPolicy::never());
-    timeout(Duration::from_millis(250), declared.shutdown_and_wait())
+    timeout(Duration::from_millis(250), declared.shutdown())
         .await
         .expect("subtree abort policy bounds declared shutdown")
         .expect("declared tree shuts down");
@@ -253,10 +253,7 @@ async fn subtree_edges_accept_explicit_policies_for_declared_and_dynamic_members
     .await
     .expect("subtree abort policy bounds dynamic removal")
     .expect("policy-bearing subtree is removed");
-    dynamic
-        .shutdown_and_wait()
-        .await
-        .expect("dynamic tree shuts down");
+    dynamic.shutdown().await.expect("dynamic tree shuts down");
 }
 
 #[tokio::test]
@@ -292,7 +289,7 @@ async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
         .collect();
     labels.sort();
     assert_eq!(labels, ["ingest", "parse"]);
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[test]
@@ -337,7 +334,7 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
 
     assert_eq!(first_actor.stats().mailbox_capacity, 9);
     assert_eq!(direct_actor.stats().mailbox_capacity, 9);
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -352,7 +349,7 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     runtime.scope().wait_started().await.expect("actors start");
 
     assert_eq!(nested_ref.stats().mailbox_capacity, 64);
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -374,7 +371,7 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
 
     assert_eq!(peer_ref.stats().mailbox_capacity, 64);
     assert_eq!(leader_ref.stats().mailbox_capacity, 9);
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[test]
@@ -423,7 +420,7 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
     assert_eq!(stats.messages_conflated, 1);
     assert_eq!(stats.message_bytes_accepted, Some(7));
 
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -461,7 +458,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
         }) if actor_id == "finite"
     ));
 
-    runtime.shutdown_and_wait().await.expect("clean shutdown");
+    runtime.shutdown().await.expect("clean shutdown");
 }
 
 #[test]
@@ -525,7 +522,7 @@ async fn leader_owned_scope_is_an_explicit_subtree() {
             .kind,
         ScopeKind::Dynamic
     );
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -594,7 +591,7 @@ async fn leader_owned_scope_defaults_are_declared_on_the_intermediate_tree() {
     assert_eq!(children_edge.restart_count, 0);
     assert!(children_edge.state.is_terminal());
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[cfg(feature = "serde")]

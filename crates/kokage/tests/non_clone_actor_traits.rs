@@ -178,7 +178,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     );
     assert_eq!(constructions.load(Ordering::SeqCst), 2);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 struct NonCloneRaw {
@@ -240,7 +240,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     assert_eq!(observed_rx.recv().await, Some((1, 1)));
     assert_eq!(constructions.load(Ordering::SeqCst), 2);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -289,5 +289,5 @@ async fn default_constructor_path_is_an_actor_factory() {
 
     handle.scope().wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }

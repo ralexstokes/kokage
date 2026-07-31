@@ -733,7 +733,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
     app.background_stop.cancel();
     app.sampler.await?;
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
+    let runtime_scope = app.runtime.scope();
+    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown()).await??;
 
     let latency = latency.snapshot();
     for series in [
@@ -764,14 +765,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
             >= 2
     );
     println!("selected metrics: {selected_metrics:#?}");
-    println!(
-        "final supervisor snapshot: {:#?}",
-        app.runtime.scope().snapshot()
-    );
-    println!(
-        "final actor stats: {:#?}",
-        app.runtime.scope().actor_stats()
-    );
+    println!("final supervisor snapshot: {:#?}", runtime_scope.snapshot());
+    println!("final actor stats: {:#?}", runtime_scope.actor_stats());
     println!("PHASE 8 OK — staged shutdown and observability");
     Ok(())
 }

@@ -139,7 +139,7 @@ async fn runtime_spawn_combines_actor_refs_and_supervisor_control() {
     assert_eq!(observed, "hello");
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -175,7 +175,7 @@ async fn runtime_handle_enumerates_actor_stats() {
     assert_eq!(stats[0].stats.messages_received, 1);
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -310,7 +310,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
         .expect("raw supervisor removed");
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -351,7 +351,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     );
     assert_eq!(root.scope().actor_stats().len(), 2);
 
-    root.shutdown_and_wait().await.expect("clean shutdown");
+    root.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -388,7 +388,7 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
         Err(ControlError::Unavailable)
     ));
 
-    root.shutdown_and_wait().await.expect("clean shutdown");
+    root.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -426,7 +426,7 @@ async fn subtree_validation_phases_report_rejected() {
     assert_eq!(root.scope().actor_stats().len(), 1);
     assert!(root.scope().subtree("workers").is_some());
 
-    root.shutdown_and_wait().await.expect("clean shutdown");
+    root.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -465,7 +465,7 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
         .collect::<Vec<_>>();
     assert_eq!(paths, [("left", 0, 0), ("right", 1, 0)]);
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -521,7 +521,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         "the replacement membership does not carry the old actor attachment"
     );
 
-    handle.shutdown_and_wait().await.expect("clean shutdown");
+    handle.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -623,7 +623,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     );
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -668,7 +668,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     assert_eq!(stats[0].stats.actor_id, static_ref.id());
     assert!(matches!(dynamic_ref.send(()).await, Err(SendError { .. })));
 
-    root.shutdown_and_wait().await.expect("clean shutdown");
+    root.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -733,7 +733,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
             .any(|stats| stats.stats.actor_id == "worker")
     );
 
-    root.shutdown_and_wait().await.expect("clean shutdown");
+    root.shutdown().await.expect("clean shutdown");
 }
 
 #[derive(Clone)]
@@ -793,7 +793,7 @@ async fn actor_stats_accumulate_across_supervised_restarts() {
     assert_eq!(stats.sends_rejected, 0);
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -839,7 +839,7 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
         .expect("worker observed the message")
         .expect("worker is still running");
     assert_eq!(observed, "run-path");
-    handle.shutdown();
+    handle.scope().shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
@@ -895,7 +895,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         .expect("worker observed the message")
         .expect("worker is still running");
     assert_eq!(observed, "spawn-wait-path");
-    handle.shutdown();
+    handle.scope().shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
@@ -927,7 +927,7 @@ async fn supervision_tree_wires_graph_into_supervised_runtime() {
     assert_eq!(observed, "built");
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -973,10 +973,7 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
     .expect("actor and sidecar reported running")
     .expect("snapshot channel stays open");
 
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("runtime shut down cleanly");
+    handle.shutdown().await.expect("runtime shut down cleanly");
 }
 
 #[tokio::test]
@@ -1007,10 +1004,7 @@ async fn snapshot_wait_reports_all_children_running_after_spawn() {
         .expect("snapshot channel stays open");
     assert_eq!(handle.scope().snapshot().children.len(), 2);
 
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("runtime shut down cleanly");
+    handle.shutdown().await.expect("runtime shut down cleanly");
 }
 
 #[derive(Clone)]
@@ -1061,10 +1055,7 @@ async fn snapshot_child_wait_arms_before_the_future_is_polled() {
     .expect("replacement starts before the helper future is polled")
     .expect("snapshot stream stays open");
 
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("runtime shut down cleanly");
+    handle.shutdown().await.expect("runtime shut down cleanly");
 }
 
 #[derive(Clone)]
@@ -1194,7 +1185,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     );
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -1209,7 +1200,7 @@ async fn ordered_tree_spawns_and_shuts_down_without_children() {
         .expect("empty ordered tree starts");
     assert!(runtime.scope().snapshot().children.is_empty());
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("empty ordered tree shuts down");
 }
@@ -1235,10 +1226,7 @@ async fn dynamic_tree_idles_empty_until_an_actor_is_added() {
     actor.send(()).await.expect("added actor is running");
     assert!(handle.snapshot().child("worker").is_some());
 
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("dynamic tree shuts down");
+    runtime.shutdown().await.expect("dynamic tree shuts down");
 }
 
 #[derive(Clone)]
@@ -1302,7 +1290,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
         .send(StuckDrainMsg::Stuck)
         .await
         .expect("drain work queued");
-    handle.shutdown();
+    handle.scope().shutdown();
     let shutdown = tokio::spawn({
         let handle = handle.scope();
         async move { handle.wait().await }
@@ -1352,17 +1340,17 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
         .spawn()
         .expect("runtime builds");
     let mut lifecycle = handle.scope().lifecycle_events();
+    let scope = handle.scope();
 
     timeout(Duration::from_secs(1), started.notified())
         .await
         .expect("actor started");
     assert!(matches!(
-        handle.shutdown_and_wait().await,
+        handle.shutdown().await,
         Err(SupervisorError::ShutdownTimedOut(actor_id)) if actor_id == "worker"
     ));
     assert!(
-        handle
-            .scope()
+        scope
             .snapshot()
             .child("worker")
             .expect("actor remains in static membership")
@@ -1433,7 +1421,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     );
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }

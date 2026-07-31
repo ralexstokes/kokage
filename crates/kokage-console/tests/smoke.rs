@@ -557,10 +557,7 @@ async fn dynamic_tree_wires_public_observability() {
     }
 
     console.shutdown();
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("failed to stop runtime");
+    runtime.shutdown().await.expect("failed to stop runtime");
 }
 
 #[tokio::test]
@@ -596,6 +593,6 @@ async fn dropping_the_handle_detaches_without_stopping_the_server() {
     .expect("detached console remains reachable");
     assert!(response.starts_with("HTTP/1.1 200"));
 
-    snapshots.shutdown();
-    lifecycle.shutdown();
+    snapshots.shutdown().await.expect("snapshot tree stops");
+    lifecycle.shutdown().await.expect("lifecycle tree stops");
 }

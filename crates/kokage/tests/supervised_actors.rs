@@ -131,7 +131,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     assert!(worker_starts.load(Ordering::SeqCst) >= 2);
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -209,7 +209,7 @@ async fn send_waits_during_permanent_restart_window() {
         .expect("send completed");
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }
@@ -279,7 +279,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         Some(exit) if exit.is_completed()
     ));
 
-    handle.shutdown();
+    handle.scope().shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
@@ -362,7 +362,7 @@ async fn call_succeeds_across_restart_window() {
     );
 
     handle
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("supervisor shut down cleanly");
 }

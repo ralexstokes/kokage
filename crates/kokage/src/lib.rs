@@ -32,7 +32,7 @@
 //! let runtime = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
-//! runtime.shutdown_and_wait().await?;
+//! runtime.shutdown().await?;
 //! # Ok(())
 //! # }
 //! ```

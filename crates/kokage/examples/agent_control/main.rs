@@ -767,7 +767,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
     let session_stats = app.sessions.actor_stats();
     let final_snapshot = app.runtime.scope().snapshot();
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown_and_wait()).await??;
+    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown()).await??;
     let latency = latency.snapshot();
     assert!(
         latency

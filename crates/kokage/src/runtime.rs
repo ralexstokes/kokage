@@ -481,11 +481,9 @@ fn task_state_from_snapshot(
 
 /// Owns a spawned supervision tree.
 ///
-/// Routine root observation and lifecycle operations delegate directly to the
-/// root scope. Use [`scope`](Self::scope) when a cheaply cloneable, non-owning
-/// [`ScopeRef`] must be passed elsewhere or used for membership mutation.
-/// Dropping a `ScopeRef` is inert and does not keep this owner alive; dropping
-/// this owner requests graceful shutdown.
+/// Use [`scope`](Self::scope) for observation and control through a cheaply
+/// cloneable, non-owning [`ScopeRef`]. Dropping a `ScopeRef` is inert and does
+/// not keep this owner alive; dropping this owner requests graceful shutdown.
 #[must_use = "dropping the running tree requests graceful shutdown"]
 pub struct RunningTree {
     supervisor: RunningSupervisor,
@@ -503,59 +501,14 @@ impl RunningTree {
         self.scope.clone()
     }
 
-    /// Returns whether the root scope has ordered or dynamic membership.
-    pub fn kind(&self) -> ScopeKind {
-        self.scope.kind()
-    }
-
-    /// Returns the actor-aware handle for a direct runtime subtree.
-    pub fn subtree(&self, id: &str) -> Option<ScopeRef> {
-        self.scope.subtree(id)
-    }
-
-    /// Returns a clone of the latest root supervisor snapshot.
-    pub fn snapshot(&self) -> SupervisorSnapshot {
-        self.scope.snapshot()
-    }
-
-    /// Returns a receiver that updates when the root snapshot changes.
-    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
-        self.scope.snapshots()
-    }
-
-    /// Returns an aligned root snapshot and direct-child lifecycle stream.
-    pub fn observe_children(&self) -> LifecycleObservation {
-        self.scope.observe_children()
-    }
-
-    /// Returns the ordered lifecycle stream for the complete root tree.
-    pub fn lifecycle_events(&self) -> LifecycleWatch {
-        self.scope.lifecycle_events()
-    }
-
-    /// Returns point-in-time actor stats for the root and all nested subtrees.
-    pub fn actor_stats(&self) -> Vec<ScopedActorStats> {
-        self.scope.actor_stats()
-    }
-
-    /// Requests graceful shutdown without waiting for completion.
-    pub fn shutdown(&self) {
-        self.supervisor.shutdown();
-    }
-
-    /// Requests graceful shutdown and waits for completion.
-    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+    /// Requests graceful shutdown and waits for completion, consuming the owner.
+    pub async fn shutdown(self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
-    /// Waits for the running tree to stop.
-    pub async fn wait(&self) -> Result<(), SupervisorError> {
+    /// Waits for the running tree to stop, consuming the owner.
+    pub async fn wait(self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
-    }
-
-    /// Waits until every current actor child of the root has completed `on_start`.
-    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
-        self.scope.wait_started().await
     }
 }
 
@@ -1177,7 +1130,7 @@ mod tests {
             .await
             .expect("static terminal membership remains visible");
         static_runtime
-            .shutdown_and_wait()
+            .shutdown()
             .await
             .expect("static runtime shuts down");
 
@@ -1208,7 +1161,7 @@ mod tests {
             .await
             .expect("dynamic terminal membership remains visible");
         dynamic_runtime
-            .shutdown_and_wait()
+            .shutdown()
             .await
             .expect("dynamic runtime shuts down");
     }
@@ -1238,7 +1191,7 @@ mod tests {
             .await
             .expect("explicitly ephemeral membership is removed");
         runtime
-            .shutdown_and_wait()
+            .shutdown()
             .await
             .expect("dynamic runtime shuts down");
     }
@@ -1286,6 +1239,6 @@ mod tests {
                 .is_some()
         );
 
-        root.shutdown_and_wait().await.expect("clean shutdown");
+        root.shutdown().await.expect("clean shutdown");
     }
 }

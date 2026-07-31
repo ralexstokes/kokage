@@ -99,6 +99,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     acked_rx.recv().await.expect("frontend ack");
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

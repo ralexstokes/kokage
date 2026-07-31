@@ -59,6 +59,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     sampler_stop.cancel();
     sampler.await?;
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

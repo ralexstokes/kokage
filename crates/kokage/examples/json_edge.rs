@@ -41,6 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

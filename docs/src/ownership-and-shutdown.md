@@ -1,6 +1,6 @@
 # Ownership and Shutdown
 
-You have been typing `runtime.shutdown_and_wait()` since chapter two. This
+You have been typing `runtime.shutdown()` since chapter two. This
 chapter makes the machinery underneath precise: who owns a running tree, how
 stopping propagates, and how long anything is allowed to take on the way
 down.
@@ -14,22 +14,21 @@ supervision tree. Ownership here is literal Rust ownership:
 - **Dropping it requests graceful shutdown.** The type is `#[must_use]`
   because `let _ = tree.spawn()?;` discards the owner on the spot and shuts
   the tree down immediately — a classic first-day surprise.
-- `shutdown()` requests shutdown and returns; `shutdown_and_wait().await`
-  requests and waits for completion; `wait().await` just waits (for a tree
-  that ends by other means — its own failure escalation, or a `shutdown()`
-  from elsewhere). The waiting forms return a [`SupervisorError`] when the
-  tree ended badly: startup aborted, restart intensity exceeded, or a
-  shutdown that timed out.
+- `shutdown().await` consumes the owner, requests shutdown, and waits for
+  completion. `wait().await` also consumes the owner and just waits, for a
+  tree that ends by its own failure escalation or a shutdown requested
+  through a `ScopeRef`. Both return a [`SupervisorError`] when the tree ended
+  badly: startup aborted, restart intensity exceeded, or a shutdown that
+  timed out.
 
 Everything else holds a [`ScopeRef`] — the cheap, cloneable, *non-owning*
 reference to a supervision scope, parallel to what `ActorRef` is for one
-actor. `RunningTree` delegates common root operations directly;
-`runtime.scope()` gives you a cloneable root ref when another component needs
-one. `scope.subtree("press-room")` navigates down, and trees hand refs out even
-before spawn. A `ScopeRef` never keeps the tree alive, and dropping one means
-nothing. What it does carry is *control capability*: observation (snapshots,
-lifecycle watches, stats — see [Observability](observability.md)), dynamic
-membership on dynamic scopes, and targeted shutdown —
+actor. `runtime.scope()` gives you a cloneable root ref for observation and
+control. `scope.subtree("press-room")` navigates down, and trees hand refs out
+even before spawn. A `ScopeRef` never keeps the tree alive, and dropping one
+means nothing. What it does carry is *control capability*: observation
+(snapshots, lifecycle watches, stats — see [Observability](observability.md)),
+dynamic membership on dynamic scopes, and targeted shutdown —
 `scope.shutdown_and_wait()` on a subtree stops just that compartment, whose
 parent then sees a completed child.
 
@@ -87,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // All five jobs print before this returns.
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -148,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     stop.cancelled().await;
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```

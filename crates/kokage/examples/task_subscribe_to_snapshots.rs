@@ -29,10 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SubtreeSpec::from(nested).restart(RestartPolicy::never()),
     );
     let running = tree.spawn()?;
-    let mut snapshots = running.snapshots();
+    let scope = running.scope();
+    let mut snapshots = scope.snapshots();
 
     println!("initial snapshot:");
-    print_snapshot(&running.snapshot(), 0);
+    print_snapshot(&scope.snapshot(), 0);
 
     let observer = tokio::spawn(async move {
         loop {
@@ -49,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     observer.await??;
 
     Ok(())

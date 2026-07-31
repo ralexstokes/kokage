@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let snapshot = snapshots.changed().await?;
     println!("snapshot: {:?}", snapshot.state);
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     event_task.abort();
     Ok(())
 }

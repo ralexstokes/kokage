@@ -205,7 +205,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
-    let mut events = handle.lifecycle_events();
+    let mut events = handle.scope().lifecycle_events();
     worker.send(()).await.expect("worker accepts message");
     let observed = timeout(EVENT_TIMEOUT, observed_rx.recv())
         .await
@@ -233,7 +233,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     ));
     assert!(child_id_is(&started, "worker"));
 
-    let snapshot = handle.snapshot();
+    let snapshot = handle.scope().snapshot();
     assert!(
         snapshot
             .child("worker")
@@ -242,10 +242,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             .is_running()
     );
 
-    handle
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown should succeed");
+    handle.shutdown().await.expect("shutdown should succeed");
 }
 
 #[test]
@@ -317,10 +314,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             .is_running()
     );
 
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown succeeds");
+    runtime.shutdown().await.expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -351,10 +345,7 @@ async fn prelude_snapshots_walk_nested_task_children() {
     let snapshot = handle.snapshot();
     assert!(snapshot.descendant(["nested", "leaf"]).is_some());
 
-    runtime
-        .shutdown_and_wait()
-        .await
-        .expect("shutdown succeeds");
+    runtime.shutdown().await.expect("shutdown succeeds");
 }
 
 #[test]

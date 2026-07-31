@@ -19,7 +19,7 @@ async fn declared_ref_observes_fast_completion() {
         .expect("task remains observable");
     assert_eq!(exit, ExitStatus::Completed { cancelled: false });
 
-    runtime.shutdown_and_wait().await.expect("tree stops");
+    runtime.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -38,7 +38,7 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
     assert!(exit.is_completed());
     assert!(task.snapshot().is_none());
 
-    runtime.shutdown_and_wait().await.expect("tree stops");
+    runtime.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -83,7 +83,7 @@ async fn old_ref_does_not_follow_same_id_replacement() {
             .is_completed()
     );
 
-    runtime.shutdown_and_wait().await.expect("tree stops");
+    runtime.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -115,7 +115,7 @@ async fn task_ref_waits_through_a_restart() {
     assert!(exit.is_completed());
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
-    runtime.shutdown_and_wait().await.expect("tree stops");
+    runtime.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -143,5 +143,5 @@ async fn explicit_readiness_failure_is_reported() {
             .is_completed()
     );
 
-    runtime.shutdown_and_wait().await.expect("tree stops");
+    runtime.shutdown().await.expect("tree stops");
 }

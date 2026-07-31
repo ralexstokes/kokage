@@ -68,16 +68,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     orders.send("business cards x100".to_owned()).await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
 
 `spawn()` returns the owning `RunningTree`; keep it alive for as long as the
-application should run. Routine root observation and shutdown are available
-directly on it. `running.scope()` returns a cheaply cloneable `ScopeRef` for
-passing non-owning control elsewhere or changing dynamic membership, parallel
-to an `ActorRef`. A `ScopeRef` does not keep its `RunningTree` alive; dropping
+application should run. `running.scope()` returns a cheaply cloneable
+`ScopeRef` for observation, control, and dynamic membership, parallel to an
+`ActorRef`. A `ScopeRef` does not keep its `RunningTree` alive; dropping
 references has no lifecycle effect, while dropping the owner requests graceful
 shutdown—so a discarded `let _ = tree.spawn()?;` shuts down immediately.
 

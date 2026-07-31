@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Contract over: the press drains its queue and leaves the tree.
     scope.remove_child("acme-press").await?;
 
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }
 ```
@@ -89,14 +89,14 @@ shop.add_subtree("sessions", dynamic_tree);
 let runtime = shop.spawn()?;
 // `spawn` returns while children are still starting; wait for the tree to
 // come up before the dynamic scope can accept members.
-runtime.wait_started().await?;
+runtime.scope().wait_started().await?;
 
 // Later, as clients arrive:
 let session = sessions
     .add_actor("session-1", || Session)
     .await?;
 # let _ = session;
-# runtime.shutdown_and_wait().await?;
+# runtime.shutdown().await?;
 # Ok(())
 # }
 ```

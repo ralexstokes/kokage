@@ -76,6 +76,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     scope.remove_child("front-desk").await?;
     scope.remove_child("rush-press").await?;
-    runtime.shutdown_and_wait().await?;
+    runtime.shutdown().await?;
     Ok(())
 }

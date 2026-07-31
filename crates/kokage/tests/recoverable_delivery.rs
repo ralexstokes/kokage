@@ -98,7 +98,7 @@ async fn close_full_mailbox_during_bounded_send(
 
     let result = bounded.await.expect("bounded send task joins");
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
     result
@@ -191,7 +191,7 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
         .try_send("one immediate attempt".to_owned())
         .expect("try_send is the immediate-attempt API");
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -265,7 +265,7 @@ async fn full_mailbox_rejections_return_the_message() {
     assert_eq!(stats.sends_rejected, 2);
 
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -302,7 +302,7 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
 
     release.notify_one();
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -371,7 +371,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
         "the timed-out replacement was not accepted"
     );
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 }
@@ -435,7 +435,7 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
     tree.add_actor_spec(spec);
     let runtime = tree.spawn().expect("tree builds");
     runtime
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("runtime shuts down cleanly");
 

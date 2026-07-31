@@ -68,11 +68,6 @@ impl RunningSupervisor {
         self.handle.clone()
     }
 
-    /// Requests a graceful shutdown of the supervisor.
-    pub fn shutdown(&self) {
-        self.handle.shutdown();
-    }
-
     /// Requests a graceful shutdown and waits for the supervisor to stop.
     pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
         self.handle.shutdown_and_wait().await

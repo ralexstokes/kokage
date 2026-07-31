@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = tree.spawn()?;
 
     sleep(Duration::from_millis(100)).await;
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
 
     println!("# Prometheus snapshot");
     println!("{}", recorder.render());
