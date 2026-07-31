@@ -22,7 +22,7 @@ pub enum SupervisorError {
     /// readiness.
     #[error("supervisor startup aborted: {0}")]
     StartupAborted(String),
-    /// A child exceeded its [`Restart`](crate::Restart)
+    /// A child exceeded its [`RestartPolicy`](crate::RestartPolicy)
     /// limit, so the supervisor cannot continue.
     #[error("restart intensity exceeded")]
     RestartIntensityExceeded,

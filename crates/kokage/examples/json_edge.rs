@@ -26,7 +26,7 @@ impl Actor for Printer {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let printer_spec = ActorSpec::new("Printer", || Printer)
-        .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
+        .shutdown(Shutdown::graceful_for(std::time::Duration::from_secs(5)));
     let mut tree = OrderedTree::new();
     let printer = tree.add_actor(printer_spec);
     let runtime = tree.spawn()?;

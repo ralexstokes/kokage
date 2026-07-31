@@ -1,5 +1,5 @@
 use kokage::{
-    OrderedTree, Restart, SubtreeSpec, TaskSpec,
+    OrderedTree, RestartMode, SubtreeSpec, TaskSpec,
     observe::{
         ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError, SupervisorSnapshot,
         SupervisorStateView,
@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
     tree.add_subtree(
         "nested",
-        SubtreeSpec::from(nested).restart(Restart::never()),
+        SubtreeSpec::from(nested).restart(RestartMode::Never),
     );
     let running = tree.spawn()?;
     let handle = running.scope();

@@ -11,7 +11,7 @@ use std::{
 
 use kokage::{
     ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, OrderedTree, Reply,
-    Restart, SendError, SendErrorKind,
+    RestartPolicy, SendError, SendErrorKind,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -64,7 +64,7 @@ impl RawActor for FailWithoutReceiving {
 }
 
 async fn close_full_mailbox_during_bounded_send(
-    restart: Restart,
+    restart: RestartPolicy,
     bound: Duration,
     message: &str,
 ) -> Result<(), SendError<String>> {
@@ -78,7 +78,7 @@ async fn close_full_mailbox_during_bounded_send(
         }
     })
     .mailbox_capacity(1)
-    .restart(restart);
+    .restart_policy(restart);
     let actor = spec.actor_ref();
     let mut tree = OrderedTree::new();
     tree.add_actor(spec);
@@ -380,7 +380,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
 #[tokio::test]
 async fn bounded_send_rides_a_closed_mailbox_into_the_next_incarnation() {
     close_full_mailbox_during_bounded_send(
-        Restart::on_failure(),
+        RestartPolicy::on_failure(),
         Duration::from_secs(1),
         "after restart",
     )
@@ -391,7 +391,7 @@ async fn bounded_send_rides_a_closed_mailbox_into_the_next_incarnation() {
 #[tokio::test]
 async fn bounded_send_returns_termination_after_its_mailbox_closes() {
     let error = close_full_mailbox_during_bounded_send(
-        Restart::never(),
+        RestartPolicy::never(),
         Duration::from_secs(1),
         "not accepted",
     )
@@ -411,7 +411,7 @@ async fn bounded_send_returns_termination_after_its_mailbox_closes() {
 #[tokio::test]
 async fn bounded_send_times_out_waiting_for_rebind_after_its_mailbox_closes() {
     let error = close_full_mailbox_during_bounded_send(
-        Restart::on_failure().backoff(Backoff::fixed(Duration::from_secs(1))),
+        RestartPolicy::on_failure().backoff(Backoff::fixed(Duration::from_secs(1))),
         Duration::from_millis(20),
         "deadline wins",
     )

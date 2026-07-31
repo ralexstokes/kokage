@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSpec, Restart, Strategy,
+    ActorSpec, RestartPolicy, Strategy,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -65,7 +65,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
 
     let mut tree = OrderedTree::new()
         .strategy(strategy)
-        .default_restart(Restart::always());
+        .default_restart(RestartPolicy::always());
     tree.add_actor(healthy);
     tree.add_actor(failing);
     let runtime = tree.spawn()?;

@@ -452,7 +452,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             .session_generations[CHAT_B],
         b_generation
     );
-    println!("PHASE 2 OK — add_actor(Restart::never()) + ctx.watch Exited/Removed");
+    println!("PHASE 2 OK — add_actor(RestartPolicy::never()) + ctx.watch Exited/Removed");
     Ok(())
 }
 
@@ -780,7 +780,7 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
     println!("sessions actor stats: {session_stats:#?}");
     println!("final supervisor snapshot: {final_snapshot:#?}");
     println!(
-        "PHASE 8 OK — Shutdown::drain_for(std::time::Duration::from_secs(5)) staged shutdown + recursive telemetry"
+        "PHASE 8 OK — Shutdown::graceful_for(std::time::Duration::from_secs(5)) staged shutdown + recursive telemetry"
     );
     Ok(())
 }

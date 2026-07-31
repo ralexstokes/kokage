@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, ExitResult, OrderedTree, Reply, Restart, SendError,
-    Strategy,
+    ActorRef, ActorSpec, Backoff, BoxError, ExitResult, OrderedTree, Reply, RestartPolicy,
+    SendError, Strategy,
     raw::{RawActor, RawContext},
 };
 use tokio::{
@@ -98,7 +98,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -162,7 +162,7 @@ impl RawActor for CleanThenReceive {
 
 #[tokio::test(start_paused = true)]
 async fn send_waits_during_permanent_restart_window() {
-    let restart = Restart::always()
+    let restart = RestartPolicy::always()
         .limit(10, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
@@ -175,7 +175,7 @@ async fn send_waits_during_permanent_restart_window() {
         first_exited: first_exited.clone(),
         observed: observed_tx.clone(),
     })
-    .restart(restart);
+    .restart_policy(restart);
     let worker_ref = worker.actor_ref();
 
     let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
@@ -241,7 +241,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -315,7 +315,7 @@ impl RawActor for RestartingRpc {
 
 #[tokio::test(start_paused = true)]
 async fn call_succeeds_across_restart_window() {
-    let restart = Restart::on_failure()
+    let restart = RestartPolicy::on_failure()
         .limit(10, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     let (failed_tx, failed_rx) = oneshot::channel();
@@ -326,7 +326,7 @@ async fn call_succeeds_across_restart_window() {
         runs: runs.clone(),
         failed: failed.clone(),
     })
-    .restart(restart);
+    .restart_policy(restart);
     let rpc_ref = rpc.actor_ref();
 
     let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);

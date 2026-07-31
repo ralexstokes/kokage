@@ -13,8 +13,9 @@ use crate::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
         BuildError, CancellationToken, ChildSpec, CompletionError, CompletionOnDrop, ControlError,
         DynamicSupervisorHandle, Guard, LifecycleEvent, LifecycleObservation, LifecycleWatch,
-        Restart, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, SupervisorError,
-        SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec,
+        MailboxShutdown, RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown,
+        SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        TaskSpec,
     },
 };
 
@@ -26,14 +27,14 @@ pub(crate) struct ActorRuntimeState {
 #[derive(Debug)]
 struct ActorRuntimeConfig {
     actor_builder: RunnableActorBuilder,
-    default_restart: Restart,
+    default_restart: RestartPolicy,
     default_shutdown: Shutdown,
 }
 
 impl ActorRuntimeState {
     pub(crate) fn new(
         actor_builder: RunnableActorBuilder,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
     ) -> Self {
         Self {
@@ -48,7 +49,7 @@ impl ActorRuntimeState {
     pub(crate) fn configure(
         &self,
         actor_builder: RunnableActorBuilder,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
     ) {
         *self.config.lock().unwrap_or_else(PoisonError::into_inner) = ActorRuntimeConfig {
@@ -58,7 +59,7 @@ impl ActorRuntimeState {
         };
     }
 
-    fn actor_defaults(&self) -> (Restart, Shutdown) {
+    fn actor_defaults(&self) -> (RestartPolicy, Shutdown) {
         let config = self.config.lock().unwrap_or_else(PoisonError::into_inner);
         (config.default_restart, config.default_shutdown)
     }
@@ -116,8 +117,9 @@ impl RuntimeAttachment {
 }
 
 struct DynamicChildOptions {
-    restart: Restart,
+    restart: RestartPolicy,
     shutdown: Shutdown,
+    mailbox_shutdown: MailboxShutdown,
     remove_when_done: bool,
 }
 
@@ -248,7 +250,7 @@ impl ScopeRef {
                     supervisor,
                     Arc::new(ActorRuntimeState::new(
                         RunnableActorBuilder::new(),
-                        Restart::default(),
+                        RestartPolicy::default(),
                         Shutdown::default(),
                     )),
                 )
@@ -564,7 +566,7 @@ impl ScopeRef {
         let parts = parts.map_err(ControlError::Rejected)?;
         let mut child = ChildSpec::supervisor(id.clone(), parts.supervisor);
         if let Some(restart) = parts.restart {
-            child = child.restart(restart);
+            child = child.restart_policy(restart);
         }
         if let Some(shutdown) = parts.shutdown {
             child = child.shutdown(shutdown);
@@ -631,6 +633,7 @@ impl ScopeRef {
         let dynamic_options = DynamicChildOptions {
             restart: spec.restart.unwrap_or(default_restart),
             shutdown: spec.shutdown.unwrap_or(default_shutdown),
+            mailbox_shutdown: spec.mailbox_shutdown,
             remove_when_done: spec.remove_when_done,
         };
         let actor = self.actors.make_actor(spec);
@@ -656,7 +659,12 @@ impl ScopeRef {
         let child = actor_child_spec(
             actor.clone(),
             &self.actors,
-            ActorChildOptions::new(options.restart, options.shutdown, options.remove_when_done),
+            ActorChildOptions::new(
+                options.restart,
+                options.shutdown,
+                options.mailbox_shutdown,
+                options.remove_when_done,
+            ),
         );
         dynamic.add_child_spec(child).await?;
 
@@ -675,11 +683,11 @@ impl ScopeRef {
     /// after detachment (or after the configured shutdown backstop aborts it).
     ///
     /// A send racing with removal may still be accepted. With
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for), work accepted before
-    /// drain closes intake belongs to the queued prefix handled before
+    /// [`MailboxShutdown::Drain`](crate::MailboxShutdown::Drain), work accepted
+    /// before drain closes intake belongs to the queued prefix handled before
     /// `on_stop`. With
-    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current),
-    /// accepted work that remains queued is dropped. Once the actor closes intake,
+    /// [`MailboxShutdown::Discard`](crate::MailboxShutdown::Discard), accepted
+    /// work that remains queued is dropped. Once the actor closes intake,
     /// `try_send` may briefly fail with
     /// [`SendErrorKind::NotRunning`](crate::SendErrorKind::NotRunning), while an
     /// awaited `send` waits and then fails with
@@ -732,16 +740,23 @@ impl Drop for TerminateBindingOnDrop {
 
 /// How one actor is supervised as a child of its enclosing scope.
 pub(crate) struct ActorChildOptions {
-    pub(crate) restart: Restart,
+    pub(crate) restart: RestartPolicy,
     pub(crate) shutdown: Shutdown,
+    pub(crate) mailbox_shutdown: MailboxShutdown,
     pub(crate) remove_when_done: bool,
 }
 
 impl ActorChildOptions {
-    pub(crate) fn new(restart: Restart, shutdown: Shutdown, remove_when_done: bool) -> Self {
+    pub(crate) fn new(
+        restart: RestartPolicy,
+        shutdown: Shutdown,
+        mailbox_shutdown: MailboxShutdown,
+        remove_when_done: bool,
+    ) -> Self {
         Self {
             restart,
             shutdown,
+            mailbox_shutdown,
             remove_when_done,
         }
     }
@@ -755,6 +770,7 @@ pub(crate) fn actor_child_spec(
     let ActorChildOptions {
         restart,
         shutdown,
+        mailbox_shutdown,
         remove_when_done,
     } = options;
     let actor_id = actor.label().to_owned();
@@ -771,7 +787,7 @@ pub(crate) fn actor_child_spec(
                     ctx.shutdown_token().cancelled(),
                     ctx.abort_token().cancelled(),
                     restart,
-                    matches!(shutdown, Shutdown::Drain { .. }),
+                    mailbox_shutdown.drains(),
                     supervisor,
                     || ctx.mark_ready(),
                 )
@@ -782,7 +798,7 @@ pub(crate) fn actor_child_spec(
     .into_spec()
     .attachment(attachment)
     .wait_for_ready()
-    .restart(restart)
+    .restart_policy(restart)
     .shutdown(shutdown);
     if remove_when_done {
         child.remove_when_done()
@@ -802,7 +818,7 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, OrderedTree, Restart,
+        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, OrderedTree, RestartMode,
         RunningTree, ScopeRef,
     };
 
@@ -836,7 +852,7 @@ mod tests {
 
     #[tokio::test]
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
-        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(Restart::never());
+        let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(RestartMode::Never);
         let static_ref = static_spec.actor_ref();
         let mut static_tree = OrderedTree::new();
         static_tree.add_actor(static_spec);
@@ -864,7 +880,7 @@ mod tests {
         let dynamic_runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
         let dynamic = dynamic_runtime.scope();
         let dynamic_ref = dynamic
-            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(Restart::never()))
+            .add_actor(ActorSpec::new("dynamic", || FailsOnMessage).restart(RestartMode::Never))
             .await
             .expect("dynamic actor is inserted");
         dynamic_runtime
@@ -898,7 +914,7 @@ mod tests {
         let actor_ref = dynamic
             .add_actor(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
-                    .restart(Restart::never())
+                    .restart(RestartMode::Never)
                     .remove_when_done(),
             )
             .await

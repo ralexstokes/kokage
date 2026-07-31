@@ -16,9 +16,9 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
-    DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart,
-    RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, SupervisorError,
-    TaskSpec,
+    DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MailboxShutdown, MonitorEvent,
+    OrderedTree, RestartMode, RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind,
+    Shutdown, StopContext, SupervisorError, TaskSpec,
     observe::ChildMembershipView,
     raw::{RawActor, RawContext},
 };
@@ -503,7 +503,7 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
                     events: events_tx.clone(),
                 }
             })
-            .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
+            .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
         )
         .await
         .expect("actor added");
@@ -624,7 +624,8 @@ async fn discard_closes_intake_and_drops_racing_messages() {
                     events: events_tx.clone(),
                 }
             })
-            .shutdown(Shutdown::discard_after_current(Duration::from_secs(5))),
+            .shutdown(Shutdown::graceful_for(Duration::from_secs(5)))
+            .mailbox_shutdown(MailboxShutdown::Discard),
         )
         .await
         .expect("actor added");
@@ -719,7 +720,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .remove_when_done(),
         )
         .await
@@ -776,7 +777,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .remove_when_done(),
         )
         .await
@@ -798,7 +799,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::always()),
+            .restart(RestartMode::Always),
         )
         .await
         .expect("permanent actor added");
@@ -824,7 +825,7 @@ async fn context_stop_applies_restart_policy_before_explicit_removal() {
 #[tokio::test]
 async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
     let runtime = DynamicTree::new()
-        .default_restart(Restart::always())
+        .default_restart(RestartPolicy::always())
         .default_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic runtime builds");
@@ -847,8 +848,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
                     starts: Arc::clone(&starts),
                 }
             })
-            .restart(Restart::never())
-            .remove_when_done(),
+            .temporary(),
         )
         .await
         .expect("explicit actor added");
@@ -871,7 +871,7 @@ async fn dynamic_runtime_defaults_apply_and_explicit_actor_options_win() {
 #[tokio::test]
 async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
     let runtime = DynamicTree::new()
-        .default_restart(Restart::always())
+        .default_restart(RestartPolicy::always())
         .default_shutdown(Shutdown::abort())
         .spawn()
         .expect("dynamic tree builds");
@@ -910,7 +910,7 @@ async fn dynamic_tree_applies_scope_defaults_to_runtime_actors() {
 }
 
 #[tokio::test]
-async fn never_actor_auto_removes_after_failure() {
+async fn temporary_actor_auto_removes_after_failure() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
@@ -924,8 +924,7 @@ async fn never_actor_auto_removes_after_failure() {
                     fail: true,
                 }
             })
-            .restart(Restart::never())
-            .remove_when_done(),
+            .temporary(),
         )
         .await
         .expect("temporary actor added");
@@ -936,7 +935,7 @@ async fn never_actor_auto_removes_after_failure() {
         target.send(()).await,
         Err(SendError { actor_id, .. }) if actor_id == "temporary"
     ));
-    shutdown_dynamic_runtime(&runtime, "never-actor removal test shutdown").await;
+    shutdown_dynamic_runtime(&runtime, "temporary-actor removal test shutdown").await;
 }
 
 #[tokio::test]
@@ -954,7 +953,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .remove_when_done(),
         )
         .await
@@ -972,7 +971,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(Restart::on_failure()),
+            .restart(RestartMode::OnFailure),
         )
         .await
         .expect("retained transient actor added");
@@ -989,7 +988,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(Restart::on_failure()),
+            .restart(RestartMode::OnFailure),
         )
         .await
         .expect("reversed retained transient actor added");
@@ -1006,7 +1005,7 @@ async fn completed_membership_is_retained_unless_spec_removes_it() {
                     fail: false,
                 }
             })
-            .restart(Restart::never()),
+            .restart(RestartMode::Never),
         )
         .await
         .expect("retained never actor added");
@@ -1030,7 +1029,7 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
                     starts: starts.clone(),
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .remove_when_done(),
         )
         .await
@@ -1316,7 +1315,7 @@ async fn timed_out_removal_terminates_the_typed_ref() {
     let actor_ref = support::dynamic_root(&runtime)
         .add_actor(
             ActorSpec::new("dynamic", || PendingActor)
-                .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
+                .shutdown(Shutdown::graceful_for(Duration::from_millis(20))),
         )
         .await
         .expect("actor added");

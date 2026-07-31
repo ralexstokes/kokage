@@ -12,8 +12,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    ChildSpec, ChildStateView, CompletionError, Restart, Shutdown, Strategy, Supervisor,
-    SupervisorError, TaskSpec,
+    ChildSpec, ChildStateView, CompletionError, RestartMode, RestartPolicy, Shutdown, Strategy,
+    Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -35,7 +35,7 @@ impl Drop for NotifyOnDrop {
 async fn a_completed_child_stops_siblings_and_supervisor() {
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
     let builder = Supervisor::ordered()
-        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(RestartMode::Never))
         .child(TaskSpec::new("sibling", move |ctx| {
             let cancelled_tx = cancelled_tx.clone();
             async move {
@@ -97,7 +97,7 @@ async fn a_completion_set_waits_for_its_last_child() {
                     Ok(())
                 }
             })
-            .restart(Restart::never()),
+            .restart(RestartMode::Never),
         )
         .child(
             TaskSpec::new("second", move |_| {
@@ -107,7 +107,7 @@ async fn a_completion_set_waits_for_its_last_child() {
                     Ok(())
                 }
             })
-            .restart(Restart::never()),
+            .restart(RestartMode::Never),
         );
     let _finished = builder
         .handle()
@@ -208,7 +208,7 @@ async fn wait_completed_realigns_from_a_clean_pre_ready_exit() {
     let handle_owner = Supervisor::ordered()
         .child(
             TaskSpec::new("worker", |_| async { Ok(()) })
-                .restart(Restart::never())
+                .restart(RestartMode::Never)
                 .wait_for_ready(),
         )
         .build()
@@ -260,7 +260,7 @@ async fn dynamic_completion_realigns_after_real_lifecycle_overflow() {
     );
 
     dynamic
-        .add_child(TaskSpec::new("target", |_| async { Ok(()) }).restart(Restart::never()))
+        .add_child(TaskSpec::new("target", |_| async { Ok(()) }).restart(RestartMode::Never))
         .await
         .expect("target is added");
     for index in 0..70 {
@@ -297,7 +297,7 @@ async fn a_nested_scope_completion_is_a_clean_child_exit_to_parent() {
     let inner = inner_builder.build().expect("valid inner supervisor");
 
     let parent = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("job", inner).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("job", inner).restart(RestartMode::OnFailure))
         .build()
         .expect("valid parent supervisor");
 
@@ -356,7 +356,7 @@ async fn a_completed_nested_scope_can_complete_its_parent() {
 
 #[tokio::test]
 async fn a_dynamic_scope_can_await_completion() {
-    let builder = Supervisor::dynamic().default_restart(Restart::never());
+    let builder = Supervisor::dynamic().default_restart(RestartPolicy::never());
     // Armed before the children exist: an id that is not yet a member stays
     // pending rather than counting as already gone.
     let finished = builder
@@ -411,9 +411,9 @@ async fn a_failed_never_child_never_completes() {
     let builder = Supervisor::ordered()
         .child(
             TaskSpec::new("failed", |_| async { Err(common::test_error("failed")) })
-                .restart(Restart::never()),
+                .restart(RestartMode::Never),
         )
-        .child(TaskSpec::new("completed", |_| async { Ok(()) }).restart(Restart::never()));
+        .child(TaskSpec::new("completed", |_| async { Ok(()) }).restart(RestartMode::Never));
     let _finished = builder
         .handle()
         .shutdown_when_children_complete(["failed", "completed"])
@@ -533,7 +533,7 @@ async fn a_group_cancelled_clean_exit_does_not_complete() {
             }
         }
     })
-    .restart(Restart::never());
+    .restart(RestartMode::Never);
     // Returns `Ok(())` because the supervisor cancelled it, not because its
     // work finished. That must not satisfy the completion set.
     let restarted = TaskSpec::new("restarted", move |ctx| {
@@ -607,7 +607,7 @@ async fn natural_always_completion_during_group_drain_spawns_once() {
             }
         }
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
     let failing = TaskSpec::new("failing", move |ctx| {
         let finish_always = finish_always.clone();
         async move {
@@ -652,7 +652,7 @@ async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
                 Ok(())
             }
         })
-        .restart(Restart::always()),
+        .restart(RestartMode::Always),
     );
     let handle = builder.handle();
     let owner = builder.build().expect("valid supervisor").spawn();
@@ -677,7 +677,7 @@ async fn a_clean_exit_with_always_policy_never_satisfies_completion() {
 #[tokio::test]
 async fn a_dropped_guard_leaves_the_supervisor_running() {
     let builder = Supervisor::ordered()
-        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(RestartMode::Never))
         .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -703,7 +703,7 @@ async fn a_dropped_guard_leaves_the_supervisor_running() {
 #[tokio::test]
 async fn a_detached_guard_preserves_completion_shutdown() {
     let builder = Supervisor::ordered()
-        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("trigger", |_| async { Ok(()) }).restart(RestartMode::Never))
         .child(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
             Ok(())
@@ -773,7 +773,7 @@ async fn fatal_restart_during_abort_removal_stops_supervisor() {
     });
 
     let handle_owner = Supervisor::dynamic()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .build()
         .expect("valid supervisor")
         .spawn();

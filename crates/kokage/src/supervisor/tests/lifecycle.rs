@@ -8,8 +8,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildSpec, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, Restart,
-    Shutdown, Strategy, Supervisor, SupervisorError, TaskSpec,
+    Backoff, ChildSpec, Guard, LifecycleEvent, LifecycleEventKind, LifecycleWatch, RestartMode,
+    RestartPolicy, Shutdown, Strategy, Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{sync::Notify, time::timeout};
 
@@ -191,7 +191,7 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
 async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
-    let restart = Restart::on_failure()
+    let restart = RestartPolicy::on_failure()
         .limit(3, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(50)));
     let builder = Supervisor::ordered().child(
@@ -205,7 +205,7 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
                 Ok(())
             }
         })
-        .restart(restart),
+        .restart_policy(restart),
     );
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle().direct_children();
@@ -285,7 +285,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let child_attempts = Arc::clone(&attempts);
     let nested = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&child_attempts);
             async move {
@@ -299,7 +299,7 @@ async fn recursive_paths_follow_nested_supervisor_reincarnation_identity() {
         .build()
         .expect("nested supervisor builds");
     let builder = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(3, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(3, Duration::from_secs(1)))
         .child_spec(ChildSpec::supervisor("nested", nested));
     let handle = builder.handle();
     let mut watch = handle.watch_lifecycle();
@@ -351,7 +351,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
                     Ok(())
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .shutdown(Shutdown::abort()),
         )
         .child(
@@ -362,7 +362,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
                     Err(failure("fatal boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
             .shutdown(Shutdown::abort()),
         )
         .build()
@@ -370,7 +370,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let running = Supervisor::ordered()
         .child_spec(
             ChildSpec::supervisor("middle", middle)
-                .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
         .expect("root supervisor builds")
@@ -539,9 +539,9 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .shutdown(crate::supervisor::Shutdown::drain_for(Duration::from_secs(
-                1,
-            ))),
+            .shutdown(crate::supervisor::Shutdown::graceful_for(
+                Duration::from_secs(1),
+            )),
         )
         .await
         .expect("worker is added");
@@ -568,7 +568,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
 #[tokio::test]
 async fn restart_intensity_failure_is_an_in_band_scope_event() {
     let builder = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("always-fails", |_| async {
             Err(failure("no restart budget"))
         }));
@@ -885,7 +885,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                 Ok(())
             }
         })
-        .restart(Restart::on_failure())
+        .restart(RestartMode::OnFailure)
         .shutdown(Shutdown::abort()),
     );
     let _leaf_finished = leaf_builder
@@ -896,7 +896,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
     let sibling_crash = Arc::clone(&crash_sibling);
     let running = Supervisor::ordered()
         .strategy(Strategy::OneForAll)
-        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(RestartMode::OnFailure))
         .child(
             TaskSpec::new("sibling", move |_| {
                 let crash = Arc::clone(&sibling_crash);
@@ -905,7 +905,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
                     Err(failure("sibling boom"))
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .shutdown(Shutdown::abort()),
         )
         .build()
@@ -958,12 +958,12 @@ async fn never_policy_nested_stop_closes_its_watch() {
                     Err(failure("worker boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60))),
         )
         .build()
         .expect("nested supervisor builds");
     let running = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::Never))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -1006,7 +1006,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
     let running = Supervisor::ordered()
         .child_spec(
             ChildSpec::supervisor("middle", middle_supervisor(&crash_leaf, &crash_middle))
-                .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
         .expect("root supervisor builds")
@@ -1068,7 +1068,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
     let running = Supervisor::ordered()
         .child_spec(
             ChildSpec::supervisor("middle", middle)
-                .restart(Restart::on_failure().limit(5, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(5, Duration::from_secs(60))),
         )
         .build()
         .expect("root supervisor builds")
@@ -1088,7 +1088,7 @@ async fn ancestor_reincarnation_closes_orphaned_dynamic_watch() {
                     Err(failure("middle boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60))),
         )
         .await
         .expect("bomb is added");
@@ -1127,8 +1127,8 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
     let (tail_supervisor, _tail_finished) = completing_supervisor(&complete_tail);
     let running = Supervisor::ordered()
         .strategy(Strategy::RestForOne)
-        .child_spec(ChildSpec::supervisor("head", head_supervisor).restart(Restart::on_failure()))
-        .child_spec(ChildSpec::supervisor("tail", tail_supervisor).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("head", head_supervisor).restart(RestartMode::OnFailure))
+        .child_spec(ChildSpec::supervisor("tail", tail_supervisor).restart(RestartMode::OnFailure))
         .build()
         .expect("root supervisor builds")
         .spawn();
@@ -1193,14 +1193,14 @@ fn middle_supervisor(
                     Err(failure("leaf boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
             .shutdown(Shutdown::abort()),
         )
         .build()
         .expect("leaf supervisor builds");
     let middle_crash = Arc::clone(crash_middle);
     Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("leaf", leaf).restart(RestartMode::Never))
         .child(
             TaskSpec::new("bomb", move |_| {
                 let crash = Arc::clone(&middle_crash);
@@ -1209,7 +1209,7 @@ fn middle_supervisor(
                     Err(failure("middle boom"))
                 }
             })
-            .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+            .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
             .shutdown(Shutdown::abort()),
         )
         .build()
@@ -1226,7 +1226,7 @@ fn completing_supervisor(complete: &Arc<Notify>) -> (crate::supervisor::Supervis
                 Ok(())
             }
         })
-        .restart(Restart::on_failure()),
+        .restart(RestartMode::OnFailure),
     );
     let finished = builder
         .handle()

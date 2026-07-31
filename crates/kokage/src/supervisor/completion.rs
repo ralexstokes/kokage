@@ -74,7 +74,7 @@ impl CompletionOperation {
             if self.set.is_complete() {
                 // `Exited` is emitted before its immediately following
                 // restart-scheduled transition. Recheck state before completing so
-                // `Restart::always()` cannot expose that transient stop as
+                // `RestartPolicy::always()` cannot expose that transient stop as
                 // finished work.
                 self.baseline = self.set.realign(&self.handle.snapshot());
                 if self.set.is_complete() {
@@ -210,7 +210,7 @@ struct CompletionSet {
     /// membership's completion state.
     latest_lineages: HashMap<String, u64>,
     /// Restart policy of the newest snapshot-aligned membership for each id.
-    restart_policies: HashMap<String, crate::supervisor::Restart>,
+    restart_policies: HashMap<String, crate::supervisor::RestartPolicy>,
 }
 
 impl CompletionSet {

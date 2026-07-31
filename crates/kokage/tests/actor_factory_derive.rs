@@ -8,8 +8,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, Restart, ScopeRef,
-    observe::SupervisorSnapshotReceiver,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, RestartPolicy,
+    ScopeRef, observe::SupervisorSnapshotReceiver,
 };
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
@@ -82,7 +82,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
         },
     ));
     let handle = builder
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 

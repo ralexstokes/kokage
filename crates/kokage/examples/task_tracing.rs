@@ -3,13 +3,13 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{Backoff, OrderedTree, Restart, TaskSpec};
+use kokage::{Backoff, OrderedTree, RestartPolicy, TaskSpec};
 use tokio::time::{Duration, sleep};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nested_restart = Restart::on_failure()
+    let nested_restart = RestartPolicy::on_failure()
         .limit(5, Duration::from_secs(5))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     tracing_subscriber::fmt()
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             }
         })
-        .restart(nested_restart),
+        .restart_policy(nested_restart),
     );
 
     let mut tree = OrderedTree::new();

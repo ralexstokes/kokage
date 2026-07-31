@@ -82,7 +82,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -149,7 +149,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -221,7 +221,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -288,7 +288,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -385,7 +385,7 @@ async fn replaced_call_reports_reply_dropped() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -484,7 +484,7 @@ async fn draining_shutdown_handles_latest_message_after_shutdown() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -545,7 +545,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }

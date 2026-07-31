@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, Restart, Strategy, Supervisor,
-    SupervisorError, TaskSpec,
+    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, RestartPolicy, Strategy,
+    Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -146,7 +146,7 @@ async fn dropped_builder_and_failed_build_terminalize_every_stream() {
             "builder" => drop(builder),
             "failed-build" => {
                 let error = builder
-                    .default_restart(Restart::on_failure().limit(1, Duration::ZERO))
+                    .default_restart(RestartPolicy::on_failure().limit(1, Duration::ZERO))
                     .build()
                     .expect_err("invalid build fails");
                 assert!(error.to_string().contains("window"));

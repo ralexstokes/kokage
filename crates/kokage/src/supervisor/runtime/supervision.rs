@@ -28,7 +28,7 @@ use crate::supervisor::{
     },
     observability::{SupervisorObservability, format_child_path},
     owner::{ParentLink, SupervisorConfig},
-    restart::Restart,
+    restart::RestartPolicy,
     scope::{ScopeKind, ScopePathSegment},
     shutdown::Shutdown,
     snapshot::{
@@ -297,7 +297,7 @@ pub(crate) fn reconcile_stable_identities(
 pub(crate) struct RuntimeMeta {
     pub(crate) strategy: Strategy,
     pub(crate) kind: ScopeKind,
-    pub(crate) default_restart: Restart,
+    pub(crate) default_restart: RestartPolicy,
     pub(crate) default_shutdown: Shutdown,
     pub(crate) path_prefix: Vec<String>,
     pub(crate) observability: SupervisorObservability,
@@ -2275,7 +2275,7 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: Shutdown::drain_for(Duration::ZERO),
+            policy: Shutdown::graceful_for(Duration::ZERO),
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2299,7 +2299,7 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: Shutdown::drain_for(Duration::ZERO),
+            policy: Shutdown::graceful_for(Duration::ZERO),
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: true,
@@ -2320,7 +2320,7 @@ mod tests {
         let (reply, mut reply_rx) = oneshot::channel();
         runtime.children[key].pending_removal = Some(PendingRemoval {
             reply,
-            policy: Shutdown::drain_for(Duration::from_secs(60)),
+            policy: Shutdown::graceful_for(Duration::from_secs(60)),
             grace_deadline: Instant::now() + Duration::from_secs(60),
             initiated_at: StdInstant::now(),
             grace_expired: false,
@@ -2343,7 +2343,7 @@ mod tests {
         let (reply, _reply_rx) = oneshot::channel();
         let pending = PendingRemoval {
             reply,
-            policy: Shutdown::drain_for(Duration::ZERO),
+            policy: Shutdown::graceful_for(Duration::ZERO),
             grace_deadline: Instant::now(),
             initiated_at: StdInstant::now(),
             grace_expired: false,

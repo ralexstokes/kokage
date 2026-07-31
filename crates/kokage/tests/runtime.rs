@@ -14,7 +14,7 @@ use std::{
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context,
-    ControlError, DynamicTree, ExitResult, OrderedTree, Reply, Restart, ScopeRef, SendError,
+    ControlError, DynamicTree, ExitResult, OrderedTree, Reply, RestartPolicy, ScopeRef, SendError,
     Shutdown, Strategy, SupervisorError, TaskSpec,
     observe::{LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView},
     raw::{RawActor, RawContext},
@@ -583,7 +583,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let mut nested_graph = nested_graph.build();
     nested_graph.add_subtree("dynamic", DynamicTree::new());
     let nested_graph =
-        nested_graph.default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)));
+        nested_graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut tree = OrderedTree::new();
     tree.add_subtree("workers", nested_graph);
     let handle = tree.spawn().expect("nested runtime builds");
@@ -687,7 +687,8 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
     let mut graph = graph.build();
     graph.add_subtree("dynamic", DynamicTree::new());
-    let graph = graph.default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)));
+    let graph =
+        graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let subtree = support::dynamic_root(&root)
         .add_subtree("workers", graph)
         .await
@@ -729,7 +730,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     let mut parent_graph = parent_graph.build();
     parent_graph.add_subtree("dynamic", DynamicTree::new());
     let parent_graph =
-        parent_graph.default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)));
+        parent_graph.default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)));
     let mut tree = OrderedTree::new();
     tree.add_subtree("parent", parent_graph);
     let root = tree.spawn().expect("runtime builds");
@@ -1087,7 +1088,7 @@ async fn snapshot_child_wait_arms_before_the_future_is_polled() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -1137,7 +1138,7 @@ async fn send_fails_after_restart_intensity_is_exhausted() {
 
     let handle = graph
         .strategy(Strategy::OneForOne)
-        .default_restart(Restart::always().limit(1, Duration::from_secs(60)))
+        .default_restart(RestartPolicy::always().limit(1, Duration::from_secs(60)))
         .spawn()
         .expect("runtime builds");
 
@@ -1206,7 +1207,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     let graph = builder.build();
 
     let handle = graph
-        .default_restart(Restart::always())
+        .default_restart(RestartPolicy::always())
         .spawn()
         .expect("runtime builds");
 
@@ -1340,7 +1341,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
                     release_gate: release_gate.clone(),
                 }
             })
-            .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
+            .shutdown(Shutdown::graceful_for(Duration::from_millis(20))),
     );
     let handle = graph.spawn().expect("runtime builds");
 
@@ -1399,7 +1400,7 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
     });
     let handle = builder
         .build()
-        .default_shutdown(Shutdown::drain_for(Duration::from_millis(20)))
+        .default_shutdown(Shutdown::graceful_for(Duration::from_millis(20)))
         .spawn()
         .expect("runtime builds");
     let mut lifecycle = handle.scope().watch_lifecycle();

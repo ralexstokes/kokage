@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, Guard, MailboxMode, Restart, ScopeRef,
+    ActorSlot, CancellationToken, Guard, MailboxMode, RestartPolicy, ScopeRef,
     observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -323,8 +323,8 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         })
         .mailbox_capacity(VENUE_MAILBOX);
 
-    let mut venues =
-        OrderedTree::new().default_restart(Restart::on_failure().limit(5, Duration::from_secs(10)));
+    let mut venues = OrderedTree::new()
+        .default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(10)));
     venues.add_actor(venue_a_feed_actor);
     venues.add_actor(venue_a_gateway_actor);
     venues.add_actor(venue_b_feed_actor);

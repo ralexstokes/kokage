@@ -356,7 +356,7 @@ impl StableSupervisorChannels {
 
     pub(crate) fn project_declared_children(
         &self,
-        children: Vec<(String, crate::supervisor::Restart, bool)>,
+        children: Vec<(String, crate::supervisor::RestartPolicy, bool)>,
     ) {
         // Projected lineages are positional, and `bind` later overwrites them
         // with lineages minted from this hub. The two agree — which is what

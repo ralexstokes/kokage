@@ -28,9 +28,9 @@ enum LoopEvent<M> {
 /// available on [`RawContext`].
 ///
 /// A [`Context::stop`] exit is normal for monitoring and supervision. A
-/// [`Restart::always`](crate::Restart::always) child restarts after it;
-/// [`Restart::on_failure`](crate::Restart::on_failure) and
-/// [`Restart::never`](crate::Restart::never) children do not.
+/// [`RestartPolicy::always`](crate::RestartPolicy::always) child restarts after it;
+/// [`RestartPolicy::on_failure`](crate::RestartPolicy::on_failure) and
+/// [`RestartPolicy::never`](crate::RestartPolicy::never) children do not.
 ///
 /// # Incarnation construction
 ///
@@ -64,9 +64,9 @@ pub trait Actor: Send + 'static {
     /// reports readiness after this hook returns successfully. Calling
     /// [`ctx.stop()`](Context::stop) requests a clean stop before the ordinary
     /// receive loop.
-    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current)
-    /// drops messages queued during startup, while
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) handles the accepted queue;
+    /// [`MailboxShutdown::Discard`](crate::MailboxShutdown::Discard) drops
+    /// messages queued during startup, while the default
+    /// [`MailboxShutdown::Drain`](crate::MailboxShutdown::Drain) handles the accepted queue;
     /// actor-local continuations are dropped under either policy, and their
     /// loss is reported as a `WARN` before [`on_stop`](Self::on_stop). An error
     /// here fails the run like a [`handle`](Self::handle) error, so under

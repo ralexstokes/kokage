@@ -1,8 +1,9 @@
 use std::{ops::Deref, sync::Arc, time::Duration};
 
 use crate::supervisor::{
-    BuildError, ChildSpec, ControlError, DynamicSupervisorBuilder, Restart, RunningSupervisor,
-    ScopeKind, Shutdown, Supervisor, SupervisorError, SupervisorHandle, TaskSpec,
+    BuildError, ChildSpec, ControlError, DynamicSupervisorBuilder, RestartMode, RestartPolicy,
+    RunningSupervisor, ScopeKind, Shutdown, Supervisor, SupervisorError, SupervisorHandle,
+    TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -93,7 +94,9 @@ async fn empty_supervisor_starts_empty_and_accepts_children() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(TaskSpec::new("dynamic", |_ctx| async move { Ok(()) }).restart(Restart::never()))
+        .add_child(
+            TaskSpec::new("dynamic", |_ctx| async move { Ok(()) }).restart(RestartMode::Never),
+        )
         .await
         .expect("empty supervisor accepts a child");
 
@@ -149,9 +152,9 @@ async fn dynamic_builder_defaults_apply_without_overriding_explicit_child_policy
             Ok(())
         }
     })
-    .restart(Restart::never());
+    .restart(RestartMode::Never);
     let handle_owner = Supervisor::dynamic()
-        .default_restart(Restart::always())
+        .default_restart(RestartPolicy::always())
         .build()
         .expect("dynamic supervisor builds")
         .spawn();
@@ -190,11 +193,7 @@ async fn dynamic_child_can_remove_itself_after_a_non_restarted_exit() {
     handle
         .dynamic()
         .expect("dynamic supervisor")
-        .add_child(
-            TaskSpec::new("temporary", |_ctx| async move { Ok(()) })
-                .restart(Restart::never())
-                .remove_when_done(),
-        )
+        .add_child(TaskSpec::new("temporary", |_ctx| async move { Ok(()) }).temporary())
         .await
         .expect("temporary child added");
 
@@ -233,7 +232,7 @@ async fn temporary_dynamic_child_auto_removes_when_skipped_by_group_restart() {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             })
-            .restart(Restart::never())
+            .restart(RestartMode::Never)
             .remove_when_done(),
         )
         .child(
@@ -292,7 +291,7 @@ async fn opted_in_non_never_exit_before_group_restart_forfeits_revival() {
                     }
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .remove_when_done(),
         )
         .child(TaskSpec::new("trigger", {
@@ -361,7 +360,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     Ok(())
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .remove_when_done(),
         )
         .child(
@@ -379,7 +378,7 @@ async fn opted_in_non_never_exit_during_group_drain_is_respawned() {
                     }
                 }
             })
-            .restart(Restart::on_failure()),
+            .restart(RestartMode::OnFailure),
         )
         .build()
         .expect("ordered group supervisor builds");
@@ -546,7 +545,7 @@ async fn terminal_failure_remains_visible_while_idle() {
                 Err(common::test_error("terminal failure"))
             }
         })
-        .restart(Restart::never())],
+        .restart(RestartMode::Never)],
     )
     .await;
     let mut events = common::event_watch(&handle);
@@ -756,7 +755,7 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
                     Ok(())
                 }
             })
-            .restart(Restart::on_failure()),
+            .restart(RestartMode::OnFailure),
             TaskSpec::new("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
@@ -812,7 +811,7 @@ async fn concurrent_removal_requests_fail_fast_while_the_first_is_pending() {
 async fn shutdown_completes_a_pending_removal_and_preserves_its_timeout() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (cancelled_tx, mut cancelled_rx) = mpsc::unbounded_channel();
-    let fast_shutdown = Shutdown::drain_for(common::SHORT_GRACE);
+    let fast_shutdown = Shutdown::graceful_for(common::SHORT_GRACE);
 
     let handle = spawn_dynamic(
         Supervisor::dynamic(),
@@ -828,7 +827,7 @@ async fn shutdown_completes_a_pending_removal_and_preserves_its_timeout() {
                     Ok(())
                 }
             })
-            .restart(Restart::on_failure())
+            .restart(RestartMode::OnFailure)
             .shutdown(fast_shutdown),
             TaskSpec::new("keeper", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -873,7 +872,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
 
     let handle = spawn_dynamic(
         Supervisor::dynamic()
-            .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1))),
+            .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1))),
         [
             TaskSpec::new("removable", {
                 let removable_started = Arc::clone(&removable_started);
@@ -890,7 +889,7 @@ async fn fatal_exit_resolves_an_accepted_pending_removal() {
                     }
                 }
             })
-            .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
+            .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
             TaskSpec::new("failing", {
                 let failing_started = Arc::clone(&failing_started);
                 let fail_now = Arc::clone(&fail_now);
@@ -950,7 +949,7 @@ async fn distinct_add_proceeds_while_a_cooperative_removal_drains() {
                 Ok(())
             }
         })
-        .shutdown(Shutdown::drain_for(Duration::from_secs(1)))],
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(1)))],
     )
     .await;
     common::recv_event(&mut started_rx).await;
@@ -1092,7 +1091,7 @@ async fn cooperative_removal_reports_timeout_after_the_abort_join() {
                 Ok(())
             }
         })
-        .shutdown(Shutdown::drain_for(common::SHORT_GRACE))],
+        .shutdown(Shutdown::graceful_for(common::SHORT_GRACE))],
     )
     .await;
     common::recv_event(&mut started_rx).await;
@@ -1121,7 +1120,7 @@ async fn cooperative_removal_reports_timeout_after_the_abort_join() {
 async fn control_plane_remains_available_after_all_children_exit() {
     let handle = spawn_dynamic(
         Supervisor::dynamic(),
-        [TaskSpec::new("done", |_ctx| async move { Ok(()) }).restart(Restart::never())],
+        [TaskSpec::new("done", |_ctx| async move { Ok(()) }).restart(RestartMode::Never)],
     )
     .await;
 
@@ -1212,7 +1211,8 @@ async fn remove_child_preempts_zero_delay_restart() {
 
     let handle = spawn_dynamic(
         Supervisor::dynamic().default_restart(
-            crate::supervisor::Restart::on_failure().limit(8, std::time::Duration::from_secs(1)),
+            crate::supervisor::RestartPolicy::on_failure()
+                .limit(8, std::time::Duration::from_secs(1)),
         ),
         [TaskSpec::new("removable", move |ctx| {
             let starts_tx = starts_tx.clone();
@@ -1266,7 +1266,8 @@ async fn remove_child_preempts_zero_delay_restart() {
 async fn queued_command_batch_preempts_zero_delay_restart() {
     let handle_owner = Supervisor::dynamic()
         .default_restart(
-            crate::supervisor::Restart::on_failure().limit(8, std::time::Duration::from_secs(1)),
+            crate::supervisor::RestartPolicy::on_failure()
+                .limit(8, std::time::Duration::from_secs(1)),
         )
         .build()
         .expect("valid dynamic supervisor")

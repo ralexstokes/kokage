@@ -9,7 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorSpec, CancellationToken, Context, ExitResult, Guard, Restart, TimerKey,
+    Actor, ActorRef, ActorSpec, CancellationToken, Context, ExitResult, Guard, RestartMode,
+    TimerKey,
 };
 use tokio::time::Instant;
 
@@ -125,7 +126,7 @@ impl Session {
                         cancel: cancel.clone(),
                     },
                 )
-                .restart(Restart::never()),
+                .restart(RestartMode::Never),
             )
             .await?;
         ctx.watch(&run_ref, move |event| SessionMsg::RunEvent {

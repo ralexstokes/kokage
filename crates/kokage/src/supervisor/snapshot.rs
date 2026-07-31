@@ -112,7 +112,9 @@ impl SupervisorSnapshotReceiver {
     }
 }
 
-use crate::supervisor::{event::ExitKind, restart::Restart, scope::ScopeKind, strategy::Strategy};
+use crate::supervisor::{
+    event::ExitKind, restart::RestartPolicy, scope::ScopeKind, strategy::Strategy,
+};
 
 /// Point-in-time snapshot of a supervisor's state, including the state of every
 /// child.
@@ -135,7 +137,7 @@ pub struct SupervisorSnapshot {
     /// Cumulative number of restarts this supervisor has scheduled for its
     /// direct children — exactly the occurrences the restart-intensity window
     /// records. That includes clean exits restarted under
-    /// [`Restart::always()`](crate::Restart::always()); under group
+    /// [`RestartPolicy::always()`](crate::RestartPolicy::always()); under group
     /// strategies such as [`Strategy::OneForAll`], sibling respawns caused by
     /// another child's exit do not increment it — only the exiting child's
     /// scheduled restart counts.
@@ -194,7 +196,7 @@ pub struct ChildSnapshot {
     pub restart_count: u64,
     /// Policy that determines whether the current exit is eligible to restart.
     #[cfg_attr(feature = "serde", serde(default))]
-    pub restart_policy: Restart,
+    pub restart_policy: RestartPolicy,
     /// Whether this membership is removed after a terminal exit.
     #[cfg_attr(feature = "serde", serde(default))]
     pub remove_when_done: bool,
@@ -308,7 +310,7 @@ impl ChildSnapshot {
             state,
             membership: ChildMembershipView::Active,
             restart_count: 0,
-            restart_policy: Restart::default(),
+            restart_policy: RestartPolicy::default(),
             remove_when_done: false,
             next_restart_in: None,
             supervisor: None,

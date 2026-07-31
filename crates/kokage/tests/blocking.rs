@@ -39,7 +39,7 @@ fn start_actor(actor: ActorHost) -> (CancellationToken, JoinHandle<Result<(), Ac
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
         }
@@ -249,7 +249,7 @@ async fn shutdown_timeout_backstops_a_closure_that_ignores_cancellation() {
             actor
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(Duration::from_millis(50)),
+                    Shutdown::graceful_for(Duration::from_millis(50)),
                 )
                 .await
         }
@@ -294,7 +294,10 @@ async fn blocking_panic_propagates_as_actor_panic() {
         Duration::from_secs(1),
         tokio::spawn(async move {
             actor
-                .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+                .run_once(
+                    pending::<()>(),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+                )
                 .await
         }),
     )

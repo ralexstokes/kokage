@@ -92,7 +92,7 @@
 //!
 //! [`raw::RawContext::recv`] returns `None` as soon as shutdown is
 //! requested. [`Actor`]'s framework-owned loop defaults to
-//! [`Shutdown::drain_for`] and finishes queued messages before stopping; a
+//! [`Shutdown::graceful_for`] and finishes queued messages before stopping; a
 //! hand-written [`raw::RawActor`] loop can inspect remaining work with
 //! [`raw::RawContext::try_recv`].
 //!
@@ -173,7 +173,7 @@
 //!         actor
 //!             .run_once(
 //!                 stop.cancelled(),
-//!                 Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+//!                 Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
 //!             )
 //!             .await
 //!     }
@@ -282,8 +282,8 @@ pub mod observe {
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
-        MonitorEvent, OrderedTree, Reply, Restart, Shutdown, StopContext, Strategy, TaskSpec,
-        TimerKey,
+        MailboxShutdown, MonitorEvent, OrderedTree, Reply, RestartMode, Shutdown, StopContext,
+        Strategy, TaskSpec, TimerKey,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -299,6 +299,7 @@ pub use actor::{
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, SubtreeSpec};
 pub use supervisor::{
-    Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard, Restart,
-    Shutdown, Strategy, SupervisorError, TaskContext, TaskSpec,
+    Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
+    MailboxShutdown, RestartMode, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext,
+    TaskSpec,
 };

@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    Backoff, ChildSpec, ControlError, Restart, ScopeKind, Shutdown, Supervisor, SupervisorError,
-    SupervisorStateView, TaskSpec,
+    Backoff, ChildSpec, ControlError, RestartMode, RestartPolicy, ScopeKind, Shutdown, Supervisor,
+    SupervisorError, SupervisorStateView, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -21,12 +21,12 @@ use common::{ExitStatusView, ObservedEvent, ObservedPathSegment};
 #[tokio::test]
 async fn nested_supervisor_completes_as_a_clean_child_exit() {
     let nested = Supervisor::ordered()
-        .child(TaskSpec::new("leaf", |_ctx| async move { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("leaf", |_ctx| async move { Ok(()) }).restart(RestartMode::Never))
         .build()
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::Never))
         .build()
         .expect("valid outer supervisor");
 
@@ -76,13 +76,13 @@ async fn nested_terminal_failure_remains_in_the_nested_snapshot() {
                     }
                 }
             })
-            .restart(Restart::never()),
+            .restart(RestartMode::Never),
         )
         .build()
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::on_failure()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::OnFailure))
         .build()
         .expect("valid outer supervisor");
 
@@ -368,12 +368,12 @@ async fn root_handle_can_add_and_remove_children_inside_nested_supervisor() {
 #[tokio::test]
 async fn parent_event_stream_includes_forwarded_nested_events() {
     let nested = Supervisor::ordered()
-        .child(TaskSpec::new("leaf", |_ctx| async move { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("leaf", |_ctx| async move { Ok(()) }).restart(RestartMode::Never))
         .build()
         .expect("valid nested supervisor");
 
     let outer = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("nested", nested).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("nested", nested).restart(RestartMode::Never))
         .build()
         .expect("valid outer supervisor");
 
@@ -439,17 +439,17 @@ async fn parent_event_stream_includes_forwarded_nested_events() {
 #[tokio::test]
 async fn nested_events_preserve_the_full_tree_path() {
     let deepest = Supervisor::ordered()
-        .child(TaskSpec::new("leaf", |_ctx| async move { Ok(()) }).restart(Restart::never()))
+        .child(TaskSpec::new("leaf", |_ctx| async move { Ok(()) }).restart(RestartMode::Never))
         .build()
         .expect("valid deepest supervisor");
 
     let middle = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("middle", deepest).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("middle", deepest).restart(RestartMode::Never))
         .build()
         .expect("valid middle supervisor");
 
     let outer = Supervisor::ordered()
-        .child_spec(ChildSpec::supervisor("outer", middle).restart(Restart::never()))
+        .child_spec(ChildSpec::supervisor("outer", middle).restart(RestartMode::Never))
         .build()
         .expect("valid outer supervisor");
 
@@ -549,7 +549,7 @@ async fn nested_handle_subscription_survives_parent_restart() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", {
             let attempts = attempts.clone();
             let fail_first = fail_first.clone();
@@ -684,7 +684,7 @@ async fn control_is_unavailable_between_nested_incarnations() {
     let (starts_tx, mut starts_rx) = mpsc::unbounded_channel();
 
     let nested = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(TaskSpec::new("leaf", {
             let fail = fail.clone();
             let attempts = attempts.clone();
@@ -709,13 +709,13 @@ async fn control_is_unavailable_between_nested_incarnations() {
         .expect("valid nested supervisor");
 
     let handle_owner = Supervisor::ordered()
-        .child_spec(
-            ChildSpec::supervisor("nested", nested).restart(common::restart_with_backoff(
+        .child_spec(ChildSpec::supervisor("nested", nested).restart_policy(
+            common::restart_with_backoff(
                 5,
                 Duration::from_secs(30),
                 Backoff::fixed(Duration::from_millis(500)),
-            )),
-        )
+            ),
+        ))
         .build()
         .expect("valid outer supervisor")
         .spawn();
@@ -775,7 +775,7 @@ async fn grandchild_stable_handle_survives_middle_supervisor_restart() {
         .expect("valid grandchild supervisor");
 
     let mid = Supervisor::ordered()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)))
         .child(
             TaskSpec::new("fuse", {
                 let fail = fail.clone();
@@ -869,7 +869,7 @@ async fn fatal_supervisor_failure_hard_cascades_through_nested_supervisors() {
         .child_spec(ChildSpec::supervisor("nested", nested))
         .child(
             TaskSpec::new("fatal", |_| async { Err(common::test_error("fatal")) })
-                .restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
+                .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60))),
         )
         .build()
         .expect("valid root supervisor");

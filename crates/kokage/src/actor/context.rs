@@ -891,7 +891,7 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Offloads are incarnation-owned. They are aborted when the incarnation
     /// fails, restarts, or uses
-    /// [`Shutdown::discard_after_current`](crate::Shutdown::discard_after_current).
+    /// [`MailboxShutdown::Discard`](crate::MailboxShutdown::Discard).
     /// A draining handler actor keeps processing queued messages and offload
     /// completions until both are exhausted; the required deadline bounds
     /// every offload's future during that drain.
@@ -1215,7 +1215,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// returns `None`, even when messages are still queued. Queued messages
     /// are dropped when the actor exits unless the actor drains them with
     /// [`try_recv`](Self::try_recv), or uses [`Actor`](crate::Actor)
-    /// with [`Shutdown::drain_for`](crate::Shutdown::drain_for). Queued
+    /// with [`Shutdown::graceful_for`](crate::Shutdown::graceful_for). Queued
     /// [`call`](ActorRef::call)s whose reply messages are dropped observe
     /// [`CallError::ReplyDropped`](crate::CallError::ReplyDropped).
     ///
@@ -1249,7 +1249,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// not prove the mailbox is fully drained while senders hold permits. For
     /// typical actors, prefer
     /// [`Actor`](crate::Actor) with
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) so the framework owns the
+    /// [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) so the framework owns the
     /// drain loop.
     ///
     /// A panic in an [`offload`](Self::offload) future or continuation resumes
@@ -1406,7 +1406,7 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// The provided receive loop calls [`Actor::handle`](crate::Actor::handle)
     /// from two phases. Ordinary calls report [`ActorStatus::Running`] until
     /// this callback requests a local stop. Once the receive loop exits,
-    /// [`Shutdown::drain_for`](crate::Shutdown::drain_for) replays already accepted
+    /// [`Shutdown::graceful_for`](crate::Shutdown::graceful_for) replays already accepted
     /// mailbox messages and offload completions as [`ActorStatus::Draining`].
     /// Nothing follows the drain except
     /// [`on_stop`](crate::Actor::on_stop), so work deferred from that phase
@@ -1641,7 +1641,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        MailboxMode, Restart,
+        MailboxMode, RestartPolicy,
         actor::binding::{BindingGuard, mailbox},
     };
 
@@ -1655,7 +1655,7 @@ mod tests {
             Arc::clone(&core),
             MailboxRef::new(actor_id, sender),
             ScopeObservability::new(),
-            Restart::never(),
+            RestartPolicy::never(),
         );
         receiver.close_external();
 

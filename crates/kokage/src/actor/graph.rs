@@ -9,7 +9,9 @@ use std::{
     time::Duration,
 };
 
-use crate::supervisor::{CancelOnDrop, CancellationToken, Restart, Shutdown};
+use crate::supervisor::{
+    CancelOnDrop, CancellationToken, MailboxShutdown, RestartPolicy, Shutdown,
+};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
 use tokio_util::task::AbortOnDropHandle;
@@ -39,7 +41,7 @@ pub(crate) struct RunnerStart {
     pub(crate) shutdown: CancellationToken,
     pub(crate) mailbox_capacity: usize,
     pub(crate) observability: ScopeObservability,
-    pub(crate) restart_policy: Restart,
+    pub(crate) restart_policy: RestartPolicy,
     pub(crate) drain_messages: bool,
     pub(crate) ready: oneshot::Sender<()>,
     pub(crate) supervisor: ScopeRef,
@@ -250,11 +252,15 @@ impl IncarnationExit {
 #[must_use = "dropping the actor host terminates its binding"]
 pub struct ActorHost {
     actor: RunnableActor,
+    mailbox_shutdown: MailboxShutdown,
 }
 
 impl ActorHost {
-    pub(crate) fn new(actor: RunnableActor) -> Self {
-        Self { actor }
+    pub(crate) fn new(actor: RunnableActor, mailbox_shutdown: MailboxShutdown) -> Self {
+        Self {
+            actor,
+            mailbox_shutdown,
+        }
     }
 
     /// Returns the actor label.
@@ -288,8 +294,9 @@ impl ActorHost {
     /// binding terminal. Dropping this method's future aborts the active
     /// incarnation but leaves the host available to the caller.
     ///
-    /// `shutdown_policy` controls message draining and bounds the complete
-    /// shutdown path. Exceeding that bound returns
+    /// `shutdown_policy` bounds the complete shutdown path. The actor's
+    /// [`MailboxShutdown`](crate::MailboxShutdown) declaration decides whether
+    /// queued messages are drained or discarded. Exceeding the bound returns
     /// [`IncarnationExit::Failed`] containing
     /// [`ActorRunError::ShutdownTimedOut`]. Actor panics resume unwinding; a
     /// custom loop that deliberately recovers from panics must catch that
@@ -347,7 +354,7 @@ impl ActorHost {
     ///
     /// for _ in 0..3 {
     ///     let exit = AssertUnwindSafe(
-    ///         host.run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
+    ///         host.run_incarnation(pending::<()>(), Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND)),
     ///     )
     ///     .catch_unwind()
     ///     .await;
@@ -390,8 +397,8 @@ impl ActorHost {
             .run_incarnation_until_ready(
                 bounded_shutdown,
                 abort,
-                Restart::always(),
-                matches!(shutdown_policy, Shutdown::Drain { .. }),
+                RestartPolicy::always(),
+                self.mailbox_shutdown.drains(),
                 ScopeRef::unavailable(),
                 || {},
             )
@@ -467,7 +474,7 @@ impl RunnableActor {
         &self,
         shutdown: F,
         abort: A,
-        restart: Restart,
+        restart: RestartPolicy,
         drain_messages: bool,
         supervisor: ScopeRef,
         ready: R,
@@ -499,7 +506,7 @@ impl RunnableActor {
         &self,
         shutdown: F,
         abort: A,
-        restart_on_drop: Restart,
+        restart_on_drop: RestartPolicy,
         drain_messages: bool,
         supervisor: ScopeRef,
         ready: R,
@@ -649,7 +656,7 @@ enum RunDisposition {
     Terminate,
 }
 
-fn run_disposition(policy: Restart, exit: &IncarnationExit) -> RunDisposition {
+fn run_disposition(policy: RestartPolicy, exit: &IncarnationExit) -> RunDisposition {
     if matches!(exit, IncarnationExit::ShutdownRequested) {
         return RunDisposition::Terminate;
     }
@@ -670,10 +677,10 @@ mod tests {
     fn run_disposition_matches_documented_restart_semantics() {
         let stopped = IncarnationExit::Stopped;
         assert_eq!(
-            run_disposition(Restart::always(), &stopped),
+            run_disposition(RestartPolicy::always(), &stopped),
             RunDisposition::ExpectRebind
         );
-        for policy in [Restart::on_failure(), Restart::never()] {
+        for policy in [RestartPolicy::on_failure(), RestartPolicy::never()] {
             assert_eq!(run_disposition(policy, &stopped), RunDisposition::Terminate);
         }
 
@@ -681,19 +688,23 @@ mod tests {
             actor_id: "worker".to_owned(),
             source: Box::new(IoError::other("boom")),
         });
-        for policy in [Restart::always(), Restart::on_failure()] {
+        for policy in [RestartPolicy::always(), RestartPolicy::on_failure()] {
             assert_eq!(
                 run_disposition(policy, &failed),
                 RunDisposition::ExpectRebind
             );
         }
         assert_eq!(
-            run_disposition(Restart::never(), &failed),
+            run_disposition(RestartPolicy::never(), &failed),
             RunDisposition::Terminate
         );
 
         let shutdown = IncarnationExit::ShutdownRequested;
-        for policy in [Restart::always(), Restart::on_failure(), Restart::never()] {
+        for policy in [
+            RestartPolicy::always(),
+            RestartPolicy::on_failure(),
+            RestartPolicy::never(),
+        ] {
             assert_eq!(
                 run_disposition(policy, &shutdown),
                 RunDisposition::Terminate

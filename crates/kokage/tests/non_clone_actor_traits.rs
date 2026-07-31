@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, Restart, ScopeRef,
-    Shutdown,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, RestartPolicy,
+    ScopeRef, Shutdown,
     observe::SupervisorSnapshotReceiver,
     raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
@@ -144,7 +144,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
         },
     ));
     let handle = builder
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -216,7 +216,7 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
         }
     }));
     let handle = builder
-        .default_restart(Restart::on_failure())
+        .default_restart(RestartPolicy::on_failure())
         .spawn()
         .expect("runtime builds");
 
@@ -256,7 +256,10 @@ async fn constructor_panic_uses_the_actor_panic_path() {
 
     let joined = tokio::spawn(async move {
         actor
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     })
     .await;

@@ -41,12 +41,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (restart_tx, restart_rx) = oneshot::channel();
     let sink_task = tokio::spawn(async move {
         let first_exit = sink
-            .run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_incarnation(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await;
         let _ = first_exit_tx.send(first_exit);
         let _ = restart_rx.await;
-        sink.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
-            .await
+        sink.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
+        .await
     });
     sink_ref.send("first run".to_owned()).await?;
     println!(

@@ -12,8 +12,8 @@ use std::{
 
 use crate::supervisor::{
     BoxError, ChildSnapshot, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    Restart, SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
-    TaskSpec,
+    RestartMode, RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    SupervisorSnapshotReceiver, TaskSpec,
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -47,8 +47,8 @@ pub fn restart_with_backoff(
     max_restarts: usize,
     within: Duration,
     backoff: crate::supervisor::Backoff,
-) -> Restart {
-    Restart::on_failure()
+) -> RestartPolicy {
+    RestartPolicy::on_failure()
         .limit(max_restarts, within)
         .backoff(backoff)
 }
@@ -363,7 +363,7 @@ pub fn fail_on_generations(
             Ok(())
         }
     })
-    .restart(Restart::on_failure())
+    .restart(RestartMode::OnFailure)
 }
 
 pub fn failing_child(
@@ -379,7 +379,7 @@ pub fn failing_child(
             Err(test_error(error))
         }
     })
-    .restart(Restart::on_failure().limit(0, Duration::from_secs(60)))
+    .restart_policy(RestartPolicy::on_failure().limit(0, Duration::from_secs(60)))
 }
 
 pub async fn wait_for_child_running(

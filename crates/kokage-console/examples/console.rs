@@ -12,8 +12,8 @@
 //! │   ├── source          runs until shutdown
 //! │   └── transform       fails every 9s (backoff 2s), bouncing its sibling
 //! └── telemetry (OneForOne)
-//!     ├── heartbeat       completes cleanly every 7s, Restart::always()
-//!     ├── schema-migration completes once, Restart::never()
+//!     ├── heartbeat       completes cleanly every 7s, RestartPolicy::always()
+//!     ├── schema-migration completes once, RestartPolicy::never()
 //!     └── exporters (OneForOne)
 //!         └── stdout-exporter  runs until shutdown
 //! ```
@@ -25,7 +25,7 @@ use std::{error::Error, io, time::Duration};
 
 use kokage::{
     Actor, ActorRef, ActorSpec, Backoff, BoxError, Context, DynamicTree, ExitResult, OrderedTree,
-    Restart, Strategy, TaskSpec,
+    RestartMode, RestartPolicy, Strategy, TaskSpec,
 };
 use kokage_console::{ConsoleBuilder, ConsoleError};
 use tokio::time::sleep;
@@ -77,7 +77,7 @@ impl Actor for Burst {
 /// A OneForAll group: when `transform` fails, `source` is stopped and
 /// restarted along with it.
 fn pipeline_runtime() -> OrderedTree {
-    let transform_restart = Restart::on_failure()
+    let transform_restart = RestartPolicy::on_failure()
         .limit(60, Duration::from_secs(60))
         .backoff(Backoff::fixed(Duration::from_secs(2)));
     let source = TaskSpec::new("source", |ctx| async move {
@@ -94,11 +94,11 @@ fn pipeline_runtime() -> OrderedTree {
             }
         }
     })
-    .restart(transform_restart);
+    .restart_policy(transform_restart);
 
     let mut tree = OrderedTree::new()
         .strategy(Strategy::OneForAll)
-        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)));
+        .default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
     tree.add_task(source);
     tree.add_task(transform);
     tree
@@ -132,19 +132,21 @@ fn telemetry_runtime() -> OrderedTree {
     exporters.add_task(exporter);
 
     let mut tree = OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)));
-    tree.add_task(heartbeat.restart(Restart::always().limit(60, Duration::from_secs(60))));
-    tree.add_task(migration.restart(Restart::never()));
+        .default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
+    tree.add_task(
+        heartbeat.restart_policy(RestartPolicy::always().limit(60, Duration::from_secs(60))),
+    );
+    tree.add_task(migration.restart(RestartMode::Never));
     tree.add_subtree("exporters", exporters);
     tree
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let worker_restart = Restart::on_failure()
+    let worker_restart = RestartPolicy::on_failure()
         .limit(60, Duration::from_secs(60))
         .backoff(Backoff::fixed(Duration::from_millis(1500)));
-    let worker_spec = ActorSpec::new("worker", || Worker).restart(worker_restart);
+    let worker_spec = ActorSpec::new("worker", || Worker).restart_policy(worker_restart);
     let worker = worker_spec.actor_ref();
     let frontend_spec = ActorSpec::new("frontend", {
         let worker = worker.clone();
@@ -155,7 +157,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let frontend = frontend_spec.actor_ref();
 
     let mut tree = OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)));
+        .default_restart(RestartPolicy::on_failure().limit(60, Duration::from_secs(60)));
     tree.add_actor(frontend_spec);
     tree.add_actor(worker_spec);
     tree.add_subtree("pipeline", pipeline_runtime());

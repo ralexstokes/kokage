@@ -176,7 +176,7 @@ impl Router {
             })
             // Draining is load-bearing for eviction: a message forwarded before
             // `Evict` must be bounced to the router for the replacement session.
-            .shutdown(Shutdown::drain_for(PHASE_TIMEOUT));
+            .shutdown(Shutdown::graceful_for(PHASE_TIMEOUT));
         let mount = self.mount();
         let offload_id = subtree_id.clone();
         ctx.offload(

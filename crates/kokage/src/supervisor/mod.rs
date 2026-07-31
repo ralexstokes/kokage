@@ -77,9 +77,9 @@ pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObservation, Li
 pub use owner::{RunningSupervisor, Supervisor};
 #[cfg(feature = "serde")]
 pub(crate) use restart::RestartWire;
-pub use restart::{Backoff, Restart};
+pub use restart::{Backoff, RestartMode, RestartPolicy};
 pub use scope::{ScopeKind, ScopePathSegment};
-pub use shutdown::Shutdown;
+pub use shutdown::{MailboxShutdown, Shutdown};
 pub use snapshot::{
     ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus, SnapshotRecvError,
     SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,

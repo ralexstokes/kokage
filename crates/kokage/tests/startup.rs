@@ -3,8 +3,8 @@ mod support;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, ActorStatus, BoxError, DynamicTree, Restart, ScopeRef, Shutdown, SupervisorError,
-    TaskSpec,
+    ActorSpec, ActorStatus, BoxError, DynamicTree, MailboxShutdown, RestartPolicy, ScopeRef,
+    Shutdown, SupervisorError, TaskSpec,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -172,7 +172,10 @@ impl Actor for FailsOnStart {
 async fn failed_actor_start_disarms_readiness_without_panicking() {
     let mut graph = OrderedTree::new();
     graph.add_actor(ActorSpec::new("FailsOnStart", || FailsOnStart));
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
             .await
@@ -372,7 +375,10 @@ async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() 
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
     handle.scope().wait_started().await.unwrap();
 
     actor.send("stop").await.unwrap();
@@ -499,9 +505,13 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
                 events: events.clone(),
             }
         })
-        .shutdown(Shutdown::discard_after_current(Duration::from_secs(5))),
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5)))
+        .mailbox_shutdown(MailboxShutdown::Discard),
     );
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -539,9 +549,12 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
                 events: events.clone(),
             }
         })
-        .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
+        .shutdown(Shutdown::graceful_for(Duration::from_secs(5))),
     );
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -577,7 +590,10 @@ impl RawActor for PromptRaw {
 async fn prompt_raw_actor_delivers_readiness_before_completion() {
     let mut graph = OrderedTree::new();
     graph.add_actor(ActorSpec::new("PromptRaw", || PromptRaw));
-    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
+    let handle = graph
+        .default_restart(RestartPolicy::never())
+        .spawn()
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
@@ -619,7 +635,7 @@ impl Actor for DefaultPolicy {
 fn the_default_shutdown_drains() {
     assert_eq!(
         Shutdown::default(),
-        Shutdown::drain_for(std::time::Duration::from_secs(5))
+        Shutdown::graceful_for(std::time::Duration::from_secs(5))
     );
 }
 

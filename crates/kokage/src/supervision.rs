@@ -6,8 +6,8 @@ use std::sync::{
 };
 
 use crate::supervisor::{
-    BuildError, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, Restart, ScopeKind,
-    Shutdown, Strategy, Supervisor, TaskSpec,
+    BuildError, ChildSpec, DynamicSupervisorBuilder, OrderedSupervisorBuilder, RestartMode,
+    RestartPolicy, ScopeKind, Shutdown, Strategy, Supervisor, TaskSpec,
 };
 
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
 #[derive(Clone)]
 struct ScopeConfig {
     strategy: Strategy,
-    default_restart: Restart,
+    default_restart: RestartPolicy,
     default_shutdown: Shutdown,
     mailbox_capacity: usize,
     reservation: Option<u64>,
@@ -29,7 +29,7 @@ impl ScopeConfig {
     fn new() -> Self {
         Self {
             strategy: Strategy::default(),
-            default_restart: Restart::default(),
+            default_restart: RestartPolicy::default(),
             default_shutdown: Shutdown::default(),
             mailbox_capacity: crate::actor::DEFAULT_MAILBOX_CAPACITY,
             reservation: None,
@@ -53,7 +53,7 @@ enum SupervisionChild {
     Scope {
         id: String,
         node: ScopeNode,
-        restart: Option<Restart>,
+        restart: Option<RestartPolicy>,
         shutdown: Option<Shutdown>,
     },
 }
@@ -119,7 +119,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let ingest = ActorSpec::new("ingest", || Worker).restart(Restart::never());
+/// let ingest = ActorSpec::new("ingest", || Worker).restart(RestartMode::Never);
 /// let parse = ActorSpec::new("parse", || Worker);
 ///
 /// let mut workers = OrderedTree::new();
@@ -156,7 +156,7 @@ pub struct DynamicTree {
 /// extensible without exposing the runtime's internal representation.
 pub struct SubtreeSpec {
     kind: SubtreeKind,
-    restart: Option<Restart>,
+    restart: Option<RestartPolicy>,
     shutdown: Option<Shutdown>,
 }
 
@@ -168,7 +168,7 @@ enum SubtreeKind {
 pub(crate) struct LoweredSubtreeSpec {
     pub(crate) supervisor: Supervisor,
     pub(crate) actors: Arc<ActorRuntimeState>,
-    pub(crate) restart: Option<Restart>,
+    pub(crate) restart: Option<RestartPolicy>,
     pub(crate) shutdown: Option<Shutdown>,
 }
 
@@ -193,15 +193,22 @@ impl From<DynamicTree> for SubtreeSpec {
 }
 
 impl SubtreeSpec {
-    /// Sets the policy used by the enclosing scope to restart this subtree.
+    /// Sets which exits make the enclosing scope restart this subtree.
     ///
     /// This configures the nested scope's edge in its parent. It is distinct
     /// from [`OrderedTree::default_restart`] and
     /// [`DynamicTree::default_restart`], which configure children inside the
     /// nested scope.
     #[must_use]
-    pub fn restart(mut self, restart: Restart) -> Self {
-        self.restart = Some(restart);
+    pub fn restart(mut self, mode: RestartMode) -> Self {
+        self.restart = Some(mode.into());
+        self
+    }
+
+    /// Sets the complete policy used by the enclosing scope to restart this subtree.
+    #[must_use]
+    pub fn restart_policy(mut self, policy: RestartPolicy) -> Self {
+        self.restart = Some(policy);
         self
     }
 
@@ -240,7 +247,7 @@ macro_rules! tree_common_methods {
     () => {
         /// Sets the restart policy inherited by actors in this scope.
         #[must_use]
-        pub fn default_restart(mut self, restart: Restart) -> Self {
+        pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
             self.inner = self.inner.default_restart(restart);
             self
         }
@@ -337,14 +344,14 @@ impl OrderedTree {
     /// of the subtree's edge in this parent:
     ///
     /// ```
-    /// use kokage::{OrderedTree, Restart, Shutdown, SubtreeSpec};
+    /// use kokage::{OrderedTree, RestartMode, Shutdown, SubtreeSpec};
     ///
     /// let workers = OrderedTree::new();
     /// let mut app = OrderedTree::new();
     /// app.add_subtree(
     ///     "workers",
     ///     SubtreeSpec::from(workers)
-    ///         .restart(Restart::never())
+    ///         .restart(RestartMode::Never)
     ///         .shutdown(Shutdown::abort()),
     /// );
     /// ```
@@ -482,7 +489,7 @@ impl TreeData<false> {
         &mut self,
         id: impl Into<String>,
         tree: TreeData<CHILD_DYNAMIC>,
-        restart: Option<Restart>,
+        restart: Option<RestartPolicy>,
         shutdown: Option<Shutdown>,
     ) {
         self.children_mut().push(SupervisionChild::Scope {
@@ -527,7 +534,7 @@ impl<const DYNAMIC: bool> TreeData<DYNAMIC> {
 
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
-    fn default_restart(mut self, restart: Restart) -> Self {
+    fn default_restart(mut self, restart: RestartPolicy) -> Self {
         self.config_mut().default_restart = restart;
         self
     }
@@ -673,7 +680,7 @@ impl SupervisionChild {
     }
 
     #[cfg(feature = "serde")]
-    fn outline(&self, default_restart: Restart, default_shutdown: Shutdown) -> ChildOutline {
+    fn outline(&self, default_restart: RestartPolicy, default_shutdown: Shutdown) -> ChildOutline {
         match self {
             Self::Actor(actor) => ChildOutline::Actor {
                 id: actor.label().to_owned(),
@@ -709,7 +716,7 @@ impl SupervisionChild {
         self,
         builder: OrderedSupervisorBuilder,
         actors: &Arc<ActorRuntimeState>,
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         default_shutdown: Shutdown,
         reservations: &mut Vec<ScopeReservation>,
     ) -> Result<OrderedSupervisorBuilder, BuildError> {
@@ -723,6 +730,7 @@ impl SupervisionChild {
                     deferred: _,
                     restart,
                     shutdown,
+                    mailbox_shutdown,
                     remove_when_done,
                 } = actors.materialize_actor_node(actor);
                 builder.child_spec(actor_child_spec(
@@ -731,6 +739,7 @@ impl SupervisionChild {
                     ActorChildOptions::new(
                         restart.unwrap_or(default_restart),
                         shutdown.unwrap_or(default_shutdown),
+                        mailbox_shutdown,
                         remove_when_done,
                     ),
                 ))
@@ -745,7 +754,7 @@ impl SupervisionChild {
                 let (nested, nested_actors) = node.lower(reservations)?;
                 let mut child = ChildSpec::supervisor(id, nested);
                 if let Some(restart) = restart {
-                    child = child.restart(restart);
+                    child = child.restart_policy(restart);
                 }
                 if let Some(shutdown) = shutdown {
                     child = child.shutdown(shutdown);
@@ -866,7 +875,7 @@ impl<const DYNAMIC: bool> IdentityTree<DYNAMIC> {
 
     /// Sets the restart policy inherited by actor nodes.
     #[must_use]
-    fn default_restart(self, restart: Restart) -> Self {
+    fn default_restart(self, restart: RestartPolicy) -> Self {
         self.map_tree(|tree| tree.default_restart(restart))
     }
 
@@ -928,7 +937,7 @@ impl IdentityTree<false> {
         &mut self,
         id: impl Into<String>,
         tree: IdentityTree<CHILD_DYNAMIC>,
-        restart: Option<Restart>,
+        restart: Option<RestartPolicy>,
         shutdown: Option<Shutdown>,
     ) {
         self.reservations.extend(tree.reservations);
@@ -971,11 +980,11 @@ impl<const DYNAMIC: bool> std::fmt::Debug for TreeData<DYNAMIC> {
 pub struct SupervisionOutline {
     /// Immutable scope kind.
     pub kind: ScopeKind,
-    /// Restart strategy.
+    /// RestartPolicy strategy.
     pub strategy: Strategy,
     /// Restart policy inherited by children without an explicit override.
     #[serde(default)]
-    pub default_restart: Restart,
+    pub default_restart: RestartPolicy,
     /// Shutdown policy inherited by children without an explicit override.
     #[serde(default)]
     pub default_shutdown: Shutdown,
@@ -993,7 +1002,7 @@ pub enum ChildOutline {
         /// Child id within the enclosing scope.
         id: String,
         /// Resolved restart policy.
-        restart: Restart,
+        restart: RestartPolicy,
         /// Resolved shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
@@ -1005,7 +1014,7 @@ pub enum ChildOutline {
         /// Child id.
         id: String,
         /// Restart policy.
-        restart: Restart,
+        restart: RestartPolicy,
         /// Shutdown policy.
         shutdown: Shutdown,
         /// Whether terminal membership is removed automatically.
@@ -1018,7 +1027,7 @@ pub enum ChildOutline {
         id: String,
         /// Resolved policy used by the parent to restart this scope.
         #[serde(default)]
-        restart: Restart,
+        restart: RestartPolicy,
         /// Resolved policy used by the parent to stop this scope.
         #[serde(default)]
         shutdown: Shutdown,
@@ -1036,7 +1045,7 @@ pub enum ChildOutline {
 /// `default_restart` and `default_shutdown`, not the global defaults.
 #[cfg(feature = "serde")]
 mod outline_wire {
-    use super::{ChildOutline, Restart, ScopeKind, Shutdown, Strategy, SupervisionOutline};
+    use super::{ChildOutline, RestartPolicy, ScopeKind, Shutdown, Strategy, SupervisionOutline};
     use crate::supervisor::RestartWire;
 
     #[derive(serde::Deserialize)]
@@ -1044,7 +1053,7 @@ mod outline_wire {
         kind: ScopeKind,
         strategy: Strategy,
         #[serde(default)]
-        default_restart: Restart,
+        default_restart: RestartPolicy,
         #[serde(default)]
         default_shutdown: Shutdown,
         children: Vec<WireChild>,
@@ -1069,7 +1078,7 @@ mod outline_wire {
         Scope {
             id: String,
             #[serde(default)]
-            restart: Option<Restart>,
+            restart: Option<RestartPolicy>,
             #[serde(default)]
             shutdown: Option<Shutdown>,
             outline: WireOutline,

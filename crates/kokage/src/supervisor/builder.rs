@@ -1,6 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::supervisor::{
+    RestartPolicy,
     child::{ChildDefinition, ChildSpec, TaskSpec},
     error::BuildError,
     handle::{StableSupervisorChannels, SupervisorHandle},
@@ -8,7 +9,6 @@ use crate::supervisor::{
         Supervisor, SupervisorConfig, refresh_declaration_for_config, reset_channels_for_config,
         stable_channels_for_config,
     },
-    restart::Restart,
     scope::ScopeKind,
     shutdown::Shutdown,
     strategy::Strategy,
@@ -20,7 +20,7 @@ use crate::supervisor::{
 /// membership remains immutable. Create one with [`Supervisor::ordered`].
 pub struct OrderedSupervisorBuilder {
     strategy: Strategy,
-    default_restart: Restart,
+    default_restart: RestartPolicy,
     default_shutdown: Shutdown,
     children: Vec<Arc<ChildDefinition>>,
     channels: Option<Arc<StableSupervisorChannels>>,
@@ -32,7 +32,7 @@ pub struct OrderedSupervisorBuilder {
 /// and stop children concurrently. Children can be added and removed through
 /// the resulting supervisor's handle. Create one with [`Supervisor::dynamic`].
 pub struct DynamicSupervisorBuilder {
-    default_restart: Restart,
+    default_restart: RestartPolicy,
     default_shutdown: Shutdown,
     channels: Option<Arc<StableSupervisorChannels>>,
 }
@@ -43,7 +43,7 @@ impl OrderedSupervisorBuilder {
     pub(crate) fn new() -> Self {
         let mut builder = Self {
             strategy: Strategy::default(),
-            default_restart: Restart::default(),
+            default_restart: RestartPolicy::default(),
             default_shutdown: Shutdown::default(),
             children: Vec::new(),
             channels: None,
@@ -86,7 +86,7 @@ impl OrderedSupervisorBuilder {
     /// the membership its own higher-level builders will lower to, and is
     /// superseded by the real declaration once the scope is built.
     #[doc(hidden)]
-    pub fn project_declared_children(&self, children: Vec<(String, Restart, bool)>) {
+    pub fn project_declared_children(&self, children: Vec<(String, RestartPolicy, bool)>) {
         self.channels().project_declared_children(children);
     }
 
@@ -101,7 +101,7 @@ impl OrderedSupervisorBuilder {
     /// Sets the restart policy inherited by declared children that do not
     /// carry an explicit override, including nested-supervisor edges.
     #[must_use]
-    pub fn default_restart(mut self, restart: Restart) -> Self {
+    pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
         self.default_restart = restart;
         self
     }
@@ -172,7 +172,7 @@ impl OrderedSupervisorBuilder {
 impl DynamicSupervisorBuilder {
     pub(crate) fn new() -> Self {
         let mut builder = Self {
-            default_restart: Restart::default(),
+            default_restart: RestartPolicy::default(),
             default_shutdown: Shutdown::default(),
             channels: None,
         };
@@ -207,7 +207,7 @@ impl DynamicSupervisorBuilder {
     /// Sets the restart policy inherited by dynamically added task and
     /// supervisor specs that do not carry an explicit override.
     #[must_use]
-    pub fn default_restart(mut self, restart: Restart) -> Self {
+    pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
         self.default_restart = restart;
         self
     }
@@ -251,6 +251,8 @@ impl Drop for DynamicSupervisorBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::supervisor::RestartMode;
+
     use std::time::Duration;
 
     use super::*;
@@ -258,45 +260,45 @@ mod tests {
 
     #[test]
     fn ordered_defaults_apply_without_overriding_child_policies() {
-        let inherited_shutdown = Shutdown::drain_for(Duration::from_millis(20));
-        let explicit_shutdown = Shutdown::drain_for(Duration::from_secs(2));
+        let inherited_shutdown = Shutdown::graceful_for(Duration::from_millis(20));
+        let explicit_shutdown = Shutdown::graceful_for(Duration::from_secs(2));
         let supervisor = Supervisor::ordered()
-            .default_restart(Restart::always())
+            .default_restart(RestartPolicy::always())
             .default_shutdown(inherited_shutdown)
             .child(TaskSpec::new("inherited", |_| async { Ok(()) }))
             .child(
                 TaskSpec::new("explicit", |_| async { Ok(()) })
-                    .restart(Restart::never())
+                    .restart(RestartMode::Never)
                     .shutdown(explicit_shutdown),
             )
             .build()
             .expect("valid ordered supervisor");
 
         let inherited = &supervisor.config.children[0];
-        assert_eq!(inherited.restart, Restart::always());
+        assert_eq!(inherited.restart, RestartPolicy::always());
         assert_eq!(inherited.shutdown_policy, inherited_shutdown);
         let explicit = &supervisor.config.children[1];
-        assert_eq!(explicit.restart, Restart::never());
+        assert_eq!(explicit.restart, RestartPolicy::never());
         assert_eq!(explicit.shutdown_policy, explicit_shutdown);
     }
 
     #[test]
     fn ordered_defaults_apply_to_nested_children_without_replacing_their_identity() {
-        let inherited_shutdown = Shutdown::drain_for(Duration::from_millis(20));
+        let inherited_shutdown = Shutdown::graceful_for(Duration::from_millis(20));
         let nested = Supervisor::ordered()
             .build()
             .expect("valid nested supervisor");
         let nested_channels = Arc::clone(&nested.channels);
 
         let supervisor = Supervisor::ordered()
-            .default_restart(Restart::always())
+            .default_restart(RestartPolicy::always())
             .default_shutdown(inherited_shutdown)
             .child_spec(ChildSpec::supervisor("nested", nested))
             .build()
             .expect("valid parent supervisor");
 
         let definition = &supervisor.config.children[0];
-        assert_eq!(definition.restart, Restart::always());
+        assert_eq!(definition.restart, RestartPolicy::always());
         assert_eq!(definition.shutdown_policy, inherited_shutdown);
         let ChildKind::Supervisor(nested) = &definition.kind else {
             panic!("nested child keeps its kind");

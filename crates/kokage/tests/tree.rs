@@ -15,7 +15,7 @@ use support::{ActorHostBuilder, ActorHosts};
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BoxError, CallError, Context,
-    ExitResult, Reply, SendError, SendErrorKind, Shutdown, StopContext,
+    ExitResult, MailboxShutdown, Reply, SendError, SendErrorKind, Shutdown, StopContext,
     raw::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 
@@ -84,7 +84,7 @@ fn start_graph(
                 actor
                     .run_once(
                         stop.cancelled(),
-                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                        Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                     )
                     .await
             })
@@ -482,7 +482,10 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let graph = builder.build();
 
     let result = host(graph, "worker")
-        .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+        .run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
         .await;
     assert!(matches!(
         result,
@@ -515,7 +518,10 @@ async fn handler_error_fails_the_actor_run() {
     let worker = host(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
     actor.send(()).await.expect("message sent");
@@ -563,7 +569,10 @@ async fn context_stop_is_idempotent_and_exits_normally() {
     let worker = host(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
 
@@ -591,7 +600,10 @@ async fn context_error_takes_precedence_over_a_stop_request() {
     let worker = host(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
 
@@ -664,22 +676,25 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = ActorHostBuilder::new();
-    let actor = add_actor(&mut builder, "worker", {
-        let release = release.clone();
-        move || GateHandler {
-            total: 0,
-            started: started_tx.clone(),
-            release: release.clone(),
-            events: events_tx.clone(),
-        }
-    });
+    let actor = builder.actor(
+        ActorSpec::new("worker", {
+            let release = release.clone();
+            move || GateHandler {
+                total: 0,
+                started: started_tx.clone(),
+                release: release.clone(),
+                events: events_tx.clone(),
+            }
+        })
+        .mailbox_shutdown(MailboxShutdown::Discard),
+    );
     let graph = builder.build();
     let worker = host(graph, "worker");
     let task = tokio::spawn(async move {
         worker
             .run_once(
                 pending::<()>(),
-                Shutdown::discard_after_current(DEFAULT_SHUTDOWN_BOUND),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
     });
@@ -708,20 +723,26 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = ActorHostBuilder::new();
-    let actor = add_actor(&mut builder, "worker", {
-        let release = release.clone();
-        move || GateHandler {
-            total: 0,
-            started: started_tx.clone(),
-            release: release.clone(),
-            events: events_tx.clone(),
-        }
-    });
+    let actor = builder.actor(
+        ActorSpec::new("worker", {
+            let release = release.clone();
+            move || GateHandler {
+                total: 0,
+                started: started_tx.clone(),
+                release: release.clone(),
+                events: events_tx.clone(),
+            }
+        })
+        .mailbox_shutdown(MailboxShutdown::Drain),
+    );
     let graph = builder.build();
     let worker = host(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(
+                pending::<()>(),
+                Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+            )
             .await
     });
 
@@ -768,21 +789,22 @@ async fn handler_discard_drops_queued_messages_and_call_reply() {
     let release = Arc::new(Notify::new());
 
     let mut builder = ActorHostBuilder::new();
-    let actor = add_actor(&mut builder, "worker", {
-        let release = release.clone();
-        move || GateHandler {
-            total: 0,
-            started: started_tx.clone(),
-            release: release.clone(),
-            events: events_tx.clone(),
-        }
-    });
+    let actor = builder.actor(
+        ActorSpec::new("worker", {
+            let release = release.clone();
+            move || GateHandler {
+                total: 0,
+                started: started_tx.clone(),
+                release: release.clone(),
+                events: events_tx.clone(),
+            }
+        })
+        .mailbox_shutdown(MailboxShutdown::Discard),
+    );
     let graph = builder.build();
 
-    let (stop, task) = start_graph_with_shutdown(
-        graph,
-        Shutdown::discard_after_current(DEFAULT_SHUTDOWN_BOUND),
-    );
+    let (stop, task) =
+        start_graph_with_shutdown(graph, Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND));
     actor.send(GateMsg::Hold).await.expect("hold sent");
     recv(&mut started_rx, "handler entered hold").await;
 
@@ -823,7 +845,7 @@ async fn handler_drain_handles_queued_messages_and_replies_before_stop() {
     let graph = builder.build();
 
     let (stop, task) =
-        start_graph_with_shutdown(graph, Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND));
+        start_graph_with_shutdown(graph, Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND));
     actor.send(GateMsg::Hold).await.expect("hold sent");
     recv(&mut started_rx, "handler entered hold").await;
 
@@ -1059,7 +1081,7 @@ async fn actors_can_declare_distinct_mailbox_capacities() {
                 actor
                     .run_once(
                         stop.cancelled(),
-                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                        Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                     )
                     .await
             })
@@ -1102,7 +1124,10 @@ async fn actor_error_fails_its_run() {
     let graph = builder.build();
 
     let result = host(graph, "bad")
-        .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+        .run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
         .await;
     assert!(matches!(
         result,
@@ -1128,7 +1153,10 @@ async fn early_clean_exit_is_a_clean_actor_run() {
     let graph = builder.build();
 
     host(graph, "quitter")
-        .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+        .run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        )
         .await
         .expect("clean early exit is ordinary completion");
 }
@@ -1181,7 +1209,7 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
             worker
                 .run_once(
                     stop.cancelled(),
-                    Shutdown::drain_for(Duration::from_millis(50)),
+                    Shutdown::graceful_for(Duration::from_millis(50)),
                 )
                 .await
         }
@@ -1390,7 +1418,7 @@ mod actor_host {
                 actor
                     .run_once(
                         stop.cancelled(),
-                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
+                        Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
                     )
                     .await
             }
@@ -1401,7 +1429,10 @@ mod actor_host {
     fn start_incarnation(mut actor: ActorHost) -> JoinHandle<(ActorHost, IncarnationExit)> {
         tokio::spawn(async move {
             let exit = actor
-                .run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+                .run_incarnation(
+                    pending::<()>(),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+                )
                 .await;
             (actor, exit)
         })
@@ -1558,7 +1589,7 @@ mod actor_host {
             worker
                 .run_once(
                     async {},
-                    Shutdown::drain_for(Duration::from_millis(100)),
+                    Shutdown::graceful_for(Duration::from_millis(100)),
                 )
                 .await,
             Err(ActorRunError::ShutdownTimedOut { actor_id, .. }) if actor_id == "worker"
@@ -1573,7 +1604,7 @@ mod actor_host {
         let worker = single_actor(graph, "worker");
 
         worker
-            .run_once(async {}, Shutdown::drain_for(Duration::from_secs(30)))
+            .run_once(async {}, Shutdown::graceful_for(Duration::from_secs(30)))
             .await
             .expect("cooperative shutdown completes cleanly");
     }
@@ -1584,7 +1615,7 @@ mod actor_host {
         crate::support::dynamic_root(&runtime)
             .add_actor(
                 ActorSpec::new("worker", || NeverStops)
-                    .shutdown(Shutdown::drain_for(Duration::from_millis(100))),
+                    .shutdown(Shutdown::graceful_for(Duration::from_millis(100))),
             )
             .await
             .expect("dynamic actor added");
@@ -1709,7 +1740,7 @@ mod actor_host {
 
         let worker = single_actor(graph, "worker");
         worker
-            .run_once(async {}, Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+            .run_once(async {}, Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND))
             .await
             .expect("worker stopped cleanly");
         assert!(matches!(
@@ -1739,7 +1770,10 @@ mod actor_host {
         let worker = single_actor(graph, "worker");
         let task = tokio::spawn(async move {
             worker
-                .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+                .run_once(
+                    pending::<()>(),
+                    Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+                )
                 .await
         });
 
@@ -1760,9 +1794,10 @@ mod actor_host {
         let mut builder = ActorHostBuilder::new();
         let worker_ref = add_actor(&mut builder, "worker", Drain::<()>::new);
         let worker = single_actor(builder.build(), "worker");
-        let task = tokio::spawn(
-            worker.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
-        );
+        let task = tokio::spawn(worker.run_once(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        ));
 
         worker_ref.send(()).await.expect("run bound its mailbox");
         task.abort();
@@ -1788,9 +1823,10 @@ mod actor_host {
             started: started_tx.clone(),
         });
         let mut worker = single_actor(builder.build(), "worker");
-        let mut run = Box::pin(
-            worker.run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
-        );
+        let mut run = Box::pin(worker.run_incarnation(
+            pending::<()>(),
+            Shutdown::graceful_for(DEFAULT_SHUTDOWN_BOUND),
+        ));
 
         tokio::select! {
             exit = &mut run => panic!("incarnation exited unexpectedly: {exit:?}"),

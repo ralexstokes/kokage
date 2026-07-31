@@ -51,7 +51,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         release: actor_release.clone(),
         handled: handled_tx.clone(),
     })
-    .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
+    .shutdown(Shutdown::graceful_for(std::time::Duration::from_secs(5)));
     let mut tree = OrderedTree::new();
     let worker = tree.add_actor(worker_spec);
     let runtime = tree.spawn()?;

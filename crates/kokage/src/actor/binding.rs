@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::supervisor::{Restart, ScopePathSegment};
+use crate::supervisor::{RestartPolicy, ScopePathSegment};
 use tokio::{
     sync::{Notify, mpsc, watch},
     time::{Instant, sleep_until},
@@ -1055,7 +1055,7 @@ pub(crate) struct BindingGuard<M> {
     core: Arc<BindingCore<M>>,
     mailbox: MailboxRef<M>,
     observability: ScopeObservability,
-    restart_policy: Restart,
+    restart_policy: RestartPolicy,
 }
 
 impl<M> BindingGuard<M> {
@@ -1063,7 +1063,7 @@ impl<M> BindingGuard<M> {
         core: Arc<BindingCore<M>>,
         mailbox: MailboxRef<M>,
         observability: ScopeObservability,
-        restart_policy: Restart,
+        restart_policy: RestartPolicy,
     ) -> Self {
         core.bind(mailbox.clone());
         observability.emit_mailbox_bound(core.actor_id());
@@ -1176,7 +1176,7 @@ mod tests {
         assert!(matches!(&*core.current.borrow(), BindingState::Unbound));
     }
 
-    /// The same race under [`Restart::never`], where a late teardown would
+    /// The same race under [`RestartPolicy::never`], where a late teardown would
     /// otherwise make a live replacement binding permanently terminal.
     #[test]
     fn terminate_ignores_a_mailbox_that_is_no_longer_bound() {

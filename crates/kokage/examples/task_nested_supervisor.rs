@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{BoxError, DynamicTree, OrderedTree, Restart, TaskSpec};
+use kokage::{BoxError, DynamicTree, OrderedTree, RestartMode, TaskSpec};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("metrics observed shutdown");
         Ok(())
     })
-    .restart(Restart::always());
+    .restart(RestartMode::Always);
 
     let running_owner = DynamicTree::new().spawn()?;
     let running = running_owner.scope();

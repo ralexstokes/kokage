@@ -385,7 +385,7 @@ impl<T: Laggable> LifecycleEventQueue<T> {
     }
 }
 
-/// Restart-stable lifecycle broadcaster shared by every incarnation of one
+/// RestartPolicy-stable lifecycle broadcaster shared by every incarnation of one
 /// supervisor identity.
 pub(crate) struct LifecycleHub {
     seq: AtomicU64,

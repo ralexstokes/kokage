@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use kokage::{Backoff, BoxError, OrderedTree, Restart, TaskSpec};
+use kokage::{Backoff, BoxError, OrderedTree, RestartPolicy, TaskSpec};
 use tokio::time::{Duration, sleep, timeout};
 
 fn example_error(message: &'static str) -> BoxError {
@@ -12,7 +12,7 @@ fn example_error(message: &'static str) -> BoxError {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let warm_cache_restart = Restart::on_failure()
+    let warm_cache_restart = RestartPolicy::on_failure()
         .limit(1, Duration::from_secs(1))
         .backoff(Backoff::fixed(Duration::from_millis(100)));
     let warm_cache_attempts = Arc::new(AtomicUsize::new(0));
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     })
-    .restart(warm_cache_restart);
+    .restart_policy(warm_cache_restart);
 
     let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());
@@ -51,8 +51,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let mut tree =
-        OrderedTree::new().default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)));
+    let mut tree = OrderedTree::new()
+        .default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)));
     tree.add_task(warm_cache);
     tree.add_task(metrics);
     let running_owner = tree.spawn()?;
