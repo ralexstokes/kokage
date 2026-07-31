@@ -12,18 +12,17 @@ mod coverage_probe {
         use kokage::prelude::{
             Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
             DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-            MonitorEventKind, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeChange,
-            ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, Strategy,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskContext, TaskRef, TaskSpec,
-            TimerKey, Tree,
+            MonitorEventKind, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef,
+            SendError, SendErrorKind, Shutdown, StopContext, Strategy, SupervisorSnapshot,
+            SupervisorSnapshotReceiver, TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, BlockingCancelled, BoxError, BuildError, CancellationToken,
-            ExitStatus, OffloadDeadline, ReplyError, ReplyReceiver, ScopeChange, ScopeChanges,
-            SubtreeSpec, SupervisorError, TaskError,
+            ExitStatus, OffloadDeadline, ReplyError, ReplyReceiver, SubtreeSpec, SupervisorError,
+            TaskError,
         };
     }
 
@@ -42,8 +41,8 @@ mod coverage_probe {
         use kokage::observe::{
             ActorStats, ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot,
             ChildStateView, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
-            LifecycleWatch, ScopeChange, ScopeChanges, ScopeKind, ScopePathSegment,
-            ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
+            LifecycleWatch, ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot,
+            SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};

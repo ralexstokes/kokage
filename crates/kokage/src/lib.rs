@@ -234,7 +234,6 @@ pub mod observe {
     pub use crate::supervision::{ChildOutline, SupervisionOutline};
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
-        runtime::{ScopeChange, ScopeChanges},
         supervisor::{
             ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot, ChildStateView,
             ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
@@ -261,8 +260,8 @@ pub mod prelude {
         Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
         DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
         OneShotTaskSpec, Reply, RestartPolicy, RestartSettings, RunningDynamicTree, RunningTree,
-        ScopeChange, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, Strategy,
-        TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
+        ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, Strategy, TaskContext, TaskRef,
+        TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -275,10 +274,7 @@ pub use actor::{
     ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
     ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
-pub use runtime::{
-    DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeChange, ScopeChanges, ScopeRef,
-    TaskError, TaskRef,
-};
+pub use runtime::{DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeRef, TaskError, TaskRef};
 #[cfg(feature = "derive")]
 pub use supervision::{DynamicScope, Supervision, SupervisionFactories};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};

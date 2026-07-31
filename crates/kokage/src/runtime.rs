@@ -614,40 +614,6 @@ pub struct DynamicScopeRef {
     scope: ScopeRef,
 }
 
-/// One item from a self-resynchronizing direct-child change stream.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum ScopeChange {
-    /// Replace locally reduced state with this complete point-in-time view.
-    ///
-    /// Every stream begins with a reset, and observer lag produces another one
-    /// after the stream has registered a fresh gap-free subscription.
-    Reset(SupervisorSnapshot),
-    /// One ordered lifecycle transition and the authoritative current state.
-    ///
-    /// The snapshot is read after the transition is published. It can include
-    /// newer changes, so consumers should treat it as current truth rather
-    /// than replaying the event into a separate reducer.
-    Event {
-        /// Transition that woke the stream.
-        event: LifecycleEvent,
-        /// Current complete point-in-time view.
-        snapshot: SupervisorSnapshot,
-    },
-}
-
-/// A direct-child lifecycle stream that automatically recovers from lag.
-///
-/// Created by [`ScopeRef::changes`]. It filters transitions already represented
-/// by a reset snapshot and replaces raw lag markers with a new aligned reset.
-pub struct ScopeChanges {
-    scope: ScopeRef,
-    events: LifecycleWatch,
-    sequence: u64,
-    reset: Option<SupervisorSnapshot>,
-}
-
 impl ScopeRef {
     pub(crate) fn new(supervisor: SupervisorHandle, actors: Arc<ActorRuntimeState>) -> Self {
         Self { supervisor, actors }
@@ -761,16 +727,6 @@ impl ScopeRef {
         self.supervisor.observe_lifecycle()
     }
 
-    /// Returns a direct-child change stream that begins and resynchronizes with snapshots.
-    ///
-    /// Most stateful consumers should use this instead of manually pairing
-    /// [`observe_children`](Self::observe_children) with sequence filtering and
-    /// lag recovery. Use [`lifecycle_events`](Self::lifecycle_events) when the
-    /// raw recursive audit stream or explicit lag markers are required.
-    pub fn changes(&self) -> ScopeChanges {
-        ScopeChanges::new(self.clone())
-    }
-
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
     /// Use [`observe_children`](Self::observe_children) for a gap-free
@@ -853,57 +809,6 @@ impl DynamicScopeRef {
     /// Converts this capability into an ordinary scope reference.
     pub fn into_scope(self) -> ScopeRef {
         self.scope
-    }
-}
-
-impl ScopeChanges {
-    fn new(scope: ScopeRef) -> Self {
-        let LifecycleObservation { snapshot, events } = scope.observe_children();
-        let sequence = snapshot.lifecycle_seq;
-        Self {
-            scope,
-            events,
-            sequence,
-            reset: Some(snapshot),
-        }
-    }
-
-    fn resubscribe(&mut self) -> SupervisorSnapshot {
-        let LifecycleObservation { snapshot, events } = self.scope.observe_children();
-        self.sequence = snapshot.lifecycle_seq;
-        self.events = events;
-        snapshot
-    }
-
-    /// Returns the next aligned reset or lifecycle transition.
-    pub async fn next(&mut self) -> Option<ScopeChange> {
-        if let Some(snapshot) = self.reset.take() {
-            return Some(ScopeChange::Reset(snapshot));
-        }
-
-        loop {
-            let event = self.events.next().await?;
-            if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
-                return Some(ScopeChange::Reset(self.resubscribe()));
-            }
-            if let Some(sequence) = event.seq() {
-                if sequence <= self.sequence {
-                    continue;
-                }
-                self.sequence = sequence;
-            }
-            let snapshot = self.scope.snapshot();
-            return Some(ScopeChange::Event { event, snapshot });
-        }
-    }
-}
-
-impl std::fmt::Debug for ScopeChanges {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScopeChanges")
-            .field("sequence", &self.sequence)
-            .field("reset_pending", &self.reset.is_some())
-            .finish_non_exhaustive()
     }
 }
 
