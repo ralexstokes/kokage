@@ -26,8 +26,8 @@ pub type ExitResult = Result<(), BoxError>;
 /// `recv`, `try_recv`, and `mark_ready`. Loop-owned timers and continuations
 /// depend on the framework-owned handler loop, so a raw actor expresses those
 /// branches directly with Tokio futures beside `recv`, while watches,
-/// offloads, blocking work, identity, and restricted scope access remain
-/// available on `RawContext` itself.
+/// offloads, blocking work, identity, and scope access remain available on
+/// `RawContext` itself.
 ///
 /// Implementors can use
 /// `async fn run(&mut self, ctx: RawContext<Self::Msg>) -> ExitResult` in

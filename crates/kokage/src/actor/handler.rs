@@ -23,8 +23,9 @@ enum LoopEvent<M> {
 ///
 /// Handler actors do not receive the mailbox-owning [`RawContext`]. The
 /// framework owns `recv`, `try_recv`, and readiness reporting, and hands each
-/// hook a [`Context`] instead. It provides loop-owned timers, continuations,
-/// Watches and offloads remain available on [`RawContext`].
+/// hook a [`Context`] instead. It provides loop-owned timers and continuations
+/// that a custom raw loop must express directly. Watches and offloads remain
+/// available on [`RawContext`].
 ///
 /// A [`Context::stop`] exit is normal for monitoring and supervision. A
 /// [`Restart::always`](crate::Restart::always) child restarts after it;
@@ -84,10 +85,12 @@ pub trait Actor: Send + 'static {
     /// hook before detaching the child and completing
     /// [`ScopeRef::remove_child`](crate::ScopeRef::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
-    /// can abort this hook and detach the child without waiting for it. The
-    /// It is not called when
-    /// [`handle`](Self::handle) or [`on_start`](Self::on_start) returns an
-    /// error.
+    /// can abort this hook and detach the child without waiting for it.
+    /// Awaiting anything here that depends on that detach — the scope
+    /// finishing its shutdown, this child's own removal — therefore waits on a
+    /// detach that waits on this hook, and resolves only once the grace period
+    /// expires. It is not called when [`handle`](Self::handle) or
+    /// [`on_start`](Self::on_start) returns an error.
     fn on_stop(
         &mut self,
         _ctx: &mut StopContext<'_, Self>,
