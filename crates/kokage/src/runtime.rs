@@ -17,9 +17,9 @@ use crate::{
         BuildError, CancellationToken, ChildMembershipView, ChildSnapshot, ChildSpec,
         ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle, ExitStatus, Guard,
         LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, MailboxShutdown,
-        RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, SupervisorError,
-        SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
-        TaskSpec,
+        RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, Strategy,
+        SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
+        SupervisorStateView, TaskSpec,
     },
 };
 
@@ -472,11 +472,27 @@ fn task_state_from_snapshot(
     let outcome = exit.and_then(|exit| {
         let can_restart = snapshot.state == SupervisorStateView::Running
             && child.membership == ChildMembershipView::Active
-            && child.restart_policy.should_restart(exit.is_failure());
+            && (child.restart_policy.should_restart(exit.is_failure())
+                || task_is_revivable_by_group(snapshot, child));
         (child.state.is_terminal() && !can_restart && child.next_restart_in.is_none())
             .then_some(Ok(exit))
     });
     Some(TaskTrackingState { started, outcome })
+}
+
+fn task_is_revivable_by_group(snapshot: &SupervisorSnapshot, child: &ChildSnapshot) -> bool {
+    if child.restart_policy.is_never() {
+        return false;
+    }
+
+    match snapshot.strategy {
+        Strategy::OneForOne => false,
+        Strategy::OneForAll => true,
+        Strategy::RestForOne => snapshot
+            .children
+            .first()
+            .is_some_and(|first| first.lineage != child.lineage),
+    }
 }
 
 /// Owns a spawned supervision tree.

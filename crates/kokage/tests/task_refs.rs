@@ -1,9 +1,13 @@
 use std::time::Duration;
 
 use kokage::{
-    DynamicTree, ExitStatus, RestartPolicy, TaskError, TaskSpec, Tree, observe::ChildStateView,
+    DynamicTree, ExitStatus, RestartPolicy, Strategy, TaskError, TaskSpec, Tree,
+    observe::ChildStateView,
 };
-use tokio::{sync::oneshot, time::timeout};
+use tokio::{
+    sync::{Notify, mpsc, oneshot},
+    time::timeout,
+};
 
 const WAIT: Duration = Duration::from_secs(3);
 
@@ -116,6 +120,103 @@ async fn task_ref_waits_through_a_restart() {
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
     runtime.shutdown().await.expect("tree stops");
+}
+
+async fn assert_task_ref_waits_through_group_restart(strategy: Strategy) {
+    let fail = std::sync::Arc::new(Notify::new());
+    let release_blocker = std::sync::Arc::new(Notify::new());
+    let blocker_cancelled = std::sync::Arc::new(Notify::new());
+    let (peer_started_tx, mut peer_started_rx) = mpsc::unbounded_channel();
+
+    let mut tree = Tree::new().strategy(strategy);
+    tree.add_task("trigger", {
+        let fail = std::sync::Arc::clone(&fail);
+        move |ctx| {
+            let fail = std::sync::Arc::clone(&fail);
+            async move {
+                if ctx.generation() == 0 {
+                    fail.notified().await;
+                    Err(std::io::Error::other("restart group").into())
+                } else {
+                    ctx.shutdown_token().cancelled().await;
+                    Ok(())
+                }
+            }
+        }
+    });
+    tree.add_task("blocker", {
+        let blocker_cancelled = std::sync::Arc::clone(&blocker_cancelled);
+        let release_blocker = std::sync::Arc::clone(&release_blocker);
+        move |ctx| {
+            let blocker_cancelled = std::sync::Arc::clone(&blocker_cancelled);
+            let release_blocker = std::sync::Arc::clone(&release_blocker);
+            async move {
+                ctx.shutdown_token().cancelled().await;
+                if ctx.generation() == 0 {
+                    blocker_cancelled.notify_one();
+                    release_blocker.notified().await;
+                }
+                Ok(())
+            }
+        }
+    });
+    let peer = tree.add_task("peer", move |ctx| {
+        let peer_started_tx = peer_started_tx.clone();
+        async move {
+            peer_started_tx
+                .send(ctx.generation())
+                .expect("peer start receiver remains available");
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        }
+    });
+    let runtime = tree.spawn().expect("tree builds");
+
+    assert_eq!(
+        timeout(WAIT, peer_started_rx.recv())
+            .await
+            .expect("initial peer starts"),
+        Some(0)
+    );
+    let mut peer_wait = tokio::spawn(async move { peer.wait().await });
+
+    fail.notify_one();
+    timeout(WAIT, blocker_cancelled.notified())
+        .await
+        .expect("group drain reaches blocker");
+    assert!(
+        timeout(Duration::from_millis(100), &mut peer_wait)
+            .await
+            .is_err(),
+        "a group-cancelled exit is not terminal"
+    );
+
+    release_blocker.notify_one();
+    assert_eq!(
+        timeout(WAIT, peer_started_rx.recv())
+            .await
+            .expect("replacement peer starts"),
+        Some(1)
+    );
+
+    runtime.shutdown().await.expect("tree stops");
+    assert!(
+        peer_wait
+            .await
+            .expect("wait task does not panic")
+            .expect("task remains observable")
+            .cancelled()
+    );
+}
+
+#[tokio::test]
+async fn task_ref_waits_through_one_for_all_restart() {
+    assert_task_ref_waits_through_group_restart(Strategy::OneForAll).await;
+}
+
+#[tokio::test]
+async fn task_ref_waits_through_rest_for_one_restart() {
+    assert_task_ref_waits_through_group_restart(Strategy::RestForOne).await;
 }
 
 #[tokio::test]
