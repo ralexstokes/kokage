@@ -173,7 +173,7 @@ impl Actor for BuilderHandleOwner {
 }
 
 struct TaskAdder {
-    lineage: mpsc::UnboundedSender<u64>,
+    inserted: mpsc::UnboundedSender<()>,
     subtree: mpsc::UnboundedSender<ScopeRef>,
 }
 
@@ -223,13 +223,13 @@ impl Actor for TaskAdder {
             .scope()
             .subtree("children")
             .expect("actor's declared child scope is registered");
-        let lineage = children
+        let inserted = children
             .add_task(TaskSpec::new("task", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
                 Ok(())
             }))
             .await?;
-        self.lineage.send(lineage).expect("test receiver open");
+        self.inserted.send(inserted).expect("test receiver open");
         let subtree = children.add_subtree("subtree", OrderedTree::new()).await?;
         self.subtree.send(subtree).expect("test receiver open");
         Ok(())
@@ -911,11 +911,11 @@ async fn declared_dynamic_scope_resolves_during_on_start_and_supports_handler_mu
 }
 
 #[tokio::test]
-async fn context_scope_add_task_returns_the_inserted_lineage() {
-    let (lineage_tx, mut lineage_rx) = mpsc::unbounded_channel();
+async fn context_scope_add_task_reports_insertion_success() {
+    let (inserted_tx, mut inserted_rx) = mpsc::unbounded_channel();
     let (subtree_tx, mut subtree_rx) = mpsc::unbounded_channel();
     let adder_spec = ActorSpec::new("adder", move || TaskAdder {
-        lineage: lineage_tx.clone(),
+        inserted: inserted_tx.clone(),
         subtree: subtree_tx.clone(),
     });
     let adder = adder_spec.actor_ref();
@@ -931,10 +931,10 @@ async fn context_scope_add_task_returns_the_inserted_lineage() {
     handle.scope().wait_started().await.expect("tree starts");
 
     adder.send(()).await.expect("adder receives command");
-    let lineage = timeout(WAIT, lineage_rx.recv())
+    timeout(WAIT, inserted_rx.recv())
         .await
-        .expect("timed out waiting for lineage")
-        .expect("lineage channel remains open");
+        .expect("timed out waiting for insertion")
+        .expect("insertion channel remains open");
     let subtree = timeout(WAIT, subtree_rx.recv())
         .await
         .expect("timed out waiting for subtree")
@@ -945,14 +945,7 @@ async fn context_scope_add_task_returns_the_inserted_lineage() {
         .subtree("owned")
         .and_then(|owned| owned.subtree("children"))
         .expect("owned dynamic scope is registered");
-    assert_eq!(
-        children
-            .snapshot()
-            .child("task")
-            .expect("task is inserted")
-            .lineage,
-        lineage
-    );
+    assert!(children.snapshot().child("task").is_some());
 
     handle.shutdown_and_wait().await.expect("tree stops");
 }
