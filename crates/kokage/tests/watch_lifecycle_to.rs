@@ -13,7 +13,7 @@ use std::{
 
 use kokage::{
     Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartPolicy,
-    RunningTree, ScopeRef, Tree,
+    RunningDynamicTree, ScopeRef, Tree,
     observe::{LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
@@ -99,7 +99,7 @@ impl Actor for ScopeSink {
 }
 
 async fn runtime_with_watched_subtree() -> (
-    RunningTree,
+    RunningDynamicTree,
     ScopeRef,
     kokage::ActorRef<SinkMsg>,
     kokage::ActorRef<()>,
@@ -172,7 +172,7 @@ async fn wait_for_generation(handle: &ScopeRef, id: &str, generation: u64) {
 }
 
 async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
-    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
+    timeout(Duration::from_secs(2), handle.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));

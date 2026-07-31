@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorRef, ActorSlot, Context, ControlError, DynamicTree, ExitResult, Guard, ScopeRef,
-    Shutdown, Strategy, SupervisorError, Tree,
+    Actor, ActorRef, ActorSlot, Context, ControlError, DynamicScopeRef, DynamicTree, ExitResult,
+    Guard, Shutdown, Strategy, SupervisorError, Tree,
     observe::{ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
 };
 
@@ -116,7 +116,7 @@ fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountE
 pub struct Router {
     /// Reserved before the root is built and retained by `RouterFactory`, so
     /// it survives router restarts without late binding.
-    mount: ScopeRef,
+    mount: DynamicScopeRef,
     #[factory(default)]
     sessions: HashMap<ChatId, SessionSlot>,
     journal: ActorRef<JournalMsg>,
@@ -141,7 +141,7 @@ pub struct Router {
 }
 
 impl Router {
-    fn mount(&self) -> ScopeRef {
+    fn mount(&self) -> DynamicScopeRef {
         self.mount.clone()
     }
 
@@ -199,8 +199,7 @@ impl Router {
                 chat,
                 ok: result.unwrap_or(false),
             },
-        )
-        .detach();
+        );
         self.sessions.insert(
             chat,
             SessionSlot::Mounting {
@@ -230,8 +229,7 @@ impl Router {
                 subtree_id,
                 done: result.unwrap_or(false),
             },
-        )
-        .detach();
+        );
     }
 
     /// Removes a subtree that no live slot routes to: an orphan minted by a
@@ -254,8 +252,7 @@ impl Router {
                 subtree_id,
                 done: result.unwrap_or(false),
             },
-        )
-        .detach();
+        );
     }
 
     async fn forward(

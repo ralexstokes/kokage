@@ -186,6 +186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let dynamic = runtime
         .scope()
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic scope");
     tokio::spawn(async move {
         loop {

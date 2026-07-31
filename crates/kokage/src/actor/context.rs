@@ -26,7 +26,7 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, MailboxReceiver, MailboxRef,
         MessageSizeObserver, SendOutcome, TimedSendOutcome,
     },
-    error::{BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind},
+    error::{BlockingCancelled, CallError, OffloadDeadline, ReplyError, SendError, SendErrorKind},
     handler::Actor,
     monitor::{ActorMonitorLease, MonitorEvent, MonitorHub},
     observability::{MessageOperation, MessageRejection, ScopeObservability, trace_actor_message},
@@ -451,13 +451,13 @@ impl<M> ActorRef<M> {
         message: impl FnOnce(Reply<T>) -> M,
     ) -> Result<T, CallError> {
         tokio::time::timeout(timeout, async {
-            let (sender, receiver) = oneshot::channel();
-            self.send(message(Reply { sender }))
+            let (reply, receiver) = Reply::channel();
+            self.send(message(reply))
                 .await
                 .map_err(|error| CallError::Terminated {
                     actor_id: error.actor_id,
                 })?;
-            receiver.await.map_err(|_| CallError::ReplyDropped {
+            receiver.recv().await.map_err(|_| CallError::ReplyDropped {
                 actor_id: self.actor_id.to_string(),
             })
         })
@@ -560,7 +560,27 @@ pub struct Reply<T> {
     sender: oneshot::Sender<T>,
 }
 
+/// Receiving half of a lower-level request/reply exchange.
+///
+/// Create a pair with [`Reply::channel`], place the `Reply` in an actor
+/// message, and combine the receiver with the desired acceptance and response
+/// deadlines. [`ActorRef::call`] remains the concise single-deadline form.
+pub struct ReplyReceiver<T> {
+    receiver: oneshot::Receiver<T>,
+}
+
 impl<T> Reply<T> {
+    /// Creates a reply value and its receiving half.
+    ///
+    /// This is the escape hatch beneath [`ActorRef::call`]. In particular, a
+    /// caller can place the reply in a message sent with
+    /// [`ActorRef::send_timeout`], recover an unaccepted request, and only then
+    /// start a separate response deadline.
+    pub fn channel() -> (Self, ReplyReceiver<T>) {
+        let (sender, receiver) = oneshot::channel();
+        (Self { sender }, ReplyReceiver { receiver })
+    }
+
     /// Sends the reply to the caller.
     ///
     /// If the caller has gone away the value is dropped silently.
@@ -569,9 +589,33 @@ impl<T> Reply<T> {
     }
 }
 
+impl<T> ReplyReceiver<T> {
+    /// Waits until the actor answers or drops the reply value.
+    pub async fn recv(self) -> Result<T, ReplyError> {
+        self.receiver.await.map_err(|_| ReplyError::Dropped)
+    }
+
+    /// Waits up to `bound` for an answer.
+    ///
+    /// Expiry drops the receiving half but does not undo an already accepted
+    /// actor request. A later [`Reply::send`] simply discards its value.
+    pub async fn recv_timeout(self, bound: Duration) -> Result<T, ReplyError> {
+        timeout(bound, self.receiver)
+            .await
+            .map_err(|_| ReplyError::Timeout)?
+            .map_err(|_| ReplyError::Dropped)
+    }
+}
+
 impl<T> fmt::Debug for Reply<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Reply").finish_non_exhaustive()
+    }
+}
+
+impl<T> fmt::Debug for ReplyReceiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReplyReceiver").finish_non_exhaustive()
     }
 }
 
@@ -890,10 +934,30 @@ impl<M: Send + 'static> RawContext<M> {
     /// Panics in the future or continuation resume on the actor task, so
     /// supervision treats them like an ordinary actor panic.
     ///
-    /// Dropping the returned [`Guard`] cancels the offload and suppresses its
-    /// continuation message. Call [`Guard::detach`] for explicit
-    /// fire-and-forget ownership.
-    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> Guard
+    /// The actor incarnation owns the offload: it is aborted when that
+    /// incarnation ends. Use [`offload_scoped`](Self::offload_scoped) when a
+    /// narrower owner should be able to cancel it by dropping a [`Guard`].
+    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C)
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        C: FnOnce(Result<T, OffloadDeadline>) -> M + Send + 'static,
+    {
+        self.offload_scoped(deadline, future, continuation).detach();
+    }
+
+    /// Runs an offload owned by the returned cancel-on-drop [`Guard`].
+    ///
+    /// This is the scoped counterpart to [`offload`](Self::offload). Dropping
+    /// the guard cancels the future and suppresses its continuation message;
+    /// consuming it with [`Guard::detach`] transfers ownership back to the
+    /// actor incarnation.
+    pub fn offload_scoped<F, T, C>(
+        &mut self,
+        deadline: Duration,
+        future: F,
+        continuation: C,
+    ) -> Guard
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -1117,11 +1181,24 @@ impl<M: Send + 'static> RawContext<M> {
     /// loss surfaces as a [`MonitorEvent::Lagged`] resync marker rather than
     /// silently; the terminal `Removed` is never dropped.
     ///
-    /// Dropping the returned [`Guard`] cancels the watch; call
-    /// [`Guard::detach`] when membership ownership should keep it alive.
+    /// The two actor memberships own the watch. Use
+    /// [`watch_scoped`](Self::watch_scoped) when a narrower owner should be able
+    /// to cancel it by dropping a [`Guard`].
+    pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F)
+    where
+        T: Send + 'static,
+        F: FnMut(MonitorEvent) -> M + Send + 'static,
+    {
+        self.watch_scoped(target, map).detach();
+    }
+
+    /// Watches a peer while the returned cancel-on-drop [`Guard`] is retained.
+    ///
+    /// Calling [`Guard::detach`] transfers ownership to the two actor
+    /// memberships, which is the behavior of [`watch`](Self::watch).
     /// Delivery of the terminal event finishes the guard without marking it
     /// cancelled.
-    pub fn watch<T, F>(&self, target: &ActorRef<T>, mut map: F) -> Guard
+    pub fn watch_scoped<T, F>(&self, target: &ActorRef<T>, mut map: F) -> Guard
     where
         T: Send + 'static,
         F: FnMut(MonitorEvent) -> M + Send + 'static,
@@ -1444,12 +1521,23 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Watches the target logical actor across restarts.
     ///
     /// See [`RawContext::watch`] for the full contract.
-    pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F) -> Guard
+    pub fn watch<T, F>(&self, target: &ActorRef<T>, map: F)
     where
         T: Send + 'static,
         F: FnMut(MonitorEvent) -> A::Msg + Send + 'static,
     {
         self.cx.watch(target, map)
+    }
+
+    /// Watches a peer while the returned cancel-on-drop guard is retained.
+    ///
+    /// See [`RawContext::watch_scoped`] for the full contract.
+    pub fn watch_scoped<T, F>(&self, target: &ActorRef<T>, map: F) -> Guard
+    where
+        T: Send + 'static,
+        F: FnMut(MonitorEvent) -> A::Msg + Send + 'static,
+    {
+        self.cx.watch_scoped(target, map)
     }
 
     /// Arms a keyed one-shot self timeout, replacing the timeout at the same key.
@@ -1519,13 +1607,30 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Runs a bounded future without blocking this actor's receive loop.
     ///
     /// See [`RawContext::offload`] for the full contract.
-    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C) -> Guard
+    pub fn offload<F, T, C>(&mut self, deadline: Duration, future: F, continuation: C)
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
         C: FnOnce(Result<T, OffloadDeadline>) -> A::Msg + Send + 'static,
     {
         self.cx.offload(deadline, future, continuation)
+    }
+
+    /// Runs an offload owned by the returned cancel-on-drop guard.
+    ///
+    /// See [`RawContext::offload_scoped`] for the full contract.
+    pub fn offload_scoped<F, T, C>(
+        &mut self,
+        deadline: Duration,
+        future: F,
+        continuation: C,
+    ) -> Guard
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+        C: FnOnce(Result<T, OffloadDeadline>) -> A::Msg + Send + 'static,
+    {
+        self.cx.offload_scoped(deadline, future, continuation)
     }
 }
 

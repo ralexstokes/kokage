@@ -30,7 +30,7 @@ async fn wait_runtime_started(runtime: &ScopeRef, phase: &str) {
 }
 
 async fn shutdown_runtime(runtime: &ScopeRef, phase: &str) {
-    tokio::time::timeout(TEST_TIMEOUT, runtime.shutdown_and_wait())
+    tokio::time::timeout(TEST_TIMEOUT, runtime.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
@@ -57,7 +57,7 @@ impl Actor for CancelBeforePoll {
     type Msg = ();
 
     async fn handle(&mut self, (): (), ctx: &mut Context<'_, Self>) -> ExitResult {
-        let guard = ctx.offload(
+        let guard = ctx.offload_scoped(
             TEST_TIMEOUT,
             poll_fn(|_| -> Poll<()> { panic!("cancelled offload was polled") }),
             |_| (),
@@ -104,22 +104,18 @@ impl Actor for Outcomes {
     type Msg = OutcomeMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success)
-            .detach();
+        ctx.offload(Duration::from_secs(1), async { 42 }, OutcomeMsg::Success);
         ctx.offload(
             Duration::from_millis(10),
             pending::<()>(),
             OutcomeMsg::Timeout,
-        )
-        .detach();
+        );
         ctx.offload(Duration::from_secs(1), async { 42 }, |result| {
             OutcomeMsg::OrSuccess(result.unwrap_or(0))
-        })
-        .detach();
+        });
         ctx.offload(Duration::from_millis(10), pending::<u32>(), |result| {
             OutcomeMsg::OrFallback(result.unwrap_or(7))
-        })
-        .detach();
+        });
         Ok(())
     }
 
@@ -236,8 +232,7 @@ impl Actor for StaleActor {
                         release_drop: self.release_drop.clone(),
                     },
                     |_| StaleMsg::Done,
-                )
-                .detach();
+                );
                 return Err(std::io::Error::other("restart after starting offload").into());
             }
             StaleMsg::Done => {
@@ -329,7 +324,7 @@ impl Actor for AbortActor {
         match message {
             AbortMsg::Start => {
                 let handle =
-                    ctx.offload(Duration::from_secs(1), pending::<()>(), |_| AbortMsg::Done);
+                    ctx.offload_scoped(Duration::from_secs(1), pending::<()>(), |_| AbortMsg::Done);
                 *self.handle.lock().unwrap() = Some(handle);
             }
             AbortMsg::Done => {
@@ -453,7 +448,8 @@ impl Actor for ReadyAbortActor {
     async fn handle(&mut self, message: Self::Msg, ctx: &mut Context<'_, Self>) -> ExitResult {
         match message {
             ReadyAbortMsg::Start => {
-                let handle = ctx.offload(Duration::from_secs(1), async {}, |_| ReadyAbortMsg::Done);
+                let handle =
+                    ctx.offload_scoped(Duration::from_secs(1), async {}, |_| ReadyAbortMsg::Done);
                 self.handle.send(handle).unwrap();
                 self.release.notified().await;
             }
@@ -541,7 +537,7 @@ impl Actor for DrainAbortActor {
             DrainAbortMsg::Start => {
                 let shutdown = ctx.shutdown_token().clone();
                 let shutdown_seen = self.shutdown_seen.clone();
-                let handle = ctx.offload(
+                let handle = ctx.offload_scoped(
                     Duration::from_secs(10),
                     async move {
                         shutdown.cancelled().await;
@@ -617,13 +613,11 @@ impl Actor for ShutdownActor {
                         release.notified().await;
                     },
                     |_| DrainMsg::Done,
-                )
-                .detach();
+                );
             }
             DrainMsg::Queued => {
                 self.observed.send("queued").unwrap();
-                ctx.offload(Duration::from_secs(1), async {}, |_| DrainMsg::Nested)
-                    .detach();
+                ctx.offload(Duration::from_secs(1), async {}, |_| DrainMsg::Nested);
             }
             DrainMsg::Nested => self.observed.send("nested").unwrap(),
             DrainMsg::Done => self.observed.send("done").unwrap(),
@@ -719,8 +713,7 @@ impl Actor for BackpressureActor {
                     Duration::from_secs(1),
                     async move { release.notified().await },
                     |_| BackpressureMsg::Done,
-                )
-                .detach();
+                );
                 self.offload_registered.notify_one();
                 self.handler_release.notified().await;
             }
@@ -848,8 +841,7 @@ impl Actor for DeadlineDrainActor {
                     Duration::from_millis(100),
                     pending::<()>(),
                     DeadlineDrainMsg::Done,
-                )
-                .detach();
+                );
                 self.registered.notify_one();
             }
             DeadlineDrainMsg::Done(outcome) => self.observed.send(outcome).unwrap(),
@@ -897,8 +889,7 @@ impl RawActor for RawCompletion {
     type Msg = &'static str;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
-        ctx.offload(Duration::from_secs(1), async {}, |_| "done")
-            .detach();
+        ctx.offload(Duration::from_secs(1), async {}, |_| "done");
         let message = ctx.recv().await.expect("offload completion");
         self.observed.send(message).unwrap();
         while ctx.recv().await.is_some() {}
@@ -936,8 +927,7 @@ impl Actor for PanicActor {
             Duration::from_secs(1),
             async { panic!("offload panic") },
             |_| PanicMsg::Start,
-        )
-        .detach();
+        );
         Ok(())
     }
 }

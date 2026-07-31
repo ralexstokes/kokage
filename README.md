@@ -73,17 +73,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`spawn()` returns the owning `RunningTree`; keep it alive for as long as the
-application should run. `running.scope()` returns a cheaply cloneable
-`ScopeRef` for observation, control, and dynamic membership, parallel to an
-`ActorRef`. A `ScopeRef` does not keep its `RunningTree` alive; dropping
-references has no lifecycle effect, while dropping the owner requests graceful
-shutdown—so a discarded `let _ = tree.spawn()?;` shuts down immediately.
+`Tree::spawn()` returns the owning `RunningTree`; `DynamicTree::spawn()`
+returns `RunningDynamicTree`. Keep the owner alive for as long as the
+application should run. `running.scope()` returns a cheaply cloneable,
+non-owning scope reference, parallel to an `ActorRef`. Ordered scopes expose
+observation and control through `ScopeRef`; dynamic scopes additionally expose
+membership mutation through `DynamicScopeRef`. Dropping references has no
+lifecycle effect, while dropping the owner requests graceful shutdown—so a
+discarded `let _ = tree.spawn()?;` shuts down immediately.
 
-Background actor operations such as watches, mailbox timers, offloads, scope
-waits, and lifecycle/completion pumps return one `kokage::Guard` type. A guard
-cancels its operation when dropped. Retain it for scoped ownership, or call
-`.detach()` when fire-and-forget behavior is intentional.
+Common watches and offloads are owned by the actor incarnation automatically.
+Use their `_scoped` variants when a narrower lifetime needs a cancel-on-drop
+`kokage::Guard`. Timers and lifecycle pumps likewise return guards; retain one
+for scoped ownership or call `.detach()` for intentional fire-and-forget work.
 
 The full runnable version is
 [`crates/kokage/examples/supervised_actors.rs`](crates/kokage/examples/supervised_actors.rs).

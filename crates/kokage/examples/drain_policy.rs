@@ -62,7 +62,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         worker.send(Msg::Job(job)).await?;
     }
 
-    runtime.scope().shutdown();
+    runtime.scope().request_shutdown();
     release.notify_one();
 
     for _ in 0..JOBS {

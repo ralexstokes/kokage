@@ -7,8 +7,9 @@ down.
 
 ## The owner and the references
 
-`spawn` returns a [`RunningTree`] — the unique **owner** of the whole
-supervision tree. Ownership here is literal Rust ownership:
+`Tree::spawn` returns a [`RunningTree`], while `DynamicTree::spawn` returns a
+[`RunningDynamicTree`] — the unique **owner** of the whole supervision tree.
+Ownership here is literal Rust ownership:
 
 - Keep it alive for as long as the application should run.
 - **Dropping it requests graceful shutdown.** The type is `#[must_use]`
@@ -27,10 +28,11 @@ actor. `runtime.scope()` gives you a cloneable root ref for observation and
 control. `scope.subtree("press-room")` navigates down, and trees hand refs out
 even before spawn. A `ScopeRef` never keeps the tree alive, and dropping one
 means nothing. What it does carry is *control capability*: observation
-(snapshots, lifecycle watches, stats — see [Observability](observability.md)),
-dynamic membership on dynamic scopes, and targeted shutdown —
-`scope.shutdown_and_wait()` on a subtree stops just that compartment, whose
-parent then sees a completed child.
+(snapshots, lifecycle watches, stats — see [Observability](observability.md))
+and targeted shutdown. A [`DynamicScopeRef`] additionally carries membership
+mutation. `scope.shutdown().await` on a subtree stops just that compartment,
+whose parent then sees a completed child; `scope.request_shutdown()` is the
+non-waiting form suitable inside that scope.
 
 ## Shutdown policies: how children stop
 
@@ -102,10 +104,10 @@ whether queued work is being drained, and hand-written raw-actor loops can check
 ## Guards: scoped ownership for background operations
 
 By now you have met [`Guard`] several times; here is the general rule it
-encodes. Every background operation an actor or scope starts — watches,
-intervals, delayed sends, offloads, lifecycle pumps, completion-triggered
-shutdowns — returns a `Guard`, and **dropping the guard cancels the
-operation**.
+encodes. An ordinary actor watch or offload is owned by the actor incarnation,
+which is the common case. Their `watch_scoped` and `offload_scoped` variants,
+mailbox timers, lifecycle pumps, and other explicitly scoped background
+operations return a `Guard`, and **dropping the guard cancels the operation**.
 
 This is the same philosophy as `RunningTree` ownership, miniaturized:
 background work is always owned by *something*, so nothing can outlive its
@@ -141,10 +143,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let stop = CancellationToken::new();
     stop.cancel_when(async {
-        // stand-in for ctrl-c / SIGTERM / an admin endpoint
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        println!("shutdown requested");
-    });
+            // stand-in for ctrl-c / SIGTERM / an admin endpoint
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            println!("shutdown requested");
+        })
+        .detach();
 
     stop.cancelled().await;
     runtime.shutdown().await?;
@@ -157,8 +160,10 @@ upward), so one root token can fan out to subsystems beyond kokage while the
 `RunningTree` remains the single authority over the actor tree itself.
 
 [`RunningTree`]: https://stokes.io/kokage/api/kokage/struct.RunningTree.html
+[`RunningDynamicTree`]: https://stokes.io/kokage/api/kokage/struct.RunningDynamicTree.html
 [`SupervisorError`]: https://stokes.io/kokage/api/kokage/enum.SupervisorError.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
+[`DynamicScopeRef`]: https://stokes.io/kokage/api/kokage/struct.DynamicScopeRef.html
 [`Shutdown`]: https://stokes.io/kokage/api/kokage/enum.Shutdown.html
 [`MailboxShutdown`]: https://stokes.io/kokage/api/kokage/enum.MailboxShutdown.html
 [`TaskContext::abort_token`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.abort_token

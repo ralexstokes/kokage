@@ -42,38 +42,20 @@ error[E0599]: no method named `subtree` found for reference `&RunningTree` in th
 26 |     let _ = running.subtree("tree");
    |                     ^^^^^^^ method not found in `&RunningTree`
 
-error[E0599]: no method named `snapshot` found for reference `&RunningTree` in the current scope
+error[E0599]: no method named `observe_children` found for reference `&RunningTree` in the current scope
   --> tests/ui/public-api/running_tree_scope_methods.rs:27:21
    |
-27 |     let _ = running.snapshot();
-   |                     ^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `snapshots` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:28:21
-   |
-28 |     let _ = running.snapshots();
-   |                     ^^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `observe_children` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:29:21
-   |
-29 |     let _ = running.observe_children();
+27 |     let _ = running.observe_children();
    |                     ^^^^^^^^^^^^^^^^ method not found in `&RunningTree`
 
 error[E0599]: no method named `lifecycle_events` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:30:21
+  --> tests/ui/public-api/running_tree_scope_methods.rs:28:21
    |
-30 |     let _ = running.lifecycle_events();
+28 |     let _ = running.lifecycle_events();
    |                     ^^^^^^^^^^^^^^^^ method not found in `&RunningTree`
 
 error[E0599]: no method named `actor_stats` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:31:21
+  --> tests/ui/public-api/running_tree_scope_methods.rs:29:21
    |
-31 |     let _ = running.actor_stats();
+29 |     let _ = running.actor_stats();
    |                     ^^^^^^^^^^^ method not found in `&RunningTree`
-
-error[E0599]: no method named `wait_started` found for reference `&RunningTree` in the current scope
-  --> tests/ui/public-api/running_tree_scope_methods.rs:32:21
-   |
-32 |     let _ = running.wait_started().await;
-   |                     ^^^^^^^^^^^^ method not found in `&RunningTree`

@@ -9,8 +9,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult,
-    RestartPolicy, ScopeRef, StopContext, Strategy, TaskSpec, Tree,
+    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicScopeRef, DynamicTree,
+    ExitResult, RestartPolicy, ScopeRef, StopContext, Strategy, TaskSpec, Tree,
     observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -67,6 +67,9 @@ impl Actor for ScopeProbe {
                 .expect("test receiver open");
             return Ok(());
         }
+        let children = children
+            .dynamic()
+            .expect("scope kind was already checked as dynamic");
         // Task insertion schedules startup rather than awaiting readiness.
         let before_ready = children
             .add_task_spec(TaskSpec::new("too-early", |_| async { Ok(()) }))
@@ -93,8 +96,7 @@ impl Actor for ScopeProbe {
                 Ok::<_, ()>(())
             },
             |result| LeaderMsg::OnStartAdded(matches!(result, Ok(Ok(())))),
-        )
-        .detach();
+        );
         Ok(())
     }
 
@@ -104,7 +106,8 @@ impl Actor for ScopeProbe {
                 let children = ctx
                     .scope()
                     .subtree(self.children_id.expect("leader declares a child scope"))
-                    .expect("declared child scope remains registered");
+                    .and_then(|scope| scope.dynamic())
+                    .expect("declared dynamic child scope remains registered");
                 children
                     .add_actor_spec(ActorSpec::new("from-handler", || Idle))
                     .await?;
@@ -150,7 +153,7 @@ impl Actor for StopProbe {
 }
 
 struct BuilderHandleOwner {
-    mount: ScopeRef,
+    mount: DynamicScopeRef,
     report: mpsc::UnboundedSender<&'static str>,
 }
 
@@ -183,7 +186,10 @@ impl Actor for DynamicCompletionLeader {
     type Msg = ();
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        let dynamic = ctx.scope();
+        let dynamic = ctx
+            .scope()
+            .dynamic()
+            .expect("leader runs directly under a dynamic scope");
         let first = dynamic
             .add_task_spec(TaskSpec::new("first", |_| async { Ok(()) }))
             .await?;
@@ -194,7 +200,7 @@ impl Actor for DynamicCompletionLeader {
         first.wait().await?;
         second.wait().await?;
         self.reports.send("completed").expect("test receiver open");
-        dynamic.shutdown();
+        dynamic.request_shutdown();
         Ok(())
     }
 
@@ -210,7 +216,8 @@ impl Actor for TaskAdder {
         let children = ctx
             .scope()
             .subtree("children")
-            .expect("actor's declared child scope is registered");
+            .and_then(|scope| scope.dynamic())
+            .expect("actor's declared dynamic child scope is registered");
         children
             .add_task_spec(TaskSpec::new("task", |ctx| async move {
                 ctx.shutdown_token().cancelled().await;
@@ -273,7 +280,7 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
     assert!(spawned.scope().snapshot().child("worker").is_some());
 
     pre_spawn
-        .shutdown_and_wait()
+        .shutdown()
         .await
         .expect("pre-spawn handle stops the spawned scope");
 }
@@ -347,7 +354,7 @@ async fn completed_dynamic_task_can_trigger_explicit_scope_shutdown() {
         .await
         .expect("future member added");
     task.wait().await.expect("task completion observed");
-    dynamic.shutdown();
+    dynamic.request_shutdown();
     timeout(WAIT, runtime.wait())
         .await
         .expect("completion requests shutdown")
@@ -366,7 +373,7 @@ async fn pre_spawn_task_ref_observes_a_fast_child() {
         .expect("fast completion remains observable")
         .expect("task ref remains available");
     assert!(exit.is_completed());
-    scope.shutdown();
+    scope.request_shutdown();
     timeout(WAIT, runtime.wait())
         .await
         .expect("scope shutdown completes")
@@ -374,31 +381,10 @@ async fn pre_spawn_task_ref_observes_a_fast_child() {
 }
 
 #[tokio::test]
-async fn ordered_scope_membership_methods_return_not_dynamic() {
+async fn ordered_scope_has_no_dynamic_capability() {
     let runtime = Tree::new().spawn().expect("ordered tree builds");
 
-    assert!(matches!(
-        runtime
-            .scope()
-            .add_actor_spec(ActorSpec::new("actor", || Idle))
-            .await,
-        Err(ControlError::NotDynamic)
-    ));
-    assert!(matches!(
-        runtime
-            .scope()
-            .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
-            .await,
-        Err(ControlError::NotDynamic)
-    ));
-    assert!(matches!(
-        runtime.scope().add_subtree("subtree", Tree::new()).await,
-        Err(ControlError::NotDynamic)
-    ));
-    assert!(matches!(
-        runtime.scope().remove_child("missing").await,
-        Err(ControlError::NotDynamic)
-    ));
+    assert!(runtime.scope().dynamic().is_none());
 
     runtime.shutdown().await.expect("runtime stops");
 }
@@ -412,24 +398,7 @@ impl Actor for OrderedScopeProbe {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let scope = ctx.scope();
-        assert!(matches!(
-            scope.add_actor_spec(ActorSpec::new("actor", || Idle)).await,
-            Err(ControlError::NotDynamic)
-        ));
-        assert!(matches!(
-            scope
-                .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
-                .await,
-            Err(ControlError::NotDynamic)
-        ));
-        assert!(matches!(
-            scope.add_subtree("subtree", Tree::new()).await,
-            Err(ControlError::NotDynamic)
-        ));
-        assert!(matches!(
-            scope.remove_child("missing").await,
-            Err(ControlError::NotDynamic)
-        ));
+        assert!(scope.dynamic().is_none());
         self.checked.send(()).expect("test receiver open");
         Ok(())
     }
@@ -440,7 +409,7 @@ impl Actor for OrderedScopeProbe {
 }
 
 #[tokio::test]
-async fn ordered_context_scope_membership_methods_return_not_dynamic() {
+async fn ordered_context_scope_has_no_dynamic_capability() {
     let (checked, mut checked_rx) = mpsc::unbounded_channel();
     let probe = ActorSpec::new("probe", move || OrderedScopeProbe {
         checked: checked.clone(),
@@ -472,7 +441,7 @@ impl Actor for StopScopeProbe {
         // fire-and-forget control are what a scope handle is good for here.
         let scope: ScopeRef = ctx.scope();
         let visible = scope.snapshot().child("probe").is_some();
-        scope.shutdown();
+        scope.request_shutdown();
         self.observed
             .send((scope.kind(), visible))
             .expect("test receiver open");
@@ -528,7 +497,7 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
         "dropping non-owning handles must leave the runtime alive"
     );
 
-    runtime.scope().shutdown();
+    runtime.scope().request_shutdown();
     assert_eq!(next_report(&mut lifecycle_rx).await, "cancelled");
     runtime.wait().await.expect("runtime stops cleanly");
 }
@@ -626,7 +595,7 @@ async fn trees_terminalize_handles_when_dropped() {
     let handle = builder.scope();
     let snapshots = handle.snapshots();
     assert_eq!(handle.snapshot().kind, ScopeKind::Dynamic);
-    let _: ScopeRef = handle.clone();
+    let _: ScopeRef = handle.clone().into_scope();
     drop(builder);
     assert_snapshot_receiver_closes(snapshots).await;
 

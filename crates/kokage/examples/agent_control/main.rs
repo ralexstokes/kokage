@@ -3,7 +3,7 @@
 //! The example is an assertion-driven acceptance script for dynamic actor
 //! lifecycles and the runtime surfaces not covered by `trading_engine`:
 //! per-conversation subtrees added and removed at runtime via
-//! `ScopeRef::add_subtree`, never-restarted transient children observed
+//! `DynamicScopeRef::add_subtree`, never-restarted transient children observed
 //! through `ctx.watch`, `continue_with` rehydration, `run_blocking` effects,
 //! a readiness-gated `RawActor` bridge, and an explicitly wired supervision
 //! tree with a real budget ↔ guard cycle.
@@ -131,8 +131,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEvent, ScopeRef, Strategy,
-    prelude::*,
+    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEvent,
+    ScopeRef, Strategy, prelude::*,
 };
 use tokio::time::Instant;
 
@@ -169,7 +169,7 @@ struct App {
     runtime: kokage::RunningTree,
     gateway: ScopeRef,
     core: ScopeRef,
-    sessions: ScopeRef,
+    sessions: DynamicScopeRef,
     chat: ChatSim,
     model: ScriptedModel,
     router: ActorRef<RouterMsg>,
@@ -392,7 +392,7 @@ async fn phase_1(app: &App, latency: &LatencyRecorder) -> Result<(), AnyError> {
     assert_eq!(app.chat.acks(), 1);
     assert_eq!(app.chat.replies(CHAT_A).len(), 1);
     assert!(app.chat.progress_count(CHAT_A) > 0);
-    println!("PHASE 1 OK — ScopeRef::add_subtree per conversation; continue_with; interval");
+    println!("PHASE 1 OK — DynamicScopeRef::add_subtree per conversation; continue_with; interval");
     Ok(())
 }
 

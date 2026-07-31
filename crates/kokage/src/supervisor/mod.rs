@@ -77,7 +77,7 @@ pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
 pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
-pub use restart::{Backoff, RestartPolicy};
+pub use restart::{Backoff, RestartCondition, RestartPolicy};
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::{MailboxShutdown, Shutdown};
 pub use snapshot::{

@@ -14,7 +14,8 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorFactory, ActorRef, ActorSpec, ExitResult, RunningTree, ScopeRef, TaskContext, TaskRef,
+    ActorFactory, ActorRef, ActorSpec, DynamicScopeRef, ExitResult, RunningDynamicTree,
+    RunningTree, ScopeRef, TaskContext, TaskRef,
     actor::{ActorNode, RawActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -97,7 +98,7 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 /// Ordered scopes contain a declared child sequence. Declaration order controls
 /// readiness-gated startup, reverse-order shutdown, and the suffix restarted
 /// by [`Strategy::RestForOne`]. Use [`DynamicTree`] for an empty leaf whose
-/// membership is written through a [`ScopeRef`] obtained before or
+/// membership is written through a [`DynamicScopeRef`] obtained before or
 /// after spawn.
 ///
 /// Actor declarations can be placed directly at different scope levels while
@@ -144,8 +145,8 @@ pub struct Tree {
 /// A single-use, identity-owning dynamic supervision tree.
 ///
 /// Dynamic trees begin empty and accept runtime membership through the
-/// [`ScopeRef`] returned by [`scope`](Self::scope) before spawn or by calling
-/// [`RunningTree::scope`] on the spawned tree.
+/// [`DynamicScopeRef`] returned by [`scope`](Self::scope) before spawn or by
+/// calling [`RunningDynamicTree::scope`] on the spawned tree.
 pub struct DynamicTree {
     inner: IdentityTree<true>,
 }
@@ -435,14 +436,14 @@ impl DynamicTree {
 
     /// Returns the stable, dynamic-membership-capable reference reserved for this
     /// root scope.
-    pub fn scope(&self) -> ScopeRef {
-        self.inner.handle()
+    pub fn scope(&self) -> DynamicScopeRef {
+        DynamicScopeRef::new(self.inner.handle())
     }
 
     /// Creates an empty dynamic scope with standard runtime defaults.
     ///
     /// The spawned scope remains idle until actors, tasks, or subtrees are
-    /// inserted through its dynamic [`ScopeRef`].
+    /// inserted through its [`DynamicScopeRef`].
     pub fn new() -> Self {
         Self {
             inner: TreeData::dynamic().with_identity(),
@@ -451,10 +452,10 @@ impl DynamicTree {
 
     /// Builds and spawns this tree in the background.
     ///
-    /// Retain the returned [`RunningTree`] for as long as the runtime should
-    /// remain alive. Dropping it requests graceful shutdown; [`ScopeRef`]
-    /// values are non-owning. Access the root scope after spawn with
-    /// [`RunningTree::scope`].
+    /// Retain the returned [`RunningDynamicTree`] for as long as the runtime
+    /// should remain alive. Dropping it requests graceful shutdown;
+    /// [`DynamicScopeRef`] values are non-owning. Access the root scope after
+    /// spawn with [`RunningDynamicTree::scope`].
     ///
     /// # Errors
     ///
@@ -462,9 +463,12 @@ impl DynamicTree {
     /// scope's restart configuration is invalid. A failed spawn consumes the
     /// tree and makes every handle issued from it terminal. An empty dynamic
     /// scope is valid and stays available for later insertion.
-    pub fn spawn(self) -> Result<RunningTree, BuildError> {
+    pub fn spawn(self) -> Result<RunningDynamicTree, BuildError> {
         let (supervisor, actors) = self.inner.into_parts()?;
-        Ok(RunningTree::new(supervisor.spawn(), actors))
+        Ok(RunningDynamicTree::new(RunningTree::new(
+            supervisor.spawn(),
+            actors,
+        )))
     }
 }
 

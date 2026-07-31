@@ -3,7 +3,7 @@ mod support;
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
-    ActorSpec, BoxError, DynamicTree, MailboxShutdown, RestartPolicy, ScopeRef, Shutdown,
+    ActorSpec, BoxError, DynamicScopeRef, DynamicTree, MailboxShutdown, RestartPolicy, Shutdown,
     SupervisorError, TaskSpec,
     prelude::*,
     raw::{RawActor, RawContext},
@@ -39,7 +39,7 @@ impl Actor for Probe {
 
 #[derive(Clone)]
 struct AddsChildOnStart {
-    handle_rx: watch::Receiver<Option<ScopeRef>>,
+    handle_rx: watch::Receiver<Option<DynamicScopeRef>>,
     added_started: Arc<Notify>,
 }
 
@@ -79,7 +79,7 @@ impl Actor for AddsChildOnStart {
 
 #[tokio::test]
 async fn actor_on_start_can_await_add_task_on_its_own_dynamic_supervisor() {
-    let (handle_tx, handle_rx) = watch::channel::<Option<ScopeRef>>(None);
+    let (handle_tx, handle_rx) = watch::channel::<Option<DynamicScopeRef>>(None);
     let added_started = Arc::new(Notify::new());
     let handle = DynamicTree::new().spawn().expect("dynamic runtime builds");
     handle_tx
@@ -248,7 +248,7 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
     actor.send("hold").await.unwrap();
     started.notified().await;
     actor.send("trigger").await.unwrap();
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     release.notify_one();
     handle.shutdown().await.unwrap();
     assert_eq!(&*handled.lock().await, &["hold", "trigger"]);
@@ -275,7 +275,7 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     actor.send("hold-and-continue").await.unwrap();
     started.notified().await;
     actor.send("mailbox").await.unwrap();
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     release.notify_one();
     handle.shutdown().await.unwrap();
 
@@ -356,7 +356,7 @@ async fn is_draining_separates_the_drain_phase_from_ordinary_handling() {
     actor.send("hold").await.unwrap();
     started.notified().await;
     actor.send("queued").await.unwrap();
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     release.notify_one();
     handle.shutdown().await.unwrap();
 
@@ -442,7 +442,7 @@ async fn is_draining_changes_only_after_the_stopping_callback_returns() {
     actor.send("hold").await.unwrap();
     assert_eq!(statuses.recv().await, Some(false));
     actor.send("queued").await.unwrap();
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
 
     assert_eq!(statuses.recv().await, Some(false));
     assert_eq!(statuses.recv().await, Some(false));
@@ -661,7 +661,7 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
     actor.send("queued-first").await.unwrap();
     actor.send("queued-second").await.unwrap();
 
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     release.notify_one();
     handle.shutdown().await.unwrap();
 

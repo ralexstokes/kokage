@@ -138,6 +138,18 @@ pub enum CallError {
     },
 }
 
+/// Errors returned by a lower-level [`ReplyReceiver`](crate::ReplyReceiver).
+#[derive(Debug, Error, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ReplyError {
+    /// Every reply sender was dropped without answering.
+    #[error("reply sender was dropped without answering")]
+    Dropped,
+    /// The requested reply deadline elapsed.
+    #[error("reply deadline elapsed")]
+    Timeout,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SendError, SendErrorKind};
