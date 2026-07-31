@@ -16,7 +16,9 @@ use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context,
     ControlError, DynamicTree, ExitResult, Reply, RestartPolicy, ScopeRef, SendError, Shutdown,
     Strategy, SupervisorError, TaskSpec, Tree,
-    observe::{LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView},
+    observe::{
+        ChildEventKind, LifecycleEventKind, SupervisorSnapshotReceiver, SupervisorStateView,
+    },
     raw::{RawActor, RawContext},
 };
 use tokio::{
@@ -1162,7 +1164,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
     counter.send(CounterMsg::Add(5)).await.expect("add sent");
     assert_eq!(
         counter
-            .call(Duration::from_secs(1), CounterMsg::Total)
+            .call(CounterMsg::Total, Duration::from_secs(1))
             .await
             .expect("total replied"),
         5
@@ -1179,7 +1181,7 @@ async fn supervised_restart_constructs_fresh_actor_state() {
 
     assert_eq!(
         counter
-            .call(Duration::from_secs(2), CounterMsg::Total)
+            .call(CounterMsg::Total, Duration::from_secs(2))
             .await
             .expect("total replied after restart"),
         0,
@@ -1366,7 +1368,9 @@ async fn actor_shutdown_timeout_is_truthful_across_layers() {
             .is_some_and(|exit| exit.timed_out())
     );
     while let Some(event) = lifecycle.next().await {
-        if let LifecycleEventKind::ChildExited { exit, .. } = event.kind {
+        if let LifecycleEventKind::Child(child) = event.kind
+            && let ChildEventKind::Exited { exit, .. } = child.kind
+        {
             assert!(exit.timed_out());
             return;
         }

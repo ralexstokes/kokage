@@ -15,12 +15,12 @@ use crate::{
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
-        BuildError, CancellationToken, ChildMembershipView, ChildSnapshot, ChildSpec,
-        ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle, ExitStatus, Guard,
-        LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, MailboxShutdown,
-        RestartPolicy, RunningSupervisor, ScopeKind, ScopePathSegment, Shutdown, Strategy,
-        SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
-        SupervisorStateView, TaskSpec,
+        BuildError, CancellationToken, ChildEventKind, ChildMembershipView, ChildSnapshot,
+        ChildSpec, ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle,
+        ExitStatus, Guard, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
+        LifecycleWatch, MailboxShutdown, RestartPolicy, RunningSupervisor, ScopeKind,
+        ScopePathSegment, Shutdown, Strategy, SupervisorError, SupervisorHandle,
+        SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView, TaskSpec,
     },
 };
 
@@ -365,30 +365,22 @@ async fn track_task(inner: Arc<TaskRefInner>, mut events: LifecycleWatch) {
 
     while let Some(event) = events.next().await {
         let matches_task = match &event.kind {
-            LifecycleEventKind::ChildAdded {
-                child_id, lineage, ..
+            LifecycleEventKind::Child(child) => {
+                child.child_id == inner.id.as_ref() && child.lineage == inner.lineage
             }
-            | LifecycleEventKind::ChildStarted {
-                child_id, lineage, ..
-            }
-            | LifecycleEventKind::ChildRestartScheduled {
-                child_id, lineage, ..
-            }
-            | LifecycleEventKind::ChildExited {
-                child_id, lineage, ..
-            }
-            | LifecycleEventKind::ChildRemoved {
-                child_id, lineage, ..
-            } => child_id == inner.id.as_ref() && *lineage == inner.lineage,
             _ => false,
         };
 
         if matches_task {
             match &event.kind {
-                LifecycleEventKind::ChildExited { exit, .. } => {
+                LifecycleEventKind::Child(child)
+                    if let ChildEventKind::Exited { exit, .. } = &child.kind =>
+                {
                     last_exit = Some(exit.clone());
                 }
-                LifecycleEventKind::ChildRemoved { .. } => {
+                LifecycleEventKind::Child(child)
+                    if matches!(child.kind, ChildEventKind::Removed) =>
+                {
                     let outcome = last_exit.clone().map_or_else(
                         || {
                             Err(TaskError::Unavailable {
@@ -632,8 +624,17 @@ pub enum ScopeChange {
     /// Every stream begins with a reset, and observer lag produces another one
     /// after the stream has registered a fresh gap-free subscription.
     Reset(SupervisorSnapshot),
-    /// Apply one ordered lifecycle transition after the preceding reset.
-    Event(LifecycleEvent),
+    /// One ordered lifecycle transition and the authoritative current state.
+    ///
+    /// The snapshot is read after the transition is published. It can include
+    /// newer changes, so consumers should treat it as current truth rather
+    /// than replaying the event into a separate reducer.
+    Event {
+        /// Transition that woke the stream.
+        event: LifecycleEvent,
+        /// Current complete point-in-time view.
+        snapshot: SupervisorSnapshot,
+    },
 }
 
 /// A direct-child lifecycle stream that automatically recovers from lag.
@@ -891,7 +892,8 @@ impl ScopeChanges {
                 }
                 self.sequence = sequence;
             }
-            return Some(ScopeChange::Event(event));
+            let snapshot = self.scope.snapshot();
+            return Some(ScopeChange::Event { event, snapshot });
         }
     }
 }
@@ -1036,20 +1038,20 @@ impl DynamicScopeRef {
 
     /// Spawns finite one-shot work and removes its membership after completion.
     ///
-    /// This is the concise job-oriented counterpart to [`add_task`](Self::add_task).
-    /// The task never restarts; use [`add_task_spec`](Self::add_task_spec) when
-    /// finite work needs a different restart or retention policy.
-    pub async fn spawn_job<F, Fut>(
+    /// This is the concise one-shot counterpart to [`add_task`](Self::add_task).
+    /// The factory is `FnOnce`, so the task can consume owned inputs. The task
+    /// never restarts; use [`add_task_spec`](Self::add_task_spec) when finite
+    /// work needs a different restart or retention policy.
+    pub async fn spawn_once<F, Fut>(
         &self,
         id: impl Into<String>,
         task: F,
     ) -> Result<TaskRef, ControlError>
     where
-        F: Fn(crate::TaskContext) -> Fut + Send + Sync + 'static,
+        F: FnOnce(crate::TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = ExitResult> + Send + 'static,
     {
-        self.add_task_spec(TaskSpec::new(id, task).temporary())
-            .await
+        self.add_task_spec(TaskSpec::once(id, task)).await
     }
 
     /// Adds an explicitly configured supervised task child to this scope.

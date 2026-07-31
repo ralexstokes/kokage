@@ -10,8 +10,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::supervisor::{
-    CancellationToken, CompletionOnDrop, ExitStatus, Guard, LifecycleEvent, LifecycleEventKind,
-    ScopeKind,
+    CancellationToken, ChildEventKind, CompletionOnDrop, ExitStatus, Guard, LifecycleEvent,
+    LifecycleEventKind, ScopeKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
 };
@@ -93,7 +93,8 @@ impl CompletionOperation {
             {
                 let needs_realign = matches!(
                     &event.kind,
-                    LifecycleEventKind::ChildAdded { .. } | LifecycleEventKind::ChildExited { .. }
+                    LifecycleEventKind::Child(child)
+                        if matches!(child.kind, ChildEventKind::Added | ChildEventKind::Exited { .. })
                 );
                 self.set.apply(&event);
                 if needs_realign {
@@ -255,21 +256,24 @@ impl CompletionSet {
 
     fn apply(&mut self, event: &LifecycleEvent) {
         let (child_id, lineage, transition) = match &event.kind {
-            LifecycleEventKind::ChildAdded {
-                child_id, lineage, ..
-            }
-            | LifecycleEventKind::ChildStarted {
-                child_id, lineage, ..
-            } => (child_id, *lineage, CompletionTransition::Running),
-            LifecycleEventKind::ChildExited {
-                child_id,
-                lineage,
-                exit,
-                ..
-            } => (child_id, *lineage, CompletionTransition::Exited(exit)),
-            LifecycleEventKind::ChildRemoved {
-                child_id, lineage, ..
-            } => (child_id, *lineage, CompletionTransition::Removed),
+            LifecycleEventKind::Child(child) => match &child.kind {
+                ChildEventKind::Added | ChildEventKind::Started { .. } => (
+                    &child.child_id,
+                    child.lineage,
+                    CompletionTransition::Running,
+                ),
+                ChildEventKind::Exited { exit, .. } => (
+                    &child.child_id,
+                    child.lineage,
+                    CompletionTransition::Exited(exit),
+                ),
+                ChildEventKind::Removed => (
+                    &child.child_id,
+                    child.lineage,
+                    CompletionTransition::Removed,
+                ),
+                ChildEventKind::RestartScheduled { .. } => return,
+            },
             _ => return,
         };
         if !self.awaits(child_id) {
@@ -401,42 +405,26 @@ mod tests {
         kind: TestLifecycleKind,
     ) -> LifecycleEvent {
         let kind = match kind {
-            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
-            },
-            TestLifecycleKind::Started { generation } => LifecycleEventKind::ChildStarted {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
-                generation,
-            },
+            TestLifecycleKind::Added => ChildEventKind::Added,
+            TestLifecycleKind::Started { generation } => ChildEventKind::Started { generation },
             TestLifecycleKind::Exited {
                 generation,
                 reason,
                 cancelled,
-            } => LifecycleEventKind::ChildExited {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
+            } => ChildEventKind::Exited {
                 generation,
                 exit: ExitStatus::new(reason, cancelled),
             },
-            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved {
-                seq,
-                child_id: child_id.to_owned(),
-                lineage,
-                total_restarts: 0,
-                child_restart_count: 0,
-            },
+            TestLifecycleKind::Removed => ChildEventKind::Removed,
         };
+        let kind = LifecycleEventKind::Child(crate::supervisor::ChildEvent {
+            seq,
+            child_id: child_id.to_owned(),
+            lineage,
+            total_restarts: 0,
+            child_restart_count: 0,
+            kind,
+        });
         LifecycleEvent::local(kind)
     }
 

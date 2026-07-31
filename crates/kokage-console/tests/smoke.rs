@@ -495,15 +495,13 @@ async fn ws_streams_events() {
     let frame = read_non_stats_json(&mut socket).await;
     assert_eq!(frame["type"], "event");
     assert_eq!(frame["data"]["scope_path"], json!([]));
-    assert_eq!(frame["data"]["kind"]["ChildStarted"]["child_id"], "worker");
-    assert!(frame["data"]["kind"]["ChildStarted"]["seq"].is_number());
-    assert!(frame["data"]["kind"]["ChildStarted"]["lineage"].is_number());
-    assert_eq!(frame["data"]["kind"]["ChildStarted"]["total_restarts"], 0);
-    assert_eq!(
-        frame["data"]["kind"]["ChildStarted"]["child_restart_count"],
-        0
-    );
-    assert_eq!(frame["data"]["kind"]["ChildStarted"]["generation"], 0);
+    let child = &frame["data"]["kind"]["Child"];
+    assert_eq!(child["child_id"], "worker");
+    assert!(child["seq"].is_number());
+    assert!(child["lineage"].is_number());
+    assert_eq!(child["total_restarts"], 0);
+    assert_eq!(child["child_restart_count"], 0);
+    assert_eq!(child["kind"]["Started"]["generation"], 0);
 }
 
 #[tokio::test]

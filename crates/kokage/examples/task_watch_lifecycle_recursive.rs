@@ -1,6 +1,6 @@
 use kokage::{
     Tree,
-    observe::{LifecycleEvent, LifecycleEventKind},
+    observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
 };
 use tokio::time::{Duration, sleep};
 
@@ -56,37 +56,23 @@ fn print_event(event: &LifecycleEvent) {
         LifecycleEventKind::SupervisorStopped => {
             println!("{scope}: supervisor stopped");
         }
-        LifecycleEventKind::ChildAdded { child_id, .. } => {
-            println!("{scope}: child added: {child_id}")
-        }
-        LifecycleEventKind::ChildStarted {
-            child_id,
-            generation,
-            ..
-        } => {
-            println!("{scope}: child started: {child_id} generation={generation}")
-        }
-        LifecycleEventKind::ChildExited {
-            child_id,
-            generation,
-            exit,
-            ..
-        } => {
-            println!("{scope}: child exited: {child_id} generation={generation} exit={exit:?}")
-        }
-        LifecycleEventKind::ChildRemoved { child_id, .. } => {
-            println!("{scope}: child removed: {child_id}");
-        }
-        LifecycleEventKind::ChildRestartScheduled {
-            child_id,
-            generation,
-            delay,
-            ..
-        } => {
-            println!(
-                "{scope}: child restart scheduled: {child_id} generation={generation} delay={delay:?}"
-            );
-        }
+        LifecycleEventKind::Child(child) => match &child.kind {
+            ChildEventKind::Added => println!("{scope}: child added: {}", child.child_id),
+            ChildEventKind::Started { generation } => println!(
+                "{scope}: child started: {} generation={generation}",
+                child.child_id
+            ),
+            ChildEventKind::Exited { generation, exit } => println!(
+                "{scope}: child exited: {} generation={generation} exit={exit:?}",
+                child.child_id
+            ),
+            ChildEventKind::Removed => println!("{scope}: child removed: {}", child.child_id),
+            ChildEventKind::RestartScheduled { generation, delay } => println!(
+                "{scope}: child restart scheduled: {} generation={generation} delay={delay:?}",
+                child.child_id
+            ),
+            _ => println!("{scope}: unknown child lifecycle event"),
+        },
         LifecycleEventKind::RestartIntensityExceeded { total_restarts, .. } => {
             println!("{scope}: restart intensity exceeded after {total_restarts} restarts");
         }

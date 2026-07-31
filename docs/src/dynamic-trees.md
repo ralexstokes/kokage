@@ -49,7 +49,7 @@ they belong to ordered scopes. Membership is managed through the
 
 - `scope.add_actor(id, factory).await?` — returns the typed `ActorRef`.
 - `scope.add_task(id, task).await?` — supervised tasks work too.
-- `scope.spawn_job(id, task).await?` — finite, non-restarting work that removes
+- `scope.spawn_once(id, task).await?` — finite, non-restarting work that removes
   its membership on completion.
 - `scope.add_subtree(id, tree).await?` — insert a whole *ordered or dynamic*
   subtree, and get back the new scope's `ScopeRef`.
@@ -112,11 +112,12 @@ actor holding the `sessions` scope (it is cheaply cloneable) can spawn a
 session actor per request, hand out its `ActorRef`, and remove it when the
 client leaves.
 
-## Job scopes: run to completion, then clean up
+## One-shot work: run to completion, then clean up
 
-`spawn_job` gives dynamic trees straightforward batch semantics. Finished
+`spawn_once` gives dynamic trees straightforward batch semantics. Finished
 work leaves the scope; the returned `TaskRef` remains tied to that exact
-membership and preserves its completion even when the task exits quickly:
+membership and preserves its completion even when the task exits quickly. Its
+factory is `FnOnce`, so it can consume owned inputs:
 
 ```rust
 # use kokage::prelude::*;
@@ -127,7 +128,7 @@ let scope = batch.scope();
 let runtime = batch.spawn()?;
 
 let job = scope
-    .spawn_job("job-42", |_ctx| async move { Ok(()) })
+    .spawn_once("job-42", |_ctx| async move { Ok(()) })
     .await?;
 
 let exit = job.wait().await?;

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use kokage::{ExitStatus, MonitorEvent, TimerKey, prelude::*};
+use kokage::{ExitStatus, TimerKey, prelude::*};
 use tokio::time::Instant;
 
 use crate::{
@@ -122,19 +122,19 @@ impl Actor for Reconciler {
                 self.rearm(ctx);
             }
             ReconcilerMsg::Feed { venue, event } => {
-                match event {
-                    MonitorEvent::Started { generation, .. } => {
+                match event.kind {
+                    MonitorEventKind::Started { generation } => {
                         tracing::debug!(venue, generation, "venue feed started");
                         self.transition(venue, VenueHealth::Stale);
                     }
-                    MonitorEvent::Exited { status, .. } => {
+                    MonitorEventKind::Exited { status, .. } => {
                         self.exit_reasons.entry(venue).or_default().push(status);
                         self.transition(venue, VenueHealth::Down);
                     }
-                    MonitorEvent::Removed { .. } => {
+                    MonitorEventKind::Removed { .. } => {
                         self.transition(venue, VenueHealth::Down);
                     }
-                    MonitorEvent::Lagged { dropped, .. } => {
+                    MonitorEventKind::Lagged { dropped } => {
                         // Overload resync point: the reconciler re-derives
                         // health from subsequent events and the next tick, so
                         // no transition is applied here.

@@ -27,5 +27,5 @@ pub use factory::ActorFactory;
 pub use graph::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit};
 pub(crate) use graph::{DEFAULT_MAILBOX_CAPACITY, RunnableActor, RunnableActorBuilder};
 pub use handler::Actor;
-pub use monitor::MonitorEvent;
+pub use monitor::{MonitorEvent, MonitorEventKind};
 pub use raw::{ExitResult, RawActor};

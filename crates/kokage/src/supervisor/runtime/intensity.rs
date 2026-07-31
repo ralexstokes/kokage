@@ -18,7 +18,9 @@ use crate::supervisor::restart::{Backoff, RestartPolicy};
 /// that resets after an incarnation runs longer than the intensity window; it is
 /// independent of timestamp eviction from the intensity window.
 pub(crate) struct RestartTracker {
-    intensity: RestartPolicy,
+    max_restarts: usize,
+    within: Duration,
+    backoff: Backoff,
     times: VecDeque<Instant>,
     rng: JitterRng,
     total_restarts: u64,
@@ -28,8 +30,14 @@ pub(crate) struct RestartTracker {
 
 impl RestartTracker {
     pub(crate) fn new(intensity: RestartPolicy) -> Self {
+        let (max_restarts, within, backoff) =
+            intensity
+                .settings()
+                .unwrap_or((0, Duration::from_secs(30), Backoff::None));
         Self {
-            intensity,
+            max_restarts,
+            within,
+            backoff,
             times: VecDeque::new(),
             rng: JitterRng::new(),
             total_restarts: 0,
@@ -46,7 +54,7 @@ impl RestartTracker {
         if self
             .run_started_at
             .take()
-            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within)
+            .is_some_and(|started_at| now.duration_since(started_at) > self.within)
         {
             self.consecutive_restarts = 0;
         }
@@ -54,7 +62,7 @@ impl RestartTracker {
 
     pub(crate) fn record_restart(&mut self, now: Instant) {
         while let Some(front) = self.times.front() {
-            if now.duration_since(*front) > self.intensity.within {
+            if now.duration_since(*front) > self.within {
                 self.times.pop_front();
             } else {
                 break;
@@ -66,11 +74,11 @@ impl RestartTracker {
     }
 
     pub(crate) fn exceeded(&self) -> bool {
-        self.times.len() > self.intensity.max_restarts
+        self.times.len() > self.max_restarts
     }
 
     pub(crate) fn backoff(&mut self) -> Duration {
-        let (deterministic, jitter) = match self.intensity.backoff {
+        let (deterministic, jitter) = match self.backoff {
             Backoff::None => return Duration::ZERO,
             Backoff::Fixed(delay) => return delay,
             Backoff::Exponential {
@@ -176,8 +184,11 @@ mod tests {
         let intensity = RestartPolicy::on_failure()
             .limit(10, Duration::from_secs(10))
             .backoff(policy);
+        let (max_restarts, within, backoff) = intensity.settings().expect("restartable policy");
         RestartTracker {
-            intensity,
+            max_restarts,
+            within,
+            backoff,
             times: VecDeque::new(),
             rng: JitterRng {
                 state: 0x1234_5678_9abc_def0,

@@ -28,20 +28,14 @@ error[E0432]: unresolved import `kokage::prelude::RawActor`
 11 | use kokage::prelude::RawActor;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^ no `RawActor` in `prelude`
 
-error[E0432]: unresolved import `kokage::prelude::TaskContext`
+error[E0432]: unresolved import `kokage::prelude::ActorSlot`
   --> tests/ui/public-api/prelude_export_tier.rs:12:5
    |
-12 | use kokage::prelude::TaskContext;
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `TaskContext` in `prelude`
-
-error[E0432]: unresolved import `kokage::prelude::ActorSlot`
-  --> tests/ui/public-api/prelude_export_tier.rs:13:5
-   |
-13 | use kokage::prelude::ActorSlot;
+12 | use kokage::prelude::ActorSlot;
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ActorSlot` in `prelude`
    |
 help: a similar name exists in the module
    |
-13 - use kokage::prelude::ActorSlot;
-13 + use kokage::prelude::ActorSpec;
+12 - use kokage::prelude::ActorSlot;
+12 + use kokage::prelude::ActorSpec;
    |

@@ -31,7 +31,7 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
     let runtime = DynamicTree::new().spawn().expect("tree builds");
     let task = runtime
         .scope()
-        .spawn_job("job", |_| async { Ok(()) })
+        .spawn_once("job", |_| async { Ok(()) })
         .await
         .expect("task is inserted");
 
@@ -42,6 +42,33 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
     assert!(exit.is_completed());
     assert!(task.snapshot().is_none());
 
+    runtime.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
+async fn spawn_once_accepts_a_consuming_factory() {
+    let runtime = DynamicTree::new().spawn().expect("tree builds");
+    let (observed_tx, observed_rx) = oneshot::channel();
+    let payload = String::from("consumed exactly once");
+    let task = runtime
+        .scope()
+        .spawn_once("consuming-job", move |_| async move {
+            observed_tx.send(payload).expect("receiver remains live");
+            Ok(())
+        })
+        .await
+        .expect("one-shot task is inserted");
+
+    assert_eq!(
+        observed_rx.await.expect("task reports payload"),
+        "consumed exactly once"
+    );
+    assert!(
+        task.wait()
+            .await
+            .expect("task remains observable")
+            .is_completed()
+    );
     runtime.shutdown().await.expect("tree stops");
 }
 

@@ -105,19 +105,24 @@ impl Actor for OrderRouter {
                     CALL_DEADLINE,
                     async move {
                         let result = gateway
-                            .call(CALL_DEADLINE, |reply| GatewayMsg::Place {
-                                key: key.clone(),
-                                symbol,
-                                qty,
-                                reply,
-                            })
+                            .call(
+                                |reply| GatewayMsg::Place {
+                                    key: key.clone(),
+                                    symbol,
+                                    qty,
+                                    reply,
+                                },
+                                CALL_DEADLINE,
+                            )
                             .await;
                         let (disposition, submitted) = match result {
                             Ok(PlaceOutcome::Accepted { .. }) => (
                                 SubmitDisposition::Confirmed,
                                 SubmitResult::Placed(key.clone()),
                             ),
-                            Err(CallError::Timeout { .. } | CallError::ReplyDropped { .. }) => (
+                            Err(
+                                CallError::ResponseTimedOut { .. } | CallError::ReplyDropped { .. },
+                            ) => (
                                 SubmitDisposition::Unknown,
                                 SubmitResult::Unknown(key.clone()),
                             ),
@@ -182,7 +187,7 @@ impl Actor for OrderRouter {
                     CALL_DEADLINE,
                     async move {
                         match gateway
-                            .call(CALL_DEADLINE, |reply| GatewayMsg::Cancel { key, reply })
+                            .call(|reply| GatewayMsg::Cancel { key, reply }, CALL_DEADLINE)
                             .await
                         {
                             Ok(outcome) => outcome,
@@ -213,10 +218,13 @@ impl Actor for OrderRouter {
                 for (key, intent) in unknown {
                     let gateway = self.gateways.get(intent.venue).expect("known venue");
                     let query = gateway
-                        .call(CALL_DEADLINE, |reply| GatewayMsg::Query {
-                            key: key.clone(),
-                            reply,
-                        })
+                        .call(
+                            |reply| GatewayMsg::Query {
+                                key: key.clone(),
+                                reply,
+                            },
+                            CALL_DEADLINE,
+                        )
                         .await;
                     match query {
                         Ok(QueryOutcome::Found(_)) => {
@@ -232,12 +240,15 @@ impl Actor for OrderRouter {
                         }
                         Ok(QueryOutcome::NotFound) => {
                             let placed = gateway
-                                .call(CALL_DEADLINE, |reply| GatewayMsg::Place {
-                                    key: key.clone(),
-                                    symbol: intent.symbol,
-                                    qty: intent.qty,
-                                    reply,
-                                })
+                                .call(
+                                    |reply| GatewayMsg::Place {
+                                        key: key.clone(),
+                                        symbol: intent.symbol,
+                                        qty: intent.qty,
+                                        reply,
+                                    },
+                                    CALL_DEADLINE,
+                                )
                                 .await;
                             if matches!(placed, Ok(PlaceOutcome::Accepted { .. })) {
                                 self.intents.get_mut(&key).expect("known intent").state =

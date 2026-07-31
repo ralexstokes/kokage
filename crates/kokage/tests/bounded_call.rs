@@ -70,14 +70,14 @@ async fn timeout_before_mailbox_binding_drops_the_request() {
     let actor = spec.into_host();
 
     assert!(matches!(
-        rpc.call(CALL_TIMEOUT, Request::Get).await,
-        Err(CallError::Timeout { actor_id, .. }) if actor_id == "rpc"
+        rpc.call(Request::Get, CALL_TIMEOUT).await,
+        Err(CallError::AcceptanceTimedOut { actor_id, .. }) if actor_id == "rpc"
     ));
     assert_eq!(rpc.stats().messages_accepted, 0);
 
     let (stop_token, task) = start(actor);
     assert_eq!(
-        rpc.call(CALL_TIMEOUT, Request::Get)
+        rpc.call(Request::Get, CALL_TIMEOUT)
             .await
             .expect("later call succeeds"),
         "ok"
@@ -175,8 +175,8 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
         .await
         .expect("first message fills the mailbox");
     assert!(matches!(
-        rpc.call(CALL_TIMEOUT, BackpressuredRequest::Get).await,
-        Err(CallError::Timeout { actor_id, .. }) if actor_id == "rpc"
+        rpc.call(BackpressuredRequest::Get, CALL_TIMEOUT).await,
+        Err(CallError::AcceptanceTimedOut { actor_id, .. }) if actor_id == "rpc"
     ));
     assert_eq!(rpc.stats().messages_accepted, 1);
 
@@ -238,7 +238,7 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
 
     let call = tokio::spawn({
         let rpc = rpc.clone();
-        async move { rpc.call(CALL_TIMEOUT, Request::Get).await }
+        async move { rpc.call(Request::Get, CALL_TIMEOUT).await }
     });
     accepted_rx
         .recv()
@@ -246,7 +246,7 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
         .expect("actor accepted the request");
     assert!(matches!(
         call.await.expect("call task joins"),
-        Err(CallError::Timeout { actor_id, .. }) if actor_id == "rpc"
+        Err(CallError::ResponseTimedOut { actor_id, .. }) if actor_id == "rpc"
     ));
     assert_eq!(effects.load(Ordering::SeqCst), 0);
 
@@ -292,7 +292,7 @@ async fn accepted_unread_request_lost_with_incarnation_reports_reply_dropped() {
 
     let call = tokio::spawn({
         let rpc = rpc.clone();
-        async move { rpc.call(CALL_TIMEOUT, Request::Get).await }
+        async move { rpc.call(Request::Get, CALL_TIMEOUT).await }
     });
     while rpc.stats().messages_accepted == 0 {
         tokio::task::yield_now().await;

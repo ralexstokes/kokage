@@ -11,7 +11,9 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, Context, ControlError, DynamicScopeRef, DynamicTree, ExitResult,
     Guard, Shutdown, Strategy, SupervisorError, Tree,
-    observe::{ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot},
+    observe::{
+        ChildEventKind, ChildMembershipView, LifecycleEvent, LifecycleEventKind, SupervisorSnapshot,
+    },
 };
 
 use crate::{
@@ -92,14 +94,7 @@ fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountE
 }
 
 fn lifecycle_seq(event: &LifecycleEvent) -> Option<u64> {
-    match &event.kind {
-        LifecycleEventKind::ChildAdded { seq, .. }
-        | LifecycleEventKind::ChildStarted { seq, .. }
-        | LifecycleEventKind::ChildExited { seq, .. }
-        | LifecycleEventKind::ChildRemoved { seq, .. }
-        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => Some(*seq),
-        _ => None,
-    }
+    event.seq()
 }
 
 fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountEventDisposition {
@@ -325,10 +320,11 @@ impl Actor for Router {
                     MountEventDisposition::Apply => {
                         self.alignment_seq = lifecycle_seq(&event)
                             .expect("only child transitions have an alignment sequence");
-                        if let LifecycleEventKind::ChildAdded { child_id, .. } = event.kind
-                            && !self.routes_subtree(&child_id)
+                        if let LifecycleEventKind::Child(child) = event.kind
+                            && matches!(child.kind, ChildEventKind::Added)
+                            && !self.routes_subtree(&child.child_id)
                         {
-                            self.pipeline_sweep(child_id, ctx);
+                            self.pipeline_sweep(child.child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}

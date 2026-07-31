@@ -236,14 +236,16 @@ impl SubtreeSpec {
 
 macro_rules! tree_common_methods {
     () => {
-        /// Sets the restart policy inherited by actors in this scope.
+        /// Sets the restart policy inherited by all direct children in this
+        /// scope, including actors, tasks, and subtree edges.
         #[must_use]
         pub fn default_restart(mut self, restart: RestartPolicy) -> Self {
             self.inner = self.inner.default_restart(restart);
             self
         }
 
-        /// Sets the shutdown policy inherited by actors in this scope.
+        /// Sets the shutdown policy inherited by all direct children in this
+        /// scope, including actors, tasks, and subtree edges.
         #[must_use]
         pub fn default_shutdown(mut self, shutdown: Shutdown) -> Self {
             self.inner = self.inner.default_shutdown(shutdown);

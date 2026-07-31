@@ -127,10 +127,11 @@ seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
 with `ActorSpec::restart(...)`, or set a scope-wide default with
 `Tree::default_restart(...)`.
 
-The constructors and builders cover normal configuration. The public
-`condition`, `max_restarts`, `within`, and `backoff` fields are available when
-configuration must be inspected or assembled generically; `condition` uses
-[`RestartCondition`].
+The constructors and builders cover normal configuration. `RestartPolicy` is
+also a public enum, so generic configuration code can match or construct its
+`Always`, `OnFailure`, and `Never` variants directly. Restartable variants
+carry `max_restarts`, `within`, and `backoff`; `Never` carries no meaningless
+budget fields.
 
 ```rust
 # use std::time::Duration;
@@ -159,6 +160,5 @@ level either absorbs it or the root gives up and
 
 Which brings us to shaping those trees.
 
-[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/struct.RestartPolicy.html
-[`RestartCondition`]: https://stokes.io/kokage/api/kokage/enum.RestartCondition.html
+[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/enum.RestartPolicy.html
 [`Backoff`]: https://stokes.io/kokage/api/kokage/enum.Backoff.html

@@ -1,4 +1,9 @@
-use std::{any::Any, future::Future, pin::Pin, sync::Arc};
+use std::{
+    any::Any,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     actor::ExitResult,
@@ -67,6 +72,10 @@ struct ClosureFactory<F> {
     f: F,
 }
 
+struct OneShotFactory<F> {
+    f: Mutex<Option<F>>,
+}
+
 impl<F, Fut> ChildFactory for ClosureFactory<F>
 where
     F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
@@ -74,6 +83,26 @@ where
 {
     fn make(&self, ctx: TaskContext) -> ChildFuture {
         Box::pin((self.f)(ctx))
+    }
+}
+
+impl<F, Fut> ChildFactory for OneShotFactory<F>
+where
+    F: FnOnce(TaskContext) -> Fut + Send + 'static,
+    Fut: Future<Output = ExitResult> + Send + 'static,
+{
+    fn make(&self, ctx: TaskContext) -> ChildFuture {
+        let factory = self
+            .f
+            .lock()
+            .expect("one-shot task factory lock poisoned")
+            .take();
+        match factory {
+            Some(factory) => Box::pin(factory(ctx)),
+            None => Box::pin(async {
+                Err(std::io::Error::other("one-shot task factory invoked more than once").into())
+            }),
+        }
     }
 }
 
@@ -110,6 +139,30 @@ impl TaskSpec {
                     readiness: ChildReadiness::Immediate,
                     attachment: None,
                     kind: ChildKind::Task(make_child_factory(f)),
+                }),
+            },
+        }
+    }
+
+    pub(crate) fn once<F, Fut>(id: impl Into<String>, f: F) -> Self
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = ExitResult> + Send + 'static,
+    {
+        Self {
+            spec: ChildSpec {
+                inner: Arc::new(ChildDefinition {
+                    id: id.into(),
+                    restart: RestartPolicy::never(),
+                    restart_is_default: false,
+                    shutdown_policy: Shutdown::default(),
+                    shutdown_is_default: true,
+                    remove_when_done: true,
+                    readiness: ChildReadiness::Immediate,
+                    attachment: None,
+                    kind: ChildKind::Task(Arc::new(OneShotFactory {
+                        f: Mutex::new(Some(f)),
+                    })),
                 }),
             },
         }

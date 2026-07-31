@@ -11,8 +11,8 @@ use std::{
 };
 
 use crate::supervisor::{
-    BoxError, ChildSnapshot, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
-    RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
+    BoxError, ChildEventKind, ChildSnapshot, ExitStatus, LifecycleEvent, LifecycleEventKind,
+    LifecycleWatch, RestartPolicy, SupervisorError, SupervisorHandle, SupervisorSnapshot,
     SupervisorSnapshotReceiver, TaskSpec,
 };
 use tokio::{
@@ -260,51 +260,39 @@ impl EventWatch {
             LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
             LifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
             LifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
-            LifecycleEventKind::ChildAdded { .. } => return Ok(None),
-            LifecycleEventKind::ChildStarted {
-                child_id,
-                generation,
-                ..
-            } => {
-                // This compatibility shim preserves the removed test-event
-                // shape. It deliberately assumes runtime generations are
-                // contiguous when synthesizing `ChildRestarted`. If that
-                // invariant changes, migrate these assertions to the raw
-                // lifecycle events instead of extending this fiction.
-                if generation > 0 {
-                    pending = Some(ObservedEvent::ChildRestarted {
-                        id: child_id.clone(),
-                        old_generation: generation - 1,
-                        new_generation: generation,
-                    });
+            LifecycleEventKind::Child(child) => match child.kind {
+                ChildEventKind::Added => return Ok(None),
+                ChildEventKind::Started { generation } => {
+                    // This compatibility shim preserves the removed test-event
+                    // shape. It deliberately assumes runtime generations are
+                    // contiguous when synthesizing `ChildRestarted`. If that
+                    // invariant changes, migrate these assertions to the raw
+                    // lifecycle events instead of extending this fiction.
+                    if generation > 0 {
+                        pending = Some(ObservedEvent::ChildRestarted {
+                            id: child.child_id.clone(),
+                            old_generation: generation - 1,
+                            new_generation: generation,
+                        });
+                    }
+                    ObservedEvent::ChildStarted {
+                        id: child.child_id,
+                        generation,
+                    }
                 }
-                ObservedEvent::ChildStarted {
-                    id: child_id,
+                ChildEventKind::Exited { generation, exit } => ObservedEvent::ChildExited {
+                    id: child.child_id,
                     generation,
+                    status: exit.into(),
+                },
+                ChildEventKind::Removed => ObservedEvent::ChildRemoved { id: child.child_id },
+                ChildEventKind::RestartScheduled { generation, delay } => {
+                    ObservedEvent::ChildRestartScheduled {
+                        id: child.child_id,
+                        generation,
+                        delay,
+                    }
                 }
-            }
-            LifecycleEventKind::ChildExited {
-                child_id,
-                generation,
-                exit,
-                ..
-            } => ObservedEvent::ChildExited {
-                id: child_id,
-                generation,
-                status: exit.into(),
-            },
-            LifecycleEventKind::ChildRemoved { child_id, .. } => {
-                ObservedEvent::ChildRemoved { id: child_id }
-            }
-            LifecycleEventKind::ChildRestartScheduled {
-                child_id,
-                generation,
-                delay,
-                ..
-            } => ObservedEvent::ChildRestartScheduled {
-                id: child_id,
-                generation,
-                delay,
             },
             LifecycleEventKind::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded

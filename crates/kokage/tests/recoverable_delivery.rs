@@ -475,10 +475,13 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
     assert_eq!(timeout_error.into_message(), "bounded");
 
     let call_error: CallError = actor
-        .call(Duration::from_secs(1), |reply: Reply<()>| {
-            drop(reply);
-            "request".to_owned()
-        })
+        .call(
+            |reply: Reply<()>| {
+                drop(reply);
+                "request".to_owned()
+            },
+            Duration::from_secs(1),
+        )
         .await
         .expect_err("terminated actor rejects call delivery");
     assert!(matches!(

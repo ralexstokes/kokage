@@ -90,14 +90,14 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
 
     assert_eq!(
         actor_ref
-            .call(Duration::from_secs(1), ProbeMsg::Increment)
+            .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("first incarnation replies"),
         (0, 1)
     );
     assert_eq!(
         actor_ref
-            .call(Duration::from_secs(1), ProbeMsg::Increment)
+            .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("first incarnation replies again"),
         (0, 2)
@@ -117,7 +117,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
 
     assert_eq!(
         actor_ref
-            .call(Duration::from_secs(1), ProbeMsg::Increment)
+            .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("replacement replies"),
         (1, 1)

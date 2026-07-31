@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildSpec, CompletionError, LifecycleEventKind, RestartPolicy, SnapshotRecvError, Supervisor,
-    TaskSpec,
+    ChildEventKind, ChildSpec, CompletionError, LifecycleEventKind, RestartPolicy,
+    SnapshotRecvError, Supervisor, TaskSpec,
 };
 use tokio::time::timeout;
 
@@ -25,12 +25,11 @@ async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
         loop {
             let event = events.next().await.expect("lifecycle remains open");
             assert!(event.scope_path.is_empty());
-            if let LifecycleEventKind::ChildAdded {
-                seq, ref child_id, ..
-            } = event.kind
-                && child_id == "worker"
+            if let LifecycleEventKind::Child(child) = event.kind
+                && child.child_id == "worker"
+                && matches!(child.kind, ChildEventKind::Added)
             {
-                break seq;
+                break child.seq;
             }
         }
     })
@@ -64,7 +63,9 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
                 .expect("recursive watch remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
+                LifecycleEventKind::Child(ref child)
+                    if child.child_id == "leaf"
+                        && matches!(child.kind, ChildEventKind::Started { .. })
             ) {
                 break event;
             }
@@ -81,7 +82,9 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
             assert!(event.scope_path.is_empty());
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "nested"
+                LifecycleEventKind::Child(ref child)
+                    if child.child_id == "nested"
+                        && matches!(child.kind, ChildEventKind::Started { .. })
             ) {
                 break event;
             }

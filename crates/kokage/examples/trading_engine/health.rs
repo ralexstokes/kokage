@@ -62,9 +62,10 @@ impl Actor for Health {
                     // already-accepted kill switch still takes effect.
                     let _ = self
                         .control
-                        .call(Duration::from_millis(500), |reply| ControlMsg::KillSwitch {
-                            reply,
-                        })
+                        .call(
+                            |reply| ControlMsg::KillSwitch { reply },
+                            Duration::from_millis(500),
+                        )
                         .await;
                 }
             }

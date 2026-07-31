@@ -36,11 +36,14 @@ pub struct AgentRun {
 impl AgentRun {
     async fn append(&self, entry: JournalEntry) -> ExitResult {
         self.journal
-            .call(PHASE_TIMEOUT, |reply| JournalMsg::Append {
-                chat: self.chat,
-                entry,
-                reply,
-            })
+            .call(
+                |reply| JournalMsg::Append {
+                    chat: self.chat,
+                    entry,
+                    reply,
+                },
+                PHASE_TIMEOUT,
+            )
             .await?;
         Ok(())
     }
@@ -79,11 +82,14 @@ impl AgentRun {
             TOOL_DEADLINE + PHASE_TIMEOUT,
             async move {
                 let execute = tool_host
-                    .call(TOOL_DEADLINE, |reply| ToolHostMsg::Execute {
-                        key: offload_key.clone(),
-                        call,
-                        reply,
-                    })
+                    .call(
+                        |reply| ToolHostMsg::Execute {
+                            key: offload_key.clone(),
+                            call,
+                            reply,
+                        },
+                        TOOL_DEADLINE,
+                    )
                     .await;
                 match execute {
                     Ok(outcome) => outcome,
@@ -92,10 +98,13 @@ impl AgentRun {
                         // behind the in-flight Execute in the tool-host mailbox,
                         // so this deterministically reconciles the completed key.
                         match tool_host
-                            .call(PHASE_TIMEOUT, |reply| ToolHostMsg::Query {
-                                key: offload_key,
-                                reply,
-                            })
+                            .call(
+                                |reply| ToolHostMsg::Query {
+                                    key: offload_key,
+                                    reply,
+                                },
+                                PHASE_TIMEOUT,
+                            )
                             .await
                         {
                             Ok(EffectStatus::Found(outcome)) => outcome,

@@ -131,8 +131,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEvent,
-    ScopeRef, Strategy, prelude::*,
+    ActorSlot, DynamicScopeRef, DynamicTree, Guard as OperationGuard, Mailbox, ScopeRef, Strategy,
+    prelude::*,
 };
 use tokio::time::Instant;
 
@@ -145,16 +145,7 @@ use messages::*;
 use model::{ModelClient, ScriptedModel};
 
 fn lifecycle_total_restarts(event: &kokage::observe::LifecycleEvent) -> Option<u64> {
-    use kokage::observe::LifecycleEventKind;
-    match &event.kind {
-        LifecycleEventKind::ChildAdded { total_restarts, .. }
-        | LifecycleEventKind::ChildStarted { total_restarts, .. }
-        | LifecycleEventKind::ChildExited { total_restarts, .. }
-        | LifecycleEventKind::ChildRemoved { total_restarts, .. }
-        | LifecycleEventKind::ChildRestartScheduled { total_restarts, .. }
-        | LifecycleEventKind::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
-        _ => None,
-    }
+    event.total_restarts()
 }
 use router::RouterFactory;
 use telemetry::LatencyRecorder;
@@ -423,19 +414,19 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
         .find(|events| {
             events.iter().any(|event| {
                 matches!(
-                    event,
-                    MonitorEvent::Exited { status, .. } if status.is_failure()
+                    &event.kind,
+                    MonitorEventKind::Exited { status, .. } if status.is_failure()
                 )
             })
         })
         .expect("panic run monitor events");
     let exited = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Exited { .. }))
+        .position(|event| matches!(event.kind, MonitorEventKind::Exited { .. }))
         .expect("Exited event");
     let removed = panic_events
         .iter()
-        .position(|event| matches!(event, MonitorEvent::Removed { .. }))
+        .position(|event| matches!(event.kind, MonitorEventKind::Removed { .. }))
         .expect("Removed event");
     assert!(
         exited < removed,
@@ -851,7 +842,7 @@ where
     M: Send + 'static,
     T: Send + 'static,
 {
-    Ok(actor.call(PHASE_TIMEOUT, make).await?)
+    Ok(actor.call(make, PHASE_TIMEOUT).await?)
 }
 
 async fn await_until<F, Fut>(predicate: F) -> Result<(), AnyError>

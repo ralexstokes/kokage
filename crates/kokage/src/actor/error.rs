@@ -122,10 +122,21 @@ pub enum CallError {
         /// Target actor id.
         actor_id: String,
     },
-    /// The timeout expired before the actor replied.
-    #[error("call to actor `{actor_id}` timed out")]
+    /// The timeout expired before the request entered the mailbox.
+    ///
+    /// The request was not accepted, so retrying it cannot duplicate work.
+    #[error("call to actor `{actor_id}` timed out before acceptance")]
     #[non_exhaustive]
-    Timeout {
+    AcceptanceTimedOut {
+        /// Target actor id.
+        actor_id: String,
+    },
+    /// The timeout expired after the request entered the mailbox.
+    ///
+    /// The actor may still process the request, so its outcome is unknown.
+    #[error("call to actor `{actor_id}` timed out waiting for a response")]
+    #[non_exhaustive]
+    ResponseTimedOut {
         /// Target actor id.
         actor_id: String,
     },

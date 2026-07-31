@@ -14,7 +14,7 @@ use std::{
 use kokage::{
     Actor, ActorSlot, ActorSpec, Context, DynamicTree, ExitResult, Guard, RestartPolicy,
     RunningDynamicTree, ScopeRef, Tree,
-    observe::{LifecycleEvent, LifecycleEventKind},
+    observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -32,6 +32,13 @@ fn child_seq(event: &LifecycleEvent) -> u64 {
         .kind
         .seq()
         .unwrap_or_else(|| panic!("expected child lifecycle event: {event:?}"))
+}
+
+fn child_kind(event: &LifecycleEvent) -> Option<&ChildEventKind> {
+    let LifecycleEventKind::Child(child) = &event.kind else {
+        return None;
+    };
+    Some(&child.kind)
 }
 
 struct Sink {
@@ -230,16 +237,16 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
 
     let first = crash_and_receive_events(&crasher, &mut observed).await;
     assert!(matches!(
-        &first[0].1.kind,
-        LifecycleEventKind::ChildExited { generation: 0, .. }
+        child_kind(&first[0].1),
+        Some(ChildEventKind::Exited { generation: 0, .. })
     ));
     assert!(matches!(
-        &first[1].1.kind,
-        LifecycleEventKind::ChildRestartScheduled { generation: 0, .. }
+        child_kind(&first[1].1),
+        Some(ChildEventKind::RestartScheduled { generation: 0, .. })
     ));
     assert!(matches!(
-        &first[2].1.kind,
-        LifecycleEventKind::ChildStarted { generation: 1, .. }
+        child_kind(&first[2].1),
+        Some(ChildEventKind::Started { generation: 1 })
     ));
     assert_eq!(child_seq(&first[1].1), child_seq(&first[0].1) + 1);
     assert_eq!(child_seq(&first[2].1), child_seq(&first[1].1) + 1);
@@ -302,12 +309,12 @@ async fn dropping_or_cancelling_lifecycle_guard_stops_delivery() {
         .forward_to(&sink, SinkMsg::Lifecycle);
     let later = crash_and_receive_events(&crasher, &mut observed).await;
     assert!(matches!(
-        &later[0].1.kind,
-        LifecycleEventKind::ChildExited { generation: 2, .. }
+        child_kind(&later[0].1),
+        Some(ChildEventKind::Exited { generation: 2, .. })
     ));
     assert!(matches!(
-        &later[2].1.kind,
-        LifecycleEventKind::ChildStarted { generation: 3, .. }
+        child_kind(&later[2].1),
+        Some(ChildEventKind::Started { generation: 3 })
     ));
     assert_no_buffered_lifecycle(
         &sink,
@@ -334,8 +341,8 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
         .expect("watched subtree removed");
     let (_, final_event) = recv_event(&mut observed).await;
     assert!(matches!(
-        final_event.kind,
-        LifecycleEventKind::ChildExited { generation: 0, .. }
+        child_kind(&final_event),
+        Some(ChildEventKind::Exited { generation: 0, .. })
     ));
     timeout(Duration::from_secs(2), guard.finished())
         .await
@@ -396,8 +403,8 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
         loop {
             let event = observed_rx.recv().await.expect("observer remains live");
             if matches!(
-                &event.kind,
-                LifecycleEventKind::ChildRestartScheduled { .. }
+                child_kind(&event),
+                Some(ChildEventKind::RestartScheduled { .. })
             ) {
                 break event;
             }
@@ -406,13 +413,14 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
     .await
     .expect("context-scope lifecycle event arrives");
     assert!(matches!(
-        scheduled.kind,
-        LifecycleEventKind::ChildRestartScheduled { .. }
+        child_kind(&scheduled),
+        Some(ChildEventKind::RestartScheduled { .. })
     ));
     assert!(matches!(
-        scheduled.kind,
-        LifecycleEventKind::ChildRestartScheduled { ref child_id, .. }
-            if child_id == "crasher"
+        &scheduled.kind,
+        LifecycleEventKind::Child(child)
+            if child.child_id == "crasher"
+                && matches!(child.kind, ChildEventKind::RestartScheduled { .. })
     ));
 
     let handle = runtime.scope();
