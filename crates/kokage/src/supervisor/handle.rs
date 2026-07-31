@@ -1479,6 +1479,10 @@ impl SupervisorHandle {
 }
 
 impl DynamicSupervisorHandle {
+    pub(crate) fn ensure_available(&self) -> Result<(), ControlError> {
+        self.handle.control_endpoint().map(drop)
+    }
+
     pub(crate) fn attached_children<T>(&self) -> Vec<AttachedChild<T>>
     where
         T: Any + Send + Sync,

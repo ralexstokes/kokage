@@ -818,7 +818,9 @@ fn runtime_subtree_membership(
 
 impl DynamicScopeRef {
     fn dynamic_supervisor(&self) -> Result<DynamicSupervisorHandle, ControlError> {
-        self.supervisor.dynamic().ok_or(ControlError::Unavailable)
+        let dynamic = self.supervisor.dynamic().ok_or(ControlError::Unavailable)?;
+        dynamic.ensure_available()?;
+        Ok(dynamic)
     }
 
     /// Builds and adds an actor-aware runtime subtree.

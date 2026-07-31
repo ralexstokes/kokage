@@ -408,6 +408,47 @@ async fn handle_removal_never_targets_a_same_id_replacement() {
 }
 
 #[tokio::test]
+async fn actor_removal_reports_an_unavailable_stopped_scope() {
+    let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
+    let scope = running_tree.scope();
+    let actor = scope
+        .add_actor("worker", || Idle)
+        .await
+        .expect("actor added");
+
+    running_tree.shutdown().await.expect("dynamic root stops");
+
+    assert_eq!(
+        scope.remove_actor(&actor).await,
+        Err(ControlError::Unavailable)
+    );
+}
+
+#[tokio::test]
+async fn actor_removal_reports_an_unavailable_detached_scope() {
+    let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
+    let root = running_tree.scope();
+    let nested = root
+        .add_dynamic_subtree("nested", DynamicTree::new())
+        .await
+        .expect("nested dynamic scope added");
+    let actor = nested
+        .add_actor("worker", || Idle)
+        .await
+        .expect("nested actor added");
+
+    root.remove_subtree(&nested)
+        .await
+        .expect("nested scope removed");
+
+    assert_eq!(
+        nested.remove_actor(&actor).await,
+        Err(ControlError::Unavailable)
+    );
+    running_tree.shutdown().await.expect("dynamic root stops");
+}
+
+#[tokio::test]
 async fn dynamic_task_ref_waits_for_completion() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
