@@ -357,15 +357,22 @@ fn task_policy_types_cover_common_configuration() {
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
     );
     let policy = RestartPolicy::on_failure();
-    let RestartPolicy::OnFailure {
-        max_restarts,
-        within,
-        backoff,
-    } = policy
-    else {
+    let RestartPolicy::OnFailure(settings) = policy else {
         panic!("on_failure builds the matching transparent variant");
     };
-    assert_eq!(max_restarts, 5);
-    assert_eq!(within, Duration::from_secs(30));
-    assert_eq!(backoff, kokage::Backoff::none());
+    assert_eq!(settings.max_restarts(), 5);
+    assert_eq!(settings.within(), Duration::from_secs(30));
+    assert_eq!(settings.backoff_policy(), kokage::Backoff::none());
+
+    let direct = RestartPolicy::OnFailure(
+        RestartSettings::new(2, Duration::from_secs(4))
+            .backoff(Backoff::fixed(Duration::from_millis(25))),
+    );
+    assert_eq!(
+        direct
+            .settings()
+            .expect("restartable policy")
+            .max_restarts(),
+        2
+    );
 }

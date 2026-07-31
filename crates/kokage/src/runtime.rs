@@ -18,8 +18,8 @@ use crate::{
         BuildError, CancellationToken, ChildEventKind, ChildMembershipView, ChildSnapshot,
         ChildSpec, ChildStateView, CompletionOnDrop, ControlError, DynamicSupervisorHandle,
         ExitStatus, Guard, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
-        LifecycleWatch, MailboxShutdown, RestartPolicy, RunningSupervisor, ScopeKind,
-        ScopePathSegment, Shutdown, Strategy, SupervisorError, SupervisorHandle,
+        LifecycleWatch, MailboxShutdown, OneShotTaskSpec, RestartPolicy, RunningSupervisor,
+        ScopeKind, ScopePathSegment, Shutdown, Strategy, SupervisorError, SupervisorHandle,
         SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView, TaskSpec,
     },
 };
@@ -1040,8 +1040,8 @@ impl DynamicScopeRef {
     ///
     /// This is the concise one-shot counterpart to [`add_task`](Self::add_task).
     /// The factory is `FnOnce`, so the task can consume owned inputs. The task
-    /// never restarts; use [`add_task_spec`](Self::add_task_spec) when finite
-    /// work needs a different restart or retention policy.
+    /// never restarts; use [`spawn_once_spec`](Self::spawn_once_spec) to
+    /// configure its shutdown, readiness, or terminal membership retention.
     pub async fn spawn_once<F, Fut>(
         &self,
         id: impl Into<String>,
@@ -1051,7 +1051,16 @@ impl DynamicScopeRef {
         F: FnOnce(crate::TaskContext) -> Fut + Send + 'static,
         Fut: Future<Output = ExitResult> + Send + 'static,
     {
-        self.add_task_spec(TaskSpec::once(id, task)).await
+        self.spawn_once_spec(OneShotTaskSpec::new(id, task)).await
+    }
+
+    /// Spawns explicitly configured one-shot work.
+    ///
+    /// This preserves the consuming `FnOnce` factory while exposing only the
+    /// task settings that remain valid without restarts. Success means the
+    /// membership was inserted and startup was scheduled.
+    pub async fn spawn_once_spec(&self, task: OneShotTaskSpec) -> Result<TaskRef, ControlError> {
+        self.add_task_child_spec(task.into_spec()).await
     }
 
     /// Adds an explicitly configured supervised task child to this scope.
@@ -1072,6 +1081,17 @@ impl DynamicScopeRef {
             .watch_lifecycle()
             .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child(task).await?;
+        Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
+    }
+
+    async fn add_task_child_spec(&self, task: ChildSpec) -> Result<TaskRef, ControlError> {
+        let dynamic = self.dynamic_supervisor()?;
+        let id: Arc<str> = Arc::from(task.id());
+        let events = self
+            .supervisor
+            .watch_lifecycle()
+            .pending_direct_child(Arc::clone(&id));
+        let lineage = dynamic.add_child_spec(task).await?;
         Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
     }
 

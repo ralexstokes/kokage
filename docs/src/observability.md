@@ -164,6 +164,12 @@ mailbox-ordered view of one collaborator; the lifecycle stream gives
 operators the whole tree with paths and counters. Same underlying model, a
 projection per audience.
 
+With the `serde` feature, snapshot, lifecycle, and scope-change representations
+have checked wire fixtures, but remain deliberately unversioned during `0.x`.
+Treat them as a same-Kokage-version adapter boundary: mixed-version producers
+and consumers, or long-lived persisted event logs, need an application-owned
+versioned envelope and migration policy.
+
 ## Message counters
 
 [`ActorRef::stats`] returns local [`ActorStats`]: messages received, accepted,

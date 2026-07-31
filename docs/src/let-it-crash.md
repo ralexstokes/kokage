@@ -121,8 +121,8 @@ let policy = RestartPolicy::on_failure()    // restart on failure only (the defa
   should run forever.
 - `RestartPolicy::never()` — run at most once; failure is recorded, not retried.
 
-Every policy carries a restart *budget* — by default 5 restarts within 30
-seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
+Every restartable policy carries a restart *budget* — by default 5 restarts
+within 30 seconds — and an optional [`Backoff`] (`fixed`, `exponential`, or
 `exponential_with_jitter`) spacing the attempts. Attach a policy to one actor
 with `ActorSpec::restart(...)`, or set a scope-wide default with
 `Tree::default_restart(...)`.
@@ -130,8 +130,14 @@ with `ActorSpec::restart(...)`, or set a scope-wide default with
 The constructors and builders cover normal configuration. `RestartPolicy` is
 also a public enum, so generic configuration code can match or construct its
 `Always`, `OnFailure`, and `Never` variants directly. Restartable variants
-carry `max_restarts`, `within`, and `backoff`; `Never` carries no meaningless
-budget fields.
+carry one `RestartSettings` payload; `Never` carries no meaningless budget
+fields. Keeping shared tuning in that payload lets the settings grow without
+changing both restartable variant shapes.
+
+The `serde` representation is likewise unversioned during `0.x`. Persisted
+configuration that must survive Kokage upgrades should live behind an
+application-owned versioned schema rather than deserializing `RestartPolicy`
+directly forever.
 
 ```rust
 # use std::time::Duration;

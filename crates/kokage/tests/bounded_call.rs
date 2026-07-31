@@ -120,6 +120,28 @@ async fn lower_level_reply_channel_distinguishes_drop_and_timeout() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn response_deadline_wins_when_a_reply_is_already_ready_at_expiry() {
+    let (reply, response) = Reply::channel();
+    reply.send(7_u8);
+
+    assert_eq!(
+        response.recv_timeout(Duration::ZERO).await,
+        Err(ReplyError::Timeout)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn response_deadline_wins_when_a_drop_is_already_ready_at_expiry() {
+    let (reply, response) = Reply::<u8>::channel();
+    drop(reply);
+
+    assert_eq!(
+        response.recv_timeout(Duration::ZERO).await,
+        Err(ReplyError::Timeout)
+    );
+}
+
 enum BackpressuredRequest {
     Occupy,
     Get(Reply<&'static str>),

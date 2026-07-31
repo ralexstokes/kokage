@@ -648,7 +648,7 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(RestartPolicy::on_failure()).expect("restart serializes");
     assert_eq!(restart["condition"], "OnFailure");
-    assert_eq!(restart["max_restarts"], 5);
+    assert_eq!(restart["settings"]["max_restarts"], 5);
     assert_eq!(
         serde_json::from_value::<RestartPolicy>(restart.clone())
             .expect("restart policy deserializes"),

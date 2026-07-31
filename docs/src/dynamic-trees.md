@@ -58,9 +58,11 @@ they belong to ordered scopes. Membership is managed through the
 - `scope.remove_child(id).await?` — stop (honoring the child's shutdown
   policy, so a draining child finishes its queue) and remove.
 
-The adjacent `add_actor_spec` and `add_task_spec` forms accept explicitly
-configured declarations. `add_subtree` accepts a `SubtreeSpec` directly when
-the subtree edge needs policy overrides.
+The adjacent `add_actor_spec`, `add_task_spec`, and `spawn_once_spec` forms
+accept explicitly configured declarations. `OneShotTaskSpec` preserves a
+consuming factory while configuring shutdown, readiness, or whether the
+terminal membership remains visible. `add_subtree` accepts a `SubtreeSpec`
+directly when the subtree edge needs policy overrides.
 
 These operations exist only on `DynamicScopeRef`, so an ordered scope cannot
 be mutated accidentally. They return [`ControlError`] for operational errors:
@@ -138,6 +140,11 @@ runtime.wait().await?;
 # Ok(())
 # }
 ```
+
+Use `scope.spawn_once_spec(OneShotTaskSpec::new(...))` when the same consuming
+factory needs a custom shutdown policy, readiness gate, or retained terminal
+membership. Restart settings are deliberately unavailable because the factory
+cannot create a second incarnation.
 
 `TaskRef::wait` skips exits followed by the task's restart policy and returns
 the terminal `ExitStatus`. Use `tokio::try_join!` or a task set when several

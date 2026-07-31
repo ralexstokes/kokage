@@ -50,11 +50,22 @@ impl Finished {
 /// for one watch arrive in lifecycle order. The stable target identity is
 /// carried once in the envelope; match [`kind`](Self::kind) for the transition.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct MonitorEvent {
     /// Stable id of the watched actor.
     pub actor_id: String,
     /// The transition that occurred.
     pub kind: MonitorEventKind,
+}
+
+impl MonitorEvent {
+    /// Creates a lifecycle transition for `actor_id`.
+    pub fn new(actor_id: impl Into<String>, kind: MonitorEventKind) -> Self {
+        Self {
+            actor_id: actor_id.into(),
+            kind,
+        }
+    }
 }
 
 /// Kind of transition carried by a [`MonitorEvent`].

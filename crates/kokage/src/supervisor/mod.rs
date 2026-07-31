@@ -68,7 +68,7 @@ pub use builder::{DynamicSupervisorBuilder, OrderedSupervisorBuilder};
 pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub(crate) use child::ChildSpec;
-pub use child::{BoxError, TaskSpec};
+pub use child::{BoxError, OneShotTaskSpec, TaskSpec};
 #[cfg(test)]
 pub use completion::CompletionError;
 pub use context::TaskContext;
@@ -80,7 +80,7 @@ pub use lifecycle::{
     LifecycleWatch,
 };
 pub use owner::{RunningSupervisor, Supervisor};
-pub use restart::{Backoff, RestartPolicy};
+pub use restart::{Backoff, RestartPolicy, RestartSettings};
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::{MailboxShutdown, Shutdown};
 pub use snapshot::{

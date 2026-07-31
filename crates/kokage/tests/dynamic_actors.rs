@@ -733,7 +733,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
         .expect("watch requested");
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent { ref actor_id, kind: MonitorEventKind::Started { .. } }
+        MonitorEvent { ref actor_id, kind: MonitorEventKind::Started { .. }, .. }
             if actor_id == "temporary"
     ));
 
@@ -746,12 +746,13 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
                 status: ExitStatus::Completed { .. },
                 ..
             },
+            ..
         }
             if actor_id == "temporary"
     ));
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent { ref actor_id, kind: MonitorEventKind::Removed { .. } }
+        MonitorEvent { ref actor_id, kind: MonitorEventKind::Removed { .. }, .. }
             if actor_id == "temporary"
     ));
     assert_eq!(starts.load(Ordering::SeqCst), 1);

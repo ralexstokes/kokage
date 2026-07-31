@@ -185,7 +185,10 @@ impl<M> ActorRef<M> {
     /// its message; ownership is recovered only when the future completes with
     /// an error.
     pub async fn send_timeout(&self, message: M, bound: Duration) -> Result<(), SendError<M>> {
-        let deadline = deadline_after(bound);
+        self.send_until(message, deadline_after(bound)).await
+    }
+
+    async fn send_until(&self, message: M, deadline: Instant) -> Result<(), SendError<M>> {
         let mut binding = self.binding.clone();
         let mut message = message;
 
@@ -454,25 +457,22 @@ impl<M> ActorRef<M> {
     ) -> Result<T, CallError> {
         let deadline = deadline_after(timeout);
         let (reply, receiver) = Reply::channel();
-        self.send_timeout(
-            message(reply),
-            deadline.saturating_duration_since(Instant::now()),
-        )
-        .await
-        .map_err(|error| match error.kind {
-            SendErrorKind::Terminated => CallError::Terminated {
-                actor_id: error.actor_id,
-            },
-            SendErrorKind::TimedOut => CallError::AcceptanceTimedOut {
-                actor_id: error.actor_id,
-            },
-            SendErrorKind::NotRunning | SendErrorKind::Full => {
-                unreachable!("send_timeout only returns terminal or timeout errors")
-            }
-        })?;
+        self.send_until(message(reply), deadline)
+            .await
+            .map_err(|error| match error.kind {
+                SendErrorKind::Terminated => CallError::Terminated {
+                    actor_id: error.actor_id,
+                },
+                SendErrorKind::TimedOut => CallError::AcceptanceTimedOut {
+                    actor_id: error.actor_id,
+                },
+                SendErrorKind::NotRunning | SendErrorKind::Full => {
+                    unreachable!("send_until only returns terminal or timeout errors")
+                }
+            })?;
 
         receiver
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .recv_until(deadline)
             .await
             .map_err(|error| match error {
                 ReplyError::Dropped => CallError::ReplyDropped {
@@ -614,13 +614,22 @@ impl<T> ReplyReceiver<T> {
 
     /// Waits up to `bound` for an answer.
     ///
+    /// Expiry wins when the deadline and reply (or sender drop) are both ready
+    /// when polled. A zero bound therefore always returns
+    /// [`ReplyError::Timeout`].
+    ///
     /// Expiry drops the receiving half but does not undo an already accepted
     /// actor request. A later [`Reply::send`] simply discards its value.
     pub async fn recv_timeout(self, bound: Duration) -> Result<T, ReplyError> {
-        timeout(bound, self.receiver)
-            .await
-            .map_err(|_| ReplyError::Timeout)?
-            .map_err(|_| ReplyError::Dropped)
+        self.recv_until(deadline_after(bound)).await
+    }
+
+    async fn recv_until(self, deadline: Instant) -> Result<T, ReplyError> {
+        tokio::select! {
+            biased;
+            () = sleep_until(deadline) => Err(ReplyError::Timeout),
+            result = self.receiver => result.map_err(|_| ReplyError::Dropped),
+        }
     }
 }
 

@@ -287,10 +287,7 @@ async fn assert_mapper_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEve
 }
 
 fn started_event(actor_id: &str, generation: u64) -> MonitorEvent {
-    MonitorEvent {
-        actor_id: actor_id.to_owned(),
-        kind: MonitorEventKind::Started { generation },
-    }
+    MonitorEvent::new(actor_id, MonitorEventKind::Started { generation })
 }
 
 struct TestExit {
@@ -304,6 +301,7 @@ fn expect_exited(event: MonitorEvent) -> TestExit {
         MonitorEvent {
             actor_id,
             kind: MonitorEventKind::Exited { generation, status },
+            ..
         } => TestExit {
             actor_id,
             generation,
@@ -318,6 +316,7 @@ fn expect_removed(event: MonitorEvent, actor_id: &str) -> Option<u64> {
         MonitorEvent {
             actor_id: id,
             kind: MonitorEventKind::Removed { generation },
+            ..
         } => {
             assert_eq!(id, actor_id);
             generation
@@ -1400,6 +1399,7 @@ async fn overlapping_replacement_keeps_exit_bound_to_its_original_generation() {
             MonitorEvent {
                 actor_id,
                 kind: MonitorEventKind::Started { generation: 1 },
+                ..
             } => {
                 assert_eq!(actor_id, "peer");
                 saw_second_start = true;
@@ -1415,6 +1415,7 @@ async fn overlapping_replacement_keeps_exit_bound_to_its_original_generation() {
                                 cancelled: false,
                             },
                     },
+                ..
             } => {
                 assert_eq!(actor_id, "peer");
                 saw_first_exit = true;
