@@ -473,8 +473,9 @@ impl ScopeRef {
     /// Dynamic additions start immediately and dynamic siblings stop
     /// concurrently under one shared maximum-grace deadline. Use
     /// [`ScopeRef::wait_started`] when readiness is needed.
-    /// Wrap the supplied tree with [`TreeNode::restart`](crate::TreeNode::restart)
-    /// or [`TreeNode::shutdown`](crate::TreeNode::shutdown) to override the
+    /// Wrap the supplied tree with
+    /// [`SubtreeSpec::restart`](crate::SubtreeSpec::restart) or
+    /// [`SubtreeSpec::shutdown`](crate::SubtreeSpec::shutdown) to override the
     /// subtree edge's policies in this dynamic parent.
     ///
     /// # Errors
@@ -493,7 +494,7 @@ impl ScopeRef {
     pub async fn add_subtree(
         &self,
         id: impl Into<String>,
-        tree: impl Into<crate::TreeNode>,
+        tree: impl Into<crate::SubtreeSpec>,
     ) -> Result<ScopeRef, ControlError> {
         let dynamic = self.dynamic_supervisor()?;
         let id = id.into();
@@ -760,10 +761,9 @@ mod tests {
     async fn actor_spec_defaults_to_retained_membership_in_static_and_dynamic_scopes() {
         let static_spec = ActorSpec::new("static", || FailsOnMessage).restart(Restart::never());
         let static_ref = static_spec.actor_ref();
-        let static_runtime = OrderedTree::new()
-            .actor(static_spec)
-            .spawn()
-            .expect("static runtime builds");
+        let mut static_tree = OrderedTree::new();
+        static_tree.add_actor(static_spec);
+        let static_runtime = static_tree.spawn().expect("static runtime builds");
         static_runtime
             .scope()
             .wait_started()

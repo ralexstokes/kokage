@@ -1,0 +1,8 @@
+error[E0599]: no associated function or constant named `Ordered` found for struct `SubtreeSpec` in the current scope
+ --> tests/ui/single-use-tree/subtree_spec_variants.rs:4:26
+  |
+4 |     let _ = SubtreeSpec::Ordered(OrderedTree::new());
+  |                          ^^^^^^^ associated function or constant not found in `SubtreeSpec`
+  |
+help: there is a method `deref` with a similar name, but with different arguments
+ --> $RUST/core/src/ops/deref.rs

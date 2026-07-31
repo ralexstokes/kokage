@@ -182,11 +182,9 @@ async fn send_waits_during_permanent_restart_window() {
     .restart(restart);
     let worker_ref = worker.actor_ref();
 
-    let handle = OrderedTree::new()
-        .strategy(Strategy::OneForOne)
-        .actor(worker)
-        .spawn()
-        .expect("runtime builds");
+    let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
+    tree.add_actor(worker);
+    let handle = tree.spawn().expect("runtime builds");
 
     timeout(Duration::from_secs(1), first_exited_rx)
         .await
@@ -335,11 +333,9 @@ async fn call_succeeds_across_restart_window() {
     .restart(restart);
     let rpc_ref = rpc.actor_ref();
 
-    let handle = OrderedTree::new()
-        .strategy(Strategy::OneForOne)
-        .actor(rpc)
-        .spawn()
-        .expect("runtime builds");
+    let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
+    tree.add_actor(rpc);
+    let handle = tree.spawn().expect("runtime builds");
 
     rpc_ref
         .send(RpcMsg::FailOnce)

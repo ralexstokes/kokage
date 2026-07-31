@@ -249,7 +249,8 @@ fn upload_size(message: &Upload) -> usize {
 
 let uploads = ActorSpec::new("uploads", UploadActor::new).message_size(upload_size);
 let uploads_ref = uploads.actor_ref();
-let tree = OrderedTree::new().actor(uploads);
+let mut tree = OrderedTree::new();
+tree.add_actor(uploads);
 ```
 
 The sizing observer is applied when the declaration is materialized, so refs

@@ -43,8 +43,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let worker_spec = ActorSpec::new("Worker", move || Worker {
         completed: completed_tx.clone(),
     });
-    let worker = worker_spec.actor_ref();
-    let runtime = OrderedTree::new().actor(worker_spec).spawn()?;
+    let mut tree = OrderedTree::new();
+    let worker = tree.add_actor(worker_spec);
+    let runtime = tree.spawn()?;
 
     let sampler_stop = CancellationToken::new();
     let sampler = tokio::spawn(sample(

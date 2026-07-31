@@ -35,10 +35,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .restart(Restart::always());
 
-    let runtime = OrderedTree::new()
-        .task(press)
-        .task(front_desk)
-        .spawn()?;
+    let mut tree = OrderedTree::new();
+    tree.add_task(press);
+    tree.add_task(front_desk);
+    let runtime = tree.spawn()?;
 
     match runtime.wait().await {
         Ok(()) => println!("runtime stopped cleanly"),
@@ -104,8 +104,8 @@ Call `OrderedTree::default_restart` or `DynamicTree::default_restart` to set a
 scope-wide declaration, and `TaskSpec::restart` when one task needs its own
 mode, budget, backoff, or terminal-removal behavior. To configure the parent
 edge of a nested scope, wrap it with
-`TreeNode::from(subtree).restart(policy).shutdown(policy)` before passing it to
-`OrderedTree::subtree` or `ScopeRef::add_subtree`. The nested
+`SubtreeSpec::from(subtree).restart(policy).shutdown(policy)` before passing it
+to `OrderedTree::add_subtree` or `ScopeRef::add_subtree`. The nested
 tree's own defaults still configure its children independently.
 
 ## Ordered startup and readiness
@@ -122,10 +122,10 @@ let database = TaskSpec::new("database", |ctx| async move {
 })
 .wait_for_ready();
 
-let runtime = OrderedTree::new()
-    .task(database)
-    .task(api)
-    .spawn()?;
+let mut tree = OrderedTree::new();
+tree.add_task(database);
+tree.add_task(api);
+let runtime = tree.spawn()?;
 
 runtime.scope().wait_started().await?;
 ```
@@ -156,12 +156,11 @@ failure:
 Select it directly on the tree:
 
 ```rust,ignore
-let runtime = OrderedTree::new()
-    .strategy(Strategy::RestForOne)
-    .task(outbound)
-    .task(progress)
-    .task(inbound)
-    .spawn()?;
+let mut tree = OrderedTree::new().strategy(Strategy::RestForOne);
+tree.add_task(outbound);
+tree.add_task(progress);
+tree.add_task(inbound);
+let runtime = tree.spawn()?;
 ```
 
 For `RestForOne`, declaration order is part of the fault model. An `inbound`
@@ -227,10 +226,10 @@ Pipeline and batch trees often have a natural completion point. Arm
 immediately is observed:
 
 ```rust,ignore
-let tree = OrderedTree::new()
-    .task(source)
-    .task(indexer.restart(Restart::never()))
-    .task(metrics_reporter);
+let mut tree = OrderedTree::new();
+tree.add_task(source);
+tree.add_task(indexer.restart(Restart::never()));
+tree.add_task(metrics_reporter);
 
 let handle = tree.scope();
 // Detach for fire-and-forget; retain the guard instead to keep the
@@ -276,13 +275,12 @@ Subtrees give each subsystem its own restart budget while preserving one
 runtime hierarchy:
 
 ```rust,ignore
-let pressroom = OrderedTree::new()
-    .default_restart(pressroom_restart)
-    .task(press);
+let mut pressroom = OrderedTree::new().default_restart(pressroom_restart);
+pressroom.add_task(press);
 
-let shop = OrderedTree::new()
-    .subtree("pressroom", pressroom)
-    .task(front_desk);
+let mut shop = OrderedTree::new();
+shop.add_subtree("pressroom", pressroom);
+shop.add_task(front_desk);
 
 let runtime = shop.spawn()?;
 ```

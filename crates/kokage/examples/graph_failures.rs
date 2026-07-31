@@ -63,12 +63,12 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         }
     });
 
-    let runtime = OrderedTree::new()
-        .actor(healthy)
-        .actor(failing)
+    let mut tree = OrderedTree::new()
         .strategy(strategy)
-        .default_restart(Restart::always())
-        .spawn()?;
+        .default_restart(Restart::always());
+    tree.add_actor(healthy);
+    tree.add_actor(failing);
+    let runtime = tree.spawn()?;
 
     timeout(Duration::from_secs(1), async {
         loop {

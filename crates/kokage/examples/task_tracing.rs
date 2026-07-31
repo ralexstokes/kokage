@@ -20,7 +20,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let attempts = Arc::new(AtomicUsize::new(0));
     let nested_attempts = Arc::clone(&attempts);
-    let nested = OrderedTree::new().task(
+    let mut nested = OrderedTree::new();
+    nested.add_task(
         TaskSpec::new("leaf", move |ctx| {
             let attempts = Arc::clone(&nested_attempts);
             async move {
@@ -35,13 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(nested_restart),
     );
 
-    let running = OrderedTree::new()
-        .task(TaskSpec::new("anchor", |ctx| async move {
-            ctx.shutdown_token().cancelled().await;
-            Ok(())
-        }))
-        .subtree("nested", nested)
-        .spawn()?;
+    let mut tree = OrderedTree::new();
+    tree.add_task(TaskSpec::new("anchor", |ctx| async move {
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+    tree.add_subtree("nested", nested);
+    let running = tree.spawn()?;
 
     sleep(Duration::from_millis(300)).await;
     running.shutdown_and_wait().await?;

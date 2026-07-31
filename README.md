@@ -56,19 +56,17 @@ impl Actor for FrontDesk {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Mint the typed ref before moving the declarations into the tree.
+    // Add declarations in startup order and retain the typed refs returned for actors.
     let press_actor = ActorSpec::new("press", Press::default);
-    let press = press_actor.actor_ref();
+    let mut tree = OrderedTree::new();
+    let press = tree.add_actor(press_actor);
     let orders_actor = ActorSpec::new("front-desk", move || FrontDesk {
         press: press.clone(),
     });
-    let orders = orders_actor.actor_ref();
+    let orders = tree.add_actor(orders_actor);
 
     // Compose the supervision tree, then run it.
-    let runtime = OrderedTree::new()
-        .actor(press_actor)
-        .actor(orders_actor)
-        .spawn()?;
+    let runtime = tree.spawn()?;
 
     orders.send("business cards x100".to_owned()).await?;
 

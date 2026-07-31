@@ -40,10 +40,10 @@ impl Actor for Greeter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let greeter_actor = ActorSpec::new("greeter", || Greeter);
-    let greeter = greeter_actor.actor_ref();
+    let mut tree = OrderedTree::new();
+    let greeter = tree.add_actor(ActorSpec::new("greeter", || Greeter));
 
-    let runtime = OrderedTree::new().actor(greeter_actor).spawn()?;
+    let runtime = tree.spawn()?;
     greeter.send("world".to_owned()).await?;
     runtime.shutdown_and_wait().await?;
     Ok(())
@@ -76,6 +76,6 @@ observation model.
 ## One tree for actors and tasks
 
 Actors and raw task children share a supervision tree. Place actors with
-`OrderedTree::actor`, nested scopes with `subtree`, and task children with
-`task`. The following chapters apply the same supervision vocabulary to
-each kind.
+`OrderedTree::add_actor`, nested scopes with `add_subtree`, and task children
+with `add_task`. The following chapters apply the same supervision vocabulary
+to each kind.

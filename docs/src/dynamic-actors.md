@@ -115,7 +115,8 @@ id:
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-let tree = OrderedTree::new().subtree("sessions", DynamicTree::new());
+let mut tree = OrderedTree::new();
+tree.add_subtree("sessions", DynamicTree::new());
 let runtime = tree.spawn()?;
 runtime.scope().wait_started().await?;
 let sessions = runtime
@@ -150,10 +151,10 @@ let sessions = DynamicTree::new();
 let sessions_handle = sessions.scope();
 let router = ActorSpec::new("router", move || Router(sessions_handle.clone()));
 
-let app = OrderedTree::new()
-    // Start the captured scope before the actor that depends on it.
-    .subtree("sessions", sessions)
-    .actor(router);
+let mut app = OrderedTree::new();
+// Start the captured scope before the actor that depends on it.
+app.add_subtree("sessions", sessions);
+app.add_actor(router);
 # let _ = app;
 ```
 
@@ -189,13 +190,12 @@ Declare a leader-owned scope explicitly:
 # use kokage::prelude::*;
 # struct Leader;
 # impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let session = OrderedTree::new().subtree(
-    "session-runtime",
-    OrderedTree::new()
-        .strategy(Strategy::OneForAll)
-        .actor(ActorSpec::new("leader", || Leader))
-        .subtree("children", DynamicTree::new()),
-);
+let mut session_runtime = OrderedTree::new().strategy(Strategy::OneForAll);
+session_runtime.add_actor(ActorSpec::new("leader", || Leader));
+session_runtime.add_subtree("children", DynamicTree::new());
+
+let mut session = OrderedTree::new();
+session.add_subtree("session-runtime", session_runtime);
 # let _ = session;
 ```
 

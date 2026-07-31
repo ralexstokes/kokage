@@ -96,11 +96,12 @@ fn pipeline_runtime() -> OrderedTree {
     })
     .restart(transform_restart);
 
-    OrderedTree::new()
+    let mut tree = OrderedTree::new()
         .strategy(Strategy::OneForAll)
-        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)))
-        .task(source)
-        .task(transform)
+        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)));
+    tree.add_task(source);
+    tree.add_task(transform);
+    tree
 }
 
 /// A OneForOne group demonstrating the other restart policies, with a further
@@ -127,13 +128,15 @@ fn telemetry_runtime() -> OrderedTree {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let exporters = OrderedTree::new().task(exporter);
+    let mut exporters = OrderedTree::new();
+    exporters.add_task(exporter);
 
-    OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)))
-        .task(heartbeat.restart(Restart::always().limit(60, Duration::from_secs(60))))
-        .task(migration.restart(Restart::never()))
-        .subtree("exporters", exporters)
+    let mut tree = OrderedTree::new()
+        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)));
+    tree.add_task(heartbeat.restart(Restart::always().limit(60, Duration::from_secs(60))));
+    tree.add_task(migration.restart(Restart::never()));
+    tree.add_subtree("exporters", exporters);
+    tree
 }
 
 #[tokio::main]
@@ -151,14 +154,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let frontend = frontend_spec.actor_ref();
 
-    let runtime = OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)))
-        .actor(frontend_spec)
-        .actor(worker_spec)
-        .subtree("pipeline", pipeline_runtime())
-        .subtree("telemetry", telemetry_runtime())
-        .subtree("dynamic", DynamicTree::new())
-        .spawn()?;
+    let mut tree = OrderedTree::new()
+        .default_restart(Restart::on_failure().limit(60, Duration::from_secs(60)));
+    tree.add_actor(frontend_spec);
+    tree.add_actor(worker_spec);
+    tree.add_subtree("pipeline", pipeline_runtime());
+    tree.add_subtree("telemetry", telemetry_runtime());
+    tree.add_subtree("dynamic", DynamicTree::new());
+    let runtime = tree.spawn()?;
 
     let console = ConsoleBuilder::for_runtime(&runtime.scope())
         .bind(([127, 0, 0, 1], 0))

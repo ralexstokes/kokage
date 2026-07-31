@@ -176,7 +176,7 @@ impl<M> Default for ActorOptions<M> {
 /// The declaration owns its incarnation factory, stable mailbox binding, and
 /// all per-actor configuration. It is intentionally not [`Clone`]. Obtain a
 /// restart-stable typed ref with [`actor_ref`](Self::actor_ref), then consume
-/// the declaration through [`crate::OrderedTree::actor`] or
+/// the declaration through [`crate::OrderedTree::add_actor`] or
 /// [`crate::ScopeRef::add_actor`].
 pub struct ActorSpec<M: Send + 'static> {
     pub(crate) actor_id: Arc<str>,

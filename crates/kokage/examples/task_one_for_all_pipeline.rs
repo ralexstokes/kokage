@@ -65,12 +65,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .restart(Restart::always())
     };
 
-    let running_owner = OrderedTree::new()
-        .strategy(Strategy::OneForAll)
-        .task(fetch)
-        .task(decode)
-        .task(sink)
-        .spawn()?;
+    let mut tree = OrderedTree::new().strategy(Strategy::OneForAll);
+    tree.add_task(fetch);
+    tree.add_task(decode);
+    tree.add_task(sink);
+    let running_owner = tree.spawn()?;
     let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();
     let restarted = timeout(

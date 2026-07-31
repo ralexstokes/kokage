@@ -11,11 +11,11 @@ pub(crate) fn dynamic_root(runtime: &RunningTree) -> ScopeRef {
 
 /// Small test fixture for incrementally assembling heterogeneous actor specs.
 ///
-/// Production code should keep each `ActorSpec` in a local variable, obtain
-/// its ref, and pass the spec directly to `OrderedTree::actor`. Tests with many
-/// unrelated fixture actors use this wrapper to keep that setup compact.
+/// Production code should add each `ActorSpec` directly through
+/// `OrderedTree::add_actor`. Tests with many unrelated fixture actors use this
+/// wrapper to keep slot definition and tree configuration compact.
 pub(crate) struct TreeBuilder {
-    tree: Option<OrderedTree>,
+    tree: OrderedTree,
 }
 
 pub(crate) struct RunnableBuilder {
@@ -70,19 +70,12 @@ impl RunnableNode {
 impl TreeBuilder {
     pub(crate) fn new() -> Self {
         Self {
-            tree: Some(OrderedTree::new()),
+            tree: OrderedTree::new(),
         }
     }
 
     pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
-        let actor_ref = spec.actor_ref();
-        self.tree = Some(
-            self.tree
-                .take()
-                .expect("test tree builder is single-use")
-                .actor(spec),
-        );
-        actor_ref
+        self.tree.add_actor(spec)
     }
 
     pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
@@ -95,17 +88,12 @@ impl TreeBuilder {
     }
 
     pub(crate) fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {
-        self.tree = Some(
-            self.tree
-                .take()
-                .expect("test tree builder is single-use")
-                .mailbox_capacity(capacity),
-        );
+        self.tree = std::mem::take(&mut self.tree).mailbox_capacity(capacity);
         self
     }
 
-    pub(crate) fn build(mut self) -> OrderedTree {
-        self.tree.take().expect("test tree builder is single-use")
+    pub(crate) fn build(self) -> OrderedTree {
+        self.tree
     }
 
     pub(crate) fn spawn(self) -> Result<kokage::RunningTree, kokage::BuildError> {

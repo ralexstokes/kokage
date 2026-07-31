@@ -247,19 +247,14 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     let leaf_ref = leaf_ref_slot.actor_ref();
     leaf_graph.define(leaf_ref_slot, Drain::<()>::new);
 
-    let root_graph = root_graph.build();
-    let nested_graph = nested_graph.build();
+    let mut root_graph = root_graph.build();
+    let mut nested_graph = nested_graph.build();
     let leaf_graph = leaf_graph.build();
-    let handle = root_graph
-        .subtree(
-            "workers",
-            nested_graph
-                .subtree("dynamic", DynamicTree::new())
-                .subtree("leaf", leaf_graph),
-        )
-        .subtree("raw-members", DynamicTree::new())
-        .spawn()
-        .expect("nested runtime builds");
+    nested_graph.add_subtree("dynamic", DynamicTree::new());
+    nested_graph.add_subtree("leaf", leaf_graph);
+    root_graph.add_subtree("workers", nested_graph);
+    root_graph.add_subtree("raw-members", DynamicTree::new());
+    let handle = root_graph.spawn().expect("nested runtime builds");
     handle
         .scope()
         .wait_started()
@@ -380,9 +375,10 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     graph.define(static_ref_slot, Drain::<()>::new);
     let root = DynamicTree::new().spawn().expect("runtime builds");
 
-    let graph = graph.build();
+    let mut graph = graph.build();
+    graph.add_subtree("dynamic", DynamicTree::new());
     let subtree = support::dynamic_root(&root)
-        .add_subtree("workers", graph.subtree("dynamic", DynamicTree::new()))
+        .add_subtree("workers", graph)
         .await
         .expect("subtree added");
     subtree.wait_started().await.expect("subtree started");
@@ -457,9 +453,9 @@ async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
 async fn subtree_validation_phases_report_rejected() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
 
-    let invalid = OrderedTree::new()
-        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }))
-        .task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
+    let mut invalid = OrderedTree::new();
+    invalid.add_task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
+    invalid.add_task(TaskSpec::new("duplicate", |_| async { Ok(()) }));
     assert_eq!(
         support::dynamic_root(&root)
             .add_subtree("invalid", invalid)
@@ -502,11 +498,10 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
 
     let left_graph = left_graph.build();
     let right_graph = right_graph.build();
-    let handle = OrderedTree::new()
-        .subtree("left", left_graph)
-        .subtree("right", right_graph)
-        .spawn()
-        .expect("runtime builds");
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("left", left_graph);
+    tree.add_subtree("right", right_graph);
+    let handle = tree.spawn().expect("runtime builds");
     handle
         .scope()
         .wait_started()
@@ -597,16 +592,13 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
     let static_ref_slot = ActorSlot::new("static-worker");
     let static_ref = static_ref_slot.actor_ref();
     nested_graph.define(static_ref_slot, || FailOnMessage);
-    let nested_graph = nested_graph.build();
-    let handle = OrderedTree::new()
-        .subtree(
-            "workers",
-            nested_graph
-                .subtree("dynamic", DynamicTree::new())
-                .default_restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
-        )
-        .spawn()
-        .expect("nested runtime builds");
+    let mut nested_graph = nested_graph.build();
+    nested_graph.add_subtree("dynamic", DynamicTree::new());
+    let nested_graph =
+        nested_graph.default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)));
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("workers", nested_graph);
+    let handle = tree.spawn().expect("nested runtime builds");
     handle
         .scope()
         .wait_started()
@@ -707,14 +699,11 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     let static_ref = static_ref_slot.actor_ref();
     graph.define(static_ref_slot, || FailOnMessage);
     let root = DynamicTree::new().spawn().expect("runtime builds");
-    let graph = graph.build();
+    let mut graph = graph.build();
+    graph.add_subtree("dynamic", DynamicTree::new());
+    let graph = graph.default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)));
     let subtree = support::dynamic_root(&root)
-        .add_subtree(
-            "workers",
-            graph
-                .subtree("dynamic", DynamicTree::new())
-                .default_restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
-        )
+        .add_subtree("workers", graph)
         .await
         .expect("subtree added");
     subtree.wait_started().await.expect("subtree started");
@@ -751,16 +740,13 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     let fuse_slot = ActorSlot::new("fuse");
     let fuse = fuse_slot.actor_ref();
     parent_graph.define(fuse_slot, || FailOnMessage);
-    let parent_graph = parent_graph.build();
-    let root = OrderedTree::new()
-        .subtree(
-            "parent",
-            parent_graph
-                .subtree("dynamic", DynamicTree::new())
-                .default_restart(Restart::on_failure().limit(0, Duration::from_secs(60))),
-        )
-        .spawn()
-        .expect("runtime builds");
+    let mut parent_graph = parent_graph.build();
+    parent_graph.add_subtree("dynamic", DynamicTree::new());
+    let parent_graph =
+        parent_graph.default_restart(Restart::on_failure().limit(0, Duration::from_secs(60)));
+    let mut tree = OrderedTree::new();
+    tree.add_subtree("parent", parent_graph);
+    let root = tree.spawn().expect("runtime builds");
     root.scope().wait_started().await.expect("runtime started");
     let parent = root
         .scope()
@@ -1028,7 +1014,9 @@ async fn supervision_tree_mixes_actor_and_non_actor_children() {
             }
         }
     });
-    let handle = graph.task(sidecar).spawn().expect("runtime builds");
+    let mut graph = graph;
+    graph.add_task(sidecar);
+    let handle = graph.spawn().expect("runtime builds");
 
     timeout(Duration::from_secs(1), sidecar_started.notified())
         .await
@@ -1465,11 +1453,9 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     graph.define(worker_ref_slot, move || Observe {
         observed: observed_tx.clone(),
     });
-    let graph = graph.build();
-    let handle = graph
-        .subtree("dynamic", DynamicTree::new())
-        .spawn()
-        .expect("mixed runtime builds");
+    let mut graph = graph.build();
+    graph.add_subtree("dynamic", DynamicTree::new());
+    let handle = graph.spawn().expect("mixed runtime builds");
 
     worker_ref
         .send("count me".to_owned())

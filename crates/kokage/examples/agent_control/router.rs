@@ -176,18 +176,12 @@ impl Router {
                 // rehydrates from the journal, while `Never` run children are
                 // skipped by the group respawn and cannot themselves recycle
                 // the session.
-                let subtree = mount
-                    .add_subtree(
-                        offload_id,
-                        OrderedTree::new().subtree(
-                            "session-runtime",
-                            OrderedTree::new()
-                                .strategy(Strategy::OneForAll)
-                                .actor(session_actor)
-                                .subtree("children", DynamicTree::new()),
-                        ),
-                    )
-                    .await;
+                let mut session_runtime = OrderedTree::new().strategy(Strategy::OneForAll);
+                session_runtime.add_actor(session_actor);
+                session_runtime.add_subtree("children", DynamicTree::new());
+                let mut session_tree = OrderedTree::new();
+                session_tree.add_subtree("session-runtime", session_runtime);
+                let subtree = mount.add_subtree(offload_id, session_tree).await;
                 subtree.is_ok()
             },
             move |result| RouterMsg::Mounted {

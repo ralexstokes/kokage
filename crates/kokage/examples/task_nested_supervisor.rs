@@ -34,7 +34,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
     };
 
-    let nested_tree = OrderedTree::new().task(nested_worker);
+    let mut nested_tree = OrderedTree::new();
+    nested_tree.add_task(nested_worker);
 
     let metrics = TaskSpec::new("metrics", |ctx| async move {
         println!("metrics started in generation {}", ctx.generation());

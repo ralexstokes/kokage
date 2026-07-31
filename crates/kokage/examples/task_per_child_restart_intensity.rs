@@ -51,11 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Supervisor default: children do not get any restart budget unless they override it.
-    let running_owner = OrderedTree::new()
-        .default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)))
-        .task(warm_cache)
-        .task(metrics)
-        .spawn()?;
+    let mut tree =
+        OrderedTree::new().default_restart(Restart::on_failure().limit(0, Duration::from_secs(1)));
+    tree.add_task(warm_cache);
+    tree.add_task(metrics);
+    let running_owner = tree.spawn()?;
     let running = running_owner.scope();
     let mut snapshots = running.subscribe_snapshots();
     let scheduled = timeout(

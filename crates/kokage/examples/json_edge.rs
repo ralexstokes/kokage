@@ -27,8 +27,9 @@ impl Actor for Printer {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let printer_spec = ActorSpec::new("Printer", || Printer)
         .shutdown(Shutdown::drain_for(std::time::Duration::from_secs(5)));
-    let printer = printer_spec.actor_ref();
-    let runtime = OrderedTree::new().actor(printer_spec).spawn()?;
+    let mut tree = OrderedTree::new();
+    let printer = tree.add_actor(printer_spec);
+    let runtime = tree.spawn()?;
 
     // A socket or file framing layer can supply the same byte slices.
     let input = b"{\"item\":\"labels\",\"quantity\":4}\n{\"item\":\"boxes\",\"quantity\":2}\n";

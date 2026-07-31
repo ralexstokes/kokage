@@ -86,10 +86,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let sink_actor = sink_slot.define(move || Sink {
         out: out_tx.clone(),
     });
-    let tree = OrderedTree::new()
-        .actor(frontend_actor)
-        .actor(parser_actor)
-        .actor(sink_actor);
+    let mut tree = OrderedTree::new();
+    tree.add_actor(frontend_actor);
+    tree.add_actor(parser_actor);
+    tree.add_actor(sink_actor);
     let runtime = tree.spawn()?;
 
     frontend.send(FrontendMsg::Feed("hello".to_owned())).await?;

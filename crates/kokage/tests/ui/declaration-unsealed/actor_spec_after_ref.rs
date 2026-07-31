@@ -21,6 +21,7 @@ fn main() {
     let spec = spec
         .mailbox(MailboxMode::queue())
         .message_size(message_size);
-    let _tree = kokage::OrderedTree::new().actor(spec);
+    let mut tree = kokage::OrderedTree::new();
+    tree.add_actor(spec);
     assert_eq!(first_ref.id(), second_ref.id());
 }

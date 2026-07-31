@@ -10,16 +10,13 @@ topology are expressed together.
 # use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let tree = OrderedTree::new()
-    .strategy(Strategy::OneForOne)
-    .actor(ActorSpec::new("ingest", || Worker))
-    .subtree(
-        "workers",
-        OrderedTree::new()
-            .strategy(Strategy::OneForAll)
-            .actor(ActorSpec::new("parse", || Worker))
-            .actor(ActorSpec::new("index", || Worker)),
-    );
+let mut workers = OrderedTree::new().strategy(Strategy::OneForAll);
+workers.add_actor(ActorSpec::new("parse", || Worker));
+workers.add_actor(ActorSpec::new("index", || Worker));
+
+let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
+tree.add_actor(ActorSpec::new("ingest", || Worker));
+tree.add_subtree("workers", workers);
 # let _ = tree;
 ```
 
@@ -54,29 +51,30 @@ let sessions = DynamicTree::new();
 let sessions_ref = sessions.scope();
 let router = ActorSpec::new("router", move || Router(sessions_ref.clone()));
 
-let app = OrderedTree::new()
-    // Moving the nested tree transfers its identity into the root. Declaring
-    // it first also makes it ready before the dependent router starts.
-    .subtree("sessions", sessions)
-    .actor(router);
+let mut app = OrderedTree::new();
+// Moving the nested tree transfers its identity into the root. Declaring
+// it first also makes it ready before the dependent router starts.
+app.add_subtree("sessions", sessions);
+app.add_actor(router);
 let app_ref = app.scope();
 # let _ = app_ref;
 ```
 
-Moving a tree into `subtree` transfers ownership, while previously issued
+Moving a tree into `add_subtree` transfers ownership, while previously issued
 references continue to address the same identity.
 
-Use `TreeNode` when the nested scope's edge needs policies distinct from its
+Use `SubtreeSpec` when the nested scope's edge needs policies distinct from its
 siblings. `restart` and `shutdown` configure how the parent restarts or stops
 the whole subtree; the tree's `default_restart` and `default_shutdown` still
 apply inside it:
 
 ```rust
-# use kokage::{TreeNode, prelude::*};
+# use kokage::{SubtreeSpec, prelude::*};
 let workers = OrderedTree::new();
-let app = OrderedTree::new().subtree(
+let mut app = OrderedTree::new();
+app.add_subtree(
     "workers",
-    TreeNode::from(workers)
+    SubtreeSpec::from(workers)
         .restart(Restart::never())
         .shutdown(Shutdown::abort()),
 );
@@ -101,10 +99,9 @@ the temporary owner is dropped at the end of the statement.
 # use kokage::prelude::*;
 # struct Worker;
 # impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let tree = OrderedTree::new()
-    .strategy(Strategy::RestForOne)
-    .actor(ActorSpec::new("ingest", || Worker))
-    .actor(ActorSpec::new("parse", || Worker));
+let mut tree = OrderedTree::new().strategy(Strategy::RestForOne);
+tree.add_actor(ActorSpec::new("ingest", || Worker));
+tree.add_actor(ActorSpec::new("parse", || Worker));
 let outline = tree.outline();
 assert_eq!(outline.strategy, Strategy::RestForOne);
 assert_eq!(outline.child_ids(), ["ingest", "parse"]);
@@ -121,13 +118,12 @@ Represent an actor and its workers with an explicit nested tree:
 # use kokage::prelude::*;
 # struct Leader;
 # impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let sessions = OrderedTree::new().subtree(
-    "session-runtime",
-    OrderedTree::new()
-        .strategy(Strategy::OneForAll)
-        .actor(ActorSpec::new("leader", || Leader))
-        .subtree("children", DynamicTree::new()),
-);
+let mut session_runtime = OrderedTree::new().strategy(Strategy::OneForAll);
+session_runtime.add_actor(ActorSpec::new("leader", || Leader));
+session_runtime.add_subtree("children", DynamicTree::new());
+
+let mut sessions = OrderedTree::new();
+sessions.add_subtree("session-runtime", session_runtime);
 # let _ = sessions;
 ```
 
