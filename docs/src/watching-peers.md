@@ -134,4 +134,4 @@ supervisor's job. Monitors are for reacting, not supervising.
 [`MonitorEvent`]: https://stokes.io/kokage/api/kokage/struct.MonitorEvent.html
 [`MonitorEventKind`]: https://stokes.io/kokage/api/kokage/enum.MonitorEventKind.html
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
-[`ExitStatus`]: https://stokes.io/kokage/api/kokage/enum.ExitStatus.html
+[`ExitStatus`]: https://stokes.io/kokage/api/kokage/observe/enum.ExitStatus.html
