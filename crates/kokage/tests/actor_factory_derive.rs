@@ -45,8 +45,12 @@ struct DerivedActor {
     _non_clone: Mutex<()>,
     #[factory(default)]
     incarnation: usize,
-    #[factory(default)]
+    #[factory(default = Self::INITIAL_LOCAL)]
     local: usize,
+}
+
+impl DerivedActor {
+    const INITIAL_LOCAL: usize = 10;
 }
 
 impl Actor for DerivedActor {
@@ -93,14 +97,14 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
             .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("first incarnation replies"),
-        (0, 1)
+        (0, 11)
     );
     assert_eq!(
         actor_ref
             .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("first incarnation replies again"),
-        (0, 2)
+        (0, 12)
     );
 
     let (lifecycle, baseline) = restart_observer(&handle.scope(), "derived");
@@ -120,7 +124,7 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
             .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("replacement replies"),
-        (1, 1)
+        (1, 11)
     );
     assert_eq!(starts.load(Ordering::SeqCst), 2);
 

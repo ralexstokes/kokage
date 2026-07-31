@@ -24,7 +24,9 @@ use syn::{
 /// without an attribute become factory fields and are cloned into every new
 /// actor incarnation. Mark incarnation-local fields with `#[factory(default)]`
 /// to omit them from the factory and initialize them with `Default::default()`
-/// on every build:
+/// on every build. Use `#[factory(default = expression)]` when fresh state has
+/// a non-`Default` initial value; the expression is evaluated for every actor
+/// incarnation and `Self` refers to the actor declaration:
 ///
 /// ```
 /// # use std::collections::VecDeque;
@@ -35,9 +37,10 @@ use syn::{
 /// #[derive(kokage::ActorFactory)]
 /// struct Worker {
 ///     client: Client,
-///     #[factory(default)]
+///     #[factory(default = VecDeque::with_capacity(Self::INITIAL_CAPACITY))]
 ///     pending: VecDeque<Job>,
 /// }
+/// # impl Worker { const INITIAL_CAPACITY: usize = 8; }
 /// # impl Actor for Worker {
 /// #     type Msg = ();
 /// #     async fn handle(&mut self, (): (), _: &mut Context<'_, Self>) -> ExitResult {
@@ -51,10 +54,10 @@ use syn::{
 /// ```
 ///
 /// The generated factory and its configuration fields inherit the actor's
-/// visibility. Configuration fields must implement `Clone`; fields marked
-/// `default` must implement `Default`. Generic, tuple, and unit structs are
-/// rejected. Hand-write `ActorFactory` when an incarnation-local field needs
-/// construction more specialized than `Default`.
+/// visibility. Configuration fields must implement `Clone`; fields marked with
+/// bare `default` must implement `Default`. Generic, tuple, and unit structs
+/// are rejected. Hand-write `ActorFactory` when construction needs logic
+/// beyond cloning configuration and synchronously initializing fields.
 #[proc_macro_derive(ActorFactory, attributes(factory))]
 pub fn derive_actor_factory(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -106,16 +109,16 @@ fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
             ));
         }
     };
-    let defaults = parse_factory_attributes(&fields)?;
+    let initializers = parse_factory_attributes(&fields)?;
     let factory = format_ident!("{actor}Factory");
     let factory_doc = format!(
-        "Reusable factory generated from [`{actor}`].\n\nUnmarked fields are durable configuration cloned into every actor incarnation; fields marked `#[factory(default)]` are freshly default-constructed."
+        "Reusable factory generated from [`{actor}`].\n\nUnmarked fields are durable configuration cloned into every actor incarnation; fields marked with `#[factory(default)]` or `#[factory(default = expression)]` are freshly initialized."
     );
 
     let factory_fields: Vec<_> = fields
         .iter()
-        .zip(&defaults)
-        .filter(|(_, default)| !**default)
+        .zip(&initializers)
+        .filter(|(_, initializer)| matches!(initializer, FactoryFieldInit::Clone))
         .map(|(field, _)| {
             let ident = field.ident.as_ref().expect("named fields");
             let ty = &field.ty;
@@ -129,29 +132,54 @@ fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         .collect();
     let actor_fields: Vec<_> = fields
         .iter()
-        .zip(&defaults)
-        .map(|(field, default)| {
+        .zip(&initializers)
+        .map(|(field, initializer)| {
             let ident = field.ident.as_ref().expect("named fields");
             let ty = &field.ty;
-            if *default {
-                quote_spanned! {field.span()=>
-                    #ident: <#ty as ::core::default::Default>::default()
-                }
-            } else {
-                quote_spanned! {field.span()=>
+            match initializer {
+                FactoryFieldInit::Clone => quote_spanned! {field.span()=>
                     #ident: <#ty as ::core::clone::Clone>::clone(&self.#ident)
-                }
+                },
+                FactoryFieldInit::Default => quote_spanned! {field.span()=>
+                    #ident: <#ty as ::core::default::Default>::default()
+                },
+                FactoryFieldInit::Expr(_) => quote_spanned! {field.span()=>
+                    #ident: <#actor as __KokageActorFactoryDefaults>::#ident()
+                },
             }
         })
         .collect();
 
-    Ok(quote! {
-        #[doc = #factory_doc]
-        #[derive(Clone)]
-        #vis struct #factory {
-            #(#factory_fields,)*
-        }
+    let custom_default_signatures: Vec<_> = fields
+        .iter()
+        .zip(&initializers)
+        .filter_map(|(field, initializer)| match initializer {
+            FactoryFieldInit::Expr(_) => {
+                let ident = field.ident.as_ref().expect("named fields");
+                let ty = &field.ty;
+                Some(quote_spanned! {field.span()=> fn #ident() -> #ty; })
+            }
+            FactoryFieldInit::Clone | FactoryFieldInit::Default => None,
+        })
+        .collect();
+    let custom_default_methods: Vec<_> = fields
+        .iter()
+        .zip(&initializers)
+        .filter_map(|(field, initializer)| match initializer {
+            FactoryFieldInit::Expr(expr) => {
+                let ident = field.ident.as_ref().expect("named fields");
+                let ty = &field.ty;
+                Some(quote_spanned! {expr.span()=>
+                    fn #ident() -> #ty {
+                        #expr
+                    }
+                })
+            }
+            FactoryFieldInit::Clone | FactoryFieldInit::Default => None,
+        })
+        .collect();
 
+    let factory_impl = quote! {
         impl ::kokage::ActorFactory for #factory {
             type Actor = #actor;
 
@@ -161,16 +189,49 @@ fn expand_actor_factory(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 }
             }
         }
+    };
+    let factory_impl = if custom_default_methods.is_empty() {
+        factory_impl
+    } else {
+        quote! {
+            const _: () = {
+                trait __KokageActorFactoryDefaults {
+                    #(#custom_default_signatures)*
+                }
+
+                impl __KokageActorFactoryDefaults for #actor {
+                    #(#custom_default_methods)*
+                }
+
+                #factory_impl
+            };
+        }
+    };
+
+    Ok(quote! {
+        #[doc = #factory_doc]
+        #[derive(Clone)]
+        #vis struct #factory {
+            #(#factory_fields,)*
+        }
+
+        #factory_impl
     })
+}
+
+enum FactoryFieldInit {
+    Clone,
+    Default,
+    Expr(Expr),
 }
 
 fn parse_factory_attributes(
     fields: &syn::punctuated::Punctuated<Field, syn::token::Comma>,
-) -> syn::Result<Vec<bool>> {
-    let mut defaults = Vec::with_capacity(fields.len());
+) -> syn::Result<Vec<FactoryFieldInit>> {
+    let mut initializers = Vec::with_capacity(fields.len());
 
     for field in fields {
-        let mut default = false;
+        let mut default = None;
         for attr in field
             .attrs
             .iter()
@@ -178,19 +239,27 @@ fn parse_factory_attributes(
         {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("default") {
-                    if default {
+                    if default.is_some() {
                         return Err(meta.error("duplicate `default` option"));
                     }
-                    default = true;
+                    default = if meta.input.peek(syn::Token![=]) {
+                        Some(Some(meta.value()?.parse()?))
+                    } else {
+                        Some(None)
+                    };
                     return Ok(());
                 }
                 Err(meta.error("expected `default`"))
             })?;
         }
-        defaults.push(default);
+        initializers.push(match default {
+            None => FactoryFieldInit::Clone,
+            Some(None) => FactoryFieldInit::Default,
+            Some(Some(expr)) => FactoryFieldInit::Expr(expr),
+        });
     }
 
-    Ok(defaults)
+    Ok(initializers)
 }
 
 /// Derives one statically declared supervision tree from a nested struct.

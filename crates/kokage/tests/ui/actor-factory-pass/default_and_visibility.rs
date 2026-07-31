@@ -9,8 +9,12 @@ mod actor {
     #[derive(ActorFactory)]
     pub struct Worker {
         durable: Arc<usize>,
-        #[factory(default)]
+        #[factory(default = Mutex::new(Vec::with_capacity(Self::INITIAL_CAPACITY)))]
         local: Mutex<Vec<String>>,
+    }
+
+    impl Worker {
+        const INITIAL_CAPACITY: usize = 8;
     }
 
     impl Actor for Worker {
