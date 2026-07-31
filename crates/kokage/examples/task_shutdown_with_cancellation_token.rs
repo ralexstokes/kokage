@@ -22,10 +22,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let running = tree.spawn()?;
 
     let app_shutdown = CancellationToken::new();
-    app_shutdown.cancel_when(async {
-        sleep(Duration::from_millis(250)).await;
-        println!("application shutdown requested");
-    });
+    app_shutdown
+        .cancel_when(async {
+            sleep(Duration::from_millis(250)).await;
+            println!("application shutdown requested");
+        })
+        .detach();
 
     app_shutdown.cancelled().await;
     running.shutdown().await?;

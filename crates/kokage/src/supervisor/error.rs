@@ -40,9 +40,6 @@ pub enum SupervisorError {
 #[derive(Debug, Error, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ControlError {
-    /// The operation requires a scope with dynamic membership.
-    #[error("scope has ordered membership")]
-    NotDynamic,
     /// No child with this id is known to the supervisor.
     #[error("unknown child id: {0}")]
     UnknownChildId(String),

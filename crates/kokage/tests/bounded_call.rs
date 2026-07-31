@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSpec, CallError, ExitResult, Mailbox, Reply, Shutdown,
+    ActorSpec, CallError, ExitResult, Mailbox, Reply, ReplyError, Shutdown,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
@@ -84,6 +84,40 @@ async fn timeout_before_mailbox_binding_drops_the_request() {
     );
     assert_eq!(rpc.stats().messages_accepted, 1);
     stop(stop_token, task).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lower_level_reply_channel_separates_acceptance_and_response_deadlines() {
+    let spec = ActorSpec::new("rpc", || ReplyImmediately);
+    let rpc = spec.actor_ref();
+    let (stop_token, task) = start(spec.into_host());
+    let (reply, response) = Reply::channel();
+
+    rpc.send_timeout(Request::Get(reply), CALL_TIMEOUT)
+        .await
+        .expect("request is accepted within its own bound");
+    assert_eq!(
+        response
+            .recv_timeout(CALL_TIMEOUT)
+            .await
+            .expect("reply arrives within a fresh response bound"),
+        "ok"
+    );
+
+    stop(stop_token, task).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lower_level_reply_channel_distinguishes_drop_and_timeout() {
+    let (reply, response) = Reply::<u8>::channel();
+    drop(reply);
+    assert_eq!(response.recv().await, Err(ReplyError::Dropped));
+
+    let (_reply, response) = Reply::<u8>::channel();
+    assert_eq!(
+        response.recv_timeout(CALL_TIMEOUT).await,
+        Err(ReplyError::Timeout)
+    );
 }
 
 enum BackpressuredRequest {

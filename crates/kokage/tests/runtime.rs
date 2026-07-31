@@ -262,6 +262,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
     let raw_members = handle
         .scope()
         .subtree("raw-members")
+        .and_then(|scope| scope.dynamic())
         .expect("dynamic raw-members subtree");
     raw_members
         .add_task_spec(TaskSpec::new("raw", |ctx| async move {
@@ -274,6 +275,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
 
     let dynamic_scope = subtree
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic subtree");
     let dynamic = dynamic_scope
         .add_actor_spec(ActorSpec::new("dynamic-worker", Drain::<()>::new))
@@ -332,6 +334,7 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
     subtree.wait_started().await.expect("subtree started");
     let dynamic = subtree
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic subtree");
     let dynamic_ref = dynamic
         .add_actor_spec(ActorSpec::new("dynamic-worker", Drain::<()>::new))
@@ -358,11 +361,11 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
 async fn dynamic_subtrees_can_nest_and_removal_terminates_retained_handles() {
     let root = DynamicTree::new().spawn().expect("runtime builds");
     let middle = support::dynamic_root(&root)
-        .add_subtree("middle", DynamicTree::new())
+        .add_dynamic_subtree("middle", DynamicTree::new())
         .await
         .expect("middle subtree added");
     let leaf = middle
-        .add_subtree("leaf", DynamicTree::new())
+        .add_dynamic_subtree("leaf", DynamicTree::new())
         .await
         .expect("leaf subtree added");
     let actor = leaf
@@ -407,7 +410,7 @@ async fn subtree_validation_phases_report_rejected() {
     );
 
     let first = support::dynamic_root(&root)
-        .add_subtree("workers", DynamicTree::new())
+        .add_dynamic_subtree("workers", DynamicTree::new())
         .await
         .expect("first subtree added");
     first
@@ -549,6 +552,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
         .expect("actor-aware subtree");
     let dynamic = subtree
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic subtree");
     let dynamic_ref = dynamic
         .add_actor_spec(ActorSpec::new("dynamic-worker", Drain::<()>::new))
@@ -646,6 +650,7 @@ async fn dynamic_subtree_restart_recreates_only_builder_membership() {
     subtree.wait_started().await.expect("subtree started");
     let dynamic = subtree
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic subtree");
     let dynamic_ref = dynamic
         .add_actor_spec(ActorSpec::new("dynamic-worker", Drain::<()>::new))
@@ -691,6 +696,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
         .expect("parent subtree available");
     let dynamic = parent
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic subtree available");
     dynamic
         .add_actor_spec(ActorSpec::new("worker", Drain::<()>::new))
@@ -721,6 +727,7 @@ async fn parent_restart_drops_dynamic_members_and_allows_same_id_replay() {
     let restarted_parent = root.scope().subtree("parent").expect("parent rebound");
     let rebound_dynamic = restarted_parent
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("dynamic subtree rebound");
     rebound_dynamic
         .add_actor_spec(ActorSpec::new("worker", Drain::<()>::new))
@@ -839,7 +846,7 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
         .expect("worker observed the message")
         .expect("worker is still running");
     assert_eq!(observed, "run-path");
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
@@ -895,7 +902,7 @@ async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
         .expect("worker observed the message")
         .expect("worker is still running");
     assert_eq!(observed, "spawn-wait-path");
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 
@@ -1290,7 +1297,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
         .send(StuckDrainMsg::Stuck)
         .await
         .expect("drain work queued");
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     let shutdown = tokio::spawn({
         let handle = handle.scope();
         async move { handle.wait().await }
@@ -1398,6 +1405,7 @@ async fn handle_actor_stats_track_graph_and_runtime_added_actors() {
     let dynamic = handle
         .scope()
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("declared dynamic subtree");
     let extra = dynamic
         .add_actor_spec(ActorSpec::new("extra", Drain::<()>::new))

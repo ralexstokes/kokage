@@ -46,7 +46,7 @@ impl RestartTracker {
         if self
             .run_started_at
             .take()
-            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within())
+            .is_some_and(|started_at| now.duration_since(started_at) > self.intensity.within)
         {
             self.consecutive_restarts = 0;
         }
@@ -54,7 +54,7 @@ impl RestartTracker {
 
     pub(crate) fn record_restart(&mut self, now: Instant) {
         while let Some(front) = self.times.front() {
-            if now.duration_since(*front) > self.intensity.within() {
+            if now.duration_since(*front) > self.intensity.within {
                 self.times.pop_front();
             } else {
                 break;
@@ -66,11 +66,11 @@ impl RestartTracker {
     }
 
     pub(crate) fn exceeded(&self) -> bool {
-        self.times.len() > self.intensity.max_restarts()
+        self.times.len() > self.intensity.max_restarts
     }
 
     pub(crate) fn backoff(&mut self) -> Duration {
-        let (deterministic, jitter) = match self.intensity.backoff_policy() {
+        let (deterministic, jitter) = match self.intensity.backoff {
             Backoff::None => return Duration::ZERO,
             Backoff::Fixed(delay) => return delay,
             Backoff::Exponential {

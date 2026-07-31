@@ -632,6 +632,28 @@ impl LifecycleHub {
         }
     }
 
+    /// Registers a watch and reads its reset snapshot under the same ordering
+    /// lock used by aligned supervisor-level emissions.
+    pub(crate) fn observe<T>(&self, snapshot: impl FnOnce() -> T) -> (T, LifecycleWatch) {
+        let watcher = LifecycleWatcher::new();
+        self.recursive_watcher_count.fetch_add(1, Ordering::AcqRel);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .recursive_watchers
+            .retain(|watcher| watcher.strong_count() > 0);
+        let watch = if state.terminal {
+            self.recursive_watcher_count.fetch_sub(1, Ordering::AcqRel);
+            watcher.mark_terminal();
+            LifecycleWatch::new(watcher, None)
+        } else {
+            state.recursive_watchers.push(Arc::downgrade(&watcher));
+            LifecycleWatch::new(watcher, Some(Arc::clone(&self.recursive_watcher_count)))
+        };
+        let snapshot = snapshot();
+        drop(state);
+        (snapshot, watch)
+    }
+
     /// Assigns a sequence and publishes the aligned snapshot while lifecycle
     /// registration is excluded by the same hub lock. The caller forwards the
     /// returned event immediately afterwards.
@@ -723,6 +745,23 @@ impl LifecycleHub {
         });
     }
 
+    /// Publishes a snapshot and its unsequenced local event atomically with
+    /// respect to aligned observation registration.
+    fn emit_aligned(&self, event: &LifecycleEvent, publish_aligned_snapshot: impl FnOnce()) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        publish_aligned_snapshot();
+        if state.terminal {
+            return;
+        }
+        state.recursive_watchers.retain(|watcher| {
+            let Some(watcher) = watcher.upgrade() else {
+                return false;
+            };
+            watcher.push(event.clone());
+            true
+        });
+    }
+
     fn has_recursive_watchers(&self) -> bool {
         self.recursive_watcher_count.load(Ordering::Acquire) > 0
     }
@@ -762,9 +801,20 @@ impl LifecycleTreeSink {
         }))
     }
 
-    /// Emits an event produced outside the sequenced direct-child path.
-    pub(crate) fn emit(&self, event: LifecycleEvent) {
-        self.forward_recursive(event);
+    /// Publishes a local snapshot and unsequenced event as one observation
+    /// boundary, then forwards the event recursively to ancestor watches.
+    pub(crate) fn emit_aligned(
+        &self,
+        mut event: LifecycleEvent,
+        publish_aligned_snapshot: impl FnOnce(),
+    ) {
+        self.0.hub.emit_aligned(&event, publish_aligned_snapshot);
+        if let Some((parent, segment)) = &self.0.parent
+            && parent.has_recursive_watchers_in_chain()
+        {
+            prepend_path(&mut event, segment.clone());
+            parent.forward(event);
+        }
     }
 
     /// Forwards a child event already staged for direct watchers by
@@ -808,7 +858,11 @@ fn prepend_path(event: &mut LifecycleEvent, segment: ScopePathSegment) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, PoisonError};
+    use std::sync::{
+        Arc, PoisonError,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    };
 
     use super::{
         ChildLifecycleEventKind, LifecycleEvent, LifecycleEventDraft, LifecycleEventKind,
@@ -850,6 +904,106 @@ mod tests {
         assert!(hub.has_recursive_watchers());
         drop(second);
         assert!(!hub.has_recursive_watchers());
+    }
+
+    #[test]
+    fn observation_before_supervisor_transition_gets_pre_transition_reset_then_event() {
+        let hub = LifecycleHub::new();
+        let snapshot = Arc::new(AtomicU64::new(0));
+        let (snapshot_entered_tx, snapshot_entered_rx) = mpsc::channel();
+        let (release_snapshot_tx, release_snapshot_rx) = mpsc::channel();
+
+        let observer = std::thread::spawn({
+            let hub = Arc::clone(&hub);
+            let snapshot = Arc::clone(&snapshot);
+            move || {
+                hub.observe(|| {
+                    snapshot_entered_tx
+                        .send(())
+                        .expect("emitter waits for observation");
+                    release_snapshot_rx
+                        .recv()
+                        .expect("test releases snapshot read");
+                    snapshot.load(Ordering::Acquire)
+                })
+            }
+        });
+        snapshot_entered_rx
+            .recv()
+            .expect("observation holds the alignment lock");
+
+        let emitter = std::thread::spawn({
+            let hub = Arc::clone(&hub);
+            let snapshot = Arc::clone(&snapshot);
+            move || {
+                hub.emit_aligned(
+                    &LifecycleEvent::local(LifecycleEventKind::SupervisorStopping),
+                    || snapshot.store(1, Ordering::Release),
+                );
+            }
+        });
+        release_snapshot_tx
+            .send(())
+            .expect("observation can finish");
+
+        let (reset, watch) = observer.join().expect("observer thread joins");
+        emitter.join().expect("emitter thread joins");
+        assert_eq!(reset, 0);
+        assert!(matches!(
+            watch.watcher.direct.pop(),
+            Some(LifecycleEvent {
+                kind: LifecycleEventKind::SupervisorStopping,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn supervisor_transition_before_observation_gets_post_transition_reset_without_stale_event() {
+        let hub = LifecycleHub::new();
+        let snapshot = Arc::new(AtomicU64::new(0));
+        let (snapshot_published_tx, snapshot_published_rx) = mpsc::channel();
+        let (release_emission_tx, release_emission_rx) = mpsc::channel();
+
+        let emitter = std::thread::spawn({
+            let hub = Arc::clone(&hub);
+            let snapshot = Arc::clone(&snapshot);
+            move || {
+                hub.emit_aligned(
+                    &LifecycleEvent::local(LifecycleEventKind::SupervisorStopping),
+                    || {
+                        snapshot.store(1, Ordering::Release);
+                        snapshot_published_tx
+                            .send(())
+                            .expect("observer waits for publication");
+                        release_emission_rx
+                            .recv()
+                            .expect("test releases event emission");
+                    },
+                );
+            }
+        });
+        snapshot_published_rx
+            .recv()
+            .expect("emission holds the alignment lock");
+
+        let observer = std::thread::spawn({
+            let hub = Arc::clone(&hub);
+            let snapshot = Arc::clone(&snapshot);
+            move || hub.observe(|| snapshot.load(Ordering::Acquire))
+        });
+        while !hub.has_recursive_watchers() {
+            std::thread::yield_now();
+        }
+        release_emission_tx.send(()).expect("emission can finish");
+
+        emitter.join().expect("emitter thread joins");
+        let (reset, watch) = observer.join().expect("observer thread joins");
+        assert_eq!(reset, 1);
+        assert!(
+            watch.watcher.direct.pop().is_none(),
+            "an event represented by the reset must not be replayed"
+        );
     }
 
     #[test]

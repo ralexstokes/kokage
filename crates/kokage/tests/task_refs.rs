@@ -31,7 +31,7 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
     let runtime = DynamicTree::new().spawn().expect("tree builds");
     let task = runtime
         .scope()
-        .add_task_spec(TaskSpec::new("job", |_| async { Ok(()) }).temporary())
+        .spawn_job("job", |_| async { Ok(()) })
         .await
         .expect("task is inserted");
 

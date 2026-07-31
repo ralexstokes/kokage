@@ -48,7 +48,7 @@ different actor answer.
 
 ## Calling
 
-The caller does not construct a `Reply` itself. It hands
+The caller usually does not construct a `Reply` itself. It hands
 [`ActorRef::call`] a *message constructor* — a closure that receives the
 freshly minted `Reply` and returns the message to send:
 
@@ -114,6 +114,26 @@ let total = counter.call(Duration::from_secs(1), CounterMsg::Total).await?;
 # }
 ```
 
+## Escape hatch: separate acceptance and response bounds
+
+`call` deliberately optimizes the common case with one end-to-end deadline.
+When accepting the request and waiting for its answer need different recovery
+policies, split the channel explicitly with [`Reply::channel`]:
+
+```rust,ignore
+let (reply, response) = Reply::channel();
+desk.send_timeout(
+        DeskMsg::Quote { pages: 250, reply },
+        Duration::from_millis(100),
+    )
+    .await?; // an error here returns the unaccepted request
+
+let price = response.recv_timeout(Duration::from_secs(2)).await?;
+```
+
+The response error distinguishes a dropped sender from a response timeout.
+Expiry cannot retract a request the actor already accepted, just like `call`.
+
 ## The timeout and what can go wrong
 
 The `Duration` you pass to `call` bounds the *entire* round trip: waiting for
@@ -149,4 +169,5 @@ More on that contract in the next chapter.
 [`Reply`]: https://stokes.io/kokage/api/kokage/struct.Reply.html
 [`Reply<T>`]: https://stokes.io/kokage/api/kokage/struct.Reply.html
 [`ActorRef::call`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.call
+[`Reply::channel`]: https://stokes.io/kokage/api/kokage/struct.Reply.html#method.channel
 [`CallError`]: https://stokes.io/kokage/api/kokage/enum.CallError.html

@@ -279,7 +279,7 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
         Some(exit) if exit.is_completed()
     ));
 
-    handle.scope().shutdown();
+    handle.scope().request_shutdown();
     handle.wait().await.expect("shutdown should succeed");
 }
 

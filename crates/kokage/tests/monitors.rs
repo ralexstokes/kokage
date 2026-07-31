@@ -106,7 +106,7 @@ impl RawActor for Observer {
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         let mapped = self.mapped.clone();
-        let watch = ctx.watch(&self.peer, move |event| {
+        let watch = ctx.watch_scoped(&self.peer, move |event| {
             if let Some(mapped) = &mapped {
                 mapped.send(event.clone()).expect("mapper receiver alive");
             }
@@ -829,8 +829,7 @@ impl RawActor for TaggedObserver {
         ctx.watch(&self.peer, move |event| TaggedObserverMessage::Event {
             registration,
             event,
-        })
-        .detach();
+        });
         self.started.send(()).expect("start receiver alive");
         while let Some(message) = ctx.recv().await {
             match message {
@@ -964,7 +963,7 @@ impl RawActor for AliasedObserver {
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
         for registration in 0..2 {
-            let watch = ctx.watch(&self.peer, move |event| AliasedObserverMessage::Event {
+            let watch = ctx.watch_scoped(&self.peer, move |event| AliasedObserverMessage::Event {
                 registration,
                 event,
             });
@@ -982,10 +981,11 @@ impl RawActor for AliasedObserver {
                     .send((registration, event))
                     .expect("event receiver alive"),
                 AliasedObserverMessage::Rewatch => {
-                    let watch = ctx.watch(&self.peer, |event| AliasedObserverMessage::Event {
-                        registration: 2,
-                        event,
-                    });
+                    let watch =
+                        ctx.watch_scoped(&self.peer, |event| AliasedObserverMessage::Event {
+                            registration: 2,
+                            event,
+                        });
                     self.watches.send(watch).expect("watch receiver alive");
                 }
             }
@@ -1110,7 +1110,7 @@ impl RawActor for ManagedObserver {
     type Msg = ManagedObserverMessage;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
-        let watch = ctx.watch(&self.peer, ManagedObserverMessage::Event);
+        let watch = ctx.watch_scoped(&self.peer, ManagedObserverMessage::Event);
         self.watch.send(watch).expect("watch receiver alive");
         while let Some(message) = ctx.recv().await {
             match message {
@@ -1664,7 +1664,7 @@ impl RawActor for GatedObserver {
     type Msg = MonitorEvent;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
-        let watch = ctx.watch(&self.peer, |event| event);
+        let watch = ctx.watch_scoped(&self.peer, |event| event);
         self.watch.send(watch).expect("watch receiver alive");
         self.gate.notified().await;
         while let Some(event) = ctx.recv().await {
@@ -1771,7 +1771,7 @@ impl RawActor for UnitObserver {
     type Msg = MonitorEvent;
 
     async fn run(&mut self, mut ctx: RawContext<Self::Msg>) -> ExitResult {
-        ctx.watch(&self.peer, |event| event).detach();
+        ctx.watch(&self.peer, |event| event);
         self.started.send(()).expect("start receiver alive");
         while let Some(event) = ctx.recv().await {
             self.observed.send(event).expect("observer receiver alive");
@@ -1847,8 +1847,7 @@ impl RawActor for PanickingMapper {
         ctx.watch(&self.peer, move |_event| {
             mapped.send(()).expect("mapping receiver alive");
             panic!("deliberate mapping panic")
-        })
-        .detach();
+        });
         self.started.send(()).expect("start receiver alive");
         while ctx.recv().await.is_some() {}
         Ok(())

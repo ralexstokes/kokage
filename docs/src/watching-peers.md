@@ -44,7 +44,7 @@ impl Actor for FrontDesk {
     type Msg = DeskMsg;
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
-        ctx.watch(&self.press, DeskMsg::Press).detach();
+        ctx.watch(&self.press, DeskMsg::Press);
         Ok(())
     }
 
@@ -101,9 +101,10 @@ of fighting it:
 - **`Removed` is terminal and guaranteed.** When the target's membership
   leaves the tree permanently, every watcher hears about it, even ones that
   were lagging.
-- **The [`Guard`] owns the watch.** Dropping it unsubscribes; `.detach()`
-  keeps the watch for the actor's lifetime. Re-watching the same target is
-  an alias, not a duplicate subscription.
+- **The actor memberships own an ordinary watch.** It lasts until either
+  actor leaves permanently. Use `watch_scoped` to receive a [`Guard`] when a
+  state-machine phase should be able to unsubscribe early. Re-watching the
+  same target is an alias, not a duplicate subscription.
 
 `Exited` carries the shared observational [`ExitStatus`]: completed, failed,
 panicked, or controller-aborted, together with whether shutdown was requested.
@@ -128,6 +129,7 @@ a collaborator, stop and reshape the tree instead: restarting is the
 supervisor's job. Monitors are for reacting, not supervising.
 
 [`Context::watch`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.watch
+[`Context::watch_scoped`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.watch_scoped
 [`MonitorEvent`]: https://stokes.io/kokage/api/kokage/enum.MonitorEvent.html
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
 [`ExitStatus`]: https://stokes.io/kokage/api/kokage/enum.ExitStatus.html

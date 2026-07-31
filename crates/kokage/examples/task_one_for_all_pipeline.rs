@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|child| child.id.as_str())
         .collect();
     println!("all pipeline stages restarted together: {restarted_stage_names:?}");
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

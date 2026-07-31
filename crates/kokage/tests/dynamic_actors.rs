@@ -16,9 +16,9 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
-    DynamicTree, ExitResult, ExitStatus, Guard, Mailbox, MailboxShutdown, MonitorEvent,
-    RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext,
-    SupervisorError, TaskSpec, Tree,
+    DynamicScopeRef, DynamicTree, ExitResult, ExitStatus, Guard, Mailbox, MailboxShutdown,
+    MonitorEvent, RestartPolicy, RunningDynamicTree, ScopeRef, SendError, SendErrorKind, Shutdown,
+    StopContext, SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, SupervisorStateView},
     raw::{RawActor, RawContext},
 };
@@ -124,7 +124,7 @@ impl RawActor for Watcher {
         while let Some(message) = ctx.recv().await {
             match message {
                 WatchMsg::Watch(target) => {
-                    watch = Some(ctx.watch(&target, WatchMsg::Event));
+                    watch = Some(ctx.watch_scoped(&target, WatchMsg::Event));
                 }
                 WatchMsg::Event(event) => {
                     self.observed
@@ -159,7 +159,7 @@ async fn wait_for_child(handle: &ScopeRef, id: &str, present: bool) {
 // is also observable on the removal path, so seeing that snapshot alone does not
 // prove retention. Settling a later control operation flushes the removal path,
 // and only then is the surviving entry a retention decision.
-async fn wait_for_retained_terminal_child(handle: &ScopeRef, id: &str) {
+async fn wait_for_retained_terminal_child(handle: &DynamicScopeRef, id: &str) {
     timeout(Duration::from_secs(1), async {
         let mut snapshots = handle.snapshots();
         loop {
@@ -220,13 +220,13 @@ async fn wait_runtime_started(handle: &ScopeRef, phase: &str) {
 }
 
 async fn shutdown_runtime(handle: &ScopeRef, phase: &str) {
-    timeout(Duration::from_secs(2), handle.shutdown_and_wait())
+    timeout(Duration::from_secs(2), handle.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
         .unwrap_or_else(|error| panic!("runtime failed during {phase}: {error}"));
 }
 
-async fn shutdown_dynamic_runtime(runtime: RunningTree, phase: &str) {
+async fn shutdown_dynamic_runtime(runtime: RunningDynamicTree, phase: &str) {
     timeout(Duration::from_secs(2), runtime.shutdown())
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for {phase}"))
@@ -710,6 +710,7 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     let dynamic = handle
         .scope()
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("dynamic subtree is available");
     let starts = Arc::new(AtomicUsize::new(0));
     let target = dynamic
@@ -1213,7 +1214,7 @@ async fn dynamic_scope_mailbox_shutdown_default_is_inherited_and_overridable() {
 
     let scope = runtime.scope();
     let mut snapshots = scope.snapshots();
-    scope.shutdown();
+    scope.request_shutdown();
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.state == SupervisorStateView::Stopping),
@@ -1327,6 +1328,7 @@ async fn runtime_added_ref_is_distributed_to_static_actor_by_message() {
     let dynamic = handle
         .scope()
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("dynamic subtree is available");
 
     let sink = dynamic
@@ -1387,6 +1389,7 @@ async fn runtime_added_actor_can_receive_static_ref_at_creation() {
     let dynamic_scope = handle
         .scope()
         .subtree("dynamic")
+        .and_then(|scope| scope.dynamic())
         .expect("dynamic subtree is available");
 
     let dynamic = dynamic_scope
@@ -1469,13 +1472,7 @@ async fn ordered_tree_has_no_runtime_membership_capability() {
     let handle = tree.spawn().expect("valid tree");
 
     assert_eq!(handle.scope().kind(), kokage::observe::ScopeKind::Ordered);
-    assert!(matches!(
-        handle
-            .scope()
-            .add_actor_spec(ActorSpec::new("rejected", Drain::<()>::new))
-            .await,
-        Err(ControlError::NotDynamic)
-    ));
+    assert!(handle.scope().dynamic().is_none());
 
     timeout(Duration::from_secs(1), handle.shutdown())
         .await

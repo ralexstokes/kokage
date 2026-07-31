@@ -50,8 +50,7 @@ impl Actor for FrontDesk {
                             DeskMsg::SupplierQuote(Err("supplier timed out".to_owned()))
                         }
                     },
-                )
-                .detach();
+                );
             }
             DeskMsg::SupplierQuote(quote) => {
                 self.quotes.send(quote).expect("receiver alive");
@@ -87,9 +86,9 @@ liability supervision exists to eliminate.
 
 The fine print:
 
-- `offload` returns a [`Guard`]: dropping it cancels the background work.
-  `.detach()` (as above) opts into fire-and-forget; storing the guard ties
-  the offload to some state's lifetime.
+- `offload` is owned by the actor incarnation automatically. Use
+  `offload_scoped` when dropping a returned [`Guard`] should cancel the work,
+  for example to tie one request to a state-machine phase.
 - Offloads are **incarnation-owned**: if the actor fails or restarts, its
   outstanding offloads are aborted. A fresh run never receives results it
   doesn't remember requesting.
@@ -135,6 +134,7 @@ hand it to `offload` and get the result delivered as a message with a
 deadline, keeping the actor fully responsive.
 
 [`Context::offload`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.offload
+[`Context::offload_scoped`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.offload_scoped
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
 [`Context::run_blocking`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.run_blocking
 [`CancellationToken`]: https://stokes.io/kokage/api/kokage/struct.CancellationToken.html

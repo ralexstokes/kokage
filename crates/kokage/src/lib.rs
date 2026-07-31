@@ -1,8 +1,8 @@
 #![warn(missing_docs)]
 
 //! The front door to OTP-style supervision trees and typed actors over an
-//! async scheduler (Tokio today), with an owning [`RunningTree`] and integrated
-//! non-owning [`ScopeRef`] values.
+//! async scheduler (Tokio today), with owning [`RunningTree`] and
+//! [`RunningDynamicTree`] values plus non-owning scope references.
 //!
 //! Add each actor's id and factory directly to a [`Tree`], then spawn it.
 //! Use [`ActorSpec`] when a declaration needs explicit policy overrides:
@@ -54,16 +54,16 @@
 //! | [`ActorSpec`] / [`TaskSpec`] | Single-actor and arbitrary async-task declarations. |
 //! | [`ActorSlot`] | Typed cyclic actor wiring. |
 //! | [`Tree`] / [`DynamicTree`] | Single-use, identity-owning supervision declarations; their scopes are available before spawn. |
-//! | [`RunningTree`] | Owns a spawned supervision tree and requests graceful shutdown when dropped. |
-//! | [`ScopeRef`] | Cheaply cloneable, non-owning reference and control capability for a supervision scope; [`ScopeRef::kind`] reports ordered or dynamic membership. |
+//! | [`RunningTree`] / [`RunningDynamicTree`] | Own a spawned ordered or dynamic supervision tree and request graceful shutdown when dropped. |
+//! | [`ScopeRef`] / [`DynamicScopeRef`] | Cheaply cloneable, non-owning scope references; only the dynamic form carries membership mutation. |
 //! | [`Actor`] | Handler-style actor definition with a provided receive loop. |
 //! | [`raw::RawActor`] | Custom-loop typed actor definition (the escape hatch). |
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
 //! | [`TaskRef`] | Cloneable, restart-stable task completion and readiness handle. |
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
 //! | [`Mailbox`] | FIFO or latest-wins storage policy selected per actor. |
-//! | [`Reply`] | One-shot response channel carried inside request messages. |
-//! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
+//! | [`Reply`] | One-shot response carried inside request messages; [`Reply::channel`] is the lower-level split-deadline escape hatch. |
+//! | [`Guard`] | Cancel-on-drop ownership for explicitly scoped operations; [`Guard::detach`] opts into fire-and-forget. |
 //!
 //! # Composition modes
 //!
@@ -118,10 +118,11 @@
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
 //! `Lagged` reports sustained observer overload. Watches survive restarts of
-//! both actors; [`Guard::cancel`] stops future delivery, and permanent removal
-//! of either membership ends the watch. Watches, mailbox timers, offloads, and
-//! lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
-//! operation; retain it or call [`Guard::detach`] to keep the work alive.
+//! both actors, and permanent removal of either membership ends the watch.
+//! Ordinary watches are membership-owned; ordinary offloads are owned by the
+//! current actor incarnation. Their explicitly scoped variants, mailbox timers,
+//! and lifecycle/completion pumps return a [`Guard`]. Dropping it cancels the
+//! operation; retain it or call [`Guard::detach`] to keep the scoped work alive.
 //!
 //! # Static declarations
 //!
@@ -225,13 +226,14 @@ pub mod raw {
 
 /// Runtime observation, lifecycle, and topology types.
 ///
-/// Control remains on [`ScopeRef`]; this module groups the values and
-/// streams returned by that handle without injecting them into the crate root.
+/// Scope handles remain at the crate root; this module groups the observation
+/// values and lower-level streams they return.
 pub mod observe {
     #[cfg(feature = "serde")]
     pub use crate::supervision::{ChildOutline, SupervisionOutline};
     pub use crate::{
         actor::{ActorStats, ScopedActorStats},
+        runtime::{ScopeChange, ScopeChanges},
         supervisor::{
             ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
             LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
@@ -255,8 +257,8 @@ pub mod observe {
 pub mod prelude {
     pub use crate::{
         Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
-        MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
-        TaskRef, TaskSpec, TimerKey, Tree,
+        MailboxShutdown, MonitorEvent, Reply, RestartPolicy, ScopeChange, Shutdown, StopContext,
+        Strategy, TaskRef, TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -266,12 +268,16 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
-    ExitResult, Mailbox, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
-    StopContext, TimerKey,
+    ExitResult, Mailbox, MonitorEvent, OffloadDeadline, Reply, ReplyError, ReplyReceiver,
+    SendError, SendErrorKind, StopContext, TimerKey,
 };
-pub use runtime::{RunningTree, ScopeRef, TaskError, TaskRef};
+pub use runtime::{
+    DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeChange, ScopeChanges, ScopeRef,
+    TaskError, TaskRef,
+};
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
-    MailboxShutdown, RestartPolicy, Shutdown, Strategy, SupervisorError, TaskContext, TaskSpec,
+    MailboxShutdown, RestartCondition, RestartPolicy, Shutdown, Strategy, SupervisorError,
+    TaskContext, TaskSpec,
 };

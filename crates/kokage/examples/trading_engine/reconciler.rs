@@ -55,8 +55,7 @@ impl Reconciler {
 
     fn watch(&self, venue: VenueId, ctx: &Context<'_, Self>) {
         let feed = self.feeds.get(venue).expect("known venue");
-        ctx.watch(feed, move |event| ReconcilerMsg::Feed { venue, event })
-            .detach();
+        ctx.watch(feed, move |event| ReconcilerMsg::Feed { venue, event });
     }
 
     fn transition(&mut self, venue: VenueId, health: VenueHealth) {

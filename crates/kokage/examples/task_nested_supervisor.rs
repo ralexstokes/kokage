@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(metrics.generation, 0);
     println!("nested subtree recovered internally without restarting outer siblings");
 
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

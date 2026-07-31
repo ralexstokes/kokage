@@ -94,24 +94,33 @@ impl Backoff {
 /// delay between attempts. The default is [`on_failure`](Self::on_failure),
 /// limited to five restarts within thirty seconds, with immediate retries.
 ///
-/// With the `serde` feature, the `mode` field serializes as `Always` (every
+/// With the `serde` feature, the `condition` field serializes as `Always` (every
 /// exit), `OnFailure` (only errors, panics, and aborts), or `Never` (at most
 /// one run).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RestartPolicy {
-    mode: RestartCondition,
-    max_restarts: usize,
-    within: Duration,
-    backoff: Backoff,
+    /// Which child exits are eligible for restart.
+    pub condition: RestartCondition,
+    /// Maximum number of eligible exits permitted inside [`within`](Self::within).
+    pub max_restarts: usize,
+    /// Sliding window used by [`max_restarts`](Self::max_restarts).
+    pub within: Duration,
+    /// Delay applied before each replacement incarnation starts.
+    pub backoff: Backoff,
 }
 
+/// Which child exits a [`RestartPolicy`] restarts.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-enum RestartCondition {
+#[non_exhaustive]
+pub enum RestartCondition {
+    /// Restart after every exit, including clean completion.
     Always,
+    /// Restart errors, panics, and aborts, but not clean completion.
     #[default]
     OnFailure,
+    /// Never restart; the child runs at most once.
     Never,
 }
 
@@ -122,9 +131,9 @@ impl Default for RestartPolicy {
 }
 
 impl RestartPolicy {
-    const fn with_mode(mode: RestartCondition) -> Self {
+    const fn with_condition(condition: RestartCondition) -> Self {
         Self {
-            mode,
+            condition,
             max_restarts: 5,
             within: Duration::from_secs(30),
             backoff: Backoff::none(),
@@ -133,17 +142,17 @@ impl RestartPolicy {
 
     /// Restarts after every exit, including clean completion.
     pub const fn always() -> Self {
-        Self::with_mode(RestartCondition::Always)
+        Self::with_condition(RestartCondition::Always)
     }
 
     /// Restarts after an error, panic, or abort, but not clean completion.
     pub const fn on_failure() -> Self {
-        Self::with_mode(RestartCondition::OnFailure)
+        Self::with_condition(RestartCondition::OnFailure)
     }
 
     /// Never restarts; the child runs at most once.
     pub const fn never() -> Self {
-        Self::with_mode(RestartCondition::Never)
+        Self::with_condition(RestartCondition::Never)
     }
 
     /// Sets the sliding restart budget.
@@ -162,7 +171,7 @@ impl RestartPolicy {
     }
 
     pub(crate) const fn should_restart(self, is_failure: bool) -> bool {
-        match self.mode {
+        match self.condition {
             RestartCondition::Always => true,
             RestartCondition::OnFailure => is_failure,
             RestartCondition::Never => false,
@@ -171,23 +180,11 @@ impl RestartPolicy {
 
     #[cfg(test)]
     pub(crate) const fn is_always(self) -> bool {
-        matches!(self.mode, RestartCondition::Always)
+        matches!(self.condition, RestartCondition::Always)
     }
 
     pub(crate) const fn is_never(self) -> bool {
-        matches!(self.mode, RestartCondition::Never)
-    }
-
-    pub(crate) const fn max_restarts(self) -> usize {
-        self.max_restarts
-    }
-
-    pub(crate) const fn within(self) -> Duration {
-        self.within
-    }
-
-    pub(crate) const fn backoff_policy(self) -> Backoff {
-        self.backoff
+        matches!(self.condition, RestartCondition::Never)
     }
 
     pub(crate) fn validate(self) -> Result<(), BuildError> {

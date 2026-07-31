@@ -534,7 +534,6 @@ impl SupervisorRuntime {
         &mut self,
         startup_ready: Option<crate::supervisor::context::TaskContext>,
     ) -> RuntimeResult<()> {
-        self.publish_snapshot();
         self.send_event(RuntimeEvent::SupervisorStarted);
         let initial_children = self.child_order.clone();
         for &key in &initial_children {
@@ -1840,15 +1839,10 @@ impl SupervisorRuntime {
     }
 
     pub(crate) fn send_event(&self, event: RuntimeEvent) {
-        if event_updates_snapshot(&event) {
-            self.publish_snapshot();
-        }
+        let updates_snapshot = event_updates_snapshot(&event);
         let child_path = event_child_id(&event)
             .and_then(|id| self.children_by_id.get(id))
             .map(|&key| self.children[key].formatted_path.as_str());
-        self.meta
-            .observability
-            .emit_event(&event, self.running_child_count(), child_path);
         let lifecycle = match &event {
             RuntimeEvent::SupervisorStarted => {
                 Some(LifecycleEvent::local(LifecycleEventKind::SupervisorStarted))
@@ -1871,7 +1865,21 @@ impl SupervisorRuntime {
             | RuntimeEvent::ChildRestarted { .. } => None,
         };
         if let Some(lifecycle) = lifecycle {
-            self.lifecycle_tree.emit(lifecycle);
+            self.lifecycle_tree.emit_aligned(lifecycle, || {
+                if updates_snapshot {
+                    self.publish_snapshot();
+                }
+                self.meta
+                    .observability
+                    .emit_event(&event, self.running_child_count(), child_path);
+            });
+        } else {
+            if updates_snapshot {
+                self.publish_snapshot();
+            }
+            self.meta
+                .observability
+                .emit_event(&event, self.running_child_count(), child_path);
         }
     }
 
@@ -2086,9 +2094,7 @@ fn event_updates_snapshot(event: &RuntimeEvent) -> bool {
     // whose restart deadline is set but whose `lifecycle_seq` is stale.
     !matches!(
         event,
-        RuntimeEvent::SupervisorStarted
-            | RuntimeEvent::ChildRestartScheduled { .. }
-            | RuntimeEvent::ChildRestarted { .. }
+        RuntimeEvent::ChildRestartScheduled { .. } | RuntimeEvent::ChildRestarted { .. }
     )
 }
 

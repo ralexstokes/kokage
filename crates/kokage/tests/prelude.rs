@@ -11,16 +11,19 @@ mod coverage_probe {
     mod expected {
         use kokage::prelude::{
             Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
-            MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskRef, TaskSpec, TimerKey, Tree,
+            MailboxShutdown, MonitorEvent, Reply, RestartPolicy, ScopeChange, Shutdown,
+            StopContext, Strategy, SupervisorSnapshot, SupervisorSnapshotReceiver, TaskRef,
+            TaskSpec, TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RunningTree, ScopeRef,
-            SendError, SendErrorKind, SubtreeSpec, SupervisorError, TaskContext, TaskError,
+            CancellationToken, ControlError, DynamicScopeRef, ExitStatus, OffloadDeadline,
+            ReplyError, ReplyReceiver, RestartCondition, RunningDynamicTree, RunningTree,
+            ScopeChange, ScopeChanges, ScopeRef, SendError, SendErrorKind, SubtreeSpec,
+            SupervisorError, TaskContext, TaskError,
         };
     }
 
@@ -38,8 +41,9 @@ mod coverage_probe {
     mod observe {
         use kokage::observe::{
             ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus,
-            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind,
-            ScopePathSegment, ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
+            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeChange,
+            ScopeChanges, ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot,
+            SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};
@@ -363,4 +367,9 @@ fn task_policy_types_cover_common_configuration() {
             .limit(2, Duration::from_secs(5))
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
     );
+    let policy = RestartPolicy::on_failure();
+    assert_eq!(policy.condition, kokage::RestartCondition::OnFailure);
+    assert_eq!(policy.max_restarts, 5);
+    assert_eq!(policy.within, Duration::from_secs(30));
+    assert_eq!(policy.backoff, kokage::Backoff::none());
 }

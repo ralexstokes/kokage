@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         restarted.generation
     );
 
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

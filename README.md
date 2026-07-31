@@ -10,14 +10,19 @@ The core idea is the one that has kept telecom switches running for decades:
 organize your program into small, isolated tasks and let a *supervisor*
 restart the ones that fail.
 
-Kokage needs one dependency. Its prelude covers the common actor, task, and
-tree surface; raw actor execution and observation APIs are grouped under
-`kokage::raw` and `kokage::observe`, while less common types remain at the
-crate root.
+Kokage combines declared and runtime-mutated supervision trees, typed actor
+mailboxes and request/reply, supervised async tasks, restart and shutdown
+policies, and gap-aware lifecycle observation in one crate.
+
+Add Kokage alongside the Tokio runtime that drives it. Its prelude covers the
+common actor, task, and tree surface; raw actor execution and observation APIs
+are grouped under `kokage::raw` and `kokage::observe`, while less common types
+remain at the crate root.
 
 ```toml
 [dependencies]
 kokage = { git = "https://github.com/ralexstokes/kokage" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ## A taste
@@ -73,20 +78,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`spawn()` returns the owning `RunningTree`; keep it alive for as long as the
-application should run. `running.scope()` returns a cheaply cloneable
-`ScopeRef` for observation, control, and dynamic membership, parallel to an
-`ActorRef`. A `ScopeRef` does not keep its `RunningTree` alive; dropping
-references has no lifecycle effect, while dropping the owner requests graceful
-shutdown—so a discarded `let _ = tree.spawn()?;` shuts down immediately.
-
-Background actor operations such as watches, mailbox timers, offloads, scope
-waits, and lifecycle/completion pumps return one `kokage::Guard` type. A guard
-cancels its operation when dropped. Retain it for scoped ownership, or call
-`.detach()` when fire-and-forget behavior is intentional.
-
 The full runnable version is
 [`crates/kokage/examples/supervised_actors.rs`](crates/kokage/examples/supervised_actors.rs).
+
+## The API shape
+
+`Tree` declares ordered membership up front. `DynamicTree` starts empty and
+exposes runtime membership for actors, tasks, jobs, or subtrees. Their
+`spawn()` methods return `RunningTree` and `RunningDynamicTree`, respectively.
+Keep that owner alive for as long as the application should run: dropping it
+requests graceful shutdown, so a discarded `let _ = tree.spawn()?;` shuts down
+immediately.
+
+`runtime.scope()` returns a cheap, cloneable, non-owning reference, parallel to
+an `ActorRef`. `ScopeRef` is the common observation and control surface:
+snapshots, self-resynchronizing `changes()`, subtree traversal, and either
+non-waiting `request_shutdown()` or waiting `shutdown().await`. Dynamic scopes
+return `DynamicScopeRef`, which adds membership operations such as `add_actor`,
+`add_task`, `spawn_job`, and `remove_child`. A scope found through untyped tree
+traversal can request that capability with `scope.dynamic()`.
+
+The common actor operations own their natural lifetimes:
+
+- `watch` is owned by the two restart-stable actor memberships and follows
+  both actors across restarts.
+- `offload` is owned by the current actor incarnation and is aborted on stop or
+  restart so stale work cannot reach a replacement.
+
+Use `watch_scoped` or `offload_scoped` when a narrower lifetime needs a
+cancel-on-drop `Guard`. Timers and lifecycle pumps likewise return guards;
+retain one for scoped ownership or call `.detach()` for intentional
+fire-and-forget work.
+
+The escape hatches stay next to the concise paths: `Reply::channel()` separates
+request-acceptance and response deadlines beneath `ActorRef::call`;
+`raw::RawActor` provides a custom receive loop beneath `Actor`; and
+`ScopeRef::observe_children` / `lifecycle_events` expose lower-level lifecycle
+streams beneath `changes()`.
 
 ## The crates
 

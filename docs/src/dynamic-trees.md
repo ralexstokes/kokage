@@ -45,12 +45,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 A dynamic tree starts empty (spawning an empty one is perfectly legal) and
 always supervises `OneForOne` — group strategies need a stable group, so
 they belong to ordered scopes. Membership is managed through the
-[`ScopeRef`]:
+[`DynamicScopeRef`]:
 
 - `scope.add_actor(id, factory).await?` — returns the typed `ActorRef`.
 - `scope.add_task(id, task).await?` — supervised tasks work too.
+- `scope.spawn_job(id, task).await?` — finite, non-restarting work that removes
+  its membership on completion.
 - `scope.add_subtree(id, tree).await?` — insert a whole *ordered or dynamic*
   subtree, and get back the new scope's `ScopeRef`.
+- `scope.add_dynamic_subtree(id, tree).await?` — retain a nested dynamic
+  subtree's `DynamicScopeRef` directly.
 - `scope.remove_child(id).await?` — stop (honoring the child's shutdown
   policy, so a draining child finishes its queue) and remove.
 
@@ -58,11 +62,13 @@ The adjacent `add_actor_spec` and `add_task_spec` forms accept explicitly
 configured declarations. `add_subtree` accepts a `SubtreeSpec` directly when
 the subtree edge needs policy overrides.
 
-All four are `async` and return [`ControlError`] on misuse: `NotDynamic` if
-the scope is ordered, `UnknownChildId`, `ChildRemovalInProgress` if you
-re-add an id whose removal hasn't finished, or `Rejected` wrapping the same
-validation a static `spawn` performs. Ids must be unique within the scope at
-any moment — a removed id may be reused afterwards.
+These operations exist only on `DynamicScopeRef`, so an ordered scope cannot
+be mutated accidentally. They return [`ControlError`] for operational errors:
+`UnknownChildId`, `ChildRemovalInProgress` if you re-add an id whose removal
+hasn't finished, or `Rejected` wrapping the same validation a static `spawn`
+performs. Ids must be unique within the scope at any moment — a removed id may
+be reused afterwards. When traversal returns an ordinary `ScopeRef`, call
+`scope.dynamic()` to request the mutation capability after checking its kind.
 
 ## Mixing static structure with dynamic membership
 
@@ -108,8 +114,8 @@ client leaves.
 
 ## Job scopes: run to completion, then clean up
 
-`TaskRef` gives dynamic trees straightforward batch semantics. `temporary()`
-makes finished work leave the scope; the ref remains tied to that exact
+`spawn_job` gives dynamic trees straightforward batch semantics. Finished
+work leaves the scope; the returned `TaskRef` remains tied to that exact
 membership and preserves its completion even when the task exits quickly:
 
 ```rust
@@ -121,12 +127,12 @@ let scope = batch.scope();
 let runtime = batch.spawn()?;
 
 let job = scope
-    .add_task_spec(TaskSpec::new("job-42", |_ctx| async move { Ok(()) }).temporary())
+    .spawn_job("job-42", |_ctx| async move { Ok(()) })
     .await?;
 
 let exit = job.wait().await?;
 assert!(exit.is_completed());
-scope.shutdown();
+scope.request_shutdown();
 runtime.wait().await?;
 # Ok(())
 # }
@@ -141,7 +147,7 @@ jobs must finish, then request the enclosing scope's shutdown explicitly.
 One sharp edge deserves a box around it: **runtime-added children are not
 part of any declaration.** If a *subtree* fails hard enough that its parent
 restarts it, the replacement scope is rebuilt from its static declaration —
-which for a dynamic scope means *empty*. Children added through a `ScopeRef`
+which for a dynamic scope means *empty*. Children added through a `DynamicScopeRef`
 are gone, and the refs you held for them are terminal.
 
 If dynamic membership must survive that, own the roster somewhere: keep a
@@ -154,5 +160,6 @@ mechanism.
 
 [`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
 [`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
+[`DynamicScopeRef`]: https://stokes.io/kokage/api/kokage/struct.DynamicScopeRef.html
 [`ControlError`]: https://stokes.io/kokage/api/kokage/enum.ControlError.html
 [`TaskRef`]: https://stokes.io/kokage/api/kokage/struct.TaskRef.html

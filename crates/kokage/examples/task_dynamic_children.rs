@@ -58,7 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("cache-warmer removed at runtime");
 
-    let nested = running.add_subtree("nested", DynamicTree::new()).await?;
+    let nested = running
+        .add_dynamic_subtree("nested", DynamicTree::new())
+        .await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("nested", |child| child.state.is_running()),
@@ -116,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("nested-cache removed from nested supervisor");
 
-    running.shutdown_and_wait().await?;
+    running.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

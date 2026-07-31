@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     future::Future,
+    ops::Deref,
     sync::{Arc, Mutex, PoisonError, Weak},
 };
 
@@ -502,6 +503,16 @@ pub struct RunningTree {
     scope: ScopeRef,
 }
 
+/// Owns a spawned dynamic supervision tree.
+///
+/// This is the dynamic counterpart to [`RunningTree`]. Its root
+/// [`scope`](Self::scope) carries the dynamic-membership capability directly,
+/// while dropping the owner still requests graceful shutdown.
+#[must_use = "dropping the running tree requests graceful shutdown"]
+pub struct RunningDynamicTree {
+    inner: RunningTree,
+}
+
 impl RunningTree {
     pub(crate) fn new(supervisor: RunningSupervisor, actors: Arc<ActorRuntimeState>) -> Self {
         let scope = ScopeRef::new(supervisor.handle(), actors);
@@ -513,6 +524,21 @@ impl RunningTree {
         self.scope.clone()
     }
 
+    /// Waits until the root scope has completed startup.
+    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
+        self.scope.wait_started().await
+    }
+
+    /// Returns the root scope's latest snapshot.
+    pub fn snapshot(&self) -> SupervisorSnapshot {
+        self.scope.snapshot()
+    }
+
+    /// Returns a receiver for root-scope snapshot updates.
+    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
+        self.scope.snapshots()
+    }
+
     /// Requests graceful shutdown and waits for completion, consuming the owner.
     pub async fn shutdown(self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
@@ -521,6 +547,48 @@ impl RunningTree {
     /// Waits for the running tree to stop, consuming the owner.
     pub async fn wait(self) -> Result<(), SupervisorError> {
         self.supervisor.wait().await
+    }
+}
+
+impl RunningDynamicTree {
+    pub(crate) fn new(inner: RunningTree) -> Self {
+        Self { inner }
+    }
+
+    /// Returns the dynamic root scope reference.
+    pub fn scope(&self) -> DynamicScopeRef {
+        DynamicScopeRef::new(self.inner.scope())
+    }
+
+    /// Waits until the root scope has completed startup.
+    pub async fn wait_started(&self) -> Result<(), SupervisorError> {
+        self.inner.wait_started().await
+    }
+
+    /// Returns the root scope's latest snapshot.
+    pub fn snapshot(&self) -> SupervisorSnapshot {
+        self.inner.snapshot()
+    }
+
+    /// Returns a receiver for root-scope snapshot updates.
+    pub fn snapshots(&self) -> SupervisorSnapshotReceiver {
+        self.inner.snapshots()
+    }
+
+    /// Requests graceful shutdown and waits for completion, consuming the owner.
+    pub async fn shutdown(self) -> Result<(), SupervisorError> {
+        self.inner.shutdown().await
+    }
+
+    /// Waits for the tree to stop, consuming the owner.
+    pub async fn wait(self) -> Result<(), SupervisorError> {
+        self.inner.wait().await
+    }
+}
+
+impl std::fmt::Debug for RunningDynamicTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunningDynamicTree").finish_non_exhaustive()
     }
 }
 
@@ -535,13 +603,48 @@ impl std::fmt::Debug for RunningTree {
 ///
 /// As an [`ActorRef`](crate::ActorRef) addresses an actor without owning its
 /// runtime, a `ScopeRef` addresses one supervision scope for control,
-/// observation, and runtime-checked membership operations. Dropping any root
+/// and observation. Dropping any root
 /// or nested reference leaves the runtime running. A spawned root remains alive
 /// until its owning [`RunningTree`] is shut down or dropped.
 #[derive(Clone)]
 pub struct ScopeRef {
     supervisor: SupervisorHandle,
     actors: Arc<ActorRuntimeState>,
+}
+
+/// A [`ScopeRef`] that can add and remove runtime children.
+///
+/// Observation, waiting, and shutdown methods are inherited from `ScopeRef`;
+/// mutation methods live only on this capability, so ordered scopes cannot be
+/// mutated accidentally.
+#[derive(Clone)]
+pub struct DynamicScopeRef {
+    scope: ScopeRef,
+}
+
+/// One item from a self-resynchronizing direct-child change stream.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum ScopeChange {
+    /// Replace locally reduced state with this complete point-in-time view.
+    ///
+    /// Every stream begins with a reset, and observer lag produces another one
+    /// after the stream has registered a fresh gap-free subscription.
+    Reset(SupervisorSnapshot),
+    /// Apply one ordered lifecycle transition after the preceding reset.
+    Event(LifecycleEvent),
+}
+
+/// A direct-child lifecycle stream that automatically recovers from lag.
+///
+/// Created by [`ScopeRef::changes`]. It filters transitions already represented
+/// by a reset snapshot and replaces raw lag markers with a new aligned reset.
+pub struct ScopeChanges {
+    scope: ScopeRef,
+    events: LifecycleWatch,
+    sequence: u64,
+    reset: Option<SupervisorSnapshot>,
 }
 
 impl ScopeRef {
@@ -575,8 +678,8 @@ impl ScopeRef {
             .clone()
     }
 
-    /// Requests a graceful shutdown of the supervisor.
-    pub fn shutdown(&self) {
+    /// Requests a graceful shutdown of the supervisor without waiting for it.
+    pub fn request_shutdown(&self) {
         self.supervisor.shutdown();
     }
 
@@ -585,17 +688,28 @@ impl ScopeRef {
     /// Awaiting this from an actor callback in the same scope can block on that
     /// callback returning. The cycle ends only if the actor's shutdown grace
     /// expires and aborts it. An actor in the scope cannot receive this result:
-    /// its own exit is part of the shutdown condition. Call [`shutdown`](Self::shutdown)
-    /// from that actor and observe completion from outside the scope. A bounded
+    /// its own exit is part of the shutdown condition. Call
+    /// [`request_shutdown`](Self::request_shutdown) from that actor and observe
+    /// completion from outside the scope. A bounded
     /// [`Context::offload`](crate::Context::offload) is appropriate only when
     /// shutting down a different scope that can stop while the actor remains live.
-    pub async fn shutdown_and_wait(&self) -> Result<(), SupervisorError> {
+    pub async fn shutdown(&self) -> Result<(), SupervisorError> {
         self.supervisor.shutdown_and_wait().await
     }
 
     /// Returns whether this scope has ordered or dynamic membership.
     pub fn kind(&self) -> ScopeKind {
         self.supervisor.kind()
+    }
+
+    /// Projects this scope to its dynamic-membership capability.
+    ///
+    /// Prefer handles returned directly by [`DynamicTree::scope`](crate::DynamicTree::scope),
+    /// [`RunningDynamicTree::scope`], or
+    /// [`DynamicScopeRef::add_dynamic_subtree`]. This projection is the escape
+    /// hatch for scopes discovered through untyped tree traversal.
+    pub fn dynamic(&self) -> Option<DynamicScopeRef> {
+        (self.kind() == ScopeKind::Dynamic).then(|| DynamicScopeRef::new(self.clone()))
     }
 
     /// Returns the actor-aware handle for a direct runtime subtree.
@@ -644,6 +758,16 @@ impl ScopeRef {
     /// [`SupervisorSnapshot::lifecycle_seq`].
     pub fn observe_children(&self) -> LifecycleObservation {
         self.supervisor.observe_lifecycle()
+    }
+
+    /// Returns a direct-child change stream that begins and resynchronizes with snapshots.
+    ///
+    /// Most stateful consumers should use this instead of manually pairing
+    /// [`observe_children`](Self::observe_children) with sequence filtering and
+    /// lag recovery. Use [`lifecycle_events`](Self::lifecycle_events) when the
+    /// raw recursive audit stream or explicit lag markers are required.
+    pub fn changes(&self) -> ScopeChanges {
+        ScopeChanges::new(self.clone())
     }
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
@@ -714,6 +838,81 @@ impl ScopeRef {
     }
 }
 
+impl DynamicScopeRef {
+    pub(crate) fn new(scope: ScopeRef) -> Self {
+        debug_assert_eq!(scope.kind(), ScopeKind::Dynamic);
+        Self { scope }
+    }
+
+    /// Returns this capability as an ordinary non-mutating scope reference.
+    pub fn as_scope(&self) -> &ScopeRef {
+        &self.scope
+    }
+
+    /// Converts this capability into an ordinary scope reference.
+    pub fn into_scope(self) -> ScopeRef {
+        self.scope
+    }
+}
+
+impl ScopeChanges {
+    fn new(scope: ScopeRef) -> Self {
+        let LifecycleObservation { snapshot, events } = scope.observe_children();
+        let sequence = snapshot.lifecycle_seq;
+        Self {
+            scope,
+            events,
+            sequence,
+            reset: Some(snapshot),
+        }
+    }
+
+    fn resubscribe(&mut self) -> SupervisorSnapshot {
+        let LifecycleObservation { snapshot, events } = self.scope.observe_children();
+        self.sequence = snapshot.lifecycle_seq;
+        self.events = events;
+        snapshot
+    }
+
+    /// Returns the next aligned reset or lifecycle transition.
+    pub async fn next(&mut self) -> Option<ScopeChange> {
+        if let Some(snapshot) = self.reset.take() {
+            return Some(ScopeChange::Reset(snapshot));
+        }
+
+        loop {
+            let event = self.events.next().await?;
+            if matches!(event.kind, LifecycleEventKind::Lagged { .. }) {
+                return Some(ScopeChange::Reset(self.resubscribe()));
+            }
+            if let Some(sequence) = event.seq() {
+                if sequence <= self.sequence {
+                    continue;
+                }
+                self.sequence = sequence;
+            }
+            return Some(ScopeChange::Event(event));
+        }
+    }
+}
+
+impl std::fmt::Debug for ScopeChanges {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScopeChanges")
+            .field("sequence", &self.sequence)
+            .field("reset_pending", &self.reset.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Deref for DynamicScopeRef {
+    type Target = ScopeRef;
+
+    fn deref(&self) -> &Self::Target {
+        &self.scope
+    }
+}
+
 fn runtime_subtree_membership(
     attached_children: Vec<__private::AttachedChild<RuntimeAttachment>>,
     actors: &Arc<ActorRuntimeState>,
@@ -740,18 +939,20 @@ fn runtime_subtree_membership(
     })
 }
 
-impl ScopeRef {
+impl DynamicScopeRef {
     fn dynamic_supervisor(&self) -> Result<DynamicSupervisorHandle, ControlError> {
-        self.supervisor.dynamic().ok_or(ControlError::NotDynamic)
+        self.supervisor.dynamic().ok_or(ControlError::Unavailable)
     }
 
     /// Builds and adds an actor-aware runtime subtree.
     ///
-    /// The returned handle can add actors or further subtrees, and recursive
-    /// [`ScopeRef::actor_stats`] include the new subtree. Removing the
-    /// child detaches its actor metadata with the supervisor membership;
-    /// retained subtree handles then fail control operations with
-    /// [`ControlError::Unavailable`].
+    /// The returned handle observes and controls the new subtree, and recursive
+    /// [`ScopeRef::actor_stats`] include it. Use
+    /// [`add_dynamic_subtree`](Self::add_dynamic_subtree) when the supplied tree
+    /// is dynamic and its mutation capability should be retained directly.
+    /// Removing the child detaches its actor metadata with the supervisor
+    /// membership; retained subtree handles then report
+    /// [`ControlError::Unavailable`] from dynamic control operations.
     ///
     /// If the subtree itself restarts, its statically declared actors
     /// are recreated, while children added later through the returned handle
@@ -769,9 +970,7 @@ impl ScopeRef {
     ///
     /// # Errors
     ///
-    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
-    /// membership. Both validation failure phases use
-    /// [`ControlError::Rejected`]: first the supplied
+    /// Both validation failure phases use [`ControlError::Rejected`]: first the supplied
     /// tree is lowered and validated, then the parent validates insertion of
     /// the resulting child. For example, a duplicate actor binding fails the
     /// first phase, while an already-occupied child id fails the second. The
@@ -811,6 +1010,17 @@ impl ScopeRef {
         .ok_or(ControlError::Unavailable)
     }
 
+    /// Builds and adds a dynamic runtime subtree, retaining its mutation capability.
+    pub async fn add_dynamic_subtree(
+        &self,
+        id: impl Into<String>,
+        tree: crate::DynamicTree,
+    ) -> Result<DynamicScopeRef, ControlError> {
+        self.add_subtree(id, tree)
+            .await
+            .and_then(|scope| scope.dynamic().ok_or(ControlError::Unavailable))
+    }
+
     /// Adds a supervised task child with default configuration to this scope.
     pub async fn add_task<F, Fut>(
         &self,
@@ -824,6 +1034,24 @@ impl ScopeRef {
         self.add_task_spec(TaskSpec::new(id, task)).await
     }
 
+    /// Spawns finite one-shot work and removes its membership after completion.
+    ///
+    /// This is the concise job-oriented counterpart to [`add_task`](Self::add_task).
+    /// The task never restarts; use [`add_task_spec`](Self::add_task_spec) when
+    /// finite work needs a different restart or retention policy.
+    pub async fn spawn_job<F, Fut>(
+        &self,
+        id: impl Into<String>,
+        task: F,
+    ) -> Result<TaskRef, ControlError>
+    where
+        F: Fn(crate::TaskContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ExitResult> + Send + 'static,
+    {
+        self.add_task_spec(TaskSpec::new(id, task).temporary())
+            .await
+    }
+
     /// Adds an explicitly configured supervised task child to this scope.
     ///
     /// This is the task-level counterpart to adding an actor. Success means
@@ -833,8 +1061,7 @@ impl ScopeRef {
     ///
     /// # Errors
     ///
-    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
-    /// membership. Other failures are reported by the dynamic supervisor.
+    /// Failures are reported by the dynamic supervisor.
     pub async fn add_task_spec(&self, task: TaskSpec) -> Result<TaskRef, ControlError> {
         let dynamic = self.dynamic_supervisor()?;
         let id: Arc<str> = Arc::from(task.id());
@@ -843,7 +1070,7 @@ impl ScopeRef {
             .watch_lifecycle()
             .pending_direct_child(Arc::clone(&id));
         let lineage = dynamic.add_child(task).await?;
-        Ok(TaskRef::new(self.clone(), id, lineage, events))
+        Ok(TaskRef::new(self.scope.clone(), id, lineage, events))
     }
 
     /// Adds an actor with default configuration and returns its stable typed ref.
@@ -863,18 +1090,17 @@ impl ScopeRef {
     /// Adds one explicitly configured actor declaration and returns its stable typed ref.
     ///
     /// The actor id is its direct supervisor child id, so it can be removed
-    /// later through [`ScopeRef::remove_child`]. See [`crate::ActorFactory`] for
+    /// later through [`DynamicScopeRef::remove_child`]. See [`crate::ActorFactory`] for
     /// the incarnation lifecycle contract. Success means membership was
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
-    /// the stronger readiness contract. A zero
-    /// A zero-capacity [`Mailbox::queue`](crate::Mailbox::queue) is rejected with
+    /// the stronger readiness contract. A zero-capacity
+    /// [`Mailbox::queue`](crate::Mailbox::queue) is rejected with
     /// [`ControlError::Rejected`].
     ///
     /// # Errors
     ///
-    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
-    /// membership. Invalid actor configuration and insertion failures are
+    /// Invalid actor configuration and insertion failures are
     /// returned as [`ControlError::Rejected`]; a stopped scope returns
     /// [`ControlError::Unavailable`].
     pub async fn add_actor_spec<M: Send + 'static>(
@@ -963,8 +1189,7 @@ impl ScopeRef {
     ///
     /// # Errors
     ///
-    /// Returns [`ControlError::NotDynamic`] when this scope has ordered
-    /// membership. A stopped scope returns [`ControlError::Unavailable`], and
+    /// A stopped scope returns [`ControlError::Unavailable`], and
     /// operation failures are reported through the remaining variants.
     pub async fn remove_child(&self, id: impl Into<String>) -> Result<(), ControlError> {
         self.dynamic_supervisor()?.remove_child(id).await
@@ -974,6 +1199,12 @@ impl ScopeRef {
 impl std::fmt::Debug for ScopeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScopeRef").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for DynamicScopeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicScopeRef").finish_non_exhaustive()
     }
 }
 
@@ -1084,16 +1315,17 @@ fn scope_path_segment(identity: &AttachedChildIdentity) -> ScopePathSegment {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Actor, ActorSpec, BuildError, Context, DynamicTree, ExitResult, RestartPolicy, RunningTree,
-        ScopeRef, Tree,
+        Actor, ActorSpec, BuildError, Context, DynamicScopeRef, DynamicTree, ExitResult,
+        RestartPolicy, RunningDynamicTree, RunningTree, ScopeRef, Tree,
     };
 
     #[test]
     fn tree_root_types_preserve_statically_known_membership() {
         let ordered_spawn: fn(Tree) -> Result<RunningTree, BuildError> = Tree::spawn;
         let ordered_scope: fn(&Tree) -> ScopeRef = Tree::scope;
-        let dynamic_spawn: fn(DynamicTree) -> Result<RunningTree, BuildError> = DynamicTree::spawn;
-        let dynamic_scope: fn(&DynamicTree) -> ScopeRef = DynamicTree::scope;
+        let dynamic_spawn: fn(DynamicTree) -> Result<RunningDynamicTree, BuildError> =
+            DynamicTree::spawn;
+        let dynamic_scope: fn(&DynamicTree) -> DynamicScopeRef = DynamicTree::scope;
 
         let _ = (ordered_spawn, ordered_scope, dynamic_spawn, dynamic_scope);
     }

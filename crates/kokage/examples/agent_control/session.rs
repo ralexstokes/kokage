@@ -106,6 +106,7 @@ impl Session {
         let children = ctx
             .scope()
             .subtree("children")
+            .and_then(|scope| scope.dynamic())
             .ok_or("session leader is missing its declared child scope")?;
         let run_ref = children
             .add_actor_spec(
@@ -133,8 +134,7 @@ impl Session {
             task,
             role,
             event,
-        })
-        .detach();
+        });
         self.active = Some(ActiveRun {
             task,
             role,

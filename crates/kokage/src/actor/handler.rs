@@ -2,7 +2,7 @@ use std::future::Future;
 
 use crate::actor::{
     context::{Context, RawContext, StopContext, TimerWake},
-    raw::{BoxError, ExitResult, RawActor},
+    raw::{ExitResult, RawActor},
 };
 
 enum LoopEvent<M> {
@@ -83,7 +83,7 @@ pub trait Actor: Send + 'static {
     /// This hook also runs after a drain and cannot change the stop decision.
     /// During cooperative supervisor removal, the supervisor waits for the
     /// hook before detaching the child and completing
-    /// [`ScopeRef::remove_child`](crate::ScopeRef::remove_child).
+    /// [`DynamicScopeRef::remove_child`](crate::DynamicScopeRef::remove_child).
     /// Immediate abort, or expiry of the cooperative shutdown grace period,
     /// can abort this hook and detach the child without waiting for it.
     /// Awaiting anything here that depends on that detach — the scope
@@ -94,7 +94,7 @@ pub trait Actor: Send + 'static {
     fn on_stop(
         &mut self,
         _ctx: &mut StopContext<'_, Self>,
-    ) -> impl Future<Output = Result<(), BoxError>> + Send {
+    ) -> impl Future<Output = ExitResult> + Send {
         async { Ok(()) }
     }
 }
