@@ -14,7 +14,7 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorFactory, ActorRef, ActorSpec, ExitResult, RunningTree, ScopeRef, TaskContext,
+    ActorFactory, ActorRef, ActorSpec, ExitResult, RunningTree, ScopeRef, TaskContext, TaskRef,
     actor::{ActorNode, RawActor, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -345,18 +345,27 @@ impl Tree {
         actor_ref
     }
 
-    /// Appends a task with default configuration.
-    pub fn add_task<F, Fut>(&mut self, id: impl Into<String>, task: F)
+    /// Appends a task with default configuration and returns its stable ref.
+    pub fn add_task<F, Fut>(&mut self, id: impl Into<String>, task: F) -> TaskRef
     where
         F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ExitResult> + Send + 'static,
     {
-        self.add_task_spec(TaskSpec::new(id, task));
+        self.add_task_spec(TaskSpec::new(id, task))
     }
 
-    /// Appends an explicitly configured task declaration.
-    pub fn add_task_spec(&mut self, task: TaskSpec) {
+    /// Appends an explicitly configured task declaration and returns its stable ref.
+    pub fn add_task_spec(&mut self, task: TaskSpec) -> TaskRef {
+        let id: Arc<str> = Arc::from(task.id());
         self.inner.add_task(task);
+        let scope = self.scope();
+        let lineage = scope
+            .snapshot()
+            .children
+            .last()
+            .expect("the appended task is present in the declared snapshot")
+            .lineage;
+        scope.task_ref(id, lineage)
     }
 
     /// Appends a named ordered or dynamic nested scope.

@@ -12,7 +12,7 @@ mod coverage_probe {
         use kokage::prelude::{
             Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
             MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskSpec, TimerKey, Tree,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskRef, TaskSpec, TimerKey, Tree,
         };
     }
 
@@ -20,7 +20,7 @@ mod coverage_probe {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
             CancellationToken, ControlError, ExitStatus, OffloadDeadline, RunningTree, ScopeRef,
-            SendError, SendErrorKind, SubtreeSpec, SupervisorError, TaskContext,
+            SendError, SendErrorKind, SubtreeSpec, SupervisorError, TaskContext, TaskError,
         };
     }
 
@@ -32,9 +32,9 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError,
-            ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
-            ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
+            ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus,
+            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind,
+            ScopePathSegment, ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};

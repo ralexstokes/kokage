@@ -145,56 +145,6 @@ async fn runtime_spawn_combines_actor_refs_and_supervisor_control() {
 }
 
 #[tokio::test]
-async fn runtime_handle_waits_for_actor_completion() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
-        observed: observed_tx.clone(),
-    });
-    let handle = runtime.spawn().expect("runtime builds");
-
-    worker_ref
-        .send("done".to_owned())
-        .await
-        .expect("message sent");
-    observed_rx.recv().await.expect("message observed");
-
-    assert_eq!(
-        timeout(
-            Duration::from_secs(1),
-            handle.scope().wait_for_children(["worker"])
-        )
-        .await
-        .expect("completion observed within timeout"),
-        Ok(())
-    );
-    handle.shutdown_and_wait().await.expect("clean shutdown");
-}
-
-#[tokio::test]
-async fn pre_spawn_scope_can_arm_shutdown_on_completion() {
-    let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
-        observed: observed_tx.clone(),
-    });
-    let pre_spawn = runtime.scope();
-    let _completion = pre_spawn
-        .shutdown_when_children_complete(["worker"])
-        .expect("completion condition is valid");
-    let handle = runtime.spawn().expect("runtime builds");
-
-    worker_ref
-        .send("done".to_owned())
-        .await
-        .expect("message sent");
-    observed_rx.recv().await.expect("message observed");
-
-    timeout(Duration::from_secs(1), handle.wait())
-        .await
-        .expect("completion shut the runtime down")
-        .expect("clean shutdown");
-}
-
-#[tokio::test]
 async fn runtime_handle_enumerates_actor_stats() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let (runtime, worker_ref) = build_runtime(move || Observe {

@@ -5,6 +5,6 @@ error[E0308]: `?` operator has incompatible types
   |  _________________________^
 5 | |         .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
 6 | |         .await?;
-  | |_______________^ expected `u64`, found `()`
+  | |_______________^ expected `u64`, found `TaskRef`
   |
-  = note: `?` operator cannot convert from `()` to `u64`
+  = note: `?` operator cannot convert from `TaskRef` to `u64`

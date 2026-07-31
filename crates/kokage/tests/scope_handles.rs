@@ -9,7 +9,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult, Guard,
+    Actor, ActorSpec, BoxError, BuildError, Context, ControlError, DynamicTree, ExitResult,
     RestartPolicy, ScopeRef, StopContext, Strategy, TaskSpec, Tree,
     observe::{ChildStateView, ScopeKind, SupervisorSnapshotReceiver},
 };
@@ -176,7 +176,6 @@ struct TaskAdder {
 }
 
 struct DynamicCompletionLeader {
-    completion: Option<Guard>,
     reports: mpsc::UnboundedSender<&'static str>,
 }
 
@@ -185,29 +184,21 @@ impl Actor for DynamicCompletionLeader {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         let dynamic = ctx.scope();
-        self.completion = Some(
-            dynamic
-                .shutdown_when_future_children_complete(["first", "second"])
-                .expect("completion condition is valid"),
-        );
-        self.reports.send("armed").expect("test receiver open");
-
-        dynamic
+        let first = dynamic
             .add_task_spec(TaskSpec::new("first", |_| async { Ok(()) }))
             .await?;
-        dynamic
+        let second = dynamic
             .add_task_spec(TaskSpec::new("second", |_| async { Ok(()) }))
             .await?;
         self.reports.send("inserted").expect("test receiver open");
+        first.wait().await?;
+        second.wait().await?;
+        self.reports.send("completed").expect("test receiver open");
+        dynamic.shutdown();
         Ok(())
     }
 
     async fn handle(&mut self, (): (), _ctx: &mut Context<'_, Self>) -> ExitResult {
-        Ok(())
-    }
-
-    async fn on_stop(&mut self, _ctx: &mut StopContext<'_, Self>) -> Result<(), BoxError> {
-        assert!(self.completion.is_some(), "completion guard was retained");
         Ok(())
     }
 }
@@ -331,33 +322,19 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
 }
 
 #[tokio::test]
-async fn dynamic_completion_names_wait_for_future_members() {
+async fn dynamic_task_ref_waits_for_completion() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
-    let mut waiter = tokio::spawn({
-        let dynamic = dynamic.clone();
-        async move { dynamic.wait_for_future_children(["future"]).await }
-    });
     let runtime = tree.spawn().expect("dynamic root builds");
-
-    assert!(
-        timeout(Duration::from_millis(50), &mut waiter)
-            .await
-            .is_err(),
-        "an absent dynamic member remains pending"
-    );
-
-    dynamic
+    let task = dynamic
         .add_task_spec(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
         .expect("future member added");
-    assert_eq!(
-        timeout(WAIT, waiter)
-            .await
-            .expect("completion wait resolves")
-            .expect("completion task joins"),
-        Ok(())
-    );
+    let exit = timeout(WAIT, task.wait())
+        .await
+        .expect("completion wait resolves")
+        .expect("task remains observable");
+    assert!(exit.is_completed());
 
     runtime
         .shutdown_and_wait()
@@ -366,18 +343,17 @@ async fn dynamic_completion_names_wait_for_future_members() {
 }
 
 #[tokio::test]
-async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
+async fn completed_dynamic_task_can_trigger_explicit_scope_shutdown() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
-    let _completion = dynamic
-        .shutdown_when_future_children_complete(["future"])
-        .expect("completion condition is valid");
     let runtime = tree.spawn().expect("dynamic root builds");
 
-    dynamic
+    let task = dynamic
         .add_task_spec(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
         .expect("future member added");
+    task.wait().await.expect("task completion observed");
+    dynamic.shutdown();
     timeout(WAIT, runtime.wait())
         .await
         .expect("completion requests shutdown")
@@ -385,30 +361,21 @@ async fn future_member_completion_watch_can_shut_down_dynamic_scope() {
 }
 
 #[tokio::test]
-async fn ordered_scope_rejects_future_member_completion_mode() {
-    let tree = Tree::new();
+async fn pre_spawn_task_ref_observes_a_fast_child() {
+    let mut tree = Tree::new();
+    let task = tree.add_task_spec(TaskSpec::new("fast", |_| async { Ok(()) }));
     let scope = tree.scope();
 
-    assert_eq!(
-        scope.wait_for_future_children(["future"]).await,
-        Err(kokage::observe::CompletionError::NotDynamic)
-    );
-}
-
-#[tokio::test]
-async fn pre_spawn_completion_shutdown_beats_a_fast_child() {
-    let mut tree = Tree::new();
-    tree.add_task_spec(TaskSpec::new("fast", |_| async { Ok(()) }));
-    let shutdown = tree
-        .scope()
-        .shutdown_when_children_complete(["fast"])
-        .expect("completion condition is valid");
-    assert!(!shutdown.is_finished());
-
     let runtime = tree.spawn().expect("ordered tree builds");
+    let exit = timeout(WAIT, task.wait())
+        .await
+        .expect("fast completion remains observable")
+        .expect("task ref remains available");
+    assert!(exit.is_completed());
+    scope.shutdown();
     timeout(WAIT, runtime.wait())
         .await
-        .expect("pre-spawn completion operation shuts the scope down")
+        .expect("scope shutdown completes")
         .expect("scope stops cleanly");
 }
 
@@ -932,22 +899,21 @@ async fn context_scope_add_task_reports_insertion_success() {
 }
 
 #[tokio::test]
-async fn dynamic_context_scope_arms_completion_before_inserting_children() {
+async fn dynamic_context_scope_uses_task_refs_for_completion() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
     let runtime = DynamicTree::new().spawn().expect("dynamic root builds");
     support::dynamic_root(&runtime)
         .add_actor_spec(ActorSpec::new("leader", move || DynamicCompletionLeader {
-            completion: None,
             reports: reports_tx.clone(),
         }))
         .await
         .expect("leader inserted");
 
-    assert_eq!(next_report(&mut reports_rx).await, "armed");
     assert_eq!(next_report(&mut reports_rx).await, "inserted");
+    assert_eq!(next_report(&mut reports_rx).await, "completed");
     timeout(WAIT, runtime.wait())
         .await
-        .expect("future-member completion requests shutdown")
+        .expect("task completion requests shutdown")
         .expect("dynamic root stops");
 }
 

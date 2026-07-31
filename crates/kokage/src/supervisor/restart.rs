@@ -169,6 +169,7 @@ impl RestartPolicy {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn is_always(self) -> bool {
         matches!(self.mode, RestartCondition::Always)
     }

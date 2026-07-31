@@ -4,6 +4,7 @@ mod attachment;
 mod builder;
 mod cancellation;
 mod child;
+#[cfg(test)]
 mod completion;
 mod context;
 mod error;
@@ -68,6 +69,7 @@ pub use cancellation::CancellationToken;
 pub(crate) use cancellation::{CancelOnDrop, CompletionOnDrop};
 pub(crate) use child::ChildSpec;
 pub use child::{BoxError, TaskSpec};
+#[cfg(test)]
 pub use completion::CompletionError;
 pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
