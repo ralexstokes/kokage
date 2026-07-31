@@ -43,8 +43,9 @@ the child; a child-level declaration replaces the enclosing scope's complete
 restart default.
 
 An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox
-policy, restart policy, shutdown policy, and incarnation factory. Calling
-`actor_ref()` before placement yields its typed, restart-stable sender.
+policy, restart policy, shutdown policy, and incarnation factory. Adding it to
+a scope returns its typed, restart-stable sender; calling `actor_ref()` before
+placement yields the same sender earlier.
 
 An `OrderedTree` owns static declarations. A `DynamicTree` owns a scope whose
 membership can change at runtime. Moving a declaration into a tree establishes

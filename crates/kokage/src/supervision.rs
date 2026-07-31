@@ -11,7 +11,7 @@ use crate::supervisor::{
 };
 
 use crate::{
-    ActorSpec, RunningTree, ScopeRef,
+    ActorRef, ActorSpec, RunningTree, ScopeRef,
     actor::{ActorNode, RunnableActorBuilder},
     runtime::{ActorChildOptions, ActorRuntimeState, RuntimeAttachment, actor_child_spec},
 };
@@ -315,7 +315,11 @@ impl OrderedTree {
     }
 
     /// Appends an actor declaration and returns its stable typed ref.
-    pub fn add_actor<M: Send + 'static>(&mut self, actor: ActorSpec<M>) -> crate::ActorRef<M> {
+    ///
+    /// The returned ref is the same restart-stable handle
+    /// [`ActorSpec::actor_ref`] mints before placement; call that when a
+    /// factory declared earlier in this scope needs the ref.
+    pub fn add_actor<M: Send + 'static>(&mut self, actor: ActorSpec<M>) -> ActorRef<M> {
         let actor_ref = actor.actor_ref();
         self.inner.add_actor(actor);
         actor_ref
