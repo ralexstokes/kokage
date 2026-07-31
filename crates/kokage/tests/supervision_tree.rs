@@ -613,24 +613,32 @@ fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
     let (graph, _ingest, _parse) = two_actor_tree();
     let mut graph = graph;
     graph.add_task(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
+    graph.add_subtree("workers", DynamicTree::new());
     let mut value = serde_json::to_value(graph.outline()).expect("outline serializes");
     let children = value["children"]
         .as_array_mut()
         .expect("outline children serialize as an array");
 
     for child in children {
-        let kind = if child.get("Actor").is_some() {
+        if let Some(spec) = child.get_mut("Scope") {
+            // Subtree edges never gain the new sibling field, so a persisted
+            // nested flag has nowhere to migrate to. It must still parse.
+            spec["restart"]["remove_when_done"] = serde_json::Value::Bool(true);
+            continue;
+        }
+        let key = if child.get("Actor").is_some() {
             "Actor"
         } else {
             "Task"
         };
-        let Some(spec) = child.get_mut(kind) else {
+        let Some(spec) = child
+            .get_mut(key)
+            .and_then(serde_json::Value::as_object_mut)
+        else {
             continue;
         };
         if spec["remove_when_done"] == serde_json::Value::Bool(true) {
-            spec.as_object_mut()
-                .expect("child outline serializes as an object")
-                .remove("remove_when_done");
+            spec.remove("remove_when_done");
             spec["restart"]["remove_when_done"] = serde_json::Value::Bool(true);
         }
     }
@@ -651,6 +659,10 @@ fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
             ..
         })
     ));
+    assert!(matches!(
+        decoded.child("workers"),
+        Some(ChildOutline::Scope { .. })
+    ));
 
     value["children"][0]["Actor"]["remove_when_done"] = serde_json::Value::Bool(false);
     let decoded: kokage::observe::SupervisionOutline =
@@ -669,6 +681,14 @@ fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(Restart::on_failure()).expect("restart serializes");
     assert!(restart.get("remove_when_done").is_none());
+    // A `Restart` persisted while it still carried retention must keep
+    // deserializing; the flag now lives beside it and is dropped here.
+    let mut legacy_restart = restart.clone();
+    legacy_restart["remove_when_done"] = serde_json::Value::Bool(true);
+    assert_eq!(
+        serde_json::from_value::<Restart>(legacy_restart).expect("legacy restart deserializes"),
+        Restart::on_failure()
+    );
 
     let exponential =
         Backoff::exponential_with_jitter(Duration::from_millis(25), 3, Duration::from_secs(2));

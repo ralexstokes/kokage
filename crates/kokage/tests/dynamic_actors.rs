@@ -1056,6 +1056,15 @@ async fn remove_when_done_does_not_remove_an_actor_that_restarts() {
     .await
     .expect("actor restarted");
     assert_eq!(starts.load(Ordering::SeqCst), 2);
+    assert!(
+        runtime
+            .scope()
+            .snapshot()
+            .child("restart-once")
+            .expect("restarting actor keeps its membership")
+            .remove_when_done,
+        "a live snapshot reports the spec-level retention declaration"
+    );
 
     shutdown_dynamic_runtime(&runtime, "restarting removal test shutdown").await;
 }

@@ -79,8 +79,8 @@ impl OrderedSupervisorBuilder {
         self.channels().handle()
     }
 
-    /// Projects child ids and restart policies in this scope's pre-spawn
-    /// snapshot.
+    /// Projects child ids, restart policies, and terminal-retention flags in
+    /// this scope's pre-spawn snapshot.
     ///
     /// Not part of the public contract: this exists so `kokage` can project
     /// the membership its own higher-level builders will lower to, and is
