@@ -1,0 +1,10 @@
+error[E0308]: `?` operator has incompatible types
+ --> tests/ui/public-api/add_task_returns_unit.rs:4:25
+  |
+4 |       let _lineage: u64 = scope
+  |  _________________________^
+5 | |         .add_task(TaskSpec::new("task", |_| async { Ok(()) }))
+6 | |         .await?;
+  | |_______________^ expected `u64`, found `()`
+  |
+  = note: `?` operator cannot convert from `()` to `u64`
