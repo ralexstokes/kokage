@@ -39,13 +39,14 @@ If you do not know OTP, the tutorial builds these pieces from scratch.
 
 One `Restart` value combines the exit mode, restart budget, and backoff. Call
 `limit` on whichever mode constructor fits the child; a child-level declaration
-replaces the enclosing scope's complete
-restart default.
+replaces the enclosing scope's complete restart default. Whether a terminal
+child keeps its membership is a separate per-child declaration,
+`remove_when_done`, and is not inherited from the scope default.
 
 An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox
-policy, restart policy, shutdown policy, and incarnation factory. Adding it to
-a scope returns its typed, restart-stable sender; calling `actor_ref()` before
-placement yields the same sender earlier.
+policy, restart policy, shutdown policy, terminal-membership retention, and
+incarnation factory. Adding it to a scope returns its typed, restart-stable
+sender; calling `actor_ref()` before placement yields the same sender earlier.
 
 An `OrderedTree` owns static declarations. A `DynamicTree` owns a scope whose
 membership can change at runtime. Moving a declaration into a tree establishes

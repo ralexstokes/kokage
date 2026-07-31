@@ -50,9 +50,10 @@ returns the typed ref. Success means startup was scheduled; use
 requires the actor to be ready.
 
 Terminal dynamic actors remain as inactive memberships by default. Select
-`ActorSpec::remove_when_done()` for an ephemeral child that
-removes itself after terminal exit; `remove_child` explicitly removes either
-kind.
+`ActorSpec::remove_when_done()` (or `TaskSpec::remove_when_done()`) for an
+ephemeral child that removes itself after terminal exit; `remove_child`
+explicitly removes either kind. Retention is declared on the child spec, so
+changing a child's `Restart` policy never changes it.
 
 The default retain/remove behavior is the same for declared and dynamically
 added actors. A declared membership that removes itself can be recreated if an
