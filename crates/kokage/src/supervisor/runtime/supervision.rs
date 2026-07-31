@@ -2465,7 +2465,10 @@ mod tests {
             .expect("lifecycle remains open");
         assert!(matches!(
             started.kind,
-            LifecycleEventKind::ChildStarted { generation: 2, .. }
+            LifecycleEventKind::Child(crate::supervisor::ChildEvent {
+                kind: crate::supervisor::ChildEventKind::Started { generation: 2 },
+                ..
+            })
         ));
     }
 

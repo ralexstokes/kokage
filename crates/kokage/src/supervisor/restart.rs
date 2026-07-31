@@ -88,38 +88,94 @@ impl Backoff {
     }
 }
 
+/// Restart budget and delay shared by restartable [`RestartPolicy`] variants.
+///
+/// The settings are one stable payload so adding another restart tuning knob
+/// does not change every policy variant. Use [`new`](Self::new) for direct
+/// construction or the fluent methods on [`RestartPolicy`] for the common
+/// case.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct RestartSettings {
+    max_restarts: usize,
+    within: Duration,
+    backoff: Backoff,
+}
+
+impl Default for RestartSettings {
+    fn default() -> Self {
+        Self::new(5, Duration::from_secs(30))
+    }
+}
+
+impl RestartSettings {
+    /// Creates an immediate-retry budget of `max_restarts` inside `within`.
+    pub const fn new(max_restarts: usize, within: Duration) -> Self {
+        Self {
+            max_restarts,
+            within,
+            backoff: Backoff::none(),
+        }
+    }
+
+    /// Replaces the sliding restart budget.
+    #[must_use]
+    pub const fn limit(mut self, max_restarts: usize, within: Duration) -> Self {
+        self.max_restarts = max_restarts;
+        self.within = within;
+        self
+    }
+
+    /// Replaces the delay between restart attempts.
+    #[must_use]
+    pub const fn backoff(mut self, backoff: Backoff) -> Self {
+        self.backoff = backoff;
+        self
+    }
+
+    /// Returns the maximum number of eligible exits inside [`within`](Self::within).
+    pub const fn max_restarts(self) -> usize {
+        self.max_restarts
+    }
+
+    /// Returns the sliding window used by [`max_restarts`](Self::max_restarts).
+    pub const fn within(self) -> Duration {
+        self.within
+    }
+
+    /// Returns the delay applied before each replacement incarnation starts.
+    pub const fn backoff_policy(self) -> Backoff {
+        self.backoff
+    }
+
+    fn validate(self) -> Result<(), BuildError> {
+        require_non_zero_duration(self.within, "restart intensity window must be non-zero")?;
+        self.backoff.validate()
+    }
+}
+
 /// Complete restart behavior for a supervised child.
 ///
 /// A single value selects which exits restart, the restart budget, and the
 /// delay between attempts. The default is [`on_failure`](Self::on_failure),
 /// limited to five restarts within thirty seconds, with immediate retries.
 ///
-/// With the `serde` feature, the `condition` field serializes as `Always` (every
-/// exit), `OnFailure` (only errors, panics, and aborts), or `Never` (at most
-/// one run).
+/// The enum is intentionally transparent: match it directly when inspecting a
+/// declaration or construct a variant directly when that is clearer than the
+/// fluent helpers. Downstream matches need a catch-all arm because the enum is
+/// non-exhaustive.
+///
+/// With the `serde` feature, the variant is tagged as `condition`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RestartPolicy {
-    /// Which child exits are eligible for restart.
-    pub condition: RestartCondition,
-    /// Maximum number of eligible exits permitted inside [`within`](Self::within).
-    pub max_restarts: usize,
-    /// Sliding window used by [`max_restarts`](Self::max_restarts).
-    pub within: Duration,
-    /// Delay applied before each replacement incarnation starts.
-    pub backoff: Backoff,
-}
-
-/// Which child exits a [`RestartPolicy`] restarts.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "condition", content = "settings"))]
 #[non_exhaustive]
-pub enum RestartCondition {
+pub enum RestartPolicy {
     /// Restart after every exit, including clean completion.
-    Always,
+    Always(RestartSettings),
     /// Restart errors, panics, and aborts, but not clean completion.
-    #[default]
-    OnFailure,
+    OnFailure(RestartSettings),
     /// Never restart; the child runs at most once.
     Never,
 }
@@ -131,65 +187,71 @@ impl Default for RestartPolicy {
 }
 
 impl RestartPolicy {
-    const fn with_condition(condition: RestartCondition) -> Self {
-        Self {
-            condition,
-            max_restarts: 5,
-            within: Duration::from_secs(30),
-            backoff: Backoff::none(),
-        }
-    }
-
     /// Restarts after every exit, including clean completion.
     pub const fn always() -> Self {
-        Self::with_condition(RestartCondition::Always)
+        Self::Always(RestartSettings::new(5, Duration::from_secs(30)))
     }
 
     /// Restarts after an error, panic, or abort, but not clean completion.
     pub const fn on_failure() -> Self {
-        Self::with_condition(RestartCondition::OnFailure)
+        Self::OnFailure(RestartSettings::new(5, Duration::from_secs(30)))
     }
 
     /// Never restarts; the child runs at most once.
     pub const fn never() -> Self {
-        Self::with_condition(RestartCondition::Never)
+        Self::Never
     }
 
     /// Sets the sliding restart budget.
     #[must_use]
-    pub const fn limit(mut self, max_restarts: usize, within: Duration) -> Self {
-        self.max_restarts = max_restarts;
-        self.within = within;
-        self
+    pub const fn limit(self, max_restarts: usize, within: Duration) -> Self {
+        match self {
+            Self::Always(settings) => Self::Always(settings.limit(max_restarts, within)),
+            Self::OnFailure(settings) => Self::OnFailure(settings.limit(max_restarts, within)),
+            Self::Never => Self::Never,
+        }
     }
 
     /// Sets the delay between restart attempts.
     #[must_use]
-    pub const fn backoff(mut self, backoff: Backoff) -> Self {
-        self.backoff = backoff;
-        self
+    pub const fn backoff(self, backoff: Backoff) -> Self {
+        match self {
+            Self::Always(settings) => Self::Always(settings.backoff(backoff)),
+            Self::OnFailure(settings) => Self::OnFailure(settings.backoff(backoff)),
+            Self::Never => Self::Never,
+        }
     }
 
     pub(crate) const fn should_restart(self, is_failure: bool) -> bool {
-        match self.condition {
-            RestartCondition::Always => true,
-            RestartCondition::OnFailure => is_failure,
-            RestartCondition::Never => false,
+        match self {
+            Self::Always(_) => true,
+            Self::OnFailure(_) => is_failure,
+            Self::Never => false,
         }
     }
 
     #[cfg(test)]
     pub(crate) const fn is_always(self) -> bool {
-        matches!(self.condition, RestartCondition::Always)
+        matches!(self, Self::Always(_))
     }
 
     pub(crate) const fn is_never(self) -> bool {
-        matches!(self.condition, RestartCondition::Never)
+        matches!(self, Self::Never)
     }
 
     pub(crate) fn validate(self) -> Result<(), BuildError> {
-        require_non_zero_duration(self.within, "restart intensity window must be non-zero")?;
-        self.backoff.validate()
+        let Some(settings) = self.settings() else {
+            return Ok(());
+        };
+        settings.validate()
+    }
+
+    /// Returns the tuning payload for restartable conditions.
+    pub const fn settings(self) -> Option<RestartSettings> {
+        match self {
+            Self::Always(settings) | Self::OnFailure(settings) => Some(settings),
+            Self::Never => None,
+        }
     }
 }
 

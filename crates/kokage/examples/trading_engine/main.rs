@@ -140,16 +140,7 @@ use ledger::Ledger;
 use messages::*;
 
 fn lifecycle_total_restarts(event: &kokage::observe::LifecycleEvent) -> Option<u64> {
-    use kokage::observe::LifecycleEventKind;
-    match &event.kind {
-        LifecycleEventKind::ChildAdded { total_restarts, .. }
-        | LifecycleEventKind::ChildStarted { total_restarts, .. }
-        | LifecycleEventKind::ChildExited { total_restarts, .. }
-        | LifecycleEventKind::ChildRemoved { total_restarts, .. }
-        | LifecycleEventKind::ChildRestartScheduled { total_restarts, .. }
-        | LifecycleEventKind::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
-        _ => None,
-    }
+    event.total_restarts()
 }
 use reconciler::Reconciler;
 use router::OrderRouter;
@@ -650,9 +641,10 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     .await?;
     let cancelled = app
         .control
-        .call(URGENT_BOUND, |reply| ControlMsg::EmergencyCancelAll {
-            reply,
-        })
+        .call(
+            |reply| ControlMsg::EmergencyCancelAll { reply },
+            URGENT_BOUND,
+        )
         .await?;
     assert!(cancelled >= 1);
     assert_eq!(app.venue_a.status(&open), Some(OrderStatus::Cancelled));
@@ -779,7 +771,7 @@ where
     M: Send + 'static,
     T: Send + 'static,
 {
-    Ok(actor.call(PHASE_TIMEOUT, message).await?)
+    Ok(actor.call(message, PHASE_TIMEOUT).await?)
 }
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {

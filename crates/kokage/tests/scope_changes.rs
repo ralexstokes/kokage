@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use kokage::{DynamicTree, ScopeChange, observe::LifecycleEventKind};
+use kokage::{
+    DynamicTree, ScopeChange,
+    observe::{ChildEventKind, LifecycleEventKind},
+};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(3);
@@ -27,19 +30,23 @@ async fn changes_begin_with_state_then_deliver_new_transitions() {
 
     timeout(WAIT, async {
         loop {
-            let ScopeChange::Event(event) = changes.next().await.expect("stream remains open")
+            let ScopeChange::Event { event, snapshot } =
+                changes.next().await.expect("stream remains open")
             else {
                 continue;
             };
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "worker"
+                LifecycleEventKind::Child(ref child)
+                    if child.child_id == "worker"
+                        && matches!(child.kind, ChildEventKind::Started { .. })
             ) {
                 assert!(
                     event
                         .seq()
                         .is_some_and(|sequence| sequence > initial.lifecycle_seq)
                 );
+                assert!(snapshot.child("worker").is_some());
                 break;
             }
         }
@@ -98,7 +105,7 @@ async fn changes_keep_supervisor_transitions_on_the_correct_side_of_reset() {
     let runtime = tree.spawn().expect("dynamic tree builds");
     assert!(matches!(
         timeout(WAIT, changes.next()).await.expect("startup event"),
-        Some(ScopeChange::Event(event))
+        Some(ScopeChange::Event { event, .. })
             if matches!(event.kind, LifecycleEventKind::SupervisorStarted)
     ));
 
@@ -107,7 +114,7 @@ async fn changes_keep_supervisor_transitions_on_the_correct_side_of_reset() {
     let mut stopped = false;
     timeout(WAIT, async {
         while let Some(change) = changes.next().await {
-            let ScopeChange::Event(event) = change else {
+            let ScopeChange::Event { event, .. } = change else {
                 panic!("a non-lagging stream must not reset again");
             };
             match event.kind {

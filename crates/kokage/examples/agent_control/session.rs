@@ -67,11 +67,14 @@ pub struct Session {
 impl Session {
     async fn append(&self, entry: JournalEntry) -> ExitResult {
         self.journal
-            .call(PHASE_TIMEOUT, |reply| JournalMsg::Append {
-                chat: self.chat,
-                entry,
-                reply,
-            })
+            .call(
+                |reply| JournalMsg::Append {
+                    chat: self.chat,
+                    entry,
+                    reply,
+                },
+                PHASE_TIMEOUT,
+            )
             .await?;
         Ok(())
     }
@@ -213,10 +216,13 @@ impl Actor for Session {
             SessionMsg::Rehydrate => {
                 let replay = self
                     .journal
-                    .call(PHASE_TIMEOUT, |reply| JournalMsg::Replay {
-                        chat: self.chat,
-                        reply,
-                    })
+                    .call(
+                        |reply| JournalMsg::Replay {
+                            chat: self.chat,
+                            reply,
+                        },
+                        PHASE_TIMEOUT,
+                    )
                     .await?;
                 self.transcript_len = replay
                     .iter()
@@ -323,7 +329,7 @@ impl Actor for Session {
                     .entry(task)
                     .or_default()
                     .push(event.clone());
-                if let kokage::MonitorEvent::Exited { status, .. } = &event
+                if let kokage::MonitorEventKind::Exited { status, .. } = &event.kind
                     && status.is_failure()
                 {
                     if let Some(active) = self.active.as_mut()
@@ -341,7 +347,7 @@ impl Actor for Session {
                         }
                         active.retry_after_removal = true;
                     }
-                } else if matches!(event, kokage::MonitorEvent::Removed { .. })
+                } else if matches!(event.kind, kokage::MonitorEventKind::Removed { .. })
                     && let Some(active) = self.active.take()
                 {
                     if active.task != task || active.role != role {

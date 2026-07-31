@@ -9,7 +9,7 @@ use std::{any::Any, future::pending, panic::AssertUnwindSafe, sync::Arc, time::D
 use futures_util::FutureExt;
 use kokage::{
     ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitResult, ExitStatus, Guard,
-    MonitorEvent, RestartPolicy, Shutdown, SupervisorError, Tree,
+    MonitorEvent, MonitorEventKind, RestartPolicy, Shutdown, SupervisorError, Tree,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext},
 };
 use tokio::{
@@ -287,10 +287,7 @@ async fn assert_mapper_silence(receiver: &mut mpsc::UnboundedReceiver<MonitorEve
 }
 
 fn started_event(actor_id: &str, generation: u64) -> MonitorEvent {
-    MonitorEvent::Started {
-        actor_id: actor_id.to_owned(),
-        generation,
-    }
+    MonitorEvent::new(actor_id, MonitorEventKind::Started { generation })
 }
 
 struct TestExit {
@@ -301,10 +298,10 @@ struct TestExit {
 
 fn expect_exited(event: MonitorEvent) -> TestExit {
     match event {
-        MonitorEvent::Exited {
+        MonitorEvent {
             actor_id,
-            generation,
-            status,
+            kind: MonitorEventKind::Exited { generation, status },
+            ..
         } => TestExit {
             actor_id,
             generation,
@@ -316,9 +313,9 @@ fn expect_exited(event: MonitorEvent) -> TestExit {
 
 fn expect_removed(event: MonitorEvent, actor_id: &str) -> Option<u64> {
     match event {
-        MonitorEvent::Removed {
+        MonitorEvent {
             actor_id: id,
-            generation,
+            kind: MonitorEventKind::Removed { generation },
             ..
         } => {
             assert_eq!(id, actor_id);
@@ -1399,21 +1396,26 @@ async fn overlapping_replacement_keeps_exit_bound_to_its_original_generation() {
         next_event(&mut fixture.observed).await,
     ] {
         match event {
-            MonitorEvent::Started {
+            MonitorEvent {
                 actor_id,
-                generation: 1,
+                kind: MonitorEventKind::Started { generation: 1 },
+                ..
             } => {
                 assert_eq!(actor_id, "peer");
                 saw_second_start = true;
             }
-            MonitorEvent::Exited {
+            MonitorEvent {
                 actor_id,
-                generation: 0,
-                status:
-                    ExitStatus::Aborted {
-                        after_grace: false,
-                        cancelled: false,
+                kind:
+                    MonitorEventKind::Exited {
+                        generation: 0,
+                        status:
+                            ExitStatus::Aborted {
+                                after_grace: false,
+                                cancelled: false,
+                            },
                     },
+                ..
             } => {
                 assert_eq!(actor_id, "peer");
                 saw_first_exit = true;
@@ -1668,7 +1670,7 @@ impl RawActor for GatedObserver {
         self.watch.send(watch).expect("watch receiver alive");
         self.gate.notified().await;
         while let Some(event) = ctx.recv().await {
-            let done = matches!(event, MonitorEvent::Exited { .. });
+            let done = matches!(event.kind, MonitorEventKind::Exited { .. });
             self.observed.send(event).expect("observer receiver alive");
             if done {
                 break;

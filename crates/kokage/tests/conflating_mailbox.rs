@@ -397,7 +397,7 @@ async fn replaced_call_reports_reply_dropped() {
         let actor_ref = actor_ref.clone();
         async move {
             actor_ref
-                .call(Duration::from_secs(1), RequestMsg::Get)
+                .call(RequestMsg::Get, Duration::from_secs(1))
                 .await
         }
     });

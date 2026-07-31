@@ -12,7 +12,7 @@ use std::{
 
 use kokage::{
     BoxError, DynamicTree, RestartPolicy, Strategy, TaskSpec, Tree,
-    observe::{LifecycleEventKind, LifecycleWatch},
+    observe::{ChildEventKind, LifecycleEventKind, LifecycleWatch},
 };
 use tokio::{
     runtime::{Builder, Runtime},
@@ -246,7 +246,11 @@ async fn wait_for_child_start_count(events: &mut LifecycleWatch, expected: usize
     let mut started = 0;
     while started < expected {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event.kind, LifecycleEventKind::ChildStarted { .. }) {
+        if matches!(
+            event.kind,
+            LifecycleEventKind::Child(ref child)
+                if matches!(child.kind, ChildEventKind::Started { .. })
+        ) {
             started += 1;
         }
     }
@@ -259,7 +263,8 @@ async fn wait_for_restart_count(events: &mut LifecycleWatch, expected: usize) ->
         let event = events.next().await.expect("lifecycle stream");
         if matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 1, .. }
+            LifecycleEventKind::Child(ref child)
+                if matches!(child.kind, ChildEventKind::Started { generation: 1 })
         ) {
             restarted += 1;
         }
@@ -272,7 +277,8 @@ async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
         let event = events.next().await.expect("lifecycle stream");
         if matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == id
+            LifecycleEventKind::Child(ref child)
+                if child.child_id == id && matches!(child.kind, ChildEventKind::Started { .. })
         ) {
             return;
         }
@@ -284,7 +290,8 @@ async fn wait_for_named_child_removed(events: &mut LifecycleWatch, id: &str) {
         let event = events.next().await.expect("lifecycle stream");
         if matches!(
             event.kind,
-            LifecycleEventKind::ChildRemoved { ref child_id, .. } if child_id == id
+            LifecycleEventKind::Child(ref child)
+                if child.child_id == id && matches!(child.kind, ChildEventKind::Removed)
         ) {
             return;
         }

@@ -185,7 +185,10 @@ impl<M> ActorRef<M> {
     /// its message; ownership is recovered only when the future completes with
     /// an error.
     pub async fn send_timeout(&self, message: M, bound: Duration) -> Result<(), SendError<M>> {
-        let deadline = deadline_after(bound);
+        self.send_until(message, deadline_after(bound)).await
+    }
+
+    async fn send_until(&self, message: M, deadline: Instant) -> Result<(), SendError<M>> {
         let mut binding = self.binding.clone();
         let mut message = message;
 
@@ -411,7 +414,7 @@ impl<M> ActorRef<M> {
     /// }
     ///
     /// # async fn get(actor: &ActorRef<Msg>) -> Result<u64, Box<dyn std::error::Error>> {
-    /// let value = actor.call(Duration::from_millis(250), Msg::Get).await?;
+    /// let value = actor.call(Msg::Get, Duration::from_millis(250)).await?;
     /// # Ok(value)
     /// # }
     /// ```
@@ -422,7 +425,9 @@ impl<M> ActorRef<M> {
     /// dropped. Once the mailbox accepts it, a timeout cannot retract it: the
     /// actor may still process the request and a late reply is discarded.
     ///
-    /// Consequently, a timeout after acceptance has an **unknown outcome**.
+    /// [`CallError::AcceptanceTimedOut`] guarantees that the request was not
+    /// accepted. A [`CallError::ResponseTimedOut`] after acceptance has an
+    /// **unknown outcome**.
     /// In-memory queries are usually harmless, but requests with external
     /// side effects need protocol-level idempotency keys and/or reconciliation
     /// so the caller can safely retry or discover what happened. A timeout is
@@ -447,24 +452,36 @@ impl<M> ActorRef<M> {
     /// child actor. The book's request/reply chapter covers the pattern.
     pub async fn call<T>(
         &self,
-        timeout: Duration,
         message: impl FnOnce(Reply<T>) -> M,
+        timeout: Duration,
     ) -> Result<T, CallError> {
-        tokio::time::timeout(timeout, async {
-            let (reply, receiver) = Reply::channel();
-            self.send(message(reply))
-                .await
-                .map_err(|error| CallError::Terminated {
+        let deadline = deadline_after(timeout);
+        let (reply, receiver) = Reply::channel();
+        self.send_until(message(reply), deadline)
+            .await
+            .map_err(|error| match error.kind {
+                SendErrorKind::Terminated => CallError::Terminated {
                     actor_id: error.actor_id,
-                })?;
-            receiver.recv().await.map_err(|_| CallError::ReplyDropped {
-                actor_id: self.actor_id.to_string(),
+                },
+                SendErrorKind::TimedOut => CallError::AcceptanceTimedOut {
+                    actor_id: error.actor_id,
+                },
+                SendErrorKind::NotRunning | SendErrorKind::Full => {
+                    unreachable!("send_until only returns terminal or timeout errors")
+                }
+            })?;
+
+        receiver
+            .recv_until(deadline)
+            .await
+            .map_err(|error| match error {
+                ReplyError::Dropped => CallError::ReplyDropped {
+                    actor_id: self.actor_id.to_string(),
+                },
+                ReplyError::Timeout => CallError::ResponseTimedOut {
+                    actor_id: self.actor_id.to_string(),
+                },
             })
-        })
-        .await
-        .map_err(|_| CallError::Timeout {
-            actor_id: self.actor_id.to_string(),
-        })?
     }
 
     async fn wait_for_next_mailbox(
@@ -597,13 +614,22 @@ impl<T> ReplyReceiver<T> {
 
     /// Waits up to `bound` for an answer.
     ///
+    /// Expiry wins when the deadline and reply (or sender drop) are both ready
+    /// when polled. A zero bound therefore always returns
+    /// [`ReplyError::Timeout`].
+    ///
     /// Expiry drops the receiving half but does not undo an already accepted
     /// actor request. A later [`Reply::send`] simply discards its value.
     pub async fn recv_timeout(self, bound: Duration) -> Result<T, ReplyError> {
-        timeout(bound, self.receiver)
-            .await
-            .map_err(|_| ReplyError::Timeout)?
-            .map_err(|_| ReplyError::Dropped)
+        self.recv_until(deadline_after(bound)).await
+    }
+
+    async fn recv_until(self, deadline: Instant) -> Result<T, ReplyError> {
+        tokio::select! {
+            biased;
+            () = sleep_until(deadline) => Err(ReplyError::Timeout),
+            result = self.receiver => result.map_err(|_| ReplyError::Dropped),
+        }
     }
 }
 
@@ -1147,9 +1173,10 @@ impl<M: Send + 'static> RawContext<M> {
     ///
     /// Each lifecycle transition of the target is converted by `map` into
     /// this actor's message type and delivered through this actor's mailbox,
-    /// in lifecycle order: [`MonitorEvent::Started`] when an incarnation starts,
-    /// [`MonitorEvent::Exited`] when it exits, and a final
-    /// [`MonitorEvent::Removed`] when the target is permanently gone. A
+    /// in lifecycle order: [`MonitorEventKind::Started`](crate::MonitorEventKind::Started)
+    /// when an incarnation starts, [`MonitorEventKind::Exited`](crate::MonitorEventKind::Exited)
+    /// when it exits, and a final
+    /// [`MonitorEventKind::Removed`](crate::MonitorEventKind::Removed) when the target is permanently gone. A
     /// target that is already running delivers an immediate `Started` for the
     /// current incarnation; a target between incarnations stays silent until
     /// the next start, so a watch never races a supervisor restart.
@@ -1167,8 +1194,8 @@ impl<M: Send + 'static> RawContext<M> {
     /// target. It must durably persist any observed state that it needs after
     /// a crash. To request a fresh snapshot instead, cancel the existing watch
     /// and register a new one: a running target delivers an immediate
-    /// [`MonitorEvent::Started`], an already removed target delivers an
-    /// immediate [`MonitorEvent::Removed`], and a target between incarnations
+    /// [`MonitorEventKind::Started`](crate::MonitorEventKind::Started), an already removed target delivers an
+    /// immediate [`MonitorEventKind::Removed`](crate::MonitorEventKind::Removed), and a target between incarnations
     /// stays silent until its next `Started`. Re-registering discards any
     /// transitions still staged on the old watch.
     ///
@@ -1178,7 +1205,7 @@ impl<M: Send + 'static> RawContext<M> {
     /// staged in a bounded per-watch buffer, so an observer whose mailbox
     /// stays full while its target restarts in a tight loop cannot grow memory
     /// without bound. On overflow the oldest transitions are dropped and the
-    /// loss surfaces as a [`MonitorEvent::Lagged`] resync marker rather than
+    /// loss surfaces as a [`MonitorEventKind::Lagged`](crate::MonitorEventKind::Lagged) resync marker rather than
     /// silently; the terminal `Removed` is never dropped.
     ///
     /// The two actor memberships own the watch. Use
@@ -1233,7 +1260,7 @@ impl<M: Send + 'static> RawContext<M> {
                 // races an empty drain is not lost.
                 let waiter = guard.queue().waiter();
                 if let Some(event) = guard.queue().pop() {
-                    let terminal = matches!(event, MonitorEvent::Removed { .. });
+                    let terminal = matches!(event.kind, crate::MonitorEventKind::Removed { .. });
                     let message = map(event);
                     tokio::select! {
                         biased;
@@ -1496,13 +1523,15 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
 
     /// Queues follow-up work as the actor's next message.
     ///
-    /// Continuations are taken ahead of the mailbox on every iteration of the
-    /// provided receive loop, so they are a priority self-send that does not
-    /// consume mailbox capacity. Calls made from
+    /// A continuation gets the next turn, but after one continuation the
+    /// receive loop gives a ready mailbox message or offload completion a
+    /// chance before taking another. This keeps sliced work responsive without
+    /// letting a continuation chain starve external input. Continuations do
+    /// not consume mailbox capacity. Calls made from
     /// [`Actor::on_start`](crate::Actor::on_start) are processed after startup
-    /// readiness is reported and before ordinary mailbox messages, which keeps
-    /// expensive warm-up work out of the readiness-critical initialization
-    /// path.
+    /// readiness is reported; an already-ready delivery may run between
+    /// successive continuations. This keeps expensive warm-up work out of the
+    /// readiness-critical initialization path.
     ///
     /// Continuations count as received messages in
     /// [`ActorStats`](crate::observe::ActorStats), but not as externally

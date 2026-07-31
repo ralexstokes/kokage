@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::supervisor::{
-    ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, RestartPolicy, Strategy,
-    Supervisor, SupervisorError, TaskSpec,
+    ChildEventKind, ChildSpec, ControlError, LifecycleEventKind, LifecycleWatch, RestartPolicy,
+    Strategy, Supervisor, SupervisorError, TaskSpec,
 };
 use tokio::{sync::mpsc, time::timeout};
 
@@ -93,7 +93,11 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
     let added = timeout(EVENT_TIMEOUT, async {
         loop {
             let event = lifecycle.next().await.expect("watch remains open");
-            if matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) {
+            if matches!(
+                event.kind,
+                LifecycleEventKind::Child(ref child)
+                    if matches!(child.kind, ChildEventKind::Added)
+            ) {
                 break event;
             }
         }
@@ -103,24 +107,38 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
     let started = timeout(EVENT_TIMEOUT, async {
         loop {
             let event = lifecycle.next().await.expect("watch remains open");
-            if matches!(event.kind, LifecycleEventKind::ChildStarted { .. }) {
+            if matches!(
+                event.kind,
+                LifecycleEventKind::Child(ref child)
+                    if matches!(child.kind, ChildEventKind::Started { .. })
+            ) {
                 break event;
             }
         }
     })
     .await
     .expect("Started arrives");
-    assert!(matches!(&added.kind, LifecycleEventKind::ChildAdded { .. }));
+    assert!(matches!(
+        &added.kind,
+        LifecycleEventKind::Child(child) if matches!(child.kind, ChildEventKind::Added)
+    ));
     assert!(matches!(
         started.kind,
-        LifecycleEventKind::ChildStarted { generation: 0, .. }
+        LifecycleEventKind::Child(ref child)
+            if matches!(child.kind, ChildEventKind::Started { generation: 0 })
     ));
     let (added_seq, added_lineage) = match &added.kind {
-        LifecycleEventKind::ChildAdded { seq, lineage, .. } => (*seq, *lineage),
+        LifecycleEventKind::Child(child) if matches!(child.kind, ChildEventKind::Added) => {
+            (child.seq, child.lineage)
+        }
         other => panic!("expected ChildAdded, got {other:?}"),
     };
     let started_seq = match started.kind {
-        LifecycleEventKind::ChildStarted { seq, .. } => seq,
+        LifecycleEventKind::Child(child)
+            if matches!(child.kind, ChildEventKind::Started { .. }) =>
+        {
+            child.seq
+        }
         other => panic!("expected ChildStarted, got {other:?}"),
     };
     assert_eq!(added_seq, baseline.lifecycle_seq + 1);

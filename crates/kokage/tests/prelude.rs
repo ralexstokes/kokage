@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kokage::{
-    observe::{LifecycleEvent, LifecycleEventKind},
+    observe::{ChildEventKind, LifecycleEvent, LifecycleEventKind},
     prelude::*,
 };
 use tokio::{sync::mpsc, time::timeout};
@@ -10,20 +10,20 @@ use tokio::{sync::mpsc, time::timeout};
 mod coverage_probe {
     mod expected {
         use kokage::prelude::{
-            Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
-            MailboxShutdown, MonitorEvent, Reply, RestartPolicy, ScopeChange, Shutdown,
-            StopContext, Strategy, SupervisorSnapshot, SupervisorSnapshotReceiver, TaskRef,
-            TaskSpec, TimerKey, Tree,
+            Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
+            DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent,
+            MonitorEventKind, Reply, RestartPolicy, RunningDynamicTree, RunningTree, ScopeChange,
+            ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, Strategy,
+            SupervisorSnapshot, SupervisorSnapshotReceiver, TaskContext, TaskRef, TaskSpec,
+            TimerKey, Tree,
         };
     }
 
     mod advanced_root {
         use kokage::{
-            ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, DynamicScopeRef, ExitStatus, OffloadDeadline,
-            ReplyError, ReplyReceiver, RestartCondition, RunningDynamicTree, RunningTree,
-            ScopeChange, ScopeChanges, ScopeRef, SendError, SendErrorKind, SubtreeSpec,
-            SupervisorError, TaskContext, TaskError,
+            ActorFactory, ActorSlot, BlockingCancelled, BoxError, BuildError, CancellationToken,
+            ExitStatus, OffloadDeadline, ReplyError, ReplyReceiver, ScopeChange, ScopeChanges,
+            SubtreeSpec, SupervisorError, TaskError,
         };
     }
 
@@ -40,10 +40,10 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus,
-            LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeChange,
-            ScopeChanges, ScopeKind, ScopePathSegment, ScopedActorStats, SupervisorSnapshot,
-            SupervisorStateView,
+            ActorStats, ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot,
+            ChildStateView, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation,
+            LifecycleWatch, ScopeChange, ScopeChanges, ScopeKind, ScopePathSegment,
+            ScopedActorStats, SupervisorSnapshot, SupervisorStateView,
         };
         #[cfg(feature = "serde")]
         use kokage::observe::{ChildOutline, SupervisionOutline};
@@ -75,21 +75,7 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
     match &event.kind {
-        LifecycleEventKind::ChildAdded {
-            child_id: observed, ..
-        }
-        | LifecycleEventKind::ChildStarted {
-            child_id: observed, ..
-        }
-        | LifecycleEventKind::ChildExited {
-            child_id: observed, ..
-        }
-        | LifecycleEventKind::ChildRemoved {
-            child_id: observed, ..
-        }
-        | LifecycleEventKind::ChildRestartScheduled {
-            child_id: observed, ..
-        } => observed == child_id,
+        LifecycleEventKind::Child(child) => child.child_id == child_id,
         _ => false,
     }
 }
@@ -222,7 +208,8 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { generation: 0, .. }
+                LifecycleEventKind::Child(ref child)
+                    if matches!(child.kind, ChildEventKind::Started { generation: 0 })
             ) && child_id_is(&event, "worker")
             {
                 break event;
@@ -233,7 +220,8 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     .expect("timed out waiting for started event");
     assert!(matches!(
         started.kind,
-        LifecycleEventKind::ChildStarted { generation: 0, .. }
+        LifecycleEventKind::Child(ref child)
+            if matches!(child.kind, ChildEventKind::Started { generation: 0 })
     ));
     assert!(child_id_is(&started, "worker"));
 
@@ -300,7 +288,8 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { generation: 0, .. }
+                LifecycleEventKind::Child(ref child)
+                    if matches!(child.kind, ChildEventKind::Started { generation: 0 })
             ) && child_id_is(&event, "worker")
             {
                 break;
@@ -368,8 +357,22 @@ fn task_policy_types_cover_common_configuration() {
             .backoff(kokage::Backoff::fixed(Duration::from_millis(50)))
     );
     let policy = RestartPolicy::on_failure();
-    assert_eq!(policy.condition, kokage::RestartCondition::OnFailure);
-    assert_eq!(policy.max_restarts, 5);
-    assert_eq!(policy.within, Duration::from_secs(30));
-    assert_eq!(policy.backoff, kokage::Backoff::none());
+    let RestartPolicy::OnFailure(settings) = policy else {
+        panic!("on_failure builds the matching transparent variant");
+    };
+    assert_eq!(settings.max_restarts(), 5);
+    assert_eq!(settings.within(), Duration::from_secs(30));
+    assert_eq!(settings.backoff_policy(), kokage::Backoff::none());
+
+    let direct = RestartPolicy::OnFailure(
+        RestartSettings::new(2, Duration::from_secs(4))
+            .backoff(Backoff::fixed(Duration::from_millis(25))),
+    );
+    assert_eq!(
+        direct
+            .settings()
+            .expect("restartable policy")
+            .max_restarts(),
+        2
+    );
 }

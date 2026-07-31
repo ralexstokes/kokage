@@ -92,81 +92,8 @@ pub enum LifecycleEventKind {
     SupervisorStopping,
     /// The emitting supervisor fully stopped.
     SupervisorStopped,
-    /// The runtime installed a direct-child membership.
-    ChildAdded {
-        /// Monotonic sequence for the emitting supervisor identity.
-        seq: u64,
-        /// Direct child membership that transitioned.
-        child_id: String,
-        /// Identity of this membership in the stable supervisor scope.
-        lineage: u64,
-        /// Stable-scope cumulative restart count at emission.
-        total_restarts: u64,
-        /// Subject child's cumulative restart count at emission.
-        child_restart_count: u64,
-    },
-    /// A direct child became running.
-    ChildStarted {
-        /// Monotonic sequence for the emitting supervisor identity.
-        seq: u64,
-        /// Direct child membership that transitioned.
-        child_id: String,
-        /// Identity of this membership in the stable supervisor scope.
-        lineage: u64,
-        /// Stable-scope cumulative restart count at emission.
-        total_restarts: u64,
-        /// Subject child's cumulative restart count at emission.
-        child_restart_count: u64,
-        /// Generation that became running.
-        generation: u64,
-    },
-    /// A direct child generation exited.
-    ChildExited {
-        /// Monotonic sequence for the emitting supervisor identity.
-        seq: u64,
-        /// Direct child membership that transitioned.
-        child_id: String,
-        /// Identity of this membership in the stable supervisor scope.
-        lineage: u64,
-        /// Stable-scope cumulative restart count at emission.
-        total_restarts: u64,
-        /// Subject child's cumulative restart count at emission.
-        child_restart_count: u64,
-        /// Generation that exited.
-        generation: u64,
-        /// Public details of the exit.
-        exit: ExitStatus,
-    },
-    /// A direct-child membership ended.
-    ChildRemoved {
-        /// Monotonic sequence for the emitting supervisor identity.
-        seq: u64,
-        /// Direct child membership that transitioned.
-        child_id: String,
-        /// Identity of this membership in the stable supervisor scope.
-        lineage: u64,
-        /// Stable-scope cumulative restart count at emission.
-        total_restarts: u64,
-        /// Subject child's cumulative restart count at emission.
-        child_restart_count: u64,
-    },
-    /// A direct-child restart was scheduled after a backoff delay.
-    ChildRestartScheduled {
-        /// Monotonic sequence for the emitting supervisor identity.
-        seq: u64,
-        /// Direct child membership that transitioned.
-        child_id: String,
-        /// Identity of this membership in the stable supervisor scope.
-        lineage: u64,
-        /// Stable-scope cumulative restart count at emission.
-        total_restarts: u64,
-        /// Subject child's cumulative restart count at emission.
-        child_restart_count: u64,
-        /// Generation that exited and will be replaced.
-        generation: u64,
-        /// Time before the replacement is spawned.
-        delay: Duration,
-    },
+    /// A direct-child membership transition.
+    Child(ChildEvent),
     /// The emitting scope exceeded its restart intensity and will stop.
     RestartIntensityExceeded {
         /// Stable-scope cumulative restart count at emission.
@@ -180,24 +107,59 @@ pub enum LifecycleEventKind {
     },
 }
 
+/// Common identity and counters for a direct-child lifecycle transition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ChildEvent {
+    /// Monotonic sequence for the emitting supervisor identity.
+    pub seq: u64,
+    /// Direct child membership that transitioned.
+    pub child_id: String,
+    /// Identity of this membership in the stable supervisor scope.
+    pub lineage: u64,
+    /// Stable-scope cumulative restart count at emission.
+    pub total_restarts: u64,
+    /// Subject child's cumulative restart count at emission.
+    pub child_restart_count: u64,
+    /// The transition that occurred.
+    pub kind: ChildEventKind,
+}
+
+/// Kind of transition carried by a [`ChildEvent`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum ChildEventKind {
+    /// The runtime installed the membership.
+    Added,
+    /// The child became running.
+    Started {
+        /// Generation that became running.
+        generation: u64,
+    },
+    /// A child generation exited.
+    Exited {
+        /// Generation that exited.
+        generation: u64,
+        /// Public details of the exit.
+        exit: ExitStatus,
+    },
+    /// The membership ended.
+    Removed,
+    /// A restart was scheduled after a backoff delay.
+    RestartScheduled {
+        /// Generation that exited and will be replaced.
+        generation: u64,
+        /// Time before the replacement is spawned.
+        delay: Duration,
+    },
+}
+
 impl LifecycleEventKind {
     fn child_identity(&self) -> Option<(&str, u64)> {
         match self {
-            Self::ChildAdded {
-                child_id, lineage, ..
-            }
-            | Self::ChildStarted {
-                child_id, lineage, ..
-            }
-            | Self::ChildExited {
-                child_id, lineage, ..
-            }
-            | Self::ChildRemoved {
-                child_id, lineage, ..
-            }
-            | Self::ChildRestartScheduled {
-                child_id, lineage, ..
-            } => Some((child_id, *lineage)),
+            Self::Child(event) => Some((&event.child_id, event.lineage)),
             Self::SupervisorStarted
             | Self::SupervisorStopping
             | Self::SupervisorStopped
@@ -212,11 +174,7 @@ impl LifecycleEventKind {
     /// and return `None`.
     pub fn seq(&self) -> Option<u64> {
         match self {
-            Self::ChildAdded { seq, .. }
-            | Self::ChildStarted { seq, .. }
-            | Self::ChildExited { seq, .. }
-            | Self::ChildRemoved { seq, .. }
-            | Self::ChildRestartScheduled { seq, .. } => Some(*seq),
+            Self::Child(event) => Some(event.seq),
             Self::SupervisorStarted
             | Self::SupervisorStopping
             | Self::SupervisorStopped
@@ -229,12 +187,8 @@ impl LifecycleEventKind {
     /// transition or `RestartIntensityExceeded`.
     pub fn total_restarts(&self) -> Option<u64> {
         match self {
-            Self::ChildAdded { total_restarts, .. }
-            | Self::ChildStarted { total_restarts, .. }
-            | Self::ChildExited { total_restarts, .. }
-            | Self::ChildRemoved { total_restarts, .. }
-            | Self::ChildRestartScheduled { total_restarts, .. }
-            | Self::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
+            Self::Child(event) => Some(event.total_restarts),
+            Self::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
             Self::SupervisorStarted
             | Self::SupervisorStopping
             | Self::SupervisorStopped
@@ -243,18 +197,7 @@ impl LifecycleEventKind {
     }
 
     fn is_child_transition(&self) -> bool {
-        match self {
-            Self::ChildAdded { .. }
-            | Self::ChildStarted { .. }
-            | Self::ChildExited { .. }
-            | Self::ChildRemoved { .. }
-            | Self::ChildRestartScheduled { .. } => true,
-            Self::SupervisorStarted
-            | Self::SupervisorStopping
-            | Self::SupervisorStopped
-            | Self::RestartIntensityExceeded { .. }
-            | Self::Lagged { .. } => false,
-        }
+        matches!(self, Self::Child(_))
     }
 }
 
@@ -678,51 +621,26 @@ impl LifecycleHub {
             kind,
         } = draft;
         let kind = match kind {
-            ChildLifecycleEventKind::Added => LifecycleEventKind::ChildAdded {
-                seq,
-                child_id,
-                lineage,
-                total_restarts,
-                child_restart_count,
-            },
-            ChildLifecycleEventKind::Started { generation } => LifecycleEventKind::ChildStarted {
-                seq,
-                child_id,
-                lineage,
-                total_restarts,
-                child_restart_count,
-                generation,
-            },
-            ChildLifecycleEventKind::Exited { generation, exit } => {
-                LifecycleEventKind::ChildExited {
-                    seq,
-                    child_id,
-                    lineage,
-                    total_restarts,
-                    child_restart_count,
-                    generation,
-                    exit,
-                }
+            ChildLifecycleEventKind::Added => ChildEventKind::Added,
+            ChildLifecycleEventKind::Started { generation } => {
+                ChildEventKind::Started { generation }
             }
-            ChildLifecycleEventKind::Removed => LifecycleEventKind::ChildRemoved {
-                seq,
-                child_id,
-                lineage,
-                total_restarts,
-                child_restart_count,
-            },
+            ChildLifecycleEventKind::Exited { generation, exit } => {
+                ChildEventKind::Exited { generation, exit }
+            }
+            ChildLifecycleEventKind::Removed => ChildEventKind::Removed,
             ChildLifecycleEventKind::RestartScheduled { generation, delay } => {
-                LifecycleEventKind::ChildRestartScheduled {
-                    seq,
-                    child_id,
-                    lineage,
-                    total_restarts,
-                    child_restart_count,
-                    generation,
-                    delay,
-                }
+                ChildEventKind::RestartScheduled { generation, delay }
             }
         };
+        let kind = LifecycleEventKind::Child(ChildEvent {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            kind,
+        });
         let event = LifecycleEvent::local(kind);
         if state.terminal {
             return event;
@@ -865,8 +783,8 @@ mod tests {
     };
 
     use super::{
-        ChildLifecycleEventKind, LifecycleEvent, LifecycleEventDraft, LifecycleEventKind,
-        LifecycleHub, LifecycleTreeSink, ScopePathSegment,
+        ChildEvent, ChildEventKind, ChildLifecycleEventKind, LifecycleEvent, LifecycleEventDraft,
+        LifecycleEventKind, LifecycleHub, LifecycleTreeSink, ScopePathSegment,
     };
 
     /// `emit` sweeps dropped watchers, but an identity that never emits would
@@ -1014,13 +932,14 @@ mod tests {
         for seq in 1..=super::LIFECYCLE_BUFFER_CAPACITY as u64 + 1 {
             queue.push(LifecycleEvent::new(
                 vec![nested.clone()],
-                LifecycleEventKind::ChildAdded {
+                LifecycleEventKind::Child(ChildEvent {
                     seq,
                     child_id: format!("child-{seq}"),
                     lineage: seq,
                     total_restarts: 0,
                     child_restart_count: 0,
-                },
+                    kind: ChildEventKind::Added,
+                }),
             ));
         }
 
@@ -1032,7 +951,7 @@ mod tests {
         ));
         let suffix = std::iter::from_fn(|| queue.pop())
             .map(|event| match event.kind {
-                LifecycleEventKind::ChildAdded { seq, .. } => seq,
+                LifecycleEventKind::Child(child) => child.seq,
                 other => panic!("expected ChildAdded, got {other:?}"),
             })
             .collect::<Vec<_>>();
@@ -1078,14 +997,14 @@ mod tests {
             forwarded,
             LifecycleEvent {
                 scope_path,
-                kind: LifecycleEventKind::ChildStarted {
+                kind: LifecycleEventKind::Child(ChildEvent {
                     seq: _,
                     child_id,
                     lineage: 8,
                     total_restarts: 13,
                     child_restart_count: 2,
-                    generation: 1,
-                },
+                    kind: ChildEventKind::Started { generation: 1 },
+                }),
             } if scope_path == vec![path] && child_id == "worker"
         ));
     }
@@ -1095,14 +1014,14 @@ mod tests {
     fn child_identity_is_structural_in_the_variant() {
         let event = LifecycleEvent::new(
             vec![ScopePathSegment::new("nested", 3, 5)],
-            LifecycleEventKind::ChildStarted {
+            LifecycleEventKind::Child(ChildEvent {
                 seq: 7,
                 child_id: "worker".to_owned(),
                 lineage: 11,
                 total_restarts: 13,
                 child_restart_count: 2,
-                generation: 1,
-            },
+                kind: ChildEventKind::Started { generation: 1 },
+            }),
         );
 
         let value = serde_json::to_value(&event).expect("event serializes");
@@ -1115,13 +1034,17 @@ mod tests {
                     "generation": 5,
                 }],
                 "kind": {
-                    "ChildStarted": {
+                    "Child": {
                         "seq": 7,
                         "child_id": "worker",
                         "lineage": 11,
                         "total_restarts": 13,
                         "child_restart_count": 2,
-                        "generation": 1,
+                        "kind": {
+                            "Started": {
+                                "generation": 1,
+                            },
+                        },
                     },
                 },
             })

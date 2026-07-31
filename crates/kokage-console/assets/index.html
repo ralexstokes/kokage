@@ -816,6 +816,10 @@
     const envelopePayload = variantPayload(envelope.kind);
     let eventName = envelopeName;
     let lifecycle = envelopePayload;
+    if (envelopeName === "Child") {
+      eventName = "Child" + variantName(envelopePayload.kind);
+      lifecycle = Object.assign({}, envelopePayload, variantPayload(envelopePayload.kind));
+    }
     const childId = lifecycle && lifecycle.child_id != null ? lifecycle.child_id : "unknown";
     let info;
     if (eventName === "SupervisorStarted") {

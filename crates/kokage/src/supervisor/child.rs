@@ -1,4 +1,9 @@
-use std::{any::Any, future::Future, pin::Pin, sync::Arc};
+use std::{
+    any::Any,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     actor::ExitResult,
@@ -50,6 +55,17 @@ pub struct TaskSpec {
     pub(crate) spec: ChildSpec,
 }
 
+/// Specification for finite task work whose factory is consumed exactly once.
+///
+/// Construct one with [`new`](Self::new), optionally configure shutdown,
+/// readiness, or terminal membership retention, then pass it to
+/// [`DynamicScopeRef::spawn_once_spec`](crate::DynamicScopeRef::spawn_once_spec).
+/// Restart configuration is intentionally absent because a consuming factory
+/// cannot produce another incarnation.
+pub struct OneShotTaskSpec {
+    pub(crate) spec: ChildSpec,
+}
+
 /// Internal carrier for any supervised child: task, actor host, or nested
 /// supervisor. `TaskSpec` is the public task-only constructor and unwraps to
 /// this carrier; actor hosts likewise begin with `TaskSpec::new(..)` before
@@ -67,6 +83,10 @@ struct ClosureFactory<F> {
     f: F,
 }
 
+struct OneShotFactory<F> {
+    f: Mutex<Option<F>>,
+}
+
 impl<F, Fut> ChildFactory for ClosureFactory<F>
 where
     F: Fn(TaskContext) -> Fut + Send + Sync + 'static,
@@ -74,6 +94,26 @@ where
 {
     fn make(&self, ctx: TaskContext) -> ChildFuture {
         Box::pin((self.f)(ctx))
+    }
+}
+
+impl<F, Fut> ChildFactory for OneShotFactory<F>
+where
+    F: FnOnce(TaskContext) -> Fut + Send + 'static,
+    Fut: Future<Output = ExitResult> + Send + 'static,
+{
+    fn make(&self, ctx: TaskContext) -> ChildFuture {
+        let factory = self
+            .f
+            .lock()
+            .expect("one-shot task factory lock poisoned")
+            .take();
+        match factory {
+            Some(factory) => Box::pin(factory(ctx)),
+            None => Box::pin(async {
+                Err(std::io::Error::other("one-shot task factory invoked more than once").into())
+            }),
+        }
     }
 }
 
@@ -193,6 +233,79 @@ impl TaskSpec {
     }
 }
 
+impl OneShotTaskSpec {
+    /// Creates finite work whose consuming factory runs at most once.
+    ///
+    /// The task never restarts and its membership is removed after completion
+    /// unless [`retain_when_done`](Self::retain_when_done) is selected.
+    pub fn new<F, Fut>(id: impl Into<String>, f: F) -> Self
+    where
+        F: FnOnce(TaskContext) -> Fut + Send + 'static,
+        Fut: Future<Output = ExitResult> + Send + 'static,
+    {
+        Self {
+            spec: ChildSpec {
+                inner: Arc::new(ChildDefinition {
+                    id: id.into(),
+                    restart: RestartPolicy::never(),
+                    restart_is_default: false,
+                    shutdown_policy: Shutdown::default(),
+                    shutdown_is_default: true,
+                    remove_when_done: true,
+                    readiness: ChildReadiness::Immediate,
+                    attachment: None,
+                    kind: ChildKind::Task(Arc::new(OneShotFactory {
+                        f: Mutex::new(Some(f)),
+                    })),
+                }),
+            },
+        }
+    }
+
+    /// Sets the shutdown policy for this task. See [`Shutdown`] for
+    /// options.
+    #[must_use]
+    pub fn shutdown(self, policy: Shutdown) -> Self {
+        Self {
+            spec: self.spec.shutdown(policy),
+        }
+    }
+
+    /// Keeps the terminal membership visible after the one-shot task exits.
+    ///
+    /// The default removes it after completion. The returned [`TaskRef`](crate::TaskRef)
+    /// retains the terminal outcome either way.
+    #[must_use]
+    pub fn retain_when_done(self) -> Self {
+        Self {
+            spec: self.spec.retain_when_done(),
+        }
+    }
+
+    /// Requires the task to call [`TaskContext::mark_ready`](crate::supervisor::TaskContext::mark_ready)
+    /// before it is considered started.
+    ///
+    /// The dynamic membership remains in its starting state until this signal.
+    /// If the task exits first, it is marked startup-aborted and cannot restart.
+    /// There is no built-in readiness timeout; use a timeout inside the task
+    /// when initialization must be bounded.
+    #[must_use]
+    pub fn wait_for_ready(self) -> Self {
+        Self {
+            spec: self.spec.wait_for_ready(),
+        }
+    }
+
+    /// Returns the task's unique identifier.
+    pub fn id(&self) -> &str {
+        self.spec.id()
+    }
+
+    pub(crate) fn into_spec(self) -> ChildSpec {
+        self.spec
+    }
+}
+
 impl ChildSpec {
     fn map_inner(mut self, update: impl FnOnce(&mut ChildDefinition)) -> Self {
         let inner = ChildDefinition::make_mut_preserving_supervisor_identity(&mut self.inner);
@@ -242,6 +355,11 @@ impl ChildSpec {
     #[must_use]
     pub(crate) fn remove_when_done(self) -> Self {
         self.map_inner(|inner| inner.remove_when_done = true)
+    }
+
+    #[must_use]
+    pub(crate) fn retain_when_done(self) -> Self {
+        self.map_inner(|inner| inner.remove_when_done = false)
     }
 
     /// Attaches process-local metadata to this supervised child.

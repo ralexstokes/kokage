@@ -84,14 +84,17 @@ impl Inbound {
     async fn delivery(&self, delivery: crate::messages::ChatDelivery) -> ExitResult {
         let ack = self
             .journal
-            .call(PHASE_TIMEOUT, |reply| JournalMsg::Append {
-                chat: delivery.chat,
-                entry: JournalEntry::UserMessage {
-                    envelope: delivery.envelope,
-                    text: delivery.text.clone(),
+            .call(
+                |reply| JournalMsg::Append {
+                    chat: delivery.chat,
+                    entry: JournalEntry::UserMessage {
+                        envelope: delivery.envelope,
+                        text: delivery.text.clone(),
+                    },
+                    reply,
                 },
-                reply,
-            })
+                PHASE_TIMEOUT,
+            )
             .await?;
         // Ack-after-append is the durability boundary. A duplicate is also
         // acked but deliberately never reaches the router.

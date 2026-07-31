@@ -344,7 +344,7 @@ async fn call_succeeds_across_restart_window() {
 
     let call_task = tokio::spawn({
         let rpc_ref = rpc_ref.clone();
-        async move { rpc_ref.call(Duration::from_secs(1), RpcMsg::Get).await }
+        async move { rpc_ref.call(RpcMsg::Get, Duration::from_secs(1)).await }
     });
     tokio::task::yield_now().await;
     assert!(

@@ -96,7 +96,7 @@ impl Actor for Guard {
                 self.report.probes += 1;
                 let under_cap = self
                     .budget
-                    .call(PHASE_TIMEOUT, |reply| BudgetMsg::UnderCap { reply })
+                    .call(|reply| BudgetMsg::UnderCap { reply }, PHASE_TIMEOUT)
                     .await
                     .unwrap_or(false);
                 if self.model.probe() && under_cap {

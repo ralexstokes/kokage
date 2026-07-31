@@ -108,12 +108,12 @@
 //! Peer monitors and supervisor lifecycle streams are two projections of one
 //! lifecycle model: a membership is added, its incarnations start and exit,
 //! and the membership is eventually removed. [`MonitorEvent`] projects the
-//! actor-relative transitions as `Started`, `Exited`, and terminal `Removed`
-//! events delivered through a typed peer's ordinary mailbox.
-//! [`observe::LifecycleEventKind`] projects the same transitions as
-//! `ChildStarted`, `ChildExited`, and `ChildRemoved` in an operations-oriented
-//! recursive tree stream, alongside membership, restart, and supervisor
-//! transitions. The mechanisms remain separate so each keeps the identity,
+//! actor-relative transitions in a [`MonitorEventKind`] delivered through a
+//! typed peer's ordinary mailbox. [`observe::LifecycleEventKind`] projects the
+//! same transitions through one `Child` envelope and an
+//! [`observe::ChildEventKind`] in an operations-oriented recursive tree stream,
+//! alongside membership, restart, and supervisor transitions. The mechanisms
+//! remain separate so each keeps the identity,
 //! ordering, and delivery contract appropriate to its audience.
 //!
 //! [`raw::RawContext::watch`] follows logical membership across restarts;
@@ -235,9 +235,10 @@ pub mod observe {
         actor::{ActorStats, ScopedActorStats},
         runtime::{ScopeChange, ScopeChanges},
         supervisor::{
-            ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus, LifecycleEvent,
-            LifecycleEventKind, LifecycleObservation, LifecycleWatch, ScopeKind, ScopePathSegment,
-            SnapshotRecvError, SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildEvent, ChildEventKind, ChildMembershipView, ChildSnapshot, ChildStateView,
+            ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleObservation, LifecycleWatch,
+            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
+            SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
 }
@@ -245,10 +246,11 @@ pub mod observe {
 /// Common imports for `kokage` consumers.
 ///
 /// This prelude covers the actor traits and contexts, static and dynamic tree
-/// composition, child declarations, common supervision policies, actor-owned
-/// operations, and the snapshot pair used by application health and readiness
-/// code. Errors, cyclic-wiring declarations, lifecycle-history types, and raw
-/// actor hosting remain at the crate root or in [`observe`] and [`raw`].
+/// composition, child declarations, common supervision policies and errors,
+/// actor-owned operations, and the snapshot pair used by application health
+/// and readiness code. Cyclic-wiring declarations, specialized errors,
+/// lifecycle-history types, and raw actor hosting remain at the crate root or
+/// in [`observe`] and [`raw`].
 ///
 /// With the `derive` feature enabled, derive macros are explicit root imports
 /// rather than prelude members. Add `use kokage::ActorFactory;` for an
@@ -256,9 +258,11 @@ pub mod observe {
 /// `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
-        MailboxShutdown, MonitorEvent, Reply, RestartPolicy, ScopeChange, Shutdown, StopContext,
-        Strategy, TaskRef, TaskSpec, TimerKey, Tree,
+        Actor, ActorRef, ActorSpec, Backoff, CallError, Context, ControlError, DynamicScopeRef,
+        DynamicTree, ExitResult, Guard, Mailbox, MailboxShutdown, MonitorEvent, MonitorEventKind,
+        OneShotTaskSpec, Reply, RestartPolicy, RestartSettings, RunningDynamicTree, RunningTree,
+        ScopeChange, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, Strategy,
+        TaskContext, TaskRef, TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
     };
 }
@@ -268,8 +272,8 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
-    ExitResult, Mailbox, MonitorEvent, OffloadDeadline, Reply, ReplyError, ReplyReceiver,
-    SendError, SendErrorKind, StopContext, TimerKey,
+    ExitResult, Mailbox, MonitorEvent, MonitorEventKind, OffloadDeadline, Reply, ReplyError,
+    ReplyReceiver, SendError, SendErrorKind, StopContext, TimerKey,
 };
 pub use runtime::{
     DynamicScopeRef, RunningDynamicTree, RunningTree, ScopeChange, ScopeChanges, ScopeRef,
@@ -278,6 +282,6 @@ pub use runtime::{
 pub use supervision::{DynamicTree, SubtreeSpec, Tree};
 pub use supervisor::{
     Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard,
-    MailboxShutdown, RestartCondition, RestartPolicy, Shutdown, Strategy, SupervisorError,
-    TaskContext, TaskSpec,
+    MailboxShutdown, OneShotTaskSpec, RestartPolicy, RestartSettings, Shutdown, Strategy,
+    SupervisorError, TaskContext, TaskSpec,
 };

@@ -11,7 +11,8 @@ are for.
 [`Context::watch`] subscribes the current actor to another actor's lifecycle.
 Events arrive as *ordinary messages* — you provide a mapping from
 [`MonitorEvent`] into your own message type, and handle them in `handle`
-like everything else:
+like everything else. The event carries the stable `actor_id` once; match its
+[`MonitorEventKind`] for the transition:
 
 ```rust
 use kokage::prelude::*;
@@ -49,12 +50,12 @@ impl Actor for FrontDesk {
     }
 
     async fn handle(&mut self, DeskMsg::Press(event): DeskMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
-        let line = match event {
-            MonitorEvent::Started { generation, .. } => format!("press up (run {generation})"),
-            MonitorEvent::Exited { status, .. } if status.is_failure() => "press down: failure".to_owned(),
-            MonitorEvent::Exited { .. } => "press stopped".to_owned(),
-            MonitorEvent::Removed { .. } => "press permanently gone".to_owned(),
-            MonitorEvent::Lagged { dropped, .. } => format!("missed {dropped} press events"),
+        let line = match event.kind {
+            MonitorEventKind::Started { generation } => format!("press up (run {generation})"),
+            MonitorEventKind::Exited { status, .. } if status.is_failure() => "press down: failure".to_owned(),
+            MonitorEventKind::Exited { .. } => "press stopped".to_owned(),
+            MonitorEventKind::Removed { .. } => "press permanently gone".to_owned(),
+            MonitorEventKind::Lagged { dropped } => format!("missed {dropped} press events"),
             _ => "unrecognized press event".to_owned(),
         };
         self.log.send(line).expect("receiver alive");
@@ -96,7 +97,7 @@ of fighting it:
   already running when you watch, you get an immediate `Started`, so there
   is no startup race to code around.
 - **Events use your mailbox.** Ordering is your ordinary message ordering,
-  and a watching actor that falls behind sees a `Lagged { dropped, .. }`
+  and a watching actor that falls behind sees a `Lagged { dropped }`
   marker rather than unbounded buffering.
 - **`Removed` is terminal and guaranteed.** When the target's membership
   leaves the tree permanently, every watcher hears about it, even ones that
@@ -130,6 +131,7 @@ supervisor's job. Monitors are for reacting, not supervising.
 
 [`Context::watch`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.watch
 [`Context::watch_scoped`]: https://stokes.io/kokage/api/kokage/struct.Context.html#method.watch_scoped
-[`MonitorEvent`]: https://stokes.io/kokage/api/kokage/enum.MonitorEvent.html
+[`MonitorEvent`]: https://stokes.io/kokage/api/kokage/struct.MonitorEvent.html
+[`MonitorEventKind`]: https://stokes.io/kokage/api/kokage/enum.MonitorEventKind.html
 [`Guard`]: https://stokes.io/kokage/api/kokage/struct.Guard.html
 [`ExitStatus`]: https://stokes.io/kokage/api/kokage/enum.ExitStatus.html

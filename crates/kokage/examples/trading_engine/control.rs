@@ -17,7 +17,7 @@ pub struct Control {
 impl Control {
     async fn cancel_gateway(gateway: ActorRef<GatewayMsg>) -> usize {
         gateway
-            .call(CALL_DEADLINE, |reply| GatewayMsg::CancelAll { reply })
+            .call(|reply| GatewayMsg::CancelAll { reply }, CALL_DEADLINE)
             .await
             .unwrap_or_default()
     }

@@ -269,14 +269,14 @@ async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
 
     assert_eq!(
         ingest
-            .call(Duration::from_secs(5), |reply| reply)
+            .call(|reply| reply, Duration::from_secs(5))
             .await
             .expect("ingest replies"),
         7
     );
     assert_eq!(
         parse
-            .call(Duration::from_secs(5), |reply| reply)
+            .call(|reply| reply, Duration::from_secs(5))
             .await
             .expect("nested parse replies"),
         7
@@ -647,7 +647,18 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 #[test]
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(RestartPolicy::on_failure()).expect("restart serializes");
+    assert_eq!(restart["condition"], "OnFailure");
+    assert_eq!(restart["settings"]["max_restarts"], 5);
+    assert_eq!(
+        serde_json::from_value::<RestartPolicy>(restart.clone())
+            .expect("restart policy deserializes"),
+        RestartPolicy::on_failure()
+    );
     assert!(restart.get("remove_when_done").is_none());
+    assert_eq!(
+        serde_json::to_value(RestartPolicy::never()).expect("never serializes"),
+        serde_json::json!({ "condition": "Never" })
+    );
     let exponential =
         Backoff::exponential_with_jitter(Duration::from_millis(25), 3, Duration::from_secs(2));
     let backoff = serde_json::to_value(exponential).expect("backoff serializes");

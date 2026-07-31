@@ -7,6 +7,7 @@ use crate::actor::{
 
 enum LoopEvent<M> {
     Message(Option<M>),
+    Continuation(M),
     Timer(TimerWake),
 }
 
@@ -111,6 +112,7 @@ impl<H: Actor> RawActor for H {
         ctx.mark_ready();
 
         let mut stopping = ctx.is_stop_requested();
+        let mut continuation_had_turn = false;
         'receive: while !stopping {
             // External shutdown has priority over actor-local continuations.
             // In particular, a continuation queued by an in-flight handler
@@ -118,8 +120,13 @@ impl<H: Actor> RawActor for H {
             if ctx.shutdown.is_cancelled() {
                 break;
             }
-            let event = if let Some(message) = ctx.take_continuation() {
+            let ready_delivery = continuation_had_turn
+                .then(|| ctx.try_delivery().ok())
+                .flatten();
+            let event = if let Some(message) = ready_delivery {
                 LoopEvent::Message(Some(message))
+            } else if let Some(message) = ctx.take_continuation() {
+                LoopEvent::Continuation(message)
             } else if let Some(timer) = ctx.next_timer_wake() {
                 let shutdown = ctx.shutdown.clone();
                 tokio::select! {
@@ -143,35 +150,61 @@ impl<H: Actor> RawActor for H {
 
             match event {
                 LoopEvent::Message(Some(message)) => {
+                    continuation_had_turn = false;
                     ctx.record_received();
                     self.handle(message, &mut Context::new(&mut ctx)).await?;
                     stopping = ctx.is_stop_requested();
                 }
                 LoopEvent::Message(None) => break,
+                LoopEvent::Continuation(message) => {
+                    continuation_had_turn = true;
+                    ctx.record_received();
+                    self.handle(message, &mut Context::new(&mut ctx)).await?;
+                    stopping = ctx.is_stop_requested();
+                    if !stopping {
+                        tokio::task::yield_now().await;
+                    }
+                }
                 LoopEvent::Timer(timer) => {
                     // Preserve mailbox arrival order at fire time: messages
                     // already queued get one bounded turn to retract or
-                    // replace the elapsed timer. Continuations retain their
-                    // priority and do not consume the bounded mailbox prefix.
+                    // replace the elapsed timer. A continuation gets at most
+                    // one turn before a queued mailbox message gets a chance.
                     let mut queued_before_fire = ctx.mailbox_depth();
                     loop {
                         if ctx.shutdown.is_cancelled() {
                             break 'receive;
                         }
-                        let message = if let Some(message) = ctx.take_continuation() {
-                            Some(message)
-                        } else if queued_before_fire > 0 {
-                            queued_before_fire -= 1;
-                            ctx.mailbox.try_recv().ok()
+                        let ready_delivery = if continuation_had_turn {
+                            if queued_before_fire > 0 {
+                                queued_before_fire -= 1;
+                                ctx.mailbox.try_recv().ok()
+                            } else {
+                                ctx.try_delivery().ok()
+                            }
                         } else {
                             None
                         };
+                        let (message, was_continuation) = if let Some(message) = ready_delivery {
+                            (Some(message), false)
+                        } else if let Some(message) = ctx.take_continuation() {
+                            (Some(message), true)
+                        } else if queued_before_fire > 0 {
+                            queued_before_fire -= 1;
+                            (ctx.mailbox.try_recv().ok(), false)
+                        } else {
+                            (None, false)
+                        };
                         let Some(message) = message else { break };
+                        continuation_had_turn = was_continuation;
                         ctx.record_received();
                         self.handle(message, &mut Context::new(&mut ctx)).await?;
                         if ctx.is_stop_requested() {
                             stopping = true;
                             break;
+                        }
+                        if was_continuation {
+                            tokio::task::yield_now().await;
                         }
                     }
                     if !stopping && let Some(message) = ctx.take_fired_timer(timer) {

@@ -15,7 +15,7 @@ use tokio::sync::{Notify, futures::Notified};
 /// this bound is only reached when an observer's mailbox stays full while its
 /// target restarts in a tight loop. Beyond the bound the oldest staged event
 /// is dropped, which coalesces a restart storm into recent history plus the
-/// current state; the terminal [`MonitorEvent::Removed`] is always the
+/// current state; the terminal [`MonitorEventKind::Removed`] is always the
 /// newest event, so it is never dropped. This caps the memory a stalled
 /// observer can pin regardless of how fast its target churns.
 const WATCH_BUFFER_CAP: usize = 128;
@@ -47,16 +47,33 @@ impl Finished {
 /// Lifecycle transition of a watched logical actor.
 ///
 /// Delivered by [`RawContext::watch`](crate::raw::RawContext::watch). Events
-/// for one watch arrive in lifecycle order: every [`Started`](Self::Started)
-/// for a generation precedes its [`Exited`](Self::Exited), and
-/// [`Removed`](Self::Removed) is final.
+/// for one watch arrive in lifecycle order. The stable target identity is
+/// carried once in the envelope; match [`kind`](Self::kind) for the transition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum MonitorEvent {
+pub struct MonitorEvent {
+    /// Stable id of the watched actor.
+    pub actor_id: String,
+    /// The transition that occurred.
+    pub kind: MonitorEventKind,
+}
+
+impl MonitorEvent {
+    /// Creates a lifecycle transition for `actor_id`.
+    pub fn new(actor_id: impl Into<String>, kind: MonitorEventKind) -> Self {
+        Self {
+            actor_id: actor_id.into(),
+            kind,
+        }
+    }
+}
+
+/// Kind of transition carried by a [`MonitorEvent`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum MonitorEventKind {
     /// An incarnation of the watched actor is running.
     Started {
-        /// Stable id of the watched actor.
-        actor_id: String,
         /// Incarnation counter, starting at zero and increasing on every
         /// restart.
         generation: u64,
@@ -64,8 +81,6 @@ pub enum MonitorEvent {
     /// The current incarnation exited. If the supervisor restarts the actor,
     /// a matching [`Started`](Self::Started) follows.
     Exited {
-        /// Stable id of the watched actor.
-        actor_id: String,
         /// Incarnation counter, starting at zero and increasing on every
         /// restart.
         generation: u64,
@@ -83,15 +98,11 @@ pub enum MonitorEvent {
     /// alternation. Emitted only under sustained overload; a healthy observer
     /// never sees it.
     Lagged {
-        /// Stable id of the watched actor.
-        actor_id: String,
         /// Number of transitions dropped since the last delivered event.
         dropped: u64,
     },
     /// The actor is permanently gone. No further events will be delivered.
     Removed {
-        /// Stable id of the watched actor.
-        actor_id: String,
         /// The last incarnation that ran, or `None` if the actor never
         /// started.
         generation: Option<u64>,
@@ -129,7 +140,7 @@ impl WatchQueue {
 
     /// Stages one event. When the buffer is full the oldest real events are
     /// dropped to make room, and the loss is recorded in a single
-    /// [`MonitorEvent::Lagged`] marker kept at the front, so overflow is
+    /// [`MonitorEventKind::Lagged`] marker kept at the front, so overflow is
     /// signalled rather than silent. The terminal event is always the newest,
     /// so overflow never drops it.
     fn push(&self, event: MonitorEvent) {
@@ -146,11 +157,19 @@ impl WatchQueue {
     /// Frees one slot by dropping the oldest real event, folding the loss into
     /// a single `Lagged` marker at the front of the buffer.
     fn record_drop(&self, events: &mut VecDeque<MonitorEvent>) {
-        if let Some(MonitorEvent::Lagged { .. }) = events.front() {
+        if let Some(MonitorEvent {
+            kind: MonitorEventKind::Lagged { .. },
+            ..
+        }) = events.front()
+        {
             // A marker already leads the buffer: drop the oldest real event
             // that follows it and bump the count.
             events.remove(1);
-            if let Some(MonitorEvent::Lagged { dropped, .. }) = events.front_mut() {
+            if let Some(MonitorEvent {
+                kind: MonitorEventKind::Lagged { dropped },
+                ..
+            }) = events.front_mut()
+            {
                 *dropped = dropped.saturating_add(1);
             }
         } else {
@@ -158,9 +177,9 @@ impl WatchQueue {
             // the length unchanged, so the caller's loop drops one more real
             // event before there is room to append.
             events.pop_front();
-            events.push_front(MonitorEvent::Lagged {
+            events.push_front(MonitorEvent {
                 actor_id: self.actor_id.clone(),
-                dropped: 1,
+                kind: MonitorEventKind::Lagged { dropped: 1 },
             });
         }
     }
@@ -223,8 +242,8 @@ impl Watcher {
             return false;
         }
         if matches!(
-            event,
-            MonitorEvent::Started { generation, .. } | MonitorEvent::Exited { generation, .. }
+            &event.kind,
+            MonitorEventKind::Started { generation } | MonitorEventKind::Exited { generation, .. }
                 if *generation < self.min_generation
         ) {
             return true;
@@ -292,10 +311,10 @@ impl MonitorHub {
     /// Registers a persistent watch on this logical actor and returns its
     /// staging queue for the caller's forwarder to drain.
     ///
-    /// A running target stages an immediate [`MonitorEvent::Started`] for the
+    /// A running target stages an immediate [`MonitorEventKind::Started`] for the
     /// current incarnation. A target between incarnations (or before its
     /// first start) stays silent until the next start. A removed target
-    /// stages an immediate final [`MonitorEvent::Removed`] and is not
+    /// stages an immediate final [`MonitorEventKind::Removed`] and is not
     /// registered.
     ///
     /// Events are staged while holding the hub lock, which totally orders
@@ -485,24 +504,23 @@ impl MonitorHub {
     }
 
     fn started_event(&self, generation: u64) -> MonitorEvent {
-        MonitorEvent::Started {
+        MonitorEvent {
             actor_id: self.actor_id.clone(),
-            generation,
+            kind: MonitorEventKind::Started { generation },
         }
     }
 
     fn exited_event(&self, generation: u64, status: ExitStatus) -> MonitorEvent {
-        MonitorEvent::Exited {
+        MonitorEvent {
             actor_id: self.actor_id.clone(),
-            generation,
-            status,
+            kind: MonitorEventKind::Exited { generation, status },
         }
     }
 
     fn removed_event(&self, generation: Option<u64>) -> MonitorEvent {
-        MonitorEvent::Removed {
+        MonitorEvent {
             actor_id: self.actor_id.clone(),
-            generation,
+            kind: MonitorEventKind::Removed { generation },
         }
     }
 
@@ -680,28 +698,37 @@ mod tests {
     use super::*;
 
     fn started_event(generation: u64) -> MonitorEvent {
-        MonitorEvent::Started {
+        MonitorEvent {
             actor_id: "peer".to_owned(),
-            generation,
+            kind: MonitorEventKind::Started { generation },
         }
     }
 
     fn exited_event(generation: u64) -> MonitorEvent {
-        MonitorEvent::Exited {
+        MonitorEvent {
             actor_id: "peer".to_owned(),
-            generation,
-            status: ExitStatus::Failed {
-                message: "boom".to_owned(),
-                cancelled: false,
+            kind: MonitorEventKind::Exited {
+                generation,
+                status: ExitStatus::Failed {
+                    message: "boom".to_owned(),
+                    cancelled: false,
+                },
             },
+        }
+    }
+
+    fn removed_event(generation: Option<u64>) -> MonitorEvent {
+        MonitorEvent {
+            actor_id: "peer".to_owned(),
+            kind: MonitorEventKind::Removed { generation },
         }
     }
 
     fn lagged_count(events: &VecDeque<MonitorEvent>) -> u64 {
         let markers = events
             .iter()
-            .filter_map(|event| match event {
-                MonitorEvent::Lagged { dropped, .. } => Some(*dropped),
+            .filter_map(|event| match event.kind {
+                MonitorEventKind::Lagged { dropped } => Some(dropped),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -710,7 +737,14 @@ mod tests {
             "at most one coalesced Lagged marker is kept"
         );
         assert!(
-            markers.is_empty() || matches!(events.front(), Some(MonitorEvent::Lagged { .. })),
+            markers.is_empty()
+                || matches!(
+                    events.front(),
+                    Some(MonitorEvent {
+                        kind: MonitorEventKind::Lagged { .. },
+                        ..
+                    })
+                ),
             "the Lagged marker leads the buffer"
         );
         markers.first().copied().unwrap_or(0)
@@ -769,7 +803,13 @@ mod tests {
         // A consumer never silently sees an Exited without its Started: the dropped
         // span is fronted by an explicit Lagged resync marker.
         assert!(
-            matches!(events.front(), Some(MonitorEvent::Lagged { .. })),
+            matches!(
+                events.front(),
+                Some(MonitorEvent {
+                    kind: MonitorEventKind::Lagged { .. },
+                    ..
+                })
+            ),
             "overflow must surface a resync marker, not silently orphan a transition"
         );
         assert!(lagged_count(&events) > 0);
@@ -823,13 +863,7 @@ mod tests {
         assert_eq!(watch.queue().pop(), Some(started_event(1)));
         assert_eq!(watch.queue().pop(), Some(exited_event(0)));
         assert_eq!(watch.queue().pop(), Some(exited_event(1)));
-        assert_eq!(
-            watch.queue().pop(),
-            Some(MonitorEvent::Removed {
-                actor_id: "peer".to_owned(),
-                generation: Some(1),
-            })
-        );
+        assert_eq!(watch.queue().pop(), Some(removed_event(Some(1))));
         assert_eq!(watch.queue().pop(), None);
     }
 
@@ -872,13 +906,7 @@ mod tests {
             CancellationToken::new(),
             Finished::new(),
         );
-        assert_eq!(
-            watch.queue().pop(),
-            Some(MonitorEvent::Removed {
-                actor_id: "peer".to_owned(),
-                generation: None,
-            })
-        );
+        assert_eq!(watch.queue().pop(), Some(removed_event(None)));
         assert_eq!(watch.queue().pop(), None);
 
         let replacement = hub.new_run(true);
@@ -920,13 +948,7 @@ mod tests {
             cancelled: false,
         });
         assert_eq!(old_watch.queue().pop(), Some(exited_event(0)));
-        assert_eq!(
-            old_watch.queue().pop(),
-            Some(MonitorEvent::Removed {
-                actor_id: "peer".to_owned(),
-                generation: Some(0),
-            })
-        );
+        assert_eq!(old_watch.queue().pop(), Some(removed_event(Some(0))));
         assert_eq!(old_watch.queue().pop(), None);
         assert_eq!(replacement_watch.queue().pop(), None);
 
@@ -955,13 +977,7 @@ mod tests {
             CancellationToken::new(),
             Finished::new(),
         );
-        assert_eq!(
-            watch.queue().pop(),
-            Some(MonitorEvent::Removed {
-                actor_id: "peer".to_owned(),
-                generation: Some(0),
-            })
-        );
+        assert_eq!(watch.queue().pop(), Some(removed_event(Some(0))));
     }
 
     #[test]
@@ -970,10 +986,7 @@ mod tests {
         for generation in 0..(WATCH_BUFFER_CAP as u64 * 2) {
             queue.push(started_event(generation));
         }
-        let removed = MonitorEvent::Removed {
-            actor_id: "peer".to_owned(),
-            generation: Some(7),
-        };
+        let removed = removed_event(Some(7));
         queue.push(removed.clone());
 
         let mut last = None;

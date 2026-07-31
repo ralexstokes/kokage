@@ -146,5 +146,5 @@ architecture.
 [`ActorSpec::into_host`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html#method.into_host
 [`raw::ActorHost`]: https://stokes.io/kokage/api/kokage/raw/struct.ActorHost.html
 [`raw::IncarnationExit`]: https://stokes.io/kokage/api/kokage/raw/enum.IncarnationExit.html
-[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/struct.RestartPolicy.html
+[`RestartPolicy`]: https://stokes.io/kokage/api/kokage/enum.RestartPolicy.html
 [`Shutdown`]: https://stokes.io/kokage/api/kokage/enum.Shutdown.html

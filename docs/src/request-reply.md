@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tree.spawn()?;
 
     let price = desk
-        .call(Duration::from_secs(1), |reply| DeskMsg::Quote { pages: 250, reply })
+        .call(|reply| DeskMsg::Quote { pages: 250, reply }, Duration::from_secs(1))
         .await?;
     println!("quote: {price}");
 
@@ -107,7 +107,7 @@ enum CounterMsg {
 # let mut tree = Tree::new();
 # let counter = tree.add_actor("counter", || Counter { total: 0 });
 # let runtime = tree.spawn()?;
-let total = counter.call(Duration::from_secs(1), CounterMsg::Total).await?;
+let total = counter.call(CounterMsg::Total, Duration::from_secs(1)).await?;
 # assert_eq!(total, 0);
 # runtime.shutdown().await?;
 # Ok(())
@@ -142,9 +142,10 @@ mailbox capacity, the actor picking the message up, and the reply arriving.
 
 - `CallError::Terminated { .. }` — the request never got in because the actor
   was permanently gone.
-- `CallError::Timeout { .. }` — the deadline passed. Note that once the
-  request has been *accepted* into the mailbox, timing out cannot retract it:
-  the actor may still process the request; only the answer is abandoned.
+- `CallError::AcceptanceTimedOut { .. }` — the deadline passed before the
+  request entered the mailbox, so retrying cannot duplicate work.
+- `CallError::ResponseTimedOut { .. }` — the deadline passed after acceptance.
+  The actor may still process the request; only the answer is abandoned.
 - `CallError::ReplyDropped { .. }` — the actor (or a forwarder) dropped the
   `Reply` without answering. This is how you notice a handler that forgot a
   code path — or a crashed one: if the actor fails while your request sits in

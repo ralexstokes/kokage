@@ -153,7 +153,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
 
     assert_eq!(
         actor_ref
-            .call(Duration::from_secs(1), ProbeMsg::Increment)
+            .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("first incarnation replies"),
         (0, 1)
@@ -171,7 +171,7 @@ async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     .expect("restart observed");
     assert_eq!(
         actor_ref
-            .call(Duration::from_secs(1), ProbeMsg::Increment)
+            .call(ProbeMsg::Increment, Duration::from_secs(1))
             .await
             .expect("replacement replies"),
         (1, 1)

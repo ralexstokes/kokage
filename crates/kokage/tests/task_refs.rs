@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use kokage::{
-    DynamicTree, ExitStatus, RestartPolicy, Strategy, TaskError, TaskSpec, Tree,
-    observe::ChildStateView,
+    DynamicTree, ExitStatus, OneShotTaskSpec, RestartPolicy, Shutdown, Strategy, TaskError,
+    TaskSpec, Tree, observe::ChildStateView,
 };
 use tokio::{
     sync::{Notify, mpsc, oneshot},
@@ -31,7 +31,7 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
     let runtime = DynamicTree::new().spawn().expect("tree builds");
     let task = runtime
         .scope()
-        .spawn_job("job", |_| async { Ok(()) })
+        .spawn_once("job", |_| async { Ok(()) })
         .await
         .expect("task is inserted");
 
@@ -41,6 +41,70 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
         .expect("task exit is available");
     assert!(exit.is_completed());
     assert!(task.snapshot().is_none());
+
+    runtime.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
+async fn spawn_once_accepts_a_consuming_factory() {
+    let runtime = DynamicTree::new().spawn().expect("tree builds");
+    let (observed_tx, observed_rx) = oneshot::channel();
+    let payload = String::from("consumed exactly once");
+    let task = runtime
+        .scope()
+        .spawn_once("consuming-job", move |_| async move {
+            observed_tx.send(payload).expect("receiver remains live");
+            Ok(())
+        })
+        .await
+        .expect("one-shot task is inserted");
+
+    assert_eq!(
+        observed_rx.await.expect("task reports payload"),
+        "consumed exactly once"
+    );
+    assert!(
+        task.wait()
+            .await
+            .expect("task remains observable")
+            .is_completed()
+    );
+    runtime.shutdown().await.expect("tree stops");
+}
+
+#[tokio::test]
+async fn configured_one_shot_retains_a_consuming_factory() {
+    let runtime = DynamicTree::new().spawn().expect("tree builds");
+    let (observed_tx, observed_rx) = oneshot::channel();
+    let payload = String::from("configured and consumed");
+    let task = runtime
+        .scope()
+        .spawn_once_spec(
+            OneShotTaskSpec::new("configured-job", move |ctx| async move {
+                ctx.mark_ready();
+                observed_tx.send(payload).expect("receiver remains live");
+                Ok(())
+            })
+            .shutdown(Shutdown::abort())
+            .wait_for_ready()
+            .retain_when_done(),
+        )
+        .await
+        .expect("configured one-shot task is inserted");
+
+    assert_eq!(
+        observed_rx.await.expect("task reports payload"),
+        "configured and consumed"
+    );
+    assert!(
+        task.wait()
+            .await
+            .expect("task remains observable")
+            .is_completed()
+    );
+    let snapshot = task.snapshot().expect("terminal membership is retained");
+    assert_eq!(snapshot.restart_policy, RestartPolicy::never());
+    assert!(!snapshot.remove_when_done);
 
     runtime.shutdown().await.expect("tree stops");
 }

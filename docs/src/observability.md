@@ -90,7 +90,8 @@ You saw this pattern in [Let It Crash](let-it-crash.md).
 ## State and events without manual resynchronization
 
 The common stateful lifecycle entry point is [`changes`]. Every stream starts
-with [`ScopeChange`]`::Reset(snapshot)`, followed by ordered direct-child events.
+with [`ScopeChange`]`::Reset(snapshot)`, followed by ordered direct-child events
+paired with the current authoritative snapshot.
 If the consumer falls behind, Kokage registers a fresh gap-free subscription
 and yields another reset instead of exposing bookkeeping as application logic:
 
@@ -99,7 +100,7 @@ let mut changes = runtime.scope().changes();
 while let Some(change) = changes.next().await {
     match change {
         ScopeChange::Reset(snapshot) => state = snapshot,
-        ScopeChange::Event(event) => state.apply(event),
+        ScopeChange::Event { snapshot, .. } => state = snapshot,
     }
 }
 ```
@@ -142,12 +143,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-[`LifecycleEventKind`] covers child additions, starts, exits (with the full
-exit view), scheduled restarts (with their delay), removals, supervisor
-transitions, and `RestartIntensityExceeded` — with each event carrying its
-scope path and, for child events, the child's identity: id, `lineage`
-(which membership), sequence number, and cumulative restart counters. The
-enum is `#[non_exhaustive]`; always match with a catch-all arm.
+[`LifecycleEventKind`] carries supervisor transitions and a single `Child`
+variant. Its [`ChildEvent`] envelope holds the child's id, `lineage` (which
+membership), sequence number, and cumulative restart counters once; match its
+[`ChildEventKind`] for additions, starts, exits, scheduled restarts, and
+removals. The enums are `#[non_exhaustive]`; always match with a catch-all arm.
 
 Delivery is buffered, not conflated. A lower-level consumer that falls far
 behind gets the oldest details collapsed into one `Lagged { dropped }` marker
@@ -163,6 +163,12 @@ Note how this differs from a peer [`MonitorEvent`] watch
 mailbox-ordered view of one collaborator; the lifecycle stream gives
 operators the whole tree with paths and counters. Same underlying model, a
 projection per audience.
+
+With the `serde` feature, snapshot, lifecycle, and scope-change representations
+have checked wire fixtures, but remain deliberately unversioned during `0.x`.
+Treat them as a same-Kokage-version adapter boundary: mixed-version producers
+and consumers, or long-lived persisted event logs, need an application-owned
+versioned envelope and migration policy.
 
 ## Message counters
 
@@ -223,8 +229,10 @@ serves a web dashboard over a running tree
 [`ScopeChange`]: https://stokes.io/kokage/api/kokage/enum.ScopeChange.html
 [`lifecycle_events`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.lifecycle_events
 [`LifecycleEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.LifecycleEventKind.html
+[`ChildEvent`]: https://stokes.io/kokage/api/kokage/observe/struct.ChildEvent.html
+[`ChildEventKind`]: https://stokes.io/kokage/api/kokage/observe/enum.ChildEventKind.html
 [`LifecycleWatch::forward_to`]: https://stokes.io/kokage/api/kokage/observe/struct.LifecycleWatch.html#method.forward_to
-[`MonitorEvent`]: https://stokes.io/kokage/api/kokage/enum.MonitorEvent.html
+[`MonitorEvent`]: https://stokes.io/kokage/api/kokage/struct.MonitorEvent.html
 [`ActorRef::stats`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.stats
 [`ScopeRef::actor_stats`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html#method.actor_stats
 [`ActorStats`]: https://stokes.io/kokage/api/kokage/observe/struct.ActorStats.html

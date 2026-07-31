@@ -62,8 +62,8 @@ has been requested.
 Sometimes one message means hours of work — printing a 500-page manual.
 Doing it all in one `handle` call would make the actor deaf to everything
 else (including shutdown) for the duration. [`Context::continue_with`]
-enqueues a message to self that is processed *before* anything else, letting
-you slice long work into resumable steps:
+enqueues a message to self for the next turn, letting you slice long work into
+resumable steps:
 
 ```rust
 # use kokage::prelude::*;
@@ -89,9 +89,12 @@ impl Actor for Press {
 }
 ```
 
-Between steps the runtime can observe shutdown; continuations bypass mailbox
-capacity, and any continuations still queued when the actor stops are
-dropped (with a warning log), not delivered to the next incarnation.
+Between steps the runtime can observe shutdown. After one continuation, a
+ready mailbox message or offload completion gets a chance before another
+continuation, so a long chain remains responsive to ordinary input.
+Continuations bypass mailbox capacity, and any continuations still queued when
+the actor stops are dropped (with a warning log), not delivered to the next
+incarnation.
 
 ## Timers
 
