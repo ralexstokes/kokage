@@ -15,7 +15,7 @@ use support::{RunnableActors as RunnableSet, RunnableBuilder as RunnableSetBuild
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BoxError, CallError, Context,
-    ExitResult, Reply, Restart, SendError, Shutdown, StopContext, TrySendError,
+    ExitResult, Reply, Restart, SendError, SendErrorKind, Shutdown, StopContext,
     raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
 };
 
@@ -273,7 +273,7 @@ async fn try_send_reports_unbound_and_terminated_states() {
 
     assert!(matches!(
         worker.try_send(()),
-        Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "worker"
+        Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
     ));
 
     let (stop, task) = start_graph(graph);
@@ -281,7 +281,7 @@ async fn try_send_reports_unbound_and_terminated_states() {
 
     assert!(matches!(
         worker.try_send(()),
-        Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
+        Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
     ));
 }
 
@@ -1049,7 +1049,7 @@ fn dropping_an_unfilled_actor_slot_terminates_its_ref() {
 
     assert!(matches!(
         ghost.try_send(1),
-        Err(TrySendError::Terminated { actor_id, .. }) if actor_id == "ghost"
+        Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "ghost"
     ));
 }
 
@@ -1061,7 +1061,7 @@ fn dropping_an_unplaced_actor_spec_terminates_its_ref() {
 
     assert!(matches!(
         ghost.try_send(1),
-        Err(TrySendError::Terminated { actor_id, .. }) if actor_id == "ghost"
+        Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "ghost"
     ));
 }
 
@@ -1264,7 +1264,7 @@ mod runnable_actor {
 
     use kokage::{
         Actor, ActorRef, ActorSlot, ActorSpec, BoxError, Context, ControlError, DynamicTree,
-        ExitResult, Restart, SendError, Shutdown, SupervisorError, TrySendError,
+        ExitResult, Restart, SendError, SendErrorKind, Shutdown, SupervisorError,
         raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
     };
     use tokio::{
@@ -1390,7 +1390,7 @@ mod runnable_actor {
         assert_eq!(detached.stats().message_bytes_accepted, None);
         assert!(matches!(
             detached.try_send(SizedPayload(Vec::new())),
-            Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
         ));
     }
 
@@ -1478,7 +1478,10 @@ mod runnable_actor {
         worker_ref.try_send(2).expect("try_send accepted");
         assert!(matches!(
             worker_ref.try_send(3),
-            Err(TrySendError::Full { .. })
+            Err(SendError {
+                kind: SendErrorKind::Full,
+                ..
+            })
         ));
 
         let stats = worker_ref.stats();
@@ -1531,7 +1534,10 @@ mod runnable_actor {
             .expect("first message accepted");
         assert!(matches!(
             worker_ref.try_send(SizedPayload(vec![0; 100])),
-            Err(TrySendError::Full { .. })
+            Err(SendError {
+                kind: SendErrorKind::Full,
+                ..
+            })
         ));
         assert_eq!(worker_ref.stats().message_bytes_accepted, Some(4));
 
@@ -1683,7 +1689,10 @@ mod runnable_actor {
             .expect("actor reported stale window");
         assert!(matches!(
             actor_ref.try_send("probe".to_owned()),
-            Err(TrySendError::NotRunning { .. })
+            Err(SendError {
+                kind: SendErrorKind::NotRunning,
+                ..
+            })
         ));
 
         // RebindActor reports this point after dropping RawContext while its
@@ -1796,7 +1805,7 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(TrySendError::NotRunning { actor_id, .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
         ));
     }
 
@@ -1833,9 +1842,23 @@ mod runnable_actor {
             let disposition = timeout(Duration::from_secs(1), async {
                 loop {
                     match worker_ref.try_send(()) {
-                        Err(error @ TrySendError::NotRunning { .. })
-                        | Err(error @ TrySendError::Terminated { .. }) => break error,
-                        Ok(()) | Err(TrySendError::Full { .. }) => tokio::task::yield_now().await,
+                        Err(
+                            error @ SendError {
+                                kind: SendErrorKind::NotRunning,
+                                ..
+                            },
+                        )
+                        | Err(
+                            error @ SendError {
+                                kind: SendErrorKind::Terminated,
+                                ..
+                            },
+                        ) => break error,
+                        Ok(())
+                        | Err(SendError {
+                            kind: SendErrorKind::Full,
+                            ..
+                        }) => tokio::task::yield_now().await,
                         Err(error) => panic!("unexpected send error after dropped run: {error}"),
                     }
                 }
@@ -1844,9 +1867,21 @@ mod runnable_actor {
             .expect("binding reached its dropped-run disposition");
 
             if expect_terminated {
-                assert!(matches!(disposition, TrySendError::Terminated { .. }));
+                assert!(matches!(
+                    disposition,
+                    SendError {
+                        kind: SendErrorKind::Terminated,
+                        ..
+                    }
+                ));
             } else {
-                assert!(matches!(disposition, TrySendError::NotRunning { .. }));
+                assert!(matches!(
+                    disposition,
+                    SendError {
+                        kind: SendErrorKind::NotRunning,
+                        ..
+                    }
+                ));
             }
         }
     }
@@ -1869,7 +1904,7 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
         ));
 
         // A second run of the same actor declares Never: the same failed exit
@@ -1887,7 +1922,7 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
         ));
     }
 
@@ -2043,7 +2078,7 @@ mod runnable_actor {
         // terminated.
         assert!(matches!(
             worker_ref.try_send("early".to_owned()),
-            Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
         ));
 
         // Each run ends by clean early exit (not requested shutdown), so the
@@ -2081,7 +2116,7 @@ mod runnable_actor {
         worker.terminate_binding();
         assert!(matches!(
             worker_ref.try_send("late".to_owned()),
-            Err(TrySendError::Terminated { actor_id , .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
         ));
     }
 

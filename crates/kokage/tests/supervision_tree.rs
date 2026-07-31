@@ -427,7 +427,11 @@ async fn static_tree_actor_can_remove_itself_when_done() {
     .expect("snapshot stream remains open");
     assert!(matches!(
         actor.try_send(()),
-        Err(kokage::TrySendError::Terminated { actor_id, .. }) if actor_id == "finite"
+        Err(kokage::SendError {
+            actor_id,
+            kind: kokage::SendErrorKind::Terminated,
+            ..
+        }) if actor_id == "finite"
     ));
 
     runtime.shutdown_and_wait().await.expect("clean shutdown");

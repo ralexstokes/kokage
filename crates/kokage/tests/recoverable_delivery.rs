@@ -11,7 +11,7 @@ use std::{
 
 use kokage::{
     ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, OrderedTree, Reply,
-    Restart, SendError, SendRejection, SendTimeoutError, TrySendError,
+    Restart, SendError, SendErrorKind, SendRejection,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -67,7 +67,7 @@ async fn close_full_mailbox_during_bounded_send(
     restart: Restart,
     bound: Duration,
     message: &str,
-) -> Result<(), SendTimeoutError<String>> {
+) -> Result<(), SendError<String>> {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let fail = Arc::new(Notify::new());
     let spec = ActorSpec::new("worker", {
@@ -134,7 +134,11 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
         .expect_err("an unbound actor rejects a fail-fast send");
     assert!(matches!(
         &try_error,
-        TrySendError::NotRunning { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::NotRunning,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(try_error.into_message(), "try");
 
@@ -144,7 +148,11 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
         .expect_err("an actor that never binds reaches the send bound");
     assert!(matches!(
         &timeout_error,
-        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::TimedOut,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(timeout_error.into_message(), "bounded");
 
@@ -168,7 +176,11 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
         .expect_err("the deadline is checked before the first acceptance attempt");
     assert!(matches!(
         &zero_bound,
-        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::TimedOut,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(zero_bound.into_message(), "zero bound");
     actor
@@ -206,7 +218,11 @@ async fn full_mailbox_rejections_return_the_message() {
         .expect_err("full mailbox rejects try_send");
     assert!(matches!(
         &try_error,
-        TrySendError::Full { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::Full,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(try_error.into_message(), "try again");
 
@@ -216,7 +232,11 @@ async fn full_mailbox_rejections_return_the_message() {
         .expect_err("full mailbox remains full through the bound");
     assert!(matches!(
         &timeout_error,
-        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::TimedOut,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(timeout_error.into_message(), "retry later");
 
@@ -316,7 +336,11 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
         .expect_err("slow key matching crosses the acceptance deadline");
     assert!(matches!(
         &timeout_error,
-        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::TimedOut,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(timeout_error.into_message(), "fresh");
     assert_eq!(
@@ -365,7 +389,11 @@ async fn bounded_send_returns_termination_after_its_mailbox_closes() {
     .expect_err("terminated membership rejects the message");
     assert!(matches!(
         &error,
-        SendTimeoutError::Terminated { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::Terminated,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(error.into_message(), "not accepted");
 }
@@ -381,7 +409,11 @@ async fn bounded_send_times_out_waiting_for_rebind_after_its_mailbox_closes() {
     .expect_err("restart backoff exceeds the delivery bound");
     assert!(matches!(
         &error,
-        SendTimeoutError::Timeout { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::TimedOut,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(error.into_message(), "deadline wins");
 }
@@ -401,6 +433,7 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .await
         .expect_err("terminated actor rejects send");
     assert_eq!(send_error.actor_id, "worker");
+    assert_eq!(send_error.kind, SendErrorKind::Terminated);
     assert_eq!(send_error.into_message(), "awaited");
 
     let try_error = actor
@@ -408,7 +441,11 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .expect_err("terminated actor rejects try_send");
     assert!(matches!(
         &try_error,
-        TrySendError::Terminated { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::Terminated,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(try_error.into_message(), "immediate");
 
@@ -418,7 +455,11 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .expect_err("terminated actor rejects send_timeout");
     assert!(matches!(
         &timeout_error,
-        SendTimeoutError::Terminated { actor_id, .. } if actor_id == "worker"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::Terminated,
+            ..
+        } if actor_id == "worker"
     ));
     assert_eq!(timeout_error.into_message(), "bounded");
 
@@ -431,7 +472,11 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .expect_err("terminated actor rejects call delivery");
     assert!(matches!(
         call_error,
-        CallError::Send(SendRejection::Terminated { actor_id, .. }) if actor_id == "worker"
+        CallError::Send(SendRejection {
+            actor_id,
+            kind: SendErrorKind::Terminated,
+            ..
+        }) if actor_id == "worker"
     ));
 }
 
@@ -460,6 +505,6 @@ async fn non_sync_message_can_discard_before_question_mark(
             Duration::from_secs(1),
         )
         .await
-        .map_err(SendTimeoutError::discard)?;
+        .map_err(SendError::discard)?;
     Ok(())
 }

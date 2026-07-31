@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use kokage::{
-    ActorSpec, ExitResult, TrySendError,
+    ActorSpec, ExitResult, SendError, SendErrorKind,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::Notify;
@@ -42,10 +42,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // `send` waits for the worker's mailbox to bind, so the first message
     // deterministically occupies the single mailbox slot; `try_send` before
-    // the binding exists would fail with `TrySendError::NotRunning`.
+    // the binding exists would fail with `SendErrorKind::NotRunning`.
     worker.send("first").await?;
     match worker.try_send("second") {
-        Err(error @ TrySendError::Full { .. }) => {
+        Err(
+            error @ SendError {
+                kind: SendErrorKind::Full,
+                ..
+            },
+        ) => {
             println!(
                 "mailbox is full; recovered `{}` for another route",
                 error.into_message()

@@ -3,14 +3,15 @@
 Actor refs expose four delivery choices:
 
 - `send(message)` waits for binding and FIFO capacity. A terminal rejection
-  returns `SendError<M>`, whose `into_message()` recovers the message.
+  returns `SendError<M>` with `SendErrorKind::Terminated`; `into_message()`
+  recovers the message.
 - `try_send(message)` fails immediately when the actor is between
-  incarnations or its FIFO mailbox is full. Every `TrySendError<M>` variant
-  returns the rejected message through `into_message()`.
+  incarnations or its FIFO mailbox is full. Its `SendError<M>` carries
+  `NotRunning`, `Full`, or `Terminated`, but never `TimedOut`.
 - `send_timeout(message, bound)` waits through the same binding and capacity
-  conditions as `send`, but returns `SendTimeoutError<M>` with the unaccepted
-  message if the bound expires. A zero bound always times out; use `try_send`
-  for one immediate attempt.
+  conditions as `send`, but returns `SendError<M>` with `TimedOut` and the
+  unaccepted message if the bound expires, or `Terminated` if membership ends.
+  A zero bound always times out; use `try_send` for one immediate attempt.
 - `call(bound, constructor)` bounds delivery plus request/reply. It constructs
   the request around a `Reply`, so `CallError` intentionally stays
   non-generic and does not return that internally constructed message.
@@ -25,8 +26,8 @@ asynchronous binding and capacity waits, but cannot preempt synchronous user
 code such as a keyed-conflation matcher. Acceptance is rechecked afterward, so
 such work can delay the result but cannot accept the message past its deadline.
 
-Payload-bearing send errors implement `std::error::Error` without requiring
-the message to implement `Debug`, `Display`, or `Sync`; their formatting
+The payload-bearing send error implements `std::error::Error` without requiring
+the message to implement `Debug`, `Display`, or `Sync`; its formatting
 deliberately omits the payload. Converting `SendError<M>` itself into
 `BoxError` with bare `?` does require `M: Sync`, because `BoxError` is
 `Send + Sync`. For a `Send` but non-`Sync` message, discard only the payload
@@ -47,10 +48,9 @@ async fn forward(target: &ActorRef<LocalMessage>) -> Result<(), BoxError> {
 }
 ```
 
-`discard()` on `SendError`, `TrySendError`, and `SendTimeoutError` preserves the
-actor id and rejection reason. Use it for an application error enum or generic
-error boundary; use `into_message()` when the caller will retry, reroute, or
-otherwise reclaim the payload.
+`SendError::discard()` preserves the actor id and rejection kind. Use it for an
+application error enum or generic error boundary; use `into_message()` when the
+caller will retry, reroute, or otherwise reclaim the payload.
 
 ## Bounded request/reply
 

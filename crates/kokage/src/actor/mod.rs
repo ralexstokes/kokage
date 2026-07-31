@@ -20,8 +20,7 @@ pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
 pub use context::{ActorRef, ActorStatus, Context, RawContext, Reply, StopContext, TimerKey};
 pub use error::{
-    BlockingCancelled, CallError, OffloadDeadline, SendError, SendRejection, SendTimeoutError,
-    TrySendError,
+    BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind, SendRejection,
 };
 pub use factory::ActorFactory;
 pub use graph::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RunnableActor};

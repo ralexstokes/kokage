@@ -1,0 +1,15 @@
+error[E0432]: unresolved imports `kokage::SendTimeoutError`, `kokage::TrySendError`
+ --> tests/ui/public-api/send_error_types_removed.rs:1:14
+  |
+1 | use kokage::{SendTimeoutError, TrySendError};
+  |              ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^ no `TrySendError` in the root
+  |              |
+  |              no `SendTimeoutError` in the root
+  |
+  = help: consider importing this enum instead:
+          std::sync::mpsc::TrySendError
+help: a similar name exists in the module
+  |
+1 - use kokage::{SendTimeoutError, TrySendError};
+1 + use kokage::{SendTimeoutError, SendError};
+  |

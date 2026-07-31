@@ -26,9 +26,7 @@ use crate::actor::{
         ActorStats, ActorStatsCounters, BindingCore, BindingState, MailboxReceiver, MailboxRef,
         MessageSizeObserver, SendOutcome, TimedSendOutcome,
     },
-    error::{
-        BlockingCancelled, CallError, OffloadDeadline, SendError, SendTimeoutError, TrySendError,
-    },
+    error::{BlockingCancelled, CallError, OffloadDeadline, SendError, SendErrorKind},
     handler::Actor,
     monitor::{ActorMonitors, MonitorEvent, MonitorHub},
     observability::{MessageOperation, MessageRejection, ScopeObservability, trace_actor_message},
@@ -135,8 +133,9 @@ impl<M> ActorRef<M> {
     /// actor is expected to rebind. Conflating mailboxes replace stale unread
     /// state immediately instead of waiting for capacity. This returns an
     /// error only when the actor has terminated with no restart scheduled, or
-    /// when the binding source has been dropped. The error returns the
-    /// unaccepted message through [`SendError::into_message`].
+    /// when the binding source has been dropped. This method therefore returns
+    /// only [`SendErrorKind::Terminated`], with the unaccepted message available
+    /// through [`SendError::into_message`].
     ///
     /// Cancelling this future while it is waiting drops the message. Use
     /// [`send_timeout`](Self::send_timeout) when a bounded wait must return an
@@ -164,12 +163,12 @@ impl<M> ActorRef<M> {
     ///
     /// Like [`send`](Self::send), this waits through restart windows and FIFO
     /// mailbox capacity pressure. If the bound expires first, the message is
-    /// returned in [`SendTimeoutError::Timeout`]. If the target membership
-    /// terminates first, it is returned in [`SendTimeoutError::Terminated`].
-    /// An `Ok` result has the same at-most-once acceptance contract as `send`.
+    /// returned with [`SendErrorKind::TimedOut`]. If the target membership
+    /// terminates first, it is returned with [`SendErrorKind::Terminated`]. An
+    /// `Ok` result has the same at-most-once acceptance contract as `send`.
     ///
     /// The deadline is checked before the first acceptance attempt, so a zero
-    /// bound always returns [`SendTimeoutError::Timeout`]; use
+    /// bound always returns [`SendErrorKind::TimedOut`]; use
     /// [`try_send`](Self::try_send) for one immediate attempt. A nonzero bound
     /// shorter than the runtime's timer tick can expire on that same tick and
     /// likewise should not be relied on to permit an attempt, particularly
@@ -184,11 +183,7 @@ impl<M> ActorRef<M> {
     /// when its bound expires. Cancelling this `send_timeout` future also drops
     /// its message; ownership is recovered only when the future completes with
     /// an error.
-    pub async fn send_timeout(
-        &self,
-        message: M,
-        bound: Duration,
-    ) -> Result<(), SendTimeoutError<M>> {
+    pub async fn send_timeout(&self, message: M, bound: Duration) -> Result<(), SendError<M>> {
         let deadline = deadline_after(bound);
         let mut binding = self.binding.clone();
         let mut message = message;
@@ -336,11 +331,14 @@ impl<M> ActorRef<M> {
 
     /// Attempts to send a message without waiting for mailbox capacity.
     ///
-    /// A full FIFO queue returns [`TrySendError::Full`]. A conflating
-    /// mailbox instead accepts the message and replaces stale unread state.
-    /// Every rejection returns the message through
-    /// [`TrySendError::into_message`].
-    pub fn try_send(&self, message: M) -> Result<(), TrySendError<M>> {
+    /// An actor without a live incarnation returns
+    /// [`SendErrorKind::NotRunning`], a full FIFO queue returns
+    /// [`SendErrorKind::Full`], and terminal membership returns
+    /// [`SendErrorKind::Terminated`]. A conflating mailbox instead accepts the
+    /// message and replaces stale unread state. This operation never returns
+    /// [`SendErrorKind::TimedOut`]. Every rejection returns the message through
+    /// [`SendError::into_message`].
+    pub fn try_send(&self, message: M) -> Result<(), SendError<M>> {
         // Clone the state separately so the watch read guard is dropped before
         // tracing or statistics code runs on a rejection path.
         let binding = self.binding.borrow().clone();
@@ -348,22 +346,32 @@ impl<M> ActorRef<M> {
             BindingState::Bound(mailbox) => mailbox,
             BindingState::Unbound if self.binding.has_changed().is_err() => {
                 let error = self.actor_try_send_terminated(message);
-                self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
+                self.observe_send(
+                    MessageOperation::TrySend,
+                    Some(send_error_rejection(&error)),
+                );
                 self.stats.record_send(false);
                 return Err(error);
             }
             BindingState::Unbound => {
-                let error = TrySendError::NotRunning {
+                let error = SendError {
                     actor_id: self.actor_id.to_string(),
                     message,
+                    kind: SendErrorKind::NotRunning,
                 };
-                self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
+                self.observe_send(
+                    MessageOperation::TrySend,
+                    Some(send_error_rejection(&error)),
+                );
                 self.stats.record_send(false);
                 return Err(error);
             }
             BindingState::Terminated => {
                 let error = self.actor_try_send_terminated(message);
-                self.observe_send(MessageOperation::TrySend, Some(try_send_rejection(&error)));
+                self.observe_send(
+                    MessageOperation::TrySend,
+                    Some(send_error_rejection(&error)),
+                );
                 self.stats.record_send(false);
                 return Err(error);
             }
@@ -512,27 +520,31 @@ impl<M> ActorRef<M> {
         SendError {
             actor_id: self.actor_id.to_string(),
             message,
+            kind: SendErrorKind::Terminated,
         }
     }
 
-    fn actor_try_send_terminated(&self, message: M) -> TrySendError<M> {
-        TrySendError::Terminated {
+    fn actor_try_send_terminated(&self, message: M) -> SendError<M> {
+        SendError {
             actor_id: self.actor_id.to_string(),
             message,
+            kind: SendErrorKind::Terminated,
         }
     }
 
-    fn send_timed_out(&self, message: M) -> SendTimeoutError<M> {
-        SendTimeoutError::Timeout {
+    fn send_timed_out(&self, message: M) -> SendError<M> {
+        SendError {
             actor_id: self.actor_id.to_string(),
             message,
+            kind: SendErrorKind::TimedOut,
         }
     }
 
-    fn actor_send_timeout_terminated(&self, message: M) -> SendTimeoutError<M> {
-        SendTimeoutError::Terminated {
+    fn actor_send_timeout_terminated(&self, message: M) -> SendError<M> {
+        SendError {
             actor_id: self.actor_id.to_string(),
             message,
+            kind: SendErrorKind::Terminated,
         }
     }
 
@@ -1635,11 +1647,12 @@ impl<'a, A: Actor + ?Sized> StopContext<'a, A> {
     }
 }
 
-fn try_send_rejection<M>(error: &TrySendError<M>) -> MessageRejection {
-    match error {
-        TrySendError::NotRunning { .. } => MessageRejection::NotRunning,
-        TrySendError::Terminated { .. } => MessageRejection::ActorTerminated,
-        TrySendError::Full { .. } => MessageRejection::MailboxFull,
+fn send_error_rejection<M>(error: &SendError<M>) -> MessageRejection {
+    match error.kind {
+        SendErrorKind::NotRunning => MessageRejection::NotRunning,
+        SendErrorKind::Terminated => MessageRejection::ActorTerminated,
+        SendErrorKind::Full => MessageRejection::MailboxFull,
+        SendErrorKind::TimedOut => MessageRejection::Timeout,
     }
 }
 
@@ -1679,7 +1692,11 @@ mod tests {
         let output = capture_tracing_output(|| {
             assert!(matches!(
                 actor.try_send(()),
-                Err(TrySendError::NotRunning { actor_id, .. }) if actor_id == "worker"
+                Err(SendError {
+                    actor_id,
+                    kind: SendErrorKind::NotRunning,
+                    ..
+                }) if actor_id == "worker"
             ));
         });
         for expected in [

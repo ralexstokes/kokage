@@ -17,8 +17,8 @@ use std::{
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
     DynamicTree, ExitReason, ExitResult, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart,
-    RunningTree, ScopeRef, SendError, Shutdown, StopContext, SupervisorError, TaskSpec,
-    TrySendError,
+    RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, SupervisorError,
+    TaskSpec,
     observe::ChildMembershipView,
     raw::{RawActor, RawContext},
 };
@@ -561,7 +561,11 @@ async fn remove_child_closes_intake_drains_then_runs_on_stop_before_detach() {
         .expect_err("closed intake rejects try_send");
     assert!(matches!(
         &not_running,
-        TrySendError::NotRunning { actor_id , .. } if actor_id == "removable"
+        SendError {
+            actor_id,
+            kind: SendErrorKind::NotRunning,
+            ..
+        } if actor_id == "removable"
     ));
     assert!(matches!(not_running.into_message(), RemovalMsg::Work(8)));
 
@@ -666,7 +670,11 @@ async fn discard_closes_intake_and_drops_racing_messages() {
 
     assert!(matches!(
         actor.try_send(RemovalMsg::Work(8)),
-        Err(TrySendError::NotRunning { actor_id , .. }) if actor_id == "discarding"
+        Err(SendError {
+            actor_id,
+            kind: SendErrorKind::NotRunning,
+            ..
+        }) if actor_id == "discarding"
     ));
     assert!(!removal.is_finished(), "removal waits for on_stop");
     release_on_stop.notify_one();
