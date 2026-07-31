@@ -165,6 +165,10 @@ async fn index_serves_dashboard() {
     assert!(body.contains("kokage console"));
     assert!(body.contains("return sample.stats.actor_id === child.id"));
     assert!(body.contains("const actor = sample.stats;"));
+    assert!(body.contains(
+        "const childId = lifecycle && lifecycle.child_id != null ? lifecycle.child_id : \"unknown\";"
+    ));
+    assert!(!body.contains("envelope.child"));
 }
 
 #[tokio::test]

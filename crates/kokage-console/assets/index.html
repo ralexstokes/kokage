@@ -814,10 +814,9 @@
     const scopePath = Array.isArray(envelope.scope_path) ? envelope.scope_path : [];
     const envelopeName = variantName(envelope.kind);
     const envelopePayload = variantPayload(envelope.kind);
-    const child = envelope.child && typeof envelope.child === "object" ? envelope.child : {};
-    const childId = child.child_id == null ? "unknown" : child.child_id;
     let eventName = envelopeName;
     let lifecycle = envelopePayload;
+    const childId = lifecycle && lifecycle.child_id != null ? lifecycle.child_id : "unknown";
     let info;
     if (eventName === "SupervisorStarted") {
       info = { kind: "started", cls: "kind-good", msg: "Supervisor started" };
