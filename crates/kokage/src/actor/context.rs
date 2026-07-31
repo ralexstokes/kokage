@@ -1477,14 +1477,14 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
         self.cx.watch(target, map)
     }
 
-    /// Arms a keyed one-shot timeout, replacing the timeout at the same key.
+    /// Arms a keyed one-shot self timeout, replacing the timeout at the same key.
     ///
-    /// Unlike [`send_after`](Self::send_after), this timeout is owned by the
-    /// actor loop and never transits the mailbox. Mailbox capacity and
-    /// conflation do not apply; delivery increments received-message statistics
-    /// but not accepted-message statistics. Reusing `key` exactly replaces the
-    /// pending entry, and [`clear_timeout`](Self::clear_timeout) exactly retracts
-    /// it until delivery. Timeouts at other keys are unchanged.
+    /// The timeout is owned by the actor loop and never transits the mailbox.
+    /// Mailbox capacity and conflation do not apply; delivery increments
+    /// received-message statistics but not accepted-message statistics. Reusing
+    /// `key` exactly replaces the pending entry, and
+    /// [`clear_timeout`](Self::clear_timeout) exactly retracts it until delivery.
+    /// Timeouts at other keys are unchanged.
     pub fn set_timeout(&mut self, key: TimerKey, message: A::Msg, delay: Duration) {
         self.cx.timers.insert(key, message, delay);
     }
@@ -1492,18 +1492,6 @@ impl<'a, A: Actor + ?Sized> Context<'a, A> {
     /// Clears the timeout at `key`, if one is armed.
     pub fn clear_timeout(&mut self, key: TimerKey) {
         self.cx.timers.clear(key);
-    }
-
-    /// Sends `message` to this actor after `delay`, bound to this incarnation.
-    ///
-    /// This uses ordinary mailbox delivery: capacity and conflation apply, and
-    /// successful delivery increments accepted-message statistics. By contrast,
-    /// [`set_timeout`](Self::set_timeout) is loop-owned, supports exact keyed
-    /// replacement and retraction, bypasses the mailbox, and does not increment
-    /// accepted-message statistics. See [`RawContext::send_after`] for the full
-    /// guard and incarnation-lifetime contract.
-    pub fn send_after(&self, message: A::Msg, delay: Duration) -> Guard {
-        self.cx.send_after(message, delay)
     }
 
     /// Sends `message` to `target` after `delay`, bound to this incarnation.

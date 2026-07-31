@@ -1,24 +1,17 @@
 # Actor Timers
 
-An actor schedules one-shot self messages through two deliberately different
-mechanisms. Choose by the delivery and cancellation semantics you need:
-
-| API | Delivery | Ownership and cancellation |
-| --- | --- | --- |
-| `send_after(message, delay)` | Ordinary self-mailbox send: capacity, FIFO backpressure, conflation, and accepted-message statistics apply. | An independent `Guard` cancels the operation; there is no key for exact replacement or retraction. |
-| `set_timeout(key, message, delay)` | Actor-loop delivery: no mailbox transit, capacity, or conflation; received-message statistics increase, accepted-message statistics do not. | The loop owns the entry; the same key exactly replaces it, and `clear_timeout(key)` exactly retracts it until delivery. |
-
-This distinction matters even though both calls schedule one self-message.
-Use `send_after` for an independently guarded mailbox delivery. Use
-`set_timeout` for protocol deadlines whose pending value must be exactly
-replaced or retracted. Periodic mailbox delivery uses `interval`.
+Handler-style actors schedule one-shot self messages with
+`set_timeout(key, message, delay)`. The actor loop owns these keyed entries:
+the same key replaces its pending message, and `clear_timeout(key)` retracts
+it. Delivery bypasses mailbox capacity and conflation, increments received
+statistics, and does not increment accepted-message statistics. Periodic
+self-delivery uses `interval`.
 
 ## Self-scheduling
 
-Handler-style actors can schedule one-shot self messages through either an
-independently guarded mailbox delivery or a loop-owned keyed timer table.
-Periodic work uses the self-first `interval(message, period)` and returns a
-`Guard`:
+Handler-style actors use the loop-owned keyed timer table for one-shot self
+messages. Periodic work uses the self-first `interval(message, period)` and
+returns a `Guard`:
 
 ```rust,ignore
 use std::time::Duration;
@@ -28,13 +21,11 @@ use kokage::prelude::*;
 #[derive(Clone)]
 enum Message {
     Reconnect,
-    Refresh,
     Reconcile,
 }
 
 #[derive(Default)]
 struct Worker {
-    refresh: Option<Guard>,
     reconcile: Option<Guard>,
 }
 
@@ -45,7 +36,6 @@ impl Actor for Worker {
 
     async fn on_start(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
         ctx.set_timeout(RECONNECT, Message::Reconnect, Duration::from_secs(5));
-        self.refresh = Some(ctx.send_after(Message::Refresh, Duration::from_secs(10)));
         self.reconcile =
             Some(ctx.interval(Message::Reconcile, Duration::from_secs(30)));
         Ok(())
@@ -58,7 +48,6 @@ impl Actor for Worker {
     ) -> ExitResult {
         match message {
             Message::Reconnect => { /* reconnect once */ }
-            Message::Refresh => { /* independently scheduled mailbox work */ }
             Message::Reconcile => { /* reconcile periodically */ }
         }
         Ok(())

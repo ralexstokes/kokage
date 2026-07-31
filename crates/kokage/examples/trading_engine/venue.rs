@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -14,6 +14,9 @@ use crate::{
     },
     telemetry::LatencyRecorder,
 };
+
+const FILL_DELAY: Duration = Duration::from_millis(25);
+const DELIVER_FILLS: TimerKey = TimerKey::new("deliver-fills");
 
 #[derive(Clone, Debug)]
 struct SimOrder {
@@ -212,6 +215,15 @@ pub struct VenueGateway {
     latency: LatencyRecorder,
     #[factory(default)]
     stalled_replies: Arc<Mutex<Vec<Reply<PlaceOutcome>>>>,
+    #[factory(default)]
+    pending_fills: VecDeque<PendingFill>,
+}
+
+struct PendingFill {
+    key: OrderKey,
+    qty: i64,
+    enqueued_at: Instant,
+    deliver_at: Instant,
 }
 
 impl VenueGateway {
@@ -220,6 +232,52 @@ impl VenueGateway {
             .lock()
             .expect("stalled reply lock poisoned")
             .push(reply);
+    }
+
+    fn schedule_fill(&mut self, key: OrderKey, qty: i64, ctx: &mut Context<'_, Self>) {
+        let enqueued_at = Instant::now();
+        let arm_timer = self.pending_fills.is_empty();
+        self.pending_fills.push_back(PendingFill {
+            key,
+            qty,
+            enqueued_at,
+            deliver_at: enqueued_at + FILL_DELAY,
+        });
+        if arm_timer {
+            ctx.set_timeout(DELIVER_FILLS, GatewayMsg::DeliverFills, FILL_DELAY);
+        }
+    }
+
+    async fn deliver_fills(&mut self, ctx: &mut Context<'_, Self>) -> ExitResult {
+        while self
+            .pending_fills
+            .front()
+            .is_some_and(|fill| fill.deliver_at <= Instant::now())
+        {
+            let fill = self
+                .pending_fills
+                .pop_front()
+                .expect("front fill was present");
+            if self.exchange.fill(&fill.key) {
+                self.ledger
+                    .send(LedgerMsg::Fill {
+                        key: fill.key,
+                        venue: self.venue,
+                        qty: fill.qty,
+                        enqueued_at: fill.enqueued_at,
+                    })
+                    .await?;
+            }
+        }
+
+        if let Some(next) = self.pending_fills.front() {
+            ctx.set_timeout(
+                DELIVER_FILLS,
+                GatewayMsg::DeliverFills,
+                next.deliver_at.saturating_duration_since(Instant::now()),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -270,34 +328,11 @@ impl Actor for VenueGateway {
                         })
                         .await?;
                     if symbol != "OPEN" {
-                        ctx.send_after(
-                            GatewayMsg::DeliverFill {
-                                key,
-                                qty,
-                                enqueued_at: Instant::now(),
-                            },
-                            Duration::from_millis(25),
-                        )
-                        .detach();
+                        self.schedule_fill(key, qty, ctx);
                     }
                 }
             }
-            GatewayMsg::DeliverFill {
-                key,
-                qty,
-                enqueued_at,
-            } => {
-                if self.exchange.fill(&key) {
-                    self.ledger
-                        .send(LedgerMsg::Fill {
-                            key,
-                            venue: self.venue,
-                            qty,
-                            enqueued_at,
-                        })
-                        .await?;
-                }
-            }
+            GatewayMsg::DeliverFills => self.deliver_fills(ctx).await?,
             GatewayMsg::Query { key, reply } => reply.send(self.exchange.query(&key)),
             GatewayMsg::Cancel { key, reply } => {
                 let outcome = self.exchange.cancel(&key);
