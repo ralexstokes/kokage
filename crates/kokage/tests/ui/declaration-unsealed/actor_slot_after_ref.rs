@@ -18,7 +18,7 @@ fn main() {
     let slot = ActorSlot::<String>::new("idle");
     let first_ref = slot.actor_ref();
     let second_ref = slot.actor_ref();
-    let spec = slot.message_size(message_size).define(|| Idle);
+    let spec = slot.define(|| Idle).message_size(message_size);
     let _tree = kokage::OrderedTree::new().actor(spec);
     assert_eq!(first_ref.id(), second_ref.id());
 }

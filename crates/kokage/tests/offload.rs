@@ -638,17 +638,21 @@ async fn shutdown_case(policy: Shutdown) -> Vec<&'static str> {
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
     graph.mailbox_capacity(1);
-    let actor_slot = ActorSlot::new("ShutdownActor").shutdown(policy);
+    let actor_slot = ActorSlot::new("ShutdownActor");
     let actor = actor_slot.actor_ref();
-    graph.define(actor_slot, {
-        let release = release.clone();
-        let entered = entered.clone();
-        move || ShutdownActor {
-            release: release.clone(),
-            entered: entered.clone(),
-            observed: observed.clone(),
-        }
-    });
+    graph.actor(
+        actor_slot
+            .define({
+                let release = release.clone();
+                let entered = entered.clone();
+                move || ShutdownActor {
+                    release: release.clone(),
+                    entered: entered.clone(),
+                    observed: observed.clone(),
+                }
+            })
+            .shutdown(policy),
+    );
     let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "draining-offload runtime startup").await;
     actor.send(DrainMsg::Start).await.unwrap();
@@ -780,19 +784,23 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
     let mut graph = TreeBuilder::new();
-    let actor_slot = ActorSlot::new("conflating-offload").mailbox(MailboxMode::conflate());
+    let actor_slot = ActorSlot::new("conflating-offload");
     let actor = actor_slot.actor_ref();
-    graph.define(actor_slot, {
-        let handler_release = handler_release.clone();
-        let offload_release = offload_release.clone();
-        let offload_registered = offload_registered.clone();
-        move || BackpressureActor {
-            handler_release: handler_release.clone(),
-            offload_release: offload_release.clone(),
-            offload_registered: offload_registered.clone(),
-            observed: observed.clone(),
-        }
-    });
+    graph.actor(
+        actor_slot
+            .define({
+                let handler_release = handler_release.clone();
+                let offload_release = offload_release.clone();
+                let offload_registered = offload_registered.clone();
+                move || BackpressureActor {
+                    handler_release: handler_release.clone(),
+                    offload_release: offload_release.clone(),
+                    offload_registered: offload_registered.clone(),
+                    observed: observed.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate()),
+    );
     let runtime = graph.build().spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "conflating completion runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();

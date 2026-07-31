@@ -1372,21 +1372,30 @@ mod runnable_actor {
     #[test]
     fn failed_sized_registration_returns_a_sized_detached_ref() {
         let mut builder = RunnableSetBuilder::new();
-        let actor_slot = ActorSlot::new("worker").message_size(sized_payload_size);
-        builder.define(actor_slot, Drain::<SizedPayload>::new);
+        let actor_slot = ActorSlot::new("worker");
+        builder.actor(
+            actor_slot
+                .define(Drain::<SizedPayload>::new)
+                .message_size(sized_payload_size),
+        );
         let detached_slot = ActorSlot::new("worker");
         let detached = detached_slot.actor_ref();
-        let detached_slot = detached_slot.message_size(sized_payload_size);
-        builder.define(detached_slot, Drain::<SizedPayload>::new);
+        builder.actor(
+            detached_slot
+                .define(Drain::<SizedPayload>::new)
+                .message_size(sized_payload_size),
+        );
 
         assert_eq!(detached.stats().message_bytes_accepted, Some(0));
 
-        let detached_slot =
-            ActorSlot::<SizedPayload>::new("worker").message_size(sized_payload_size);
+        let detached_slot = ActorSlot::<SizedPayload>::new("worker");
         let detached = detached_slot.actor_ref();
-        drop(detached_slot);
-        // The option becomes observable only if definition reaches
-        // materialization; dropping an unfilled declaration applies nothing.
+        let detached_spec = detached_slot
+            .define(Drain::<SizedPayload>::new)
+            .message_size(sized_payload_size);
+        drop(detached_spec);
+        // The option becomes observable only when the completed declaration is
+        // materialized; dropping the spec leaves its ref detached and unsized.
         assert_eq!(detached.stats().message_bytes_accepted, None);
         assert!(matches!(
             detached.try_send(SizedPayload(Vec::new())),

@@ -55,16 +55,20 @@ async fn conflate_keeps_only_the_newest_unread_message() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
-    let actor_ref_slot = ActorSlot::new("ticks").mailbox(MailboxMode::conflate());
+    let actor_ref_slot = ActorSlot::new("ticks");
     let actor_ref = actor_ref_slot.actor_ref();
-    builder.define(actor_ref_slot, {
-        let release = release.clone();
-        move || GatedCollector {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        actor_ref_slot
+            .define({
+                let release = release.clone();
+                move || GatedCollector {
+                    started: started_tx.clone(),
+                    release: release.clone(),
+                    received: received_tx.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate()),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()
@@ -119,16 +123,20 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
     let (received_tx, _received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
-    let actor_ref_slot = ActorSlot::new("ticks").mailbox(MailboxMode::conflate());
+    let actor_ref_slot = ActorSlot::new("ticks");
     let actor_ref = actor_ref_slot.actor_ref();
-    builder.define(actor_ref_slot, {
-        let release = release.clone();
-        move || GatedCollector {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        actor_ref_slot
+            .define({
+                let release = release.clone();
+                move || GatedCollector {
+                    started: started_tx.clone(),
+                    release: release.clone(),
+                    received: received_tx.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate()),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()
@@ -187,18 +195,21 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
-    let actor_ref_slot = ActorSlot::new("snapshots")
-        .mailbox(MailboxMode::conflate())
-        .message_size(sized_snapshot_size);
+    let actor_ref_slot = ActorSlot::new("snapshots");
     let actor_ref = actor_ref_slot.actor_ref();
-    builder.define(actor_ref_slot, {
-        let release = release.clone();
-        move || GatedCollector {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        actor_ref_slot
+            .define({
+                let release = release.clone();
+                move || GatedCollector {
+                    started: started_tx.clone(),
+                    release: release.clone(),
+                    received: received_tx.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate())
+            .message_size(sized_snapshot_size),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()
@@ -253,18 +264,20 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
-    let slot = ActorSlot::new("market-data")
-        .mailbox_capacity(2)
-        .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol));
+    let slot = ActorSlot::new("market-data");
     let actor_ref = slot.actor_ref();
-    builder.define(slot, {
-        let release = release.clone();
-        move || GatedCollector {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        slot.define({
+            let release = release.clone();
+            move || GatedCollector {
+                started: started_tx.clone(),
+                release: release.clone(),
+                received: received_tx.clone(),
+            }
+        })
+        .mailbox_capacity(2)
+        .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol)),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()
@@ -349,16 +362,20 @@ async fn replaced_call_reports_reply_dropped() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
-    let actor_ref_slot = ActorSlot::new("requests").mailbox(MailboxMode::conflate());
+    let actor_ref_slot = ActorSlot::new("requests");
     let actor_ref = actor_ref_slot.actor_ref();
-    builder.define(actor_ref_slot, {
-        let release = release.clone();
-        move || GatedCollector {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        actor_ref_slot
+            .define({
+                let release = release.clone();
+                move || GatedCollector {
+                    started: started_tx.clone(),
+                    release: release.clone(),
+                    received: received_tx.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate()),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()
@@ -445,16 +462,20 @@ async fn draining_shutdown_handles_latest_message_after_shutdown() {
     let (received_tx, mut received_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
     let mut builder = RunnableBuilder::new();
-    let actor_ref_slot = ActorSlot::new("drain").mailbox(MailboxMode::conflate());
+    let actor_ref_slot = ActorSlot::new("drain");
     let actor_ref = actor_ref_slot.actor_ref();
-    builder.define(actor_ref_slot, {
-        let release = release.clone();
-        move || GatedDrainActor {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        actor_ref_slot
+            .define({
+                let release = release.clone();
+                move || GatedDrainActor {
+                    started: started_tx.clone(),
+                    release: release.clone(),
+                    received: received_tx.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate()),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()
@@ -494,25 +515,29 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
     let release = Arc::new(Notify::new());
     let panic_once = Arc::new(AtomicBool::new(true));
     let mut builder = RunnableBuilder::new();
-    let actor_ref_slot = ActorSlot::new("poison-recovery").mailbox(MailboxMode::conflate_by_key({
-        let panic_once = Arc::clone(&panic_once);
-        move |value: &u64| {
-            assert!(
-                !panic_once.swap(false, Ordering::SeqCst),
-                "key extraction panic"
-            );
-            value % 2
-        }
-    }));
+    let actor_ref_slot = ActorSlot::new("poison-recovery");
     let actor_ref = actor_ref_slot.actor_ref();
-    builder.define(actor_ref_slot, {
-        let release = release.clone();
-        move || GatedCollector {
-            started: started_tx.clone(),
-            release: release.clone(),
-            received: received_tx.clone(),
-        }
-    });
+    builder.actor(
+        actor_ref_slot
+            .define({
+                let release = release.clone();
+                move || GatedCollector {
+                    started: started_tx.clone(),
+                    release: release.clone(),
+                    received: received_tx.clone(),
+                }
+            })
+            .mailbox(MailboxMode::conflate_by_key({
+                let panic_once = Arc::clone(&panic_once);
+                move |value: &u64| {
+                    assert!(
+                        !panic_once.swap(false, Ordering::SeqCst),
+                        "key extraction panic"
+                    );
+                    value % 2
+                }
+            })),
+    );
     let graph = builder.build();
     let actor = graph
         .into_nodes()

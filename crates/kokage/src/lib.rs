@@ -39,8 +39,8 @@
 //!
 //! [`ActorSlot`] supports cyclic wiring: create every slot and clone its
 //! typed ref first, then consume each slot with [`ActorSlot::define`] and
-//! place the resulting specs in the desired scopes. Actor ids are local to
-//! their containing scope, so sibling scopes may reuse an id.
+//! configure and place the resulting specs in the desired scopes. Actor ids
+//! are local to their containing scope, so sibling scopes may reuse an id.
 //!
 //! The [`prelude`] re-exports the common composition, actor, and task surface plus
 //! snapshot observation. Raw actor execution types live in [`raw`],
