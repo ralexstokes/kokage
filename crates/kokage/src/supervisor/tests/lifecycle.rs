@@ -19,6 +19,20 @@ fn failure(message: &'static str) -> crate::supervisor::BoxError {
     Box::new(io::Error::other(message))
 }
 
+fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
+    event
+        .child
+        .as_ref()
+        .is_some_and(|child| child.child_id == child_id)
+}
+
+fn child_identity(event: &LifecycleEvent) -> &crate::supervisor::ChildLifecycleIdentity {
+    event
+        .child
+        .as_ref()
+        .expect("child transition carries identity")
+}
+
 async fn next_matching(
     watch: &mut LifecycleWatch,
     mut predicate: impl FnMut(&LifecycleEvent) -> bool,
@@ -65,30 +79,20 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
     let running = builder.build().expect("supervisor builds").spawn();
 
     let added = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 0,
-                ..
-            } if child_id == "worker"
-        )
+            LifecycleEventKind::ChildStarted { generation: 0 }
+        ) && child_id_is(event, "worker")
     })
     .await;
 
     assert_eq!(added.seq(), Some(baseline.lifecycle_seq + 1));
     assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
-    assert!(matches!(
-        added.kind,
-        LifecycleEventKind::ChildAdded { lineage, .. } if lineage == declared.lineage
-    ));
+    assert_eq!(child_identity(&added).lineage, declared.lineage);
 
     running.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -121,44 +125,45 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
     timeout(WAIT, async {
         while transitions.len() < 3 {
             let event = watch.next().await.expect("watch remains open");
-            match event.kind {
+            let Some(child) = event.child.as_ref() else {
+                continue;
+            };
+            match &event.kind {
                 LifecycleEventKind::ChildExited {
-                    seq,
-                    child_id,
                     generation: 0,
-                    total_restarts,
-                    child_restart_count,
                     exit,
-                    ..
-                } if child_id == "flaky" => {
+                } if child.child_id == "flaky" => {
                     assert!(exit.failure_message().is_some());
                     assert!(!exit.cancelled());
-                    transitions.push(("exited", seq, total_restarts, child_restart_count));
+                    transitions.push((
+                        "exited",
+                        child.seq,
+                        child.total_restarts,
+                        child.child_restart_count,
+                    ));
                 }
-                LifecycleEventKind::ChildRestartScheduled {
-                    seq,
-                    child_id,
-                    generation: 0,
-                    total_restarts,
-                    child_restart_count,
-                    ..
-                } if child_id == "flaky" => {
+                LifecycleEventKind::ChildRestartScheduled { generation: 0, .. }
+                    if child.child_id == "flaky" =>
+                {
                     let snapshot = handle.snapshot();
-                    let child = snapshot.child("flaky").expect("flaky remains declared");
-                    assert_eq!(snapshot.lifecycle_seq, seq);
-                    assert_eq!(child.restart_count, child_restart_count);
-                    assert!(child.next_restart_in.is_some());
-                    transitions.push(("scheduled", seq, total_restarts, child_restart_count));
+                    let snapshot_child = snapshot.child("flaky").expect("flaky remains declared");
+                    assert_eq!(snapshot.lifecycle_seq, child.seq);
+                    assert_eq!(snapshot_child.restart_count, child.child_restart_count);
+                    assert!(snapshot_child.next_restart_in.is_some());
+                    transitions.push((
+                        "scheduled",
+                        child.seq,
+                        child.total_restarts,
+                        child.child_restart_count,
+                    ));
                 }
-                LifecycleEventKind::ChildStarted {
-                    seq,
-                    child_id,
-                    generation: 1,
-                    total_restarts,
-                    child_restart_count,
-                    ..
-                } if child_id == "flaky" => {
-                    transitions.push(("started", seq, total_restarts, child_restart_count));
+                LifecycleEventKind::ChildStarted { generation: 1 } if child.child_id == "flaky" => {
+                    transitions.push((
+                        "started",
+                        child.seq,
+                        child.total_restarts,
+                        child.child_restart_count,
+                    ));
                 }
                 _ => {}
             }
@@ -291,12 +296,8 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let restarted = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 1,
-                ..
-            } if child_id == "worker"
-        )
+            LifecycleEventKind::ChildStarted { generation: 1 }
+        ) && child_id_is(event, "worker")
     })
     .await;
     assert_eq!(restarted.total_restarts(), Some(1));
@@ -305,42 +306,25 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let fatal_exit = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildExited {
-                ref child_id,
-                generation: 0,
-                ..
-            } if child_id == "fatal"
-        )
+            LifecycleEventKind::ChildExited { generation: 0, .. }
+        ) && child_id_is(event, "fatal")
     })
     .await;
     let added = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 0,
-                ..
-            } if child_id == "worker"
-        )
+            LifecycleEventKind::ChildStarted { generation: 0 }
+        ) && child_id_is(event, "worker")
     })
     .await;
     assert_eq!(added.seq(), fatal_exit.seq().map(|seq| seq + 1));
     assert!(started.seq() > added.seq());
-    let added_lineage = match &added.kind {
-        LifecycleEventKind::ChildAdded { lineage, .. } => *lineage,
-        _ => unreachable!(),
-    };
-    let started_lineage = match &started.kind {
-        LifecycleEventKind::ChildStarted { lineage, .. } => *lineage,
-        _ => unreachable!(),
-    };
+    let added_lineage = child_identity(&added).lineage;
+    let started_lineage = child_identity(&started).lineage;
     assert!(added_lineage > initial_lineage);
     assert_eq!(started_lineage, added_lineage);
     assert_eq!(added.total_restarts(), Some(2));
@@ -367,23 +351,15 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         .await
         .expect("child is added");
     let added = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
+            && child_id_is(event, "worker")
     })
     .await;
-    let lineage = match started.kind {
-        LifecycleEventKind::ChildStarted { lineage, .. } => lineage,
-        _ => unreachable!(),
-    };
+    let lineage = child_identity(&started).lineage;
 
     running
         .handle()
@@ -393,28 +369,19 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         .await
         .expect("child is removed");
     let exited = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     let removed = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildRemoved { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildRemoved) && child_id_is(event, "worker")
     })
     .await;
     assert!(matches!(
         exited.kind,
-        LifecycleEventKind::ChildExited { lineage: observed, ref exit, .. }
-            if observed == lineage && exit.cancelled()
+        LifecycleEventKind::ChildExited { ref exit, .. } if exit.cancelled()
     ));
-    assert!(matches!(
-        removed.kind,
-        LifecycleEventKind::ChildRemoved { lineage: observed, .. } if observed == lineage
-    ));
+    assert_eq!(child_identity(&exited).lineage, lineage);
+    assert_eq!(child_identity(&removed).lineage, lineage);
     assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
     assert_eq!(removed.seq(), exited.seq().map(|seq| seq + 1));
 
@@ -443,10 +410,8 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
 
     timeout(Duration::from_millis(100), async {
         next_matching(&mut watch, |event| {
-            matches!(
-                event.kind,
-                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "worker"
-            )
+            matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
+                && child_id_is(event, "worker")
         })
         .await
     })
@@ -457,12 +422,8 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 0,
-                ..
-            } if child_id == "worker"
-        )
+            LifecycleEventKind::ChildStarted { generation: 0 }
+        ) && child_id_is(event, "worker")
     })
     .await;
     assert!(started.seq().is_some());
@@ -495,10 +456,7 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
     let removal = tokio::spawn(async move { dynamic.remove_child("worker").await });
 
     let removed = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildRemoved { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildRemoved) && child_id_is(event, "worker")
     })
     .await;
     timeout(WAIT, removal)
@@ -562,7 +520,12 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
     timeout(WAIT, async {
         while let Some(event) = watch.next().await {
             match event.kind {
-                LifecycleEventKind::ChildExited { child_id, .. } => exited.push(child_id),
+                LifecycleEventKind::ChildExited { .. } => exited.push(
+                    event
+                        .child
+                        .expect("child transition carries identity")
+                        .child_id,
+                ),
                 LifecycleEventKind::SupervisorStopped => stopped = true,
                 _ => {}
             }
@@ -697,10 +660,9 @@ async fn nested_churn_cannot_overflow_a_direct_child_watch() {
                 !matches!(event.kind, LifecycleEventKind::Lagged { .. }),
                 "nested-only traffic must not consume the direct buffer"
             );
-            if matches!(
-                event.kind,
-                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "root-peer"
-            ) {
+            if matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
+                && child_id_is(&event, "root-peer")
+            {
                 break event;
             }
         }
@@ -783,10 +745,7 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
         .await
         .expect("first nested scope is added");
     let first = next_matching(&mut root_watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildStarted { .. }) && child_id_is(event, "leaf")
     })
     .await;
     let first_lineage = first.scope_path[0].lineage;
@@ -811,10 +770,9 @@ async fn removed_nested_watch_closes_and_same_id_reinsertion_gets_a_new_path_lin
         .await
         .expect("second nested scope is added");
     let second = next_matching(&mut root_watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
-        ) && event.scope_path[0].lineage > first_lineage
+        matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
+            && child_id_is(event, "leaf")
+            && event.scope_path[0].lineage > first_lineage
     })
     .await;
     assert_eq!(second.scope_path[0].id, "nested");
@@ -869,10 +827,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
 
     complete_leaf.notify_one();
     next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     assert_stays_open(
@@ -883,21 +838,14 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
 
     crash_sibling.notify_one();
     let added = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 0,
-                ..
-            } if child_id == "worker"
-        )
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
+        ) && child_id_is(event, "worker")
     })
     .await;
     assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
@@ -935,10 +883,7 @@ async fn never_policy_nested_stop_closes_its_watch() {
 
     crash.notify_one();
     next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     wait_closed(&mut watch, "Never-policy nested identity to close").await;
@@ -983,10 +928,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_leaf.notify_one();
     let first_exit = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     assert_stays_open(
@@ -997,21 +939,14 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_middle.notify_one();
     let added = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildAdded { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted {
-                ref child_id,
-                generation: 0,
-                ..
-            } if child_id == "worker"
-        )
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
+        ) && child_id_is(event, "worker")
     })
     .await;
     assert!(added.seq() > first_exit.seq());
@@ -1019,10 +954,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_leaf.notify_one();
     let second_exit = next_matching(&mut watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     assert!(second_exit.seq() > started.seq());
@@ -1118,10 +1050,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
 
     complete_head.notify_one();
     next_matching(&mut head_watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     wait_closed(&mut head_watch, "RestForOne head watch to close").await;
@@ -1132,10 +1061,7 @@ async fn rest_for_one_closes_head_but_defers_tail_terminality() {
 
     complete_tail.notify_one();
     next_matching(&mut tail_watch, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildExited { ref child_id, .. } if child_id == "worker"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildExited { .. }) && child_id_is(event, "worker")
     })
     .await;
     assert_stays_open(
@@ -1234,10 +1160,7 @@ async fn direct_children_is_a_depth_filter_on_the_recursive_vocabulary() {
     let running = builder.build().expect("supervisor builds").spawn();
 
     let leaf = next_matching(&mut tree, |event| {
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildStarted { .. }) && child_id_is(event, "leaf")
     })
     .await;
     assert_eq!(leaf.scope_path.len(), 1);
@@ -1245,10 +1168,8 @@ async fn direct_children_is_a_depth_filter_on_the_recursive_vocabulary() {
 
     let nested = next_matching(&mut direct, |event| {
         assert!(event.scope_path.is_empty());
-        matches!(
-            event.kind,
-            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "nested"
-        )
+        matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
+            && child_id_is(event, "nested")
     })
     .await;
     assert!(nested.scope_path.is_empty());

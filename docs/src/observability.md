@@ -68,12 +68,14 @@ Count restarts from the cumulative counters carried by events, not by inferring
 event pairs. Readiness-gated children emit `Started` only after `on_start`
 succeeds.
 
-Each child variant of `LifecycleEventKind` carries a monotonic `seq`, child id
-and lineage, `total_restarts`, and the child's `child_restart_count`.
-`ChildRestartScheduled` is part of the same vocabulary and sequence. A nested supervisor's sequence and total counter continue across its
-own incarnations, including recreation by an ancestor. `next()` returns `None`
-only after staged events are drained and the stable supervisor identity can
-never run again.
+Every child transition sets `LifecycleEvent::child` to a
+`ChildLifecycleIdentity` containing its monotonic `seq`, child id and lineage,
+`total_restarts`, and the child's `child_restart_count`. The event kind then
+carries only transition-specific data such as generation, exit, or delay.
+`ChildRestartScheduled` is part of the same vocabulary and sequence. A nested
+supervisor's sequence and total counter continue across its own incarnations,
+including recreation by an ancestor. `next()` returns `None` only after staged
+events are drained and the stable supervisor identity can never run again.
 
 ### Gap-free snapshot alignment
 
@@ -181,9 +183,9 @@ to the watched handle. Every path segment includes the nested supervisor's id,
 lineage, and generation, so consumers can distinguish both a restarted
 incarnation and a removed-then-reinserted subtree.
 
-`LifecycleEvent` is an envelope containing the scope path and a flat
-`LifecycleEventKind`. Child variants retain the emitting scope's sequence and
-cumulative restart counters. A nested scope's
+`LifecycleEvent` is an envelope containing the scope path, an optional shared
+child identity, and a flat `LifecycleEventKind`. The child identity retains the
+emitting scope's sequence and cumulative restart counters. A nested scope's
 stable identity is reattached automatically when an ancestor recreates it; the
 path then reflects the new ancestor generation.
 
@@ -206,7 +208,8 @@ staged events have drained.
 Use `handle.watch_lifecycle().direct_children()` when per-scope sequence
 alignment is the goal. Keep the default tree stream for diagnostics,
 dashboards, and any observer that needs a single feed. The
-`trading_engine` example's breaker consumes the child event's `total_restarts`;
+`trading_engine` example's breaker consumes the child identity's
+`total_restarts`;
 that counter records scheduled restarts — the
 same occurrences as the restart-intensity window, including clean exits
 restarted under `Restart::always()`. Group-strategy sibling respawns do not

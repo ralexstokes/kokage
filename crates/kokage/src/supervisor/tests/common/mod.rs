@@ -251,18 +251,23 @@ impl EventWatch {
     }
 
     fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
-        let path = event.scope_path;
+        let LifecycleEvent {
+            scope_path: path,
+            child,
+            kind,
+        } = event;
         let mut pending = None;
-        let leaf = match event.kind {
+        let leaf = match kind {
             LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
             LifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
             LifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
-            LifecycleEventKind::ChildAdded { .. } => return Ok(None),
-            LifecycleEventKind::ChildStarted {
-                child_id,
-                generation,
-                ..
-            } => {
+            LifecycleEventKind::ChildAdded => return Ok(None),
+            LifecycleEventKind::ChildStarted { generation } => {
+                let child_id = child
+                    .as_ref()
+                    .expect("child transition carries identity")
+                    .child_id
+                    .clone();
                 // This compatibility shim preserves the removed test-event
                 // shape. It deliberately assumes runtime generations are
                 // contiguous when synthesizing `ChildRestarted`. If that
@@ -280,29 +285,37 @@ impl EventWatch {
                     generation,
                 }
             }
-            LifecycleEventKind::ChildExited {
-                child_id,
-                generation,
-                exit,
-                ..
-            } => ObservedEvent::ChildExited {
-                id: child_id,
-                generation,
-                status: exit.into(),
-            },
-            LifecycleEventKind::ChildRemoved { child_id, .. } => {
-                ObservedEvent::ChildRemoved { id: child_id }
+            LifecycleEventKind::ChildExited { generation, exit } => {
+                let child_id = child
+                    .as_ref()
+                    .expect("child transition carries identity")
+                    .child_id
+                    .clone();
+                ObservedEvent::ChildExited {
+                    id: child_id,
+                    generation,
+                    status: exit.into(),
+                }
             }
-            LifecycleEventKind::ChildRestartScheduled {
-                child_id,
-                generation,
-                delay,
-                ..
-            } => ObservedEvent::ChildRestartScheduled {
-                id: child_id,
-                generation,
-                delay,
+            LifecycleEventKind::ChildRemoved => ObservedEvent::ChildRemoved {
+                id: child
+                    .as_ref()
+                    .expect("child transition carries identity")
+                    .child_id
+                    .clone(),
             },
+            LifecycleEventKind::ChildRestartScheduled { generation, delay } => {
+                let child_id = child
+                    .as_ref()
+                    .expect("child transition carries identity")
+                    .child_id
+                    .clone();
+                ObservedEvent::ChildRestartScheduled {
+                    id: child_id,
+                    generation,
+                    delay,
+                }
+            }
             LifecycleEventKind::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded
             }
