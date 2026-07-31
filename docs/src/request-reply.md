@@ -1,155 +1,152 @@
-# Delivery bounds and request/reply
+# Request and Reply
 
-Actor refs expose four delivery choices:
+`send` is fire-and-forget. Often you want an answer back: how much will this
+order cost? Kokage builds request–reply on two pieces — a [`Reply`] value
+carried *inside* your message type, and [`ActorRef::call`] on the caller's
+side.
 
-- `send(message)` waits for binding and FIFO capacity. A terminal rejection
-  returns `SendError<M>` with `SendErrorKind::Terminated`; `into_message()`
-  recovers the message.
-- `try_send(message)` fails immediately when the actor is between
-  incarnations or its FIFO mailbox is full. Its `SendError<M>` carries
-  `NotRunning`, `Full`, or `Terminated`, but never `TimedOut`.
-- `send_timeout(message, bound)` waits through the same binding and capacity
-  conditions as `send`, but returns `SendError<M>` with `TimedOut` and the
-  unaccepted message if the bound expires, or `Terminated` if membership ends.
-  A zero bound always times out; use `try_send` for one immediate attempt.
-- `call(bound, constructor)` bounds delivery plus request/reply. It constructs
-  the request around a `Reply`, so `CallError` intentionally stays
-  non-generic and does not return that internally constructed message.
+## Carrying a reply channel in the message
 
-Use `send_timeout` when bounded delivery must preserve ownership. Wrapping the
-ordinary future in `tokio::time::timeout(bound, actor.send(message))` is
-**lossy**: timeout cancels and drops the `send` future, including the message
-it owns. That wrapper cannot be used to retry or reroute after expiry.
-Dropping a `send_timeout` future also drops its message; recovery is guaranteed
-only when the future runs to completion and returns an error. The bound covers
-asynchronous binding and capacity waits, but cannot preempt synchronous user
-code such as a keyed-conflation matcher. Acceptance is rechecked afterward, so
-such work can delay the result but cannot accept the message past its deadline.
+The front desk of our shop takes orders and gives quotes. Its message type
+says so directly:
 
-The payload-bearing send error implements `std::error::Error` without requiring
-the message to implement `Debug`, `Display`, or `Sync`; its formatting
-deliberately omits the payload. Converting `SendError<M>` itself into
-`BoxError` with bare `?` does require `M: Sync`, because `BoxError` is
-`Send + Sync`. For a `Send` but non-`Sync` message, discard only the payload
-before propagating the non-generic `SendRejection`:
+```rust
+use kokage::prelude::*;
 
-```rust,no_run
-use std::cell::Cell;
-use kokage::{BoxError, SendError, prelude::*};
+enum DeskMsg {
+    Order(String),
+    Quote { pages: u32, reply: Reply<u64> },
+}
 
-struct LocalMessage(Cell<u64>); // `Send`, but not `Sync`
+struct FrontDesk {
+    orders_taken: u64,
+}
 
-async fn forward(target: &ActorRef<LocalMessage>) -> Result<(), BoxError> {
-    target
-        .send(LocalMessage(Cell::new(1)))
-        .await
-        .map_err(SendError::discard)?;
+impl Actor for FrontDesk {
+    type Msg = DeskMsg;
+
+    async fn handle(&mut self, msg: DeskMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        match msg {
+            DeskMsg::Order(job) => {
+                self.orders_taken += 1;
+                println!("accepted: {job}");
+            }
+            DeskMsg::Quote { pages, reply } => {
+                reply.send(u64::from(pages) * 3);
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+[`Reply<T>`] is a one-shot response channel. `reply.send(value)` consumes it;
+if the caller has already given up (timed out), the value is silently
+discarded. A `Reply` is an ordinary value — you may stash it in the actor's
+state and answer later, or forward it inside another message to let a
+different actor answer.
+
+## Calling
+
+The caller does not construct a `Reply` itself. It hands
+[`ActorRef::call`] a *message constructor* — a closure that receives the
+freshly minted `Reply` and returns the message to send:
+
+```rust
+# use std::time::Duration;
+# use kokage::prelude::*;
+# enum DeskMsg { Order(String), Quote { pages: u32, reply: Reply<u64> } }
+# struct FrontDesk { orders_taken: u64 }
+# impl Actor for FrontDesk {
+#     type Msg = DeskMsg;
+#     async fn handle(&mut self, msg: DeskMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+#         match msg {
+#             DeskMsg::Order(job) => { self.orders_taken += 1; println!("accepted: {job}"); }
+#             DeskMsg::Quote { pages, reply } => reply.send(u64::from(pages) * 3),
+#         }
+#         Ok(())
+#     }
+# }
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = OrderedTree::new();
+    let desk = tree.add_actor(ActorSpec::new("front-desk", || FrontDesk { orders_taken: 0 }));
+    let runtime = tree.spawn()?;
+
+    let price = desk
+        .call(Duration::from_secs(1), |reply| DeskMsg::Quote { pages: 250, reply })
+        .await?;
+    println!("quote: {price}");
+
+    desk.send(DeskMsg::Order("250-page manual".to_owned())).await?;
+
+    runtime.shutdown_and_wait().await?;
     Ok(())
 }
 ```
 
-`SendError::discard()` preserves the actor id and rejection kind. Use it for an
-application error enum or generic error boundary; use `into_message()` when the
-caller will retry, reroute, or otherwise reclaim the payload.
+When the reply slot is a tuple variant holding only the `Reply`, the variant
+name itself is already such a constructor, so this reads even tighter:
 
-## Bounded request/reply
-
-`ActorRef::call` builds request/reply on the ordinary actor mailbox: it creates
-a one-shot `Reply<T>`, puts that reply handle in your message, sends the
-message, and waits for the actor to answer. Every `call` takes an explicit
-timeout so the whole operation is bounded:
-
-```rust,no_run
-use std::time::Duration;
-use kokage::prelude::*;
-
-enum AccountMsg {
-    Balance(Reply<u64>),
+```rust
+# use std::time::Duration;
+# use kokage::prelude::*;
+enum CounterMsg {
+    Total(Reply<u64>),
 }
-
-async fn balance(
-    account: &ActorRef<AccountMsg>,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let balance = account
-        .call(Duration::from_millis(250), AccountMsg::Balance)
-        .await?;
-    Ok(balance)
-}
+# struct Counter { total: u64 }
+# impl Actor for Counter {
+#     type Msg = CounterMsg;
+#     async fn handle(&mut self, CounterMsg::Total(reply): CounterMsg, _ctx: &mut Context<'_, Self>) -> ExitResult {
+#         reply.send(self.total);
+#         Ok(())
+#     }
+# }
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let mut tree = OrderedTree::new();
+# let counter = tree.add_actor(ActorSpec::new("counter", || Counter { total: 0 }));
+# let runtime = tree.spawn()?;
+let total = counter.call(Duration::from_secs(1), CounterMsg::Total).await?;
+# assert_eq!(total, 0);
+# runtime.shutdown_and_wait().await?;
+# Ok(())
+# }
 ```
 
-The timeout covers both phases of a call:
+## The timeout and what can go wrong
 
-1. **Delivery:** `call` waits for the same conditions as `send`. Before the
-   actor starts, or during an expected restart, it waits for a mailbox to bind.
-   With a full FIFO mailbox, it waits for capacity. If the timeout expires in
-   this phase, the call returns `CallError::Timeout` and drops the request
-   before acceptance.
-2. **Reply:** after the mailbox accepts the request, `call` waits on its
-   one-shot reply channel. If the timeout expires now, the call returns
-   `CallError::Timeout`, but only the caller's wait is cancelled. The accepted
-   request remains in the mailbox, the actor may still process it, and
-   `Reply::send` silently discards a late result.
+The `Duration` you pass to `call` bounds the *entire* round trip: waiting for
+mailbox capacity, the actor picking the message up, and the reply arriving.
+[`CallError`] tells you which part failed:
 
-This boundary means that a timed-out call can have an **unknown outcome**. The
-caller cannot generally tell whether the request never reached the actor, is
-still queued, is currently running, or completed after the timeout.
+- `CallError::Send(rejection)` — the request never got in (actor permanently
+  terminated, for example).
+- `CallError::Timeout { .. }` — the deadline passed. Note that once the
+  request has been *accepted* into the mailbox, timing out cannot retract it:
+  the actor may still process the request; only the answer is abandoned.
+- `CallError::ReplyDropped { .. }` — the actor (or a forwarder) dropped the
+  `Reply` without answering. This is how you notice a handler that forgot a
+  code path — or a crashed one: if the actor fails while your request sits in
+  its mailbox, the mailbox dies with that run and the reply comes back as
+  `ReplyDropped` rather than hanging.
 
-## Side effects and retries
+Two practical rules:
 
-For read-only operations, ignoring a late reply is often enough. For commands
-that write to a database, charge a card, publish an event, or otherwise affect
-an external system, do not treat a timeout as proof that nothing happened.
-Give each logical operation an idempotency key that the actor and external
-system persist, or provide a reconciliation query that lets the caller learn
-the final status. Retry with the same key rather than creating a second
-logical operation.
+- **Always give `call` a real timeout.** It is your protection against a
+  stuck collaborator.
+- **Don't `call` yourself.** An actor that calls its own ref inside `handle`
+  deadlocks until the timeout: the reply can only be produced by the very
+  handler that is blocked waiting for it. Between actors, prefer sending a
+  message that carries a `Reply` onward instead of blocking inside `handle`
+  — an actor awaiting a `call` is not processing its own mailbox in the
+  meantime.
 
-Neither `CallError::Timeout` nor cancellation of the `call` future is a
-cancellation signal for actor work. If a protocol needs cooperative
-cancellation, model it explicitly in the message type and define what happens
-when cancellation races with completion.
+Request–reply is also the escape hatch from kokage's at-most-once delivery:
+if you need to *know* work happened, make the protocol say so with a reply.
+More on that contract in the next chapter.
 
-## Backpressure and restarts
-
-The timeout deliberately includes mailbox backpressure and restart backoff.
-Choose one that covers the queueing delay your service is willing to tolerate:
-
-- Use `try_send` for fire-and-forget messages when failing fast on a full
-  mailbox beats waiting. Recover the rejected message from the error when it
-  should take another route. There is no fail-fast variant of `call`.
-- Use `send_timeout(message, bound)` when ordinary message delivery may wait
-  briefly for capacity or a restart, but the caller needs the unaccepted
-  message back after a firm bound.
-- Use `call(timeout, ...)` when the caller can wait for capacity or a short
-  restart window, but needs a firm end-to-end bound.
-- Do not use `call` with a conflating mailbox. A newer value can replace the
-  request, causing `CallError::ReplyDropped`.
-
-A call waiting during an expected restart can succeed after the new actor
-incarnation binds. A request accepted by the old incarnation before it stops
-is still subject to the at-most-once delivery contract: it may be lost with
-that incarnation, in which case the reply channel closes with
-`CallError::ReplyDropped`.
-
-## Head-of-line blocking: calls from inside a handler
-
-An actor processes one message at a time. When a handler awaits a `call` to
-another actor, the calling actor's mailbox stops for the full round-trip:
-every queued message — a cancel bound for a healthy peer, an urgent status
-query — waits behind the outstanding request for up to the call's timeout.
-This is the natural way to write a request-routing actor, and it
-is the actor-model equivalent of blocking inside an Erlang `gen_server`
-callback: one slow callee becomes head-of-line blocking for everything
-routed through the intermediary.
-
-Not every handler needs to avoid it. A serial batch operation that mutates
-actor state between calls — a reconciliation sweep run while intake is quiet,
-for example — can reasonably stay inline, provided blocking the mailbox for
-its duration is an explicit, accepted trade-off.
-
-For fan-out and routing actors it rarely is. Pipeline the request off the
-handler loop instead of awaiting it, so the mailbox keeps moving while the
-call is outstanding. The loop owns the eventual completion separately from
-the mailbox, so it does not consume mailbox capacity:
-[Bounded actor offloads](actor-offloads.md) covers the mechanism and works the
-routing case end to end.
+[`Reply`]: https://stokes.io/kokage/api/kokage/struct.Reply.html
+[`Reply<T>`]: https://stokes.io/kokage/api/kokage/struct.Reply.html
+[`ActorRef::call`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.call
+[`CallError`]: https://stokes.io/kokage/api/kokage/enum.CallError.html

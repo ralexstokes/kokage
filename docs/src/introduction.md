@@ -1,86 +1,104 @@
 # Introduction
 
-Kokage brings OTP-style supervision and typed actors to an async Rust
-scheduler. Actors exchange typed messages through restart-stable
-`ActorRef<M>` values, while supervision trees decide which children restart
-together and how shutdown proceeds.
+**kokage** 木陰 — *actors in the shade of a supervision tree*.
 
-The guiding idea is **let it crash**: isolate fallible work in small children,
-keep restart decisions in their supervisor, and rebuild fresh state instead of
-trying to recover every failure in place.
+Kokage brings OTP-style supervision trees and typed actors to Rust, as a thin
+layer over an async scheduler (Tokio today). The organizing idea is the one
+that has kept telecom switches running for decades: **let it crash**. Instead
+of defensively handling every failure where it happens, you split your program
+into small, isolated units of work — actors and tasks — and let a *supervisor*
+restart the ones that fail.
 
-## The crates
+Three properties make that practical here:
 
-Most applications depend only on `kokage`. Its prelude contains the common
-actor, task, tree, and supervision-policy surface. Less common errors and
-control types remain at the crate root, raw actor execution lives under
-`kokage::raw`, and observation types live under `kokage::observe`.
+- **Typed mailboxes.** Every actor declares one message type, and the
+  [`ActorRef`] you use to reach it is typed accordingly. There is no `Any`
+  downcasting and no stringly-typed dispatch.
+- **Restart-stable references.** An [`ActorRef`] addresses the actor's
+  *membership* in the tree, not one particular run of it. When a supervisor
+  restarts an actor, existing refs transparently reconnect to the
+  replacement.
+- **One front door.** Supervision trees are the only way to build a running
+  system, so every actor and task is supervised, observable, and shut down in
+  a known order — there are no orphans.
 
-| Crate | Role |
-|---|---|
-| [`kokage`](https://stokes.io/kokage/api/kokage/index.html) | Typed actors and raw task children placed directly in ordered or dynamic supervision trees. |
-| `kokage-derive` | The optional `ActorFactory` derive, re-exported by `kokage`. |
-| `kokage-console` | An experimental live view over snapshots. |
+## What this book is
 
-## The mental model
+A tutorial. It builds up a small fault-tolerant service — a print shop with a
+front desk, presses that occasionally jam, and a growing cast of helpers —
+starting from a single actor and ending with dynamic membership, custom
+receive loops, and production observability.
 
-If you know Erlang/OTP or Elixir, the concepts map directly:
+The chapters are ordered from simple to advanced:
 
-| OTP concept | kokage equivalent |
-|---|---|
-| Supervisor + child specs | `OrderedTree` / `DynamicTree` + `ActorSpec` / `TaskSpec` |
-| `one_for_one` / `one_for_all` / `rest_for_one` | `Strategy::OneForOne` / `Strategy::OneForAll` / `Strategy::RestForOne` |
-| `permanent` / `transient` / `temporary` | `Restart::always()` / `Restart::on_failure()` / `Restart::never()` |
-| Restart intensity (`MaxR`/`MaxT`) | `Restart::on_failure().limit(max_restarts, within)` (or `.limit(...)` on either other mode) |
-| GenServer-like process with a mailbox | An `Actor` with stage-specific lifecycle contexts |
-| Registered process name | A typed `ActorRef<M>` passed during wiring; ids name scope-local children rather than global addresses |
+- **First Steps** — define an actor, spawn a tree, send messages, ask for
+  answers, and understand mailboxes and backpressure.
+- **Fault Tolerance** — crash things on purpose: restart policies, supervision
+  strategies, nested trees, and plain async tasks as supervised children.
+- **The Actor Toolkit** — lifecycle hooks, timers, blocking work, bounded
+  offloads, and watching peer actors.
+- **Advanced Composition** — trees whose membership changes at runtime,
+  cyclic wiring, ownership and shutdown semantics, and raw actors with
+  hand-written receive loops.
+- **In Production** — tracing, metrics, snapshots, and lifecycle streams.
 
-If you do not know OTP, the tutorial builds these pieces from scratch.
+Every Rust code block in this book is compiled — and most are run — against
+the current `kokage` sources as part of CI, so what you read is what the
+library actually does.
 
-One `Restart` value combines the exit mode, restart budget, and backoff. Call
-`limit` on whichever mode constructor fits the child; a child-level declaration
-replaces the enclosing scope's complete restart default. Whether a terminal
-child keeps its membership is a separate per-child declaration,
-`remove_when_done`, and is not inherited from the scope default.
+## Prerequisites
 
-An `ActorSpec<M>` declares one logical actor: its scope-local id, mailbox
-policy, restart policy, shutdown policy, terminal-membership retention, and
-incarnation factory. Adding it to a scope returns its typed, restart-stable
-sender; calling `actor_ref()` before placement yields the same sender earlier.
+You should be comfortable with basic Rust and have seen async/await and Tokio
+before. No prior actor-system or Erlang/OTP experience is assumed.
 
-An `OrderedTree` owns static declarations. A `DynamicTree` owns a scope whose
-membership can change at runtime. Moving a declaration into a tree establishes
-exactly one owner, and `spawn()` validates the complete tree before starting
-it.
+Kokage needs one dependency, and your binary needs Tokio for its entry point:
 
-A `RunningTree` owns the spawned tree. Keep it alive for the application's
-lifetime; use `running.scope()` and nested lookups to obtain cheaply cloned
-`ScopeRef` values for non-owning control and observation. Dropping the owner
-requests graceful shutdown; dropping a scope reference does not.
-
-## The running example
-
-The tutorial grows a small print shop:
-
-```text
-  orders ref ──▶ ┌────────────┐      ┌───────┐
-                 │ front-desk │ ───▶ │ press │
-                 └────────────┘      └───────┘
+```toml
+[dependencies]
+kokage = { git = "https://github.com/ralexstokes/kokage" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-- a front desk accepts orders;
-- a press performs work and may fail;
-- typed refs connect them;
-- the tree determines their restart relationships.
+The crates are early-stage and not yet on crates.io; APIs may change.
 
-Actors keep transient state inside each incarnation. Data that must survive a
-restart belongs in a durable factory capture, another actor, or external
-storage.
+## A taste
 
-## How to read this tutorial
+Here is the whole shape of a kokage program — declare actors, place them in a
+tree, spawn it, talk to them, shut down:
 
-Start with [Getting started](getting-started.md), then use
-[Actor wiring](actor-trees.md) for slots and cyclic references. Continue with
-[Supervised actors](supervised-actors.md) and
-[Inspectable supervision trees](supervision-trees.md) before adding runtime
-membership from [Dynamic actors](dynamic-actors.md).
+```rust,no_run
+use kokage::prelude::*;
+
+struct Press;
+
+impl Actor for Press {
+    type Msg = String;
+
+    async fn handle(&mut self, job: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        println!("printing {job}");
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = OrderedTree::new();
+    let press = tree.add_actor(ActorSpec::new("press", || Press));
+    let runtime = tree.spawn()?;
+
+    press.send("business cards x100".to_owned()).await?;
+
+    runtime.shutdown_and_wait().await?;
+    Ok(())
+}
+```
+
+If the press panics or returns an error, its supervisor restarts it and the
+`press` ref keeps working. The next chapter takes this apart piece by piece.
+
+Alongside the tutorial, the [API documentation](https://stokes.io/kokage/api/)
+covers the full reference surface, and the repository's
+[`examples/`](https://github.com/ralexstokes/kokage/tree/main/crates/kokage/examples)
+directory holds runnable programs for every feature this book touches.
+
+[`ActorRef`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html

@@ -1,147 +1,163 @@
-# Inspectable supervision trees
+# Supervision Trees
 
-`OrderedTree` and `DynamicTree` are single-use, identity-owning
-declarations. Actors are placed directly in them, so typed wiring and failure
-topology are expressed together.
+One press was a workshop. A real shop has structure: a press *room* with
+machines that work as a unit, and a front desk in front of it. Supervision
+trees let you draw that structure explicitly — and failure handling follows
+the drawing.
 
-## Recursive composition
+## Nesting scopes
+
+An [`OrderedTree`] can contain actors, tasks, and *other trees*. The shop:
 
 ```rust
-# use kokage::prelude::*;
-# struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let mut workers = OrderedTree::new().strategy(Strategy::OneForAll);
-workers.add_actor(ActorSpec::new("parse", || Worker));
-workers.add_actor(ActorSpec::new("index", || Worker));
+use kokage::prelude::*;
 
-let mut tree = OrderedTree::new().strategy(Strategy::OneForOne);
-tree.add_actor(ActorSpec::new("ingest", || Worker));
-tree.add_subtree("workers", workers);
-# let _ = tree;
+struct Press {
+    name: &'static str,
+}
+
+impl Actor for Press {
+    type Msg = String;
+
+    async fn handle(&mut self, job: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        println!("[{}] printed: {job}", self.name);
+        Ok(())
+    }
+}
+
+struct FrontDesk {
+    presses: Vec<ActorRef<String>>,
+    next: usize,
+}
+
+impl Actor for FrontDesk {
+    type Msg = String;
+
+    async fn handle(&mut self, job: String, _ctx: &mut Context<'_, Self>) -> ExitResult {
+        let press = &self.presses[self.next % self.presses.len()];
+        self.next += 1;
+        press.send(job).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The press room: two presses that share their fate.
+    let mut press_room = OrderedTree::new().strategy(Strategy::OneForAll);
+    let press_a = press_room.add_actor(ActorSpec::new("press-a", || Press { name: "press-a" }));
+    let press_b = press_room.add_actor(ActorSpec::new("press-b", || Press { name: "press-b" }));
+
+    // The shop: the press room first, then the front desk that feeds it.
+    let mut shop = OrderedTree::new();
+    shop.add_subtree("press-room", press_room);
+    let desk = shop.add_actor(ActorSpec::new("front-desk", move || FrontDesk {
+        presses: vec![press_a.clone(), press_b.clone()],
+        next: 0,
+    }));
+
+    let runtime = shop.spawn()?;
+
+    desk.send("posters x20".to_owned()).await?;
+    desk.send("stickers x300".to_owned()).await?;
+
+    runtime.shutdown_and_wait().await?;
+    Ok(())
+}
 ```
 
-A scope owns one namespace. Actor and subtree ids must be non-empty and unique
-among that scope's direct children. Sibling scopes have independent namespaces,
-so reusing `worker` beneath each is legal.
+Two structural rules do a lot of quiet work here:
 
-Child order is behavior in an ordered scope. Startup waits for each declared
-child's readiness before starting the next, shutdown visits children in reverse
-order, and `Strategy::RestForOne` restarts the failed child plus the suffix
-declared after it. A dynamic scope has no declared sequence.
+- **Startup order is declaration order.** The press room comes up before the
+  front desk, so by the time the desk takes its first order, the presses
+  exist. (Refs tolerate out-of-order anyway — `send` waits for the target to
+  bind — but ordered startup makes readiness reasoning easy.)
+- **Shutdown is the reverse.** The desk stops first — draining its queued
+  orders into the still-running presses — then the press room. Consumers
+  outlive their producers.
 
-Restart and shutdown defaults apply to every direct child edge, including an
-edge that wraps a subtree. The nested scope controls the defaults of its own
-children. Mailbox-capacity defaults apply only to actors directly in the scope;
-subtrees start from the standard default unless configured themselves.
+Child ids are local to their scope, so `"press-a"` may appear in two
+different rooms without conflict. Validation happens at `spawn`: duplicate
+ids in one scope, an empty id, a zero mailbox capacity, or a zero restart
+window all return a [`BuildError`] instead of a half-built tree.
 
-Tree lowering happens at `spawn` and at dynamic `add_subtree`. Invalid
-mailbox defaults, invalid ids, and duplicates are rejected before startup is
-scheduled.
+## Strategies: who shares the fate?
 
-## Identity exists before spawn
+Each scope has a [`Strategy`] deciding what a child's failure means for its
+siblings:
 
-Each tree has a stable reference as soon as it is created. This lets a factory
-capture a future scope without a global cell:
+- `Strategy::OneForOne` (default) — only the failed child restarts.
+  Independent workers.
+- `Strategy::OneForAll` — all children in the scope restart together. Use it
+  when siblings hold state about each other; our two presses share
+  calibration, so a fresh `press-a` must be paired with a fresh `press-b`.
+- `Strategy::RestForOne` — the failed child *and every child declared after
+  it* restart. This encodes a startup pipeline: later children depend on
+  earlier ones, so a failure invalidates everything downstream of it, but
+  not upstream.
 
-```rust
-# use kokage::prelude::*;
-# struct Router(kokage::ScopeRef);
-# impl kokage::Actor for Router { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let sessions = DynamicTree::new();
-let sessions_ref = sessions.scope();
-let router = ActorSpec::new("router", move || Router(sessions_ref.clone()));
+Because the strategy lives on the scope — not on the actors — you choose
+fate-sharing by *drawing the tree*, not by threading flags through actor
+code. Wiring (who holds a ref to whom) never changes execution topology.
 
-let mut app = OrderedTree::new();
-// Moving the nested tree transfers its identity into the root. Declaring
-// it first also makes it ready before the dependent router starts.
-app.add_subtree("sessions", sessions);
-app.add_actor(router);
-let app_ref = app.scope();
-# let _ = app_ref;
-```
+## Policies: defaults and overrides
 
-Moving a tree into `add_subtree` transfers ownership, while previously issued
-references continue to address the same identity.
-
-Use `SubtreeSpec` when the nested scope's edge needs policies distinct from its
-siblings. `restart` and `shutdown` configure how the parent restarts or stops
-the whole subtree; the tree's `default_restart` and `default_shutdown` still
-apply inside it:
+Restart and shutdown policies compose along the same structure. A tree sets
+defaults for its own children; each child may override; a nested subtree's
+*edge* in its parent is configured on the [`SubtreeSpec`]:
 
 ```rust
+# use std::time::Duration;
 # use kokage::{SubtreeSpec, prelude::*};
-let workers = OrderedTree::new();
-let mut app = OrderedTree::new();
-app.add_subtree(
-    "workers",
-    SubtreeSpec::from(workers)
-        .restart(Restart::never())
-        .shutdown(Shutdown::abort()),
+# let press_room = OrderedTree::new();
+// Defaults for children declared in this scope.
+let mut shop = OrderedTree::new()
+    .default_restart(Restart::on_failure().limit(5, Duration::from_secs(30)))
+    .default_shutdown(Shutdown::drain_for(Duration::from_secs(5)));
+
+// The press room as a child of the shop: its own restart budget as a unit.
+shop.add_subtree(
+    "press-room",
+    SubtreeSpec::from(press_room)
+        .restart(Restart::on_failure().limit(2, Duration::from_secs(60))),
 );
-# let _ = app;
+# let _ = shop;
 ```
 
-Trees deliberately do not implement `Clone`: one identity binds to one
-runtime. Before binding, control operations return `ControlError::Unavailable`,
-while projected snapshots and subscriptions are already usable. `spawn()`
-consumes the tree and returns its owning runtime. Dropping an unspawned tree or
-failing to spawn it makes issued references terminal.
+Note the two layers are different things: `default_restart` *inside*
+`press_room` would govern each press individually; the `SubtreeSpec` restart
+governs the press room *as a whole* when it exhausts its internal budget and
+fails upward. Nested scopes do not inherit the parent's defaults — each scope
+states its own.
 
-Dropping a non-owning reference does not stop a runtime. Dropping the owning
-`RunningTree` requests graceful shutdown, so `let _ = tree.spawn()?;` is a footgun:
-the temporary owner is dropped at the end of the statement.
+This is also your bulkhead design tool from the last chapter: a subtree is a
+blast compartment. Give a flaky subsystem its own scope with a modest budget,
+and its worst day costs the shop a compartment restart instead of the tree.
 
-## Inspect the declaration
+## Seeing the shape
 
-`outline()` returns an `observe::SupervisionOutline` without spawning:
+Trees can describe themselves before spawning. [`outline`] returns the
+declared structure — and `{:?}` on a tree prints it — which is handy in
+tests that pin down an application's topology:
 
 ```rust
 # use kokage::prelude::*;
-# struct Worker;
-# impl kokage::Actor for Worker { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let mut tree = OrderedTree::new().strategy(Strategy::RestForOne);
-tree.add_actor(ActorSpec::new("ingest", || Worker));
-tree.add_actor(ActorSpec::new("parse", || Worker));
-let outline = tree.outline();
-assert_eq!(outline.strategy, Strategy::RestForOne);
-assert_eq!(outline.child_ids(), ["ingest", "parse"]);
+# struct Press;
+# impl Actor for Press {
+#     type Msg = String;
+#     async fn handle(&mut self, _j: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
+# }
+let mut shop = OrderedTree::new();
+shop.add_subtree("press-room", OrderedTree::new());
+shop.add_actor(ActorSpec::new("front-desk", || Press));
+assert_eq!(shop.outline().child_ids(), ["press-room", "front-desk"]);
 ```
 
-Use the outline for configuration tests and topology review. Runtime snapshots
-and lifecycle watches cover live state.
-
-## Leader-owned scopes
-
-Represent an actor and its workers with an explicit nested tree:
-
-```rust
-# use kokage::prelude::*;
-# struct Leader;
-# impl kokage::Actor for Leader { type Msg = (); async fn handle(&mut self, (): (), _: &mut kokage::Context<'_, Self>) -> kokage::ExitResult { Ok(()) } }
-let mut session_runtime = OrderedTree::new().strategy(Strategy::OneForAll);
-session_runtime.add_actor(ActorSpec::new("leader", || Leader));
-session_runtime.add_subtree("children", DynamicTree::new());
-
-let mut sessions = OrderedTree::new();
-sessions.add_subtree("session-runtime", session_runtime);
-# let _ = sessions;
-```
-
-Inside the leader, resolve the declared scope explicitly with
-`ctx.scope().subtree("children")`. The lookup works during `on_start`, before
-the child scope has started, and returns a `ScopeRef`. Do not await that
-scope's readiness from the callback that must return before startup can
-continue. Check `kind()` when the tree shape is not already known;
-membership operations return `ControlError::NotDynamic` on an ordered scope.
-
-The containing strategy states the fate-sharing relationship. For example,
-`OneForAll` restarts the leader when a restartable worker failure exhausts
-the inner scope, while `RestForOne` respects declaration order.
+Actors are not the only thing a tree can supervise. Next: plain async tasks
+as first-class children.
 
 [`OrderedTree`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html
-[`DynamicTree`]: https://stokes.io/kokage/api/kokage/struct.DynamicTree.html
-[`ScopeRef`]: https://stokes.io/kokage/api/kokage/struct.ScopeRef.html
-[`ActorSpec`]: https://stokes.io/kokage/api/kokage/struct.ActorSpec.html
-[`observe::SupervisionOutline`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisionOutline.html
-[`ScopeKind`]: https://stokes.io/kokage/api/kokage/observe/enum.ScopeKind.html
-[`observe::SupervisorSnapshot`]: https://stokes.io/kokage/api/kokage/observe/struct.SupervisorSnapshot.html
+[`BuildError`]: https://stokes.io/kokage/api/kokage/enum.BuildError.html
+[`Strategy`]: https://stokes.io/kokage/api/kokage/enum.Strategy.html
+[`SubtreeSpec`]: https://stokes.io/kokage/api/kokage/struct.SubtreeSpec.html
+[`outline`]: https://stokes.io/kokage/api/kokage/struct.OrderedTree.html#method.outline

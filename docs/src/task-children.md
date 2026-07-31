@@ -1,0 +1,125 @@
+# Task Children
+
+Not everything is an actor. A cache warmer, a metrics flusher, a listener
+loop accepting connections — some children are just *futures* that should be
+supervised like everything else. [`TaskSpec`] declares an arbitrary async
+task as a first-class tree child, with the same restart policies, shutdown
+handling, and observability as actors.
+
+## Declaring a task
+
+```rust
+use kokage::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut tree = OrderedTree::new();
+
+    tree.add_task(
+        TaskSpec::new("cache-warmer", |ctx| async move {
+            println!("warming cache (generation {})", ctx.generation());
+            // ... load things ...
+            ctx.mark_ready();
+
+            // Then hold the warm cache until shutdown.
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .wait_for_ready(),
+    );
+
+    tree.add_task(TaskSpec::new("api", |ctx| async move {
+        println!("api serving (cache is warm)");
+        ctx.shutdown_token().cancelled().await;
+        Ok(())
+    }));
+
+    let runtime = tree.spawn()?;
+    runtime.scope().wait_started().await?;
+    runtime.shutdown_and_wait().await?;
+    Ok(())
+}
+```
+
+The closure you give [`TaskSpec::new`] receives a [`TaskContext`] and returns
+a future ending in [`ExitResult`] — the same contract as an actor: `Ok(())`
+is a clean completion, `Err` is a failure the supervisor answers with the
+child's restart policy.
+
+Because the closure is a factory (`Fn`, not `FnOnce`), it is called again for
+every restart — exactly like an actor factory. State captured by the closure
+must therefore be cloned *inside* it:
+
+```rust
+# use std::sync::Arc;
+# use kokage::prelude::*;
+# let jobs: Arc<Vec<String>> = Arc::new(vec![]);
+let spec = TaskSpec::new("indexer", move |ctx| {
+    let jobs = Arc::clone(&jobs);     // per-incarnation clone
+    async move {
+        let _ = (&jobs, ctx);
+        // ... use jobs ...
+        Ok(())
+    }
+});
+# let _ = spec;
+```
+
+## Cooperating with shutdown
+
+A task learns about shutdown through its context:
+
+- [`shutdown_token`] — a [`CancellationToken`] cancelled when the scope wants
+  the task to stop. A well-behaved loop `select!`s on it (or awaits
+  `cancelled()` as above) and returns `Ok(())`.
+- [`abort_token`] — cancelled when the *grace period has expired* and the
+  supervisor is about to abort the future outright. Use it for last-resort
+  cleanup of tasks whose work can't be interrupted mid-await.
+
+A task that ignores its tokens is not stuck forever: shutdown policies bound
+the wait, and after the grace period the future is aborted (recorded as an
+aborted exit, not a clean one).
+
+## Startup ordering with readiness
+
+In an ordered scope, children normally start one after another as soon as
+each future is spawned. When a later child genuinely depends on an earlier
+one having *finished doing something* — the API above needs the cache warm —
+pair [`wait_for_ready`] on the spec with [`mark_ready`] in the task: the
+supervisor holds back the next declared child until the mark. There is no
+built-in timeout on that wait, so make sure a `wait_for_ready` task always
+reaches `mark_ready` (or exits).
+
+## Policies and one-shot jobs
+
+Tasks take the same per-child configuration as actors:
+
+```rust
+# use std::time::Duration;
+# use kokage::prelude::*;
+let spec = TaskSpec::new("indexer", |_ctx| async move { Ok(()) })
+    .restart(Restart::never())
+    .shutdown(Shutdown::abort())
+    .remove_when_done();
+# let _ = spec;
+```
+
+`remove_when_done` is the interesting one for job-style work: after the task
+completes cleanly (with no pending restart), its membership is removed from
+the scope entirely, rather than sitting there as a stopped child. Combined
+with dynamic trees, this is the substrate for "run a job, then forget it" —
+see [Dynamic Trees](dynamic-trees.md).
+
+`ctx.generation()` tells a task which incarnation it is (0 for the first
+run), which is handy for logging and for warm-up work that only the first
+incarnation should do.
+
+[`TaskSpec`]: https://stokes.io/kokage/api/kokage/struct.TaskSpec.html
+[`TaskSpec::new`]: https://stokes.io/kokage/api/kokage/struct.TaskSpec.html#method.new
+[`TaskContext`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html
+[`ExitResult`]: https://stokes.io/kokage/api/kokage/type.ExitResult.html
+[`shutdown_token`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.shutdown_token
+[`abort_token`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.abort_token
+[`CancellationToken`]: https://stokes.io/kokage/api/kokage/struct.CancellationToken.html
+[`wait_for_ready`]: https://stokes.io/kokage/api/kokage/struct.TaskSpec.html#method.wait_for_ready
+[`mark_ready`]: https://stokes.io/kokage/api/kokage/struct.TaskContext.html#method.mark_ready
