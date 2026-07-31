@@ -1,6 +1,6 @@
 mod support;
 
-use support::RunnableBuilder;
+use support::ActorHostBuilder;
 
 use std::{any::Any, future::pending, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
@@ -120,7 +120,7 @@ fn runnable_actor<F>(label: &str, factory: F) -> (ActorHost, ActorRef<<F::Actor 
 where
     F: ActorFactory,
 {
-    let mut builder = RunnableBuilder::new();
+    let mut builder = ActorHostBuilder::new();
     let slot = ActorSlot::new(label);
     let actor_ref = slot.actor_ref();
     builder.define(slot, factory);

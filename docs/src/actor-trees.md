@@ -143,3 +143,10 @@ return. Custom supervision loops use `ActorHost::run_incarnation`, inspect its
 Dropping the host always terminates the binding, including when a `run_once`
 future is cancelled, so senders cannot wait forever for a rebind that will
 never happen.
+
+`IncarnationExit` has no panicked variant: a panicking actor resumes unwinding
+through `run_incarnation`, exactly as it does through `run_once`. A loop that
+restarts panicking actors therefore catches that unwind itself, wrapping the
+borrowed run future in `AssertUnwindSafe`. The host outlives the unwind, so the
+next incarnation binds a fresh mailbox behind the same `ActorRef` handles. See
+the `ActorHost::run_incarnation` API docs for the full loop.
