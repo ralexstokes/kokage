@@ -1137,4 +1137,69 @@ mod tests {
 
         assert_mailbox_closed(mailbox.try_send(()).expect_err("mailbox is closed"));
     }
+
+    fn incarnation_mailbox(actor_id: &Arc<str>) -> (MailboxRef<()>, MailboxReceiver<()>) {
+        let (sender, receiver) = mailbox(&MailboxMode::queue(), 1);
+        (MailboxRef::new(Arc::clone(actor_id), sender), receiver)
+    }
+
+    fn assert_bound_to(core: &BindingCore<()>, mailbox: &MailboxRef<()>) {
+        assert!(
+            matches!(&*core.current.borrow(), BindingState::Bound(current) if current.same_channel(mailbox))
+        );
+    }
+
+    /// A cancelled incarnation can drop its `BindingGuard` after a replacement
+    /// has already bound. Teardown must then find its own mailbox gone and
+    /// leave the replacement alone.
+    #[test]
+    fn unbind_ignores_a_mailbox_that_is_no_longer_bound() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = BindingCore::new(Arc::clone(&actor_id));
+        let (cancelled, _cancelled_rx) = incarnation_mailbox(&actor_id);
+        let (replacement, _replacement_rx) = incarnation_mailbox(&actor_id);
+
+        core.bind(cancelled.clone());
+        core.bind(replacement.clone());
+
+        assert!(!core.unbind_mailbox(&cancelled));
+        assert_bound_to(&core, &replacement);
+
+        assert!(core.unbind_mailbox(&replacement));
+        assert!(matches!(&*core.current.borrow(), BindingState::Unbound));
+    }
+
+    /// The same race under [`Restart::never`], where a late teardown would
+    /// otherwise make a live replacement binding permanently terminal.
+    #[test]
+    fn terminate_ignores_a_mailbox_that_is_no_longer_bound() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = BindingCore::new(Arc::clone(&actor_id));
+        let (cancelled, _cancelled_rx) = incarnation_mailbox(&actor_id);
+        let (replacement, _replacement_rx) = incarnation_mailbox(&actor_id);
+
+        core.bind(cancelled.clone());
+        core.bind(replacement.clone());
+
+        assert!(!core.terminate_mailbox(&cancelled));
+        assert_bound_to(&core, &replacement);
+
+        assert!(core.terminate_mailbox(&replacement));
+        assert!(matches!(&*core.current.borrow(), BindingState::Terminated));
+    }
+
+    /// Teardown of the last incarnation is also a no-op once the owning host
+    /// has already terminated the binding, so a terminal state never regresses.
+    #[test]
+    fn teardown_does_not_regress_a_terminated_binding() {
+        let actor_id: Arc<str> = Arc::from("worker");
+        let core = BindingCore::new(Arc::clone(&actor_id));
+        let (cancelled, _cancelled_rx) = incarnation_mailbox(&actor_id);
+
+        core.bind(cancelled.clone());
+        core.terminate();
+
+        assert!(!core.unbind_mailbox(&cancelled));
+        assert!(matches!(&*core.current.borrow(), BindingState::Terminated));
+    }
 }

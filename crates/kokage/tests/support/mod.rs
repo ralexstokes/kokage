@@ -18,11 +18,11 @@ pub(crate) struct TreeBuilder {
     tree: OrderedTree,
 }
 
-pub(crate) struct RunnableBuilder {
+pub(crate) struct ActorHostBuilder {
     actors: Vec<ActorHost>,
 }
 
-impl RunnableBuilder {
+impl ActorHostBuilder {
     pub(crate) fn new() -> Self {
         Self { actors: Vec::new() }
     }
@@ -42,22 +42,22 @@ impl RunnableBuilder {
         self.actor(slot.define(factory))
     }
 
-    pub(crate) fn build(self) -> RunnableActors {
-        RunnableActors(self.actors)
+    pub(crate) fn build(self) -> ActorHosts {
+        ActorHosts(self.actors)
     }
 }
 
-pub(crate) struct RunnableActors(Vec<ActorHost>);
+pub(crate) struct ActorHosts(Vec<ActorHost>);
 
-impl RunnableActors {
-    pub(crate) fn into_nodes(self) -> Vec<RunnableNode> {
-        self.0.into_iter().map(RunnableNode).collect()
+impl ActorHosts {
+    pub(crate) fn into_nodes(self) -> Vec<ActorHostNode> {
+        self.0.into_iter().map(ActorHostNode).collect()
     }
 }
 
-pub(crate) struct RunnableNode(ActorHost);
+pub(crate) struct ActorHostNode(ActorHost);
 
-impl RunnableNode {
+impl ActorHostNode {
     pub(crate) fn label(&self) -> &str {
         self.0.label()
     }

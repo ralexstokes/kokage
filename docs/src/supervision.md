@@ -203,8 +203,7 @@ decides whether queued messages are drained or discarded. Offload deadlines
 remain independent bounds on individual offloads; they do not extend the
 child grace. A host running an actor outside a tree passes the same `Shutdown`
 value to `ActorHost::run_once` or `ActorHost::run_incarnation`; a conventional
-standalone declaration is
-`Shutdown::drain_for(`[`raw::DEFAULT_SHUTDOWN_BOUND`]`)`.
+standalone declaration is `Shutdown::drain_for(`[`raw::DEFAULT_SHUTDOWN_BOUND`]`)`.
 
 ### One shutdown clock per child
 

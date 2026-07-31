@@ -207,7 +207,29 @@ pub enum IncarnationExit {
 }
 
 impl IncarnationExit {
-    fn into_result(self) -> Result<(), ActorRunError> {
+    /// Reports whether the incarnation failed.
+    ///
+    /// This is the restart question a custom supervision loop asks, and it
+    /// keeps answering it correctly as variants are added, unlike a `match`
+    /// with a catch-all arm forced by `#[non_exhaustive]`.
+    #[must_use]
+    pub fn is_failure(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+
+    /// Reports whether the host's shutdown future resolved before the actor
+    /// stopped.
+    ///
+    /// A supervision loop that restarts on a clean stop still ends on this.
+    #[must_use]
+    pub fn is_shutdown_requested(&self) -> bool {
+        matches!(self, Self::ShutdownRequested)
+    }
+
+    /// Converts this exit into the result [`ActorHost::run_once`] returns,
+    /// discarding the distinction between a clean stop and a requested
+    /// shutdown.
+    pub fn into_result(self) -> Result<(), ActorRunError> {
         match self {
             Self::Stopped | Self::ShutdownRequested => Ok(()),
             Self::Failed(error) => Err(error),
@@ -269,6 +291,78 @@ impl ActorHost {
     /// [`ActorRunError::ShutdownTimedOut`]. Actor panics resume unwinding; a
     /// custom loop that deliberately recovers from panics must catch that
     /// unwind around the borrowed run future.
+    ///
+    /// # Restarting a failed incarnation
+    ///
+    /// A panic is not an [`IncarnationExit`] variant, so a loop that supervises
+    /// panicking actors wraps the borrowed future in
+    /// [`AssertUnwindSafe`](std::panic::AssertUnwindSafe) and catches the
+    /// unwind itself. The host survives either way, so the next incarnation
+    /// binds a fresh mailbox behind the same [`ActorRef`] handles.
+    ///
+    /// ```
+    /// use std::{
+    ///     future::pending,
+    ///     panic::AssertUnwindSafe,
+    ///     sync::{
+    ///         Arc,
+    ///         atomic::{AtomicUsize, Ordering},
+    ///     },
+    /// };
+    ///
+    /// use futures_util::FutureExt;
+    /// use kokage::{
+    ///     ActorSpec, ExitResult, Shutdown,
+    ///     raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
+    /// };
+    ///
+    /// struct Flaky {
+    ///     runs: Arc<AtomicUsize>,
+    /// }
+    ///
+    /// impl RawActor for Flaky {
+    ///     type Msg = ();
+    ///
+    ///     async fn run(&mut self, _ctx: RawContext<()>) -> ExitResult {
+    ///         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
+    ///             return Err("first incarnation fails".into());
+    ///         }
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let runs = Arc::new(AtomicUsize::new(0));
+    /// let mut host = ActorSpec::new("worker", {
+    ///     let runs = Arc::clone(&runs);
+    ///     move || Flaky {
+    ///         runs: Arc::clone(&runs),
+    ///     }
+    /// })
+    /// .into_host();
+    ///
+    /// for _ in 0..3 {
+    ///     let exit = AssertUnwindSafe(
+    ///         host.run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
+    ///     )
+    ///     .catch_unwind()
+    ///     .await;
+    ///
+    ///     match exit {
+    ///         // Panicked, or exited with an error: run another incarnation.
+    ///         Err(_panic) => continue,
+    ///         Ok(exit) if exit.is_failure() => continue,
+    ///         // Stopped cleanly or was asked to shut down: give up the host.
+    ///         Ok(_) => break,
+    ///     }
+    /// }
+    ///
+    /// assert_eq!(runs.load(Ordering::SeqCst), 2);
+    /// // Dropping `host` here terminates the binding, so senders holding an
+    /// // `ActorRef` fail fast instead of waiting for a rebind.
+    /// # }
+    /// ```
     pub async fn run_incarnation<F>(
         &mut self,
         shutdown: F,
@@ -390,6 +484,10 @@ impl RunnableActor {
                 ready,
             )
             .await;
+        // Not reached for a panicking actor: that path resumes unwinding from
+        // inside the call above. `BindingGuard::drop` already makes the same
+        // transition this would, so the binding still lands where
+        // `run_disposition` would have put it.
         self.apply_run_disposition(run_disposition(restart, &exit));
         exit.into_result()
     }
@@ -498,6 +596,11 @@ impl RunnableActor {
                     ActorExitStatus::Panicked,
                     None,
                 );
+                // Unwinding skips every caller's post-run bookkeeping. The
+                // binding is safe regardless: `TypedRunner::start` binds
+                // before it builds the actor, so a live `BindingGuard`
+                // always unwinds with the actor task and clears the binding
+                // exactly as this exit's `run_disposition` would have.
                 std::panic::resume_unwind(err.into_panic());
             }
             Err(_err) if shutdown_timed_out => {
