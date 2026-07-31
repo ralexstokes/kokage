@@ -147,11 +147,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let press = tree.add_actor("press", move || Press {
         maintained: maintained_tx.clone(),
     });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     press.send(PressMsg::Job("posters x20".to_owned())).await?;
     maintained_rx.recv().await; // observe one maintenance pass
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

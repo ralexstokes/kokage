@@ -28,8 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "nested",
         SubtreeSpec::from(nested).restart(RestartPolicy::never()),
     );
-    let running = tree.spawn()?;
-    let scope = running.scope();
+    let running_tree = tree.spawn()?;
+    let scope = running_tree.scope();
     let mut snapshots = scope.snapshots();
 
     println!("initial snapshot:");
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    running.shutdown().await?;
+    running_tree.shutdown().await?;
     observer.await??;
 
     Ok(())

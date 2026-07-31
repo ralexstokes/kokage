@@ -82,7 +82,7 @@ async fn close_full_mailbox_during_bounded_send(
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("first incarnation starts");
     actor
         .send("fills first mailbox".to_owned())
@@ -97,7 +97,7 @@ async fn close_full_mailbox_during_bounded_send(
     fail.notify_one();
 
     let result = bounded.await.expect("bounded send task joins");
-    runtime
+    running_tree
         .shutdown()
         .await
         .expect("runtime shuts down cleanly");
@@ -168,7 +168,7 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
     assert!(!waiting.is_finished(), "bounded send waits for a binding");
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
     waiting
         .await
         .expect("bounded send task joins")
@@ -190,7 +190,7 @@ async fn unbound_try_send_and_send_timeout_return_the_message() {
     actor
         .try_send("one immediate attempt".to_owned())
         .expect("try_send is the immediate-attempt API");
-    runtime
+    running_tree
         .shutdown()
         .await
         .expect("runtime shuts down cleanly");
@@ -211,7 +211,7 @@ async fn full_mailbox_rejections_return_the_message() {
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("actor starts");
 
     actor
@@ -264,7 +264,7 @@ async fn full_mailbox_rejections_return_the_message() {
     assert_eq!(stats.messages_accepted, 2);
     assert_eq!(stats.sends_rejected, 2);
 
-    runtime
+    running_tree
         .shutdown()
         .await
         .expect("runtime shuts down cleanly");
@@ -285,7 +285,7 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("actor starts");
 
     actor
@@ -301,7 +301,7 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
     assert_eq!(stats.messages_conflated, 1);
 
     release.notify_one();
-    runtime
+    running_tree
         .shutdown()
         .await
         .expect("runtime shuts down cleanly");
@@ -332,7 +332,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
     started_rx.recv().await.expect("actor starts");
 
     actor
@@ -370,7 +370,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
         received_rx.try_recv().is_err(),
         "the timed-out replacement was not accepted"
     );
-    runtime
+    running_tree
         .shutdown()
         .await
         .expect("runtime shuts down cleanly");
@@ -433,8 +433,8 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
-    runtime
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
         .shutdown()
         .await
         .expect("runtime shuts down cleanly");

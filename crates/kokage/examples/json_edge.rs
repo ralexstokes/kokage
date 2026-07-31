@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .shutdown(Shutdown::graceful_for(std::time::Duration::from_secs(5)));
     let mut tree = Tree::new();
     let printer = tree.add_actor_spec(printer_spec);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     // A socket or file framing layer can supply the same byte slices.
     let input = b"{\"item\":\"labels\",\"quantity\":4}\n{\"item\":\"boxes\",\"quantity\":2}\n";
@@ -41,6 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

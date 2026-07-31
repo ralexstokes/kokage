@@ -69,11 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Compose the supervision tree, then run it.
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     orders.send("business cards x100".to_owned()).await?;
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
@@ -90,7 +90,7 @@ Keep that owner alive for as long as the application should run: dropping it
 requests graceful shutdown, so a discarded `let _ = tree.spawn()?;` shuts down
 immediately.
 
-`runtime.scope()` returns a cheap, cloneable, non-owning reference, parallel to
+`running_tree.scope()` returns a cheap, cloneable, non-owning reference, parallel to
 an `ActorRef`. `ScopeRef` is the common observation and control surface:
 snapshots, self-resynchronizing `changes()`, subtree traversal, and either
 non-waiting `request_shutdown()` or waiting `shutdown().await`. Dynamic scopes

@@ -506,10 +506,10 @@ async fn ws_streams_events() {
 
 #[tokio::test]
 async fn dynamic_tree_wires_public_observability() {
-    let runtime = DynamicTree::new()
+    let running_tree = DynamicTree::new()
         .spawn()
         .expect("failed to spawn empty runtime");
-    let console = ConsoleBuilder::for_runtime(&runtime.scope())
+    let console = ConsoleBuilder::for_runtime(&running_tree.scope())
         .bind(([127, 0, 0, 1], 0))
         .spawn()
         .await
@@ -521,7 +521,7 @@ async fn dynamic_tree_wires_public_observability() {
     let stats = read_json(&mut socket).await;
     assert_eq!(stats, json!({ "type": "actor_stats", "data": [] }));
 
-    runtime
+    running_tree
         .scope()
         .add_task_spec(TaskSpec::new("worker", |ctx| async move {
             ctx.shutdown_token().cancelled().await;
@@ -530,7 +530,7 @@ async fn dynamic_tree_wires_public_observability() {
         .await
         .expect("failed to add runtime child");
 
-    runtime
+    running_tree
         .scope()
         .add_actor_spec(ActorSpec::new("tracked", || IdleActor))
         .await
@@ -555,7 +555,10 @@ async fn dynamic_tree_wires_public_observability() {
     }
 
     console.shutdown();
-    runtime.shutdown().await.expect("failed to stop runtime");
+    running_tree
+        .shutdown()
+        .await
+        .expect("failed to stop runtime");
 }
 
 #[tokio::test]

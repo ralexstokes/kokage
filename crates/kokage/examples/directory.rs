@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         entries: HashMap::new(),
     });
     tree.add_subtree("dynamic", dynamic_tree);
-    let runtime = tree.spawn()?;
-    let handle = runtime.scope();
+    let running_tree = tree.spawn()?;
+    let handle = running_tree.scope();
     handle.wait_started().await?;
 
     let (printed, mut output) = mpsc::unbounded_channel();
@@ -85,6 +85,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     receipts.send("order #42".to_owned()).await?;
     println!("{}", output.recv().await.expect("printed receipt"));
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

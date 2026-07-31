@@ -68,7 +68,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         .default_restart(RestartPolicy::always());
     tree.add_actor_spec(healthy);
     tree.add_actor_spec(failing);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     timeout(Duration::from_secs(1), async {
         loop {
@@ -87,7 +87,7 @@ async fn demonstrate(strategy: Strategy) -> Result<(usize, usize), Box<dyn Error
         failing_runs.load(Ordering::SeqCst),
         healthy_runs.load(Ordering::SeqCst),
     );
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(counts)
 }
 

@@ -56,12 +56,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         next: 0,
     });
 
-    let runtime = shop.spawn()?;
+    let running_tree = shop.spawn()?;
 
     desk.send("posters x20".to_owned()).await?;
     desk.send("stickers x300".to_owned()).await?;
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

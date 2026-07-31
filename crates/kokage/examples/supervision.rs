@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tree.add_actor_spec(frontend_actor);
     tree.add_actor_spec(parser_actor);
     tree.add_actor_spec(sink_actor);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     frontend.send(FrontendMsg::Feed("hello".to_owned())).await?;
     println!(
@@ -99,6 +99,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     acked_rx.recv().await.expect("frontend ack");
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

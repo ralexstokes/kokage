@@ -49,9 +49,9 @@ impl Actor for RushPress {
 async fn main() -> Result<(), Box<dyn Error>> {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
 
-    let runtime = DynamicTree::new().spawn()?;
+    let running_tree = DynamicTree::new().spawn()?;
 
-    let scope = runtime.scope();
+    let scope = running_tree.scope();
     let orders = scope
         .add_actor("front-desk", || Frontend { rush: None })
         .await?;
@@ -76,6 +76,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     scope.remove_child("front-desk").await?;
     scope.remove_child("rush-press").await?;
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

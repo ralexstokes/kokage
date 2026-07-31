@@ -23,14 +23,14 @@ impl Actor for Worker {
     }
 }
 
-async fn sample(worker: ActorRef<&'static str>, runtime: ScopeRef, stop: CancellationToken) {
+async fn sample(worker: ActorRef<&'static str>, scope: ScopeRef, stop: CancellationToken) {
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
             _ = stop.cancelled() => break,
             _ = tick.tick() => {
                 let stats = worker.stats();
-                let restarts = runtime.snapshot().child(worker.id()).map_or(0, |c| c.restart_count);
+                let restarts = scope.snapshot().child(worker.id()).map_or(0, |c| c.restart_count);
                 println!("actor_messages_received_total{{actor=\"{}\"}} {}\nactor_messages_accepted_total{{actor=\"{}\"}} {}\nactor_sends_rejected_total{{actor=\"{}\"}} {}\nactor_mailbox_depth{{actor=\"{}\"}} {}\nactor_restarts_total{{actor=\"{}\"}} {}", worker.id(), stats.messages_received, worker.id(), stats.messages_accepted, worker.id(), stats.sends_rejected, worker.id(), stats.mailbox_depth, worker.id(), restarts);
             }
         }
@@ -45,12 +45,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let mut tree = Tree::new();
     let worker = tree.add_actor_spec(worker_spec);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     let sampler_stop = CancellationToken::new();
     let sampler = tokio::spawn(sample(
         worker.clone(),
-        runtime.scope(),
+        running_tree.scope(),
         sampler_stop.clone(),
     ));
     worker.send("hello stats").await?;
@@ -59,6 +59,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     sampler_stop.cancel();
     sampler.await?;
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

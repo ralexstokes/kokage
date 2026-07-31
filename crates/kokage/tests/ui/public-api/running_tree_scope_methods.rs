@@ -10,23 +10,23 @@ impl ActorTrait for Actor {
     }
 }
 
-async fn membership_operations_require_scope_ref(running: &RunningTree) {
-    let _ = running
+async fn membership_operations_require_scope_ref(running_tree: &RunningTree) {
+    let _ = running_tree
         .add_actor_spec(ActorSpec::new("actor", || Actor))
         .await;
-    let _ = running
+    let _ = running_tree
         .add_task_spec(TaskSpec::new("task", |_| async { Ok(()) }))
         .await;
-    let _ = running.add_subtree("tree", Tree::new()).await;
-    let _ = running.remove_child("child").await;
+    let _ = running_tree.add_subtree("tree", Tree::new()).await;
+    let _ = running_tree.remove_child("child").await;
 }
 
-async fn observation_and_control_require_scope_ref(running: &RunningTree) {
-    let _ = running.kind();
-    let _ = running.subtree("tree");
-    let _ = running.observe_children();
-    let _ = running.lifecycle_events();
-    let _ = running.actor_stats();
+async fn observation_and_control_require_scope_ref(running_tree: &RunningTree) {
+    let _ = running_tree.kind();
+    let _ = running_tree.subtree("tree");
+    let _ = running_tree.observe_children();
+    let _ = running_tree.lifecycle_events();
+    let _ = running_tree.actor_stats();
 }
 
 fn main() {}

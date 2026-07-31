@@ -35,9 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
 
-    let runtime = tree.spawn()?;
-    runtime.scope().wait_started().await?;
-    runtime.shutdown().await?;
+    let running_tree = tree.spawn()?;
+    running_tree.scope().wait_started().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

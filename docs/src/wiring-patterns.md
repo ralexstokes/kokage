@@ -80,12 +80,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = Tree::new();
     tree.add_actor_spec(desk_spec);
     tree.add_actor_spec(press_spec);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     desk_ref.send(DeskMsg::Order("menus x50".to_owned())).await?;
     println!("receipt for: {}", receipts_rx.recv().await.expect("printed"));
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

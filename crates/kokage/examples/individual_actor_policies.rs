@@ -71,8 +71,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut tree = Tree::new();
     tree.add_actor_spec(frontend_spec);
     tree.add_actor_spec(worker_spec);
-    let runtime = tree.spawn()?;
-    let handle = runtime.scope();
+    let running_tree = tree.spawn()?;
+    let handle = running_tree.scope();
 
     let baseline = handle
         .snapshot()
@@ -90,6 +90,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     frontend.send("after-restart".to_owned()).await?;
     println!("observed {}", observed_rx.recv().await.expect("message"));
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

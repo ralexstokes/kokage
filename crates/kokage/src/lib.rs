@@ -29,10 +29,10 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut tree = Tree::new();
 //! let echo_ref = tree.add_actor("echo", || Echo);
-//! let runtime = tree.spawn()?;
+//! let running_tree = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
-//! runtime.shutdown().await?;
+//! running_tree.shutdown().await?;
 //! # Ok(())
 //! # }
 //! ```

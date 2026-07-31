@@ -1432,8 +1432,8 @@ mod tests {
 
     #[tokio::test]
     async fn dynamic_membership_removal_is_explicit() {
-        let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        let dynamic = runtime.scope();
+        let running_tree = DynamicTree::new().spawn().expect("dynamic runtime builds");
+        let dynamic = running_tree.scope();
         let actor_ref = dynamic
             .add_actor_spec(
                 ActorSpec::new("ephemeral", || FailsOnMessage)
@@ -1442,19 +1442,19 @@ mod tests {
             )
             .await
             .expect("dynamic actor is inserted");
-        runtime
+        running_tree
             .scope()
             .wait_started()
             .await
             .expect("dynamic actor starts");
-        let mut snapshots = runtime.scope().snapshots();
+        let mut snapshots = running_tree.scope().snapshots();
         assert!(snapshots.latest().child("ephemeral").is_some());
         actor_ref.send(()).await.expect("dynamic message accepted");
         snapshots
             .wait_for(|snapshot| snapshot.child("ephemeral").is_none())
             .await
             .expect("explicitly ephemeral membership is removed");
-        runtime
+        running_tree
             .shutdown()
             .await
             .expect("dynamic runtime shuts down");

@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut tree = Tree::new();
     let press = tree.add_actor_spec(spec);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     // Accepted immediately; the press picks it up and blocks on the gate.
     press.send("job A".to_owned()).await?;
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Release the press twice and drain on shutdown.
     gate.add_permits(2);
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

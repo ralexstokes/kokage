@@ -41,13 +41,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Raw actors are declared and supervised exactly like handler actors.
     let mut tree = Tree::new();
     let press = tree.add_actor("batch-press", || BatchPress);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     for n in 1..=4 {
         press.send(format!("job {n}")).await?;
     }
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

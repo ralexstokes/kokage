@@ -67,12 +67,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let desk = tree.add_actor("front-desk", move || FrontDesk {
         quotes: quotes_tx.clone(),
     });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     desk.send(DeskMsg::RestockPaper { reams: 40 }).await?;
     println!("supplier says: {:?}", quotes_rx.recv().await.expect("quote"));
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

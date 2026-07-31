@@ -61,7 +61,7 @@ async fn a_continuation_chain_gives_ready_mailbox_input_a_turn() {
             release: Arc::clone(&release),
         }
     });
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     actor.send(Msg::Start).await.expect("chain starts");
     first_continuation.notified().await;
@@ -75,7 +75,7 @@ async fn a_continuation_chain_gives_ready_mailbox_input_a_turn() {
     assert_eq!(observed_rx.recv().await, Some("external"));
     assert_eq!(observed_rx.recv().await, Some("continuation"));
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 enum CooperateMsg {
@@ -127,7 +127,7 @@ async fn an_immediate_continuation_chain_cooperates_with_senders() {
             started: Arc::clone(&started),
         }
     });
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     let sender = {
         let actor = actor.clone();
@@ -152,7 +152,7 @@ async fn an_immediate_continuation_chain_cooperates_with_senders() {
     );
     sender.await.expect("sender task completes");
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -167,10 +167,10 @@ async fn an_immediate_continuation_chain_cooperates_with_shutdown() {
             started: Arc::clone(&started),
         }
     });
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     let stopper = {
-        let scope = runtime.scope();
+        let scope = running_tree.scope();
         let started = Arc::clone(&started);
         tokio::spawn(async move {
             started.notified().await;
@@ -179,7 +179,7 @@ async fn an_immediate_continuation_chain_cooperates_with_shutdown() {
     };
     actor.send(CooperateMsg::Start).await.expect("chain starts");
 
-    tokio::time::timeout(Duration::from_secs(1), runtime.wait())
+    tokio::time::timeout(Duration::from_secs(1), running_tree.wait())
         .await
         .expect("tree stops without draining the continuation chain")
         .expect("tree stops cleanly");
@@ -257,7 +257,7 @@ async fn a_timer_prefix_continuation_chain_checks_new_deliveries() {
             release_arm: Arc::clone(&release_arm),
         }
     });
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     let sender = {
         let actor = actor.clone();
@@ -288,5 +288,5 @@ async fn a_timer_prefix_continuation_chain_checks_new_deliveries() {
     );
     sender.await.expect("sender task completes");
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }

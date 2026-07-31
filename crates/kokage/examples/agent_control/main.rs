@@ -157,7 +157,7 @@ type AnyError = Box<dyn Error + Send + Sync>;
 const GATEWAY_MAILBOX: usize = 32;
 
 struct App {
-    runtime: kokage::RunningTree,
+    running_tree: kokage::RunningTree,
     gateway: ScopeRef,
     core: ScopeRef,
     sessions: DynamicScopeRef,
@@ -292,17 +292,17 @@ async fn build_app() -> Result<App, AnyError> {
     tree.add_subtree("sessions", sessions_runtime);
     tree.add_subtree("gateway", gateway_tree);
     tree.add_subtree("core", core_tree);
-    let runtime = tree.spawn()?;
-    let gateway = runtime
+    let running_tree = tree.spawn()?;
+    let gateway = running_tree
         .scope()
         .subtree("gateway")
         .expect("gateway runtime subtree");
-    let core = runtime
+    let core = running_tree
         .scope()
         .subtree("core")
         .expect("core runtime subtree");
     // `sessions_mount` was issued before the root existed and addresses the
-    // same identity the post-spawn `runtime.scope().subtree("sessions")`
+    // same identity the post-spawn `running_tree.scope().subtree("sessions")`
     // lookup would return, so the phases below drive it directly.
     let sessions = sessions_mount.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
@@ -320,7 +320,7 @@ async fn build_app() -> Result<App, AnyError> {
             });
 
     Ok(App {
-        runtime,
+        running_tree,
         gateway,
         core,
         sessions,
@@ -338,7 +338,7 @@ async fn build_app() -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.scope().wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.running_tree.scope().wait_started()).await??;
     assert_eq!(app.chat.sessions(), 1);
     assert!(app.sessions.snapshot().children.is_empty());
     assert!(!paused(&app.guard).await?);
@@ -754,11 +754,11 @@ async fn phase_8(app: App, latency: LatencyRecorder) -> Result<(), AnyError> {
             .message_bytes_accepted
             .is_some_and(|bytes| bytes > 0)
     );
-    let recursive_stats = app.runtime.scope().actor_stats();
+    let recursive_stats = app.running_tree.scope().actor_stats();
     let session_stats = app.sessions.actor_stats();
-    let final_snapshot = app.runtime.scope().snapshot();
+    let final_snapshot = app.running_tree.scope().snapshot();
     drop(app.lifecycle_watch);
-    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown()).await??;
+    tokio::time::timeout(Duration::from_secs(5), app.running_tree.shutdown()).await??;
     let latency = latency.snapshot();
     assert!(
         latency

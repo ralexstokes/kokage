@@ -90,9 +90,9 @@ where
     builder.define(actor_ref_slot, factory);
     let graph = builder.build();
 
-    let runtime = graph.strategy(Strategy::OneForOne);
+    let tree = graph.strategy(Strategy::OneForOne);
 
-    (runtime, actor_ref)
+    (tree, actor_ref)
 }
 
 fn restart_observer(handle: &ScopeRef, id: &str) -> (SupervisorSnapshotReceiver, u64) {
@@ -118,11 +118,11 @@ async fn await_restart(mut snapshots: SupervisorSnapshotReceiver, id: &str, base
 #[tokio::test]
 async fn runtime_spawn_combines_actor_refs_and_supervisor_control() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || Observe {
+    let (tree, worker_ref) = build_runtime(move || Observe {
         observed: observed_tx.clone(),
     });
 
-    let handle = runtime.spawn().expect("runtime builds");
+    let handle = tree.spawn().expect("runtime builds");
 
     assert_eq!(
         handle.scope().snapshot().state,
@@ -149,10 +149,10 @@ async fn runtime_spawn_combines_actor_refs_and_supervisor_control() {
 #[tokio::test]
 async fn runtime_handle_enumerates_actor_stats() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || Observe {
+    let (tree, worker_ref) = build_runtime(move || Observe {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let handle = tree.spawn().expect("runtime builds");
 
     worker_ref
         .send("counted".to_owned())
@@ -767,10 +767,10 @@ impl RawActor for FailAfterObserve {
 #[tokio::test]
 async fn actor_stats_accumulate_across_supervised_restarts() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || FailAfterObserve {
+    let (tree, worker_ref) = build_runtime(move || FailAfterObserve {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let handle = tree.spawn().expect("runtime builds");
 
     worker_ref
         .send("first".to_owned())
@@ -810,11 +810,11 @@ async fn actor_stats_accumulate_across_supervised_restarts() {
 #[tokio::test]
 async fn tree_spawn_accepts_ref_cloned_before_startup() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
+    let (tree, worker_ref) = build_runtime(move || ObserveOnce {
         observed: observed_tx.clone(),
     });
 
-    let handle = runtime.spawn().expect("runtime builds");
+    let handle = tree.spawn().expect("runtime builds");
     let mut snapshots = handle.scope().snapshots();
     let sender = tokio::spawn(async move {
         worker_ref
@@ -855,11 +855,11 @@ async fn tree_spawn_accepts_ref_cloned_before_startup() {
 #[tokio::test]
 async fn runtime_spawn_wait_drives_to_completion_with_control_surface() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, worker_ref) = build_runtime(move || ObserveOnce {
+    let (tree, worker_ref) = build_runtime(move || ObserveOnce {
         observed: observed_tx.clone(),
     });
 
-    let handle = runtime.spawn().expect("runtime builds");
+    let handle = tree.spawn().expect("runtime builds");
     let control = handle.scope();
 
     control
@@ -1201,14 +1201,14 @@ async fn supervised_restart_constructs_fresh_actor_state() {
 
 #[tokio::test]
 async fn ordered_tree_spawns_and_shuts_down_without_children() {
-    let runtime = Tree::new().spawn().expect("empty ordered tree builds");
-    runtime
+    let running_tree = Tree::new().spawn().expect("empty ordered tree builds");
+    running_tree
         .scope()
         .wait_started()
         .await
         .expect("empty ordered tree starts");
-    assert!(runtime.scope().snapshot().children.is_empty());
-    runtime
+    assert!(running_tree.scope().snapshot().children.is_empty());
+    running_tree
         .shutdown()
         .await
         .expect("empty ordered tree shuts down");
@@ -1216,10 +1216,10 @@ async fn ordered_tree_spawns_and_shuts_down_without_children() {
 
 #[tokio::test]
 async fn dynamic_tree_idles_empty_until_an_actor_is_added() {
-    let runtime = DynamicTree::new()
+    let running_tree = DynamicTree::new()
         .spawn()
         .expect("empty dynamic tree builds");
-    let handle = runtime.scope();
+    let handle = running_tree.scope();
     handle
         .wait_started()
         .await
@@ -1235,7 +1235,10 @@ async fn dynamic_tree_idles_empty_until_an_actor_is_added() {
     actor.send(()).await.expect("added actor is running");
     assert!(handle.snapshot().child("worker").is_some());
 
-    runtime.shutdown().await.expect("dynamic tree shuts down");
+    running_tree
+        .shutdown()
+        .await
+        .expect("dynamic tree shuts down");
 }
 
 #[derive(Clone)]

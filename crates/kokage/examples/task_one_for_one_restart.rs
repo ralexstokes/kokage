@@ -42,9 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = Tree::new();
     tree.add_task_spec(flaky);
     tree.add_task_spec(metrics);
-    let running_owner = tree.spawn()?;
-    let running = running_owner.scope();
-    let mut snapshots = running.snapshots();
+    let running_tree = tree.spawn()?;
+    let scope = running_tree.scope();
+    let mut snapshots = scope.snapshots();
     let restarted = timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("flaky-worker", |child| {
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         restarted.generation
     );
 
-    running.shutdown().await?;
+    scope.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

@@ -10,8 +10,8 @@ const WAIT: Duration = Duration::from_secs(3);
 
 #[tokio::test]
 async fn changes_begin_with_state_then_deliver_new_transitions() {
-    let runtime = DynamicTree::new().spawn().expect("dynamic tree builds");
-    let scope = runtime.scope();
+    let running_tree = DynamicTree::new().spawn().expect("dynamic tree builds");
+    let scope = running_tree.scope();
     let mut changes = scope.changes();
 
     let ScopeChange::Reset(initial) = changes.next().await.expect("initial reset") else {
@@ -54,13 +54,13 @@ async fn changes_begin_with_state_then_deliver_new_transitions() {
     .await
     .expect("started transition arrives");
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
 async fn changes_replace_lag_with_a_fresh_reset() {
-    let runtime = DynamicTree::new().spawn().expect("dynamic tree builds");
-    let scope = runtime.scope();
+    let running_tree = DynamicTree::new().spawn().expect("dynamic tree builds");
+    let scope = running_tree.scope();
     let mut changes = scope.changes();
     assert!(matches!(changes.next().await, Some(ScopeChange::Reset(_))));
 
@@ -90,7 +90,7 @@ async fn changes_replace_lag_with_a_fresh_reset() {
     assert_eq!(reset.children.len(), 70);
     assert_eq!(reset, scope.snapshot());
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -102,7 +102,7 @@ async fn changes_keep_supervisor_transitions_on_the_correct_side_of_reset() {
         panic!("a change stream must begin with a reset");
     };
 
-    let runtime = tree.spawn().expect("dynamic tree builds");
+    let running_tree = tree.spawn().expect("dynamic tree builds");
     assert!(matches!(
         timeout(WAIT, changes.next()).await.expect("startup event"),
         Some(ScopeChange::Event { event, .. })
@@ -131,12 +131,12 @@ async fn changes_keep_supervisor_transitions_on_the_correct_side_of_reset() {
     .expect("shutdown transitions arrive");
     assert!(stopping);
     assert!(stopped);
-    runtime.wait().await.expect("tree stops");
+    running_tree.wait().await.expect("tree stops");
 
     let tree = DynamicTree::new();
     let scope = tree.scope();
     let mut startup = scope.lifecycle_events();
-    let runtime = tree.spawn().expect("second tree builds");
+    let running_tree = tree.spawn().expect("second tree builds");
     timeout(WAIT, async {
         while let Some(event) = startup.next().await {
             if matches!(event.kind, LifecycleEventKind::SupervisorStarted) {
@@ -157,5 +157,5 @@ async fn changes_keep_supervisor_transitions_on_the_correct_side_of_reset() {
             .is_err(),
         "startup represented by the reset must not be replayed"
     );
-    runtime.shutdown().await.expect("second tree stops");
+    running_tree.shutdown().await.expect("second tree stops");
 }

@@ -112,10 +112,10 @@ async fn runtime_with_watched_subtree() -> (
     kokage::ActorRef<()>,
     mpsc::UnboundedReceiver<(u64, LifecycleEvent)>,
 ) {
-    let runtime = DynamicTree::new().spawn().expect("runtime builds");
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
     let sink_generation = Arc::new(AtomicU64::new(0));
-    let sink = support::dynamic_root(&runtime)
+    let sink = support::dynamic_root(&running_tree)
         .add_actor_spec(
             ActorSpec::new("sink", move || {
                 let generation = sink_generation.fetch_add(1, Ordering::SeqCst);
@@ -132,7 +132,7 @@ async fn runtime_with_watched_subtree() -> (
     let crasher_slot = ActorSlot::new("crasher");
     let crasher = crasher_slot.actor_ref();
     graph.define(crasher_slot, || Crasher);
-    let watched = support::dynamic_root(&runtime)
+    let watched = support::dynamic_root(&running_tree)
         .add_subtree(
             "watched",
             graph
@@ -141,11 +141,11 @@ async fn runtime_with_watched_subtree() -> (
         )
         .await
         .expect("watched subtree added");
-    timeout(Duration::from_secs(2), runtime.scope().wait_started())
+    timeout(Duration::from_secs(2), running_tree.scope().wait_started())
         .await
         .expect("runtime startup timed out")
         .expect("runtime starts");
-    (runtime, watched, sink, crasher, observed_rx)
+    (running_tree, watched, sink, crasher, observed_rx)
 }
 
 async fn recv_event(
@@ -379,20 +379,20 @@ async fn lifecycle_pump_stops_on_watched_or_target_terminality() {
 
 #[tokio::test]
 async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
-    let runtime = DynamicTree::new().spawn().expect("runtime builds");
+    let running_tree = DynamicTree::new().spawn().expect("runtime builds");
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    support::dynamic_root(&runtime)
+    support::dynamic_root(&running_tree)
         .add_actor_spec(ActorSpec::new("sink", move || ScopeSink {
             observed: observed_tx.clone(),
             watch: None,
         }))
         .await
         .expect("scope sink added");
-    let crasher = support::dynamic_root(&runtime)
+    let crasher = support::dynamic_root(&running_tree)
         .add_actor_spec(ActorSpec::new("crasher", || Crasher).restart(RestartPolicy::on_failure()))
         .await
         .expect("crasher added");
-    runtime
+    running_tree
         .scope()
         .wait_started()
         .await
@@ -423,6 +423,6 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
                 && matches!(child.kind, ChildEventKind::RestartScheduled { .. })
     ));
 
-    let handle = runtime.scope();
+    let handle = running_tree.scope();
     shutdown_runtime(&handle, "context-scope lifecycle pump shutdown").await;
 }

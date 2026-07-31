@@ -510,11 +510,15 @@ async fn supervised_graceful_shutdown_marks_monitor_exit_cancelled() {
         watch_mode: WatchMode::Detach,
     }));
     tree.add_actor_spec(peer_spec);
-    let running = tree.spawn().expect("tree builds");
-    running.scope().wait_started().await.expect("actors start");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actors start");
 
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
-    running
+    running_tree
         .shutdown()
         .await
         .expect("cooperative shutdown succeeds");
@@ -546,8 +550,12 @@ async fn supervised_natural_completion_is_not_marked_cancelled() {
         }
     }));
     tree.add_actor_spec(peer_spec);
-    let running = tree.spawn().expect("tree builds");
-    running.scope().wait_started().await.expect("actors start");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actors start");
 
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     peer_ref
@@ -563,7 +571,7 @@ async fn supervised_natural_completion_is_not_marked_cancelled() {
         Some(0)
     );
 
-    running
+    running_tree
         .shutdown()
         .await
         .expect("remaining tree stops cleanly");
@@ -589,12 +597,16 @@ async fn assert_supervised_grace_expiry_status(expected: ExitStatus) {
         watch_mode: WatchMode::Detach,
     }));
     tree.add_actor_spec(peer_spec);
-    let running = tree.spawn().expect("tree builds");
-    running.scope().wait_started().await.expect("actors start");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actors start");
 
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     assert!(matches!(
-        running.shutdown().await,
+        running_tree.shutdown().await,
         Err(SupervisorError::ShutdownTimedOut(_))
     ));
     assert_eq!(
@@ -1785,8 +1797,8 @@ impl RawActor for UnitObserver {
 #[tokio::test]
 async fn supervisor_abort_delivers_failure_exited_then_removed() {
     let (peer_started_tx, mut peer_started) = mpsc::unbounded_channel();
-    let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-    let peer_ref = support::dynamic_root(&runtime)
+    let running_tree = DynamicTree::new().spawn().expect("dynamic runtime builds");
+    let peer_ref = support::dynamic_root(&running_tree)
         .add_actor_spec(
             ActorSpec::new("peer", move || StubbornPeer {
                 started: peer_started_tx.clone(),
@@ -1797,7 +1809,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
         .expect("peer added");
     let (observed_tx, mut observed) = mpsc::unbounded_channel();
     let (observer_started_tx, mut observer_started) = mpsc::unbounded_channel();
-    support::dynamic_root(&runtime)
+    support::dynamic_root(&running_tree)
         .add_actor_spec(ActorSpec::new("observer", {
             let peer_ref = peer_ref.clone();
             move || UnitObserver {
@@ -1812,7 +1824,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
     started(&mut observer_started).await;
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
 
-    support::dynamic_root(&runtime)
+    support::dynamic_root(&running_tree)
         .remove_child("peer")
         .await
         .expect("peer removed by abort");
@@ -1831,7 +1843,10 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
         "removing the child terminates the binding"
     );
 
-    runtime.shutdown().await.expect("runtime stopped cleanly");
+    running_tree
+        .shutdown()
+        .await
+        .expect("runtime stopped cleanly");
 }
 
 #[derive(Clone)]

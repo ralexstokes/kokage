@@ -52,10 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     // Readiness: wait until every child is running.
-    let mut snapshots = runtime.snapshots();
+    let mut snapshots = running_tree.snapshots();
     let ready = snapshots
         .wait_for(|s| s.children.iter().all(|c| c.state.is_running()))
         .await?;
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ready.total_restarts
     );
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
@@ -96,7 +96,7 @@ If the consumer falls behind, Kokage registers a fresh gap-free subscription
 and yields another reset instead of exposing bookkeeping as application logic:
 
 ```rust,ignore
-let mut changes = runtime.scope().changes();
+let mut changes = running_tree.scope().changes();
 while let Some(change) = changes.next().await {
     match change {
         ScopeChange::Reset(snapshot) => state = snapshot,
@@ -127,8 +127,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let runtime = tree.spawn()?;
-    let scope = runtime.scope();
+    let running_tree = tree.spawn()?;
+    let scope = running_tree.scope();
     let mut events = scope.lifecycle_events();
 
     scope.request_shutdown();
@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
-    runtime.wait().await?;
+    running_tree.wait().await?;
     Ok(())
 }
 ```

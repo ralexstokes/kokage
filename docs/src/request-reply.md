@@ -71,7 +71,7 @@ freshly minted `Reply` and returns the message to send:
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = Tree::new();
     let desk = tree.add_actor("front-desk", || FrontDesk { orders_taken: 0 });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     let price = desk
         .call(|reply| DeskMsg::Quote { pages: 250, reply }, Duration::from_secs(1))
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     desk.send(DeskMsg::Order("250-page manual".to_owned())).await?;
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
@@ -106,10 +106,10 @@ enum CounterMsg {
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let mut tree = Tree::new();
 # let counter = tree.add_actor("counter", || Counter { total: 0 });
-# let runtime = tree.spawn()?;
+# let running_tree = tree.spawn()?;
 let total = counter.call(CounterMsg::Total, Duration::from_secs(1)).await?;
 # assert_eq!(total, 0);
-# runtime.shutdown().await?;
+# running_tree.shutdown().await?;
 # Ok(())
 # }
 ```
