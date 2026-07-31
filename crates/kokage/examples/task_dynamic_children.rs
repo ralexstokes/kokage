@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scope = running_tree.scope();
     let mut snapshots = scope.snapshots();
 
-    let cache_warmer = scope
+    scope
         .add_task("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
 
-    scope
+    let cache_warmer = scope
         .add_task("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
     let mut nested_snapshots = nested.snapshots();
-    let nested_cache = nested
+    nested
         .add_task("seed", |ctx| async move {
             println!("nested seed started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("nested supervisor added at runtime");
 
-    nested
+    let nested_cache = nested
         .add_task("nested-cache", |ctx| async move {
             println!("nested-cache started in generation {}", ctx.generation());
 
