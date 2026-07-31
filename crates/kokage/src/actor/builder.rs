@@ -529,6 +529,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn actor_slot_define_returns_a_default_spec_with_the_same_binding() {
+        let slot = ActorSlot::<String>::new("slot");
+        let actor_ref = slot.actor_ref();
+        let spec = slot.define(|| StringActor);
+
+        assert_eq!(spec.actor_options.mailbox_capacity, None);
+        assert!(spec.actor_options.size_hint.is_none());
+        assert_eq!(spec.restart, None);
+        assert_eq!(spec.shutdown, None);
+        assert_eq!(actor_ref.stats().message_bytes_accepted, None);
+
+        let _actor = spec.message_size(String::len).into_runnable();
+
+        assert_eq!(actor_ref.stats().message_bytes_accepted, Some(0));
+    }
+
     struct StringActor;
     impl Actor for StringActor {
         type Msg = String;

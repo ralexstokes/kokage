@@ -23,10 +23,13 @@ names absent.
 the common prelude vocabulary in their declared tiers. `removed_host_module.rs`
 pins the replacement of the former `host` module by `raw` and root exports.
 `send_error_types_removed.rs` keeps the superseded `TrySendError` and
-`SendTimeoutError` carriers absent.
+`SendTimeoutError` carriers absent. `actor_slot_configuration_removed.rs`
+pins that cyclic slots do not duplicate the configuration vocabulary of the
+`ActorSpec` returned by `define`.
 
-`declaration-unsealed/` contains compile-pass probes proving actor and slot
-mailbox configuration remains available after one or more `actor_ref()` calls.
+`declaration-unsealed/` contains compile-pass probes proving declarations can
+still be configured after one or more `actor_ref()` calls. For a slot, the
+configuration is applied to the spec returned by `define`.
 
 `lifecycle-stages/` covers the capabilities withheld from actor callbacks.
 `StopContext` cannot queue a continuation after the receive loop has ended, a

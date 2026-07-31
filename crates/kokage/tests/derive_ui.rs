@@ -18,13 +18,14 @@ fn derive_ui() {
     // a nested scope declaration.
     t.compile_fail("tests/ui/single-use-tree/*.rs");
 
-    // Minting a stable ref borrows the declaration. Mailbox options remain
-    // configurable until the spec or slot is consumed by placement/define.
+    // Minting a stable ref borrows the declaration. ActorSpec options remain
+    // configurable until placement; ActorSlot options begin after define.
     t.pass("tests/ui/declaration-unsealed/*.rs");
 
     // Public API tiers are intentionally disjoint: task declarations and
     // their shared error surface live at the root, raw actor hosting and
     // observation have named modules, and neither escape hatch is in the
-    // prelude. The low-level supervisor layer remains private.
+    // prelude. The low-level supervisor layer remains private, and ActorSlot
+    // exposes only cyclic-ref construction and definition.
     t.compile_fail("tests/ui/public-api/*.rs");
 }
