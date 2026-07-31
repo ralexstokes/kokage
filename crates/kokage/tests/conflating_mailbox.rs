@@ -12,7 +12,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, CallError, Context, ExitResult, MailboxMode, Reply, Restart, Shutdown,
+    Actor, ActorSlot, CallError, Context, ExitResult, MailboxMode, Reply, Shutdown,
     raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -74,15 +74,14 @@ async fn conflate_keeps_only_the_newest_unread_message() {
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -142,15 +141,14 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -215,15 +213,14 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -283,15 +280,14 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -381,15 +377,14 @@ async fn replaced_call_reports_reply_dropped() {
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -481,15 +476,14 @@ async fn draining_shutdown_handles_latest_message_after_shutdown() {
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -543,15 +537,14 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
         .into_nodes()
         .pop()
         .expect("graph contains actor")
-        .into_runnable();
+        .into_host();
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await

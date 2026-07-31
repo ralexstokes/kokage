@@ -7,8 +7,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSpec, CallError, ExitResult, Reply, Restart, Shutdown,
-    raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    ActorSpec, CallError, ExitResult, Reply, Shutdown,
+    raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::{
     sync::{Notify, mpsc},
@@ -18,15 +18,14 @@ use tokio_util::sync::CancellationToken;
 
 const CALL_TIMEOUT: Duration = Duration::from_millis(50);
 
-fn start(actor: RunnableActor) -> (CancellationToken, tokio::task::JoinHandle<()>) {
+fn start(actor: ActorHost) -> (CancellationToken, tokio::task::JoinHandle<()>) {
     let stop = CancellationToken::new();
     let task = tokio::spawn({
         let stop = stop.clone();
         async move {
             actor
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -66,7 +65,7 @@ impl RawActor for ReplyImmediately {
 async fn timeout_before_mailbox_binding_drops_the_request() {
     let spec = ActorSpec::new("rpc", || ReplyImmediately);
     let rpc = spec.actor_ref();
-    let actor = spec.into_runnable();
+    let actor = spec.into_host();
 
     assert!(matches!(
         rpc.call(CALL_TIMEOUT, Request::Get).await,
@@ -133,7 +132,7 @@ async fn timeout_under_fifo_backpressure_drops_the_unaccepted_request() {
     })
     .mailbox_capacity(1);
     let rpc = spec.actor_ref();
-    let (stop_token, task) = start(spec.into_runnable());
+    let (stop_token, task) = start(spec.into_host());
     started_rx.recv().await.expect("actor started");
 
     rpc.send(BackpressuredRequest::Occupy)
@@ -199,7 +198,7 @@ async fn timeout_after_acceptance_does_not_cancel_actor_work_or_late_reply() {
         }
     });
     let rpc = spec.actor_ref();
-    let (stop_token, task) = start(spec.into_runnable());
+    let (stop_token, task) = start(spec.into_host());
 
     let call = tokio::spawn({
         let rpc = rpc.clone();
@@ -252,7 +251,7 @@ async fn accepted_unread_request_lost_with_incarnation_reports_reply_dropped() {
         }
     });
     let rpc = spec.actor_ref();
-    let (_stop_token, task) = start(spec.into_runnable());
+    let (_stop_token, task) = start(spec.into_host());
     started_rx.recv().await.expect("actor started");
 
     let call = tokio::spawn({

@@ -1,10 +1,10 @@
 use std::{error::Error, future::pending, marker::PhantomData};
 
 use kokage::{
-    Actor, ActorSpec, CancellationToken, Context, ExitResult, Restart, Shutdown,
-    raw::DEFAULT_SHUTDOWN_BOUND,
+    Actor, ActorSpec, CancellationToken, Context, ExitResult, Shutdown,
+    raw::{DEFAULT_SHUTDOWN_BOUND, IncarnationExit},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 enum Command<M> {
     Observe(M),
@@ -61,14 +61,21 @@ async fn run() -> Result<(), Box<dyn Error>> {
         Observe::<String>::new(observed_tx.clone())
     });
     let frontend = spec.actor_ref();
-    let actor = spec.into_runnable();
-    let first_run = tokio::spawn({
-        let actor = actor.clone();
+    let mut actor = spec.into_host();
+    let stop = CancellationToken::new();
+    let (first_exit_tx, first_exit_rx) = oneshot::channel();
+    let (restart_tx, restart_rx) = oneshot::channel();
+    let actor_task = tokio::spawn({
+        let stop = stop.clone();
         async move {
+            let first_exit = actor
+                .run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+                .await;
+            let _ = first_exit_tx.send(first_exit);
+            let _ = restart_rx.await;
             actor
-                .run_until(
-                    pending::<()>(),
-                    Restart::on_failure(),
+                .run_once(
+                    stop.cancelled(),
                     Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                 )
                 .await
@@ -78,26 +85,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
     println!("observed {:?}", observed_rx.recv().await);
 
     frontend.send(Command::Fail).await?;
-    let _failure = first_run.await?.expect_err("first run fails");
+    assert!(matches!(first_exit_rx.await?, IncarnationExit::Failed(_)));
     println!("actor is waiting for its next binding");
 
-    let stop = CancellationToken::new();
-    let second_run = tokio::spawn({
-        let stop = stop.clone();
-        async move {
-            actor
-                .run_until(
-                    stop.cancelled(),
-                    Restart::on_failure(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-                )
-                .await
-        }
-    });
+    let _ = restart_tx.send(());
     frontend.send(Command::Observe("second".to_owned())).await?;
     println!("observed {:?}", observed_rx.recv().await);
     stop.cancel();
-    second_run.await??;
+    actor_task.await??;
 
     Ok(())
 }

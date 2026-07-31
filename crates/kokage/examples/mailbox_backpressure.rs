@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .mailbox_capacity(1);
     let worker = worker_spec.actor_ref();
 
-    let handle = support::ActorTasks::start([worker_spec.into_runnable()]);
+    let handle = support::ActorTasks::start([worker_spec.into_host()]);
 
     // `send` waits for the worker's mailbox to bind, so the first message
     // deterministically occupies the single mailbox slot; `try_send` before

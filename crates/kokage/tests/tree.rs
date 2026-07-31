@@ -15,8 +15,8 @@ use support::{RunnableActors as RunnableSet, RunnableBuilder as RunnableSetBuild
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BoxError, CallError, Context,
-    ExitResult, Reply, Restart, SendError, SendErrorKind, Shutdown, StopContext,
-    raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+    ExitResult, Reply, SendError, SendErrorKind, Shutdown, StopContext,
+    raw::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 
 use tokio::{
@@ -35,13 +35,13 @@ where
     builder.actor(ActorSpec::new(id, factory))
 }
 
-fn runnable(graph: RunnableSet, label: &str) -> RunnableActor {
+fn runnable(graph: RunnableSet, label: &str) -> ActorHost {
     graph
         .into_nodes()
         .into_iter()
         .find(|actor| actor.label() == label)
         .expect("actor exists")
-        .into_runnable()
+        .into_host()
 }
 
 struct Drain<M>(PhantomData<fn(M)>);
@@ -78,13 +78,12 @@ fn start_graph(
         .into_nodes()
         .into_iter()
         .map(|actor| {
-            let actor = actor.into_runnable();
+            let actor = actor.into_host();
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(
+                    .run_once(
                         stop.cancelled(),
-                        Restart::never(),
                         Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                     )
                     .await
@@ -113,13 +112,9 @@ fn start_graph_with_shutdown(
         .into_nodes()
         .into_iter()
         .map(|actor| {
-            let actor = actor.into_runnable();
+            let actor = actor.into_host();
             let stop = stop.clone();
-            tokio::spawn(async move {
-                actor
-                    .run_until(stop.cancelled(), Restart::never(), shutdown)
-                    .await
-            })
+            tokio::spawn(async move { actor.run_once(stop.cancelled(), shutdown).await })
         })
         .collect::<Vec<_>>();
     let task = tokio::spawn(async move {
@@ -487,11 +482,7 @@ async fn handler_on_start_error_fails_actor_run_without_handle_or_stop() {
     let graph = builder.build();
 
     let result = runnable(graph, "worker")
-        .run_until(
-            pending::<()>(),
-            Restart::never(),
-            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-        )
+        .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
         .await;
     assert!(matches!(
         result,
@@ -524,11 +515,7 @@ async fn handler_error_fails_the_actor_run() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                Restart::never(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
+            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
     });
     actor.send(()).await.expect("message sent");
@@ -576,11 +563,7 @@ async fn context_stop_is_idempotent_and_exits_normally() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                Restart::never(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
+            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
     });
 
@@ -608,11 +591,7 @@ async fn context_error_takes_precedence_over_a_stop_request() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                Restart::never(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
+            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
     });
 
@@ -698,9 +677,8 @@ async fn handler_stop_with_discard_drops_mailbox_and_continuations_then_runs_on_
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
+            .run_once(
                 pending::<()>(),
-                Restart::never(),
                 Shutdown::discard_after_current(DEFAULT_SHUTDOWN_BOUND),
             )
             .await
@@ -743,11 +721,7 @@ async fn handler_stop_with_drain_handles_mailbox_but_drops_continuations() {
     let worker = runnable(graph, "worker");
     let task = tokio::spawn(async move {
         worker
-            .run_until(
-                pending::<()>(),
-                Restart::never(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
+            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
     });
 
@@ -1079,13 +1053,12 @@ async fn actors_can_declare_distinct_mailbox_capacities() {
         .into_nodes()
         .into_iter()
         .map(|actor| {
-            let actor = actor.into_runnable();
+            let actor = actor.into_host();
             let stop = stop.clone();
             tokio::spawn(async move {
                 actor
-                    .run_until(
+                    .run_once(
                         stop.cancelled(),
-                        Restart::never(),
                         Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                     )
                     .await
@@ -1129,11 +1102,7 @@ async fn actor_error_fails_its_run() {
     let graph = builder.build();
 
     let result = runnable(graph, "bad")
-        .run_until(
-            pending::<()>(),
-            Restart::never(),
-            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-        )
+        .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
         .await;
     assert!(matches!(
         result,
@@ -1159,11 +1128,7 @@ async fn early_clean_exit_is_a_clean_actor_run() {
     let graph = builder.build();
 
     runnable(graph, "quitter")
-        .run_until(
-            pending::<()>(),
-            Restart::never(),
-            Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-        )
+        .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
         .await
         .expect("clean early exit is ordinary completion");
 }
@@ -1214,9 +1179,8 @@ async fn standalone_shutdown_bound_aborts_uncooperative_actor() {
         let stop = stop.clone();
         async move {
             worker
-                .run_until(
+                .run_once(
                     stop.cancelled(),
-                    Restart::never(),
                     Shutdown::drain_for(Duration::from_millis(50)),
                 )
                 .await
@@ -1264,8 +1228,10 @@ mod runnable_actor {
 
     use kokage::{
         Actor, ActorRef, ActorSlot, ActorSpec, BoxError, Context, ControlError, DynamicTree,
-        ExitResult, Restart, SendError, SendErrorKind, Shutdown, SupervisorError,
-        raw::{ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor},
+        ExitResult, SendError, SendErrorKind, Shutdown, SupervisorError,
+        raw::{
+            ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
+        },
     };
     use tokio::{
         sync::{Notify, mpsc},
@@ -1416,30 +1382,29 @@ mod runnable_actor {
         }
     }
 
-    fn start_actor(
-        actor: RunnableActor,
-    ) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
-        start_actor_with_policy(actor, Restart::never())
-    }
-
-    fn start_actor_with_policy(
-        actor: RunnableActor,
-        restart: Restart,
-    ) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
+    fn start_actor(actor: ActorHost) -> (CancellationToken, JoinHandle<Result<(), ActorRunError>>) {
         let stop = CancellationToken::new();
         let task = tokio::spawn({
             let stop = stop.clone();
             async move {
                 actor
-                    .run_until(
+                    .run_once(
                         stop.cancelled(),
-                        restart,
                         Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
                     )
                     .await
             }
         });
         (stop, task)
+    }
+
+    fn start_incarnation(mut actor: ActorHost) -> JoinHandle<(ActorHost, IncarnationExit)> {
+        tokio::spawn(async move {
+            let exit = actor
+                .run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
+                .await;
+            (actor, exit)
+        })
     }
 
     async fn stop_actor(
@@ -1453,13 +1418,13 @@ mod runnable_actor {
             .expect("actor task joined")
     }
 
-    fn single_actor(graph: RunnableSet, id: &str) -> RunnableActor {
+    fn single_actor(graph: RunnableSet, id: &str) -> ActorHost {
         graph
             .into_nodes()
             .into_iter()
             .find(|actor| actor.label() == id)
             .expect("actor exists")
-            .into_runnable()
+            .into_host()
     }
 
     #[tokio::test]
@@ -1572,7 +1537,7 @@ mod runnable_actor {
         });
         tokio::task::yield_now().await;
 
-        let actor = spec.message_size(sized_payload_size).into_runnable();
+        let actor = spec.message_size(sized_payload_size).into_host();
         let (stop, task) = start_actor(actor);
         send.await
             .expect("send task does not panic")
@@ -1591,9 +1556,8 @@ mod runnable_actor {
 
         assert!(matches!(
             worker
-                .run_until(
+                .run_once(
                     async {},
-                    Restart::never(),
                     Shutdown::drain_for(Duration::from_millis(100)),
                 )
                 .await,
@@ -1609,11 +1573,7 @@ mod runnable_actor {
         let worker = single_actor(graph, "worker");
 
         worker
-            .run_until(
-                async {},
-                Restart::never(),
-                Shutdown::drain_for(Duration::from_secs(30)),
-            )
+            .run_once(async {}, Shutdown::drain_for(Duration::from_secs(30)))
             .await
             .expect("cooperative shutdown completes cleanly");
     }
@@ -1690,7 +1650,7 @@ mod runnable_actor {
         let graph = builder.build();
 
         let worker = single_actor(graph, "worker");
-        let (_first_stop, first_task) = start_actor_with_policy(worker.clone(), Restart::always());
+        let first_task = start_incarnation(worker);
 
         timeout(Duration::from_secs(1), entered_rx.recv())
             .await
@@ -1720,12 +1680,10 @@ mod runnable_actor {
         let send_task = tokio::spawn(send);
 
         release.notify_one();
-        first_task
-            .await
-            .expect("first actor task joined")
-            .expect("first actor run completed cleanly");
+        let (worker, first_exit) = first_task.await.expect("first actor task joined");
+        assert!(matches!(first_exit, IncarnationExit::Stopped));
 
-        let (second_stop, second_task) = start_actor_with_policy(worker, Restart::always());
+        let (second_stop, second_task) = start_actor(worker);
         assert_eq!(
             timeout(Duration::from_secs(1), observed_rx.recv())
                 .await
@@ -1744,35 +1702,21 @@ mod runnable_actor {
     }
 
     #[tokio::test]
-    async fn runnable_actor_rejects_concurrent_runs() {
-        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    async fn run_once_consumes_the_host_and_terminates_its_binding() {
         let mut builder = RunnableSetBuilder::new();
-        add_actor(&mut builder, "worker", move || StartSignallingDrain {
-            started: started_tx.clone(),
-        });
+        let worker_ref = add_actor(&mut builder, "worker", || StopsOnShutdown);
         let graph = builder.build();
 
         let worker = single_actor(graph, "worker");
-        let (stop, task) = start_actor(worker.clone());
-        timeout(Duration::from_secs(1), started_rx.recv())
-            .await
-            .expect("first run should bind the actor promptly")
-            .expect("start sender remains alive");
-
-        assert!(matches!(
-            worker
-                .run_until(
-                    pending::<()>(),
-                    Restart::never(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-                )
-                .await,
-            Err(ActorRunError::AlreadyRunning { actor_id , .. }) if actor_id == "worker"
-        ));
-
-        stop_actor(stop, task)
+        worker
+            .run_once(async {}, Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
             .expect("worker stopped cleanly");
+        assert!(matches!(
+            worker_ref.try_send(()),
+            Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. })
+                if actor_id == "worker"
+        ));
     }
 
     #[derive(Clone)]
@@ -1788,21 +1732,14 @@ mod runnable_actor {
     }
 
     #[tokio::test]
-    async fn restart_policy_default_is_on_failure_for_run_until() {
-        assert_eq!(Restart::default(), Restart::on_failure());
-
+    async fn failed_run_once_terminates_the_binding() {
         let mut builder = RunnableSetBuilder::new();
         let worker_ref = add_actor(&mut builder, "worker", || FailsOnMessage);
         let graph = builder.build();
         let worker = single_actor(graph, "worker");
-        let running_worker = worker.clone();
         let task = tokio::spawn(async move {
-            running_worker
-                .run_until(
-                    pending::<()>(),
-                    Default::default(),
-                    Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-                )
+            worker
+                .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
                 .await
         });
 
@@ -1814,121 +1751,106 @@ mod runnable_actor {
         assert!(matches!(result, Err(ActorRunError::Failed { .. })));
         assert!(matches!(
             worker_ref.try_send(()),
-            Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
+            Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
         ));
     }
 
     #[tokio::test]
-    async fn dropped_run_follows_restart_policy() {
-        for (policy, expect_terminated) in [
-            (Restart::always(), false),
-            (Restart::on_failure(), false),
-            (Restart::never(), true),
-        ] {
-            let mut builder = RunnableSetBuilder::new();
-            let worker_ref = add_actor(&mut builder, "worker", Drain::<()>::new);
-            let graph = builder.build();
-            let worker = single_actor(graph, "worker");
-            let running_worker = worker.clone();
-            let task = tokio::spawn(async move {
-                running_worker
-                    .run_until(
-                        pending::<()>(),
-                        policy,
-                        Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-                    )
-                    .await
-            });
+    async fn dropping_a_run_once_future_terminates_the_binding() {
+        let mut builder = RunnableSetBuilder::new();
+        let worker_ref = add_actor(&mut builder, "worker", Drain::<()>::new);
+        let worker = single_actor(builder.build(), "worker");
+        let task = tokio::spawn(
+            worker.run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
+        );
 
-            worker_ref.send(()).await.expect("run bound its mailbox");
-            task.abort();
-            assert!(
-                task.await
-                    .expect_err("aborted run task is cancelled")
-                    .is_cancelled()
-            );
-
-            let disposition = timeout(Duration::from_secs(1), async {
-                loop {
-                    match worker_ref.try_send(()) {
-                        Err(
-                            error @ SendError {
-                                kind: SendErrorKind::NotRunning,
-                                ..
-                            },
-                        )
-                        | Err(
-                            error @ SendError {
-                                kind: SendErrorKind::Terminated,
-                                ..
-                            },
-                        ) => break error,
-                        Ok(())
-                        | Err(SendError {
-                            kind: SendErrorKind::Full,
-                            ..
-                        }) => tokio::task::yield_now().await,
-                        Err(error) => panic!("unexpected send error after dropped run: {error}"),
-                    }
-                }
+        worker_ref.send(()).await.expect("run bound its mailbox");
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("run task is cancelled")
+                .is_cancelled()
+        );
+        assert!(matches!(
+            worker_ref.try_send(()),
+            Err(SendError {
+                kind: SendErrorKind::Terminated,
+                ..
             })
-            .await
-            .expect("binding reached its dropped-run disposition");
-
-            if expect_terminated {
-                assert!(matches!(
-                    disposition,
-                    SendError {
-                        kind: SendErrorKind::Terminated,
-                        ..
-                    }
-                ));
-            } else {
-                assert!(matches!(
-                    disposition,
-                    SendError {
-                        kind: SendErrorKind::NotRunning,
-                        ..
-                    }
-                ));
-            }
-        }
+        ));
     }
 
     #[tokio::test]
-    async fn restart_policy_is_per_run_not_sticky() {
+    async fn dropping_a_run_incarnation_future_keeps_the_host_reusable() {
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let mut builder = RunnableSetBuilder::new();
+        let worker_ref = add_actor(&mut builder, "worker", move || StartSignallingDrain {
+            started: started_tx.clone(),
+        });
+        let mut worker = single_actor(builder.build(), "worker");
+        let mut run = Box::pin(
+            worker.run_incarnation(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND)),
+        );
+
+        tokio::select! {
+            exit = &mut run => panic!("incarnation exited unexpectedly: {exit:?}"),
+            started = started_rx.recv() => started.expect("first incarnation started"),
+        }
+        drop(run);
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                match worker_ref.try_send(()) {
+                    Err(SendError {
+                        kind: SendErrorKind::NotRunning,
+                        ..
+                    }) => break,
+                    Ok(())
+                    | Err(SendError {
+                        kind: SendErrorKind::Full,
+                        ..
+                    }) => tokio::task::yield_now().await,
+                    Err(error) => panic!("unexpected binding state after cancellation: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("cancelled incarnation becomes unbound");
+
+        let (stop, task) = start_actor(worker);
+        started_rx.recv().await.expect("second incarnation started");
+        worker_ref
+            .send(())
+            .await
+            .expect("replacement mailbox bound");
+        stop_actor(stop, task)
+            .await
+            .expect("replacement incarnation stopped cleanly");
+    }
+
+    #[tokio::test]
+    async fn run_incarnation_keeps_the_binding_rebindable_until_host_drop() {
         let mut builder = RunnableSetBuilder::new();
         let worker_ref = add_actor(&mut builder, "worker", || FailsOnMessage);
         let graph = builder.build();
         let worker = single_actor(graph, "worker");
 
-        // First run declares OnFailure: the failed exit leaves the binding
-        // waiting to rebind.
-        let (_stop, task) = start_actor_with_policy(worker.clone(), Restart::on_failure());
+        let task = start_incarnation(worker);
         worker_ref.send(()).await.expect("send accepted");
-        let result = timeout(Duration::from_secs(1), task)
+        let (worker, exit) = timeout(Duration::from_secs(1), task)
             .await
-            .expect("first run exits in time")
-            .expect("first actor task joined");
-        assert!(matches!(result, Err(ActorRunError::Failed { .. })));
+            .expect("incarnation exits in time")
+            .expect("actor task joined");
+        assert!(matches!(
+            exit,
+            IncarnationExit::Failed(ActorRunError::Failed { .. })
+        ));
         assert!(matches!(
             worker_ref.try_send(()),
             Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
         ));
 
-        // A second run of the same actor declares Never: the same failed exit
-        // now terminates the binding — this run's argument wins over any state
-        // left behind by the first run.
-        let (_stop, task) = start_actor_with_policy(worker, Restart::never());
-        worker_ref
-            .send(())
-            .await
-            .expect("send accepted after rebind");
-        let result = timeout(Duration::from_secs(1), task)
-            .await
-            .expect("second run exits in time")
-            .expect("second actor task joined");
-        assert!(matches!(result, Err(ActorRunError::Failed { .. })));
+        drop(worker);
         assert!(matches!(
             worker_ref.try_send(()),
             Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
@@ -1993,16 +1915,12 @@ mod runnable_actor {
         });
         let graph = builder.build();
 
-        let mut actors = graph
-            .into_nodes()
-            .into_iter()
-            .map(|node| node.into_runnable());
+        let mut actors = graph.into_nodes().into_iter().map(|node| node.into_host());
         let frontend = actors.next().expect("frontend exists");
         let worker = actors.next().expect("worker exists");
 
         let (frontend_stop, frontend_task) = start_actor(frontend);
-        let (_first_worker_stop, first_worker_task) =
-            start_actor_with_policy(worker.clone(), Restart::on_failure());
+        let first_worker_task = start_incarnation(worker);
 
         frontend_ref.send(Work("first")).await.expect("first send");
         assert_eq!(
@@ -2012,12 +1930,14 @@ mod runnable_actor {
                 .expect("message observed"),
             "first"
         );
+        let (worker, first_exit) = timeout(Duration::from_secs(1), first_worker_task)
+            .await
+            .expect("first worker exited")
+            .expect("first worker task joined");
         assert!(matches!(
-            timeout(Duration::from_secs(1), first_worker_task)
-                .await
-                .expect("first worker exited")
-                .expect("first worker task joined"),
-            Err(ActorRunError::Failed { ref actor_id, .. }) if actor_id == "worker"
+            first_exit,
+            IncarnationExit::Failed(ActorRunError::Failed { ref actor_id, .. })
+                if actor_id == "worker"
         ));
 
         frontend_ref
@@ -2036,8 +1956,7 @@ mod runnable_actor {
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
 
-        let (second_worker_stop, second_worker_task) =
-            start_actor_with_policy(worker, Restart::on_failure());
+        let (second_worker_stop, second_worker_task) = start_actor(worker);
         assert_eq!(
             timeout(Duration::from_secs(1), observed_rx.recv())
                 .await
@@ -2090,39 +2009,38 @@ mod runnable_actor {
             Err(SendError { actor_id, kind: SendErrorKind::NotRunning, .. }) if actor_id == "worker"
         ));
 
-        // Each run ends by clean early exit (not requested shutdown), so the
-        // `Always` policy leaves the binding unbound and rebindable.
-        let (_first_stop, first_task) = start_actor_with_policy(worker.clone(), Restart::always());
+        // Each incarnation ends by clean early exit while the owning host
+        // keeps the binding unbound and rebindable.
+        let first_task = start_incarnation(worker);
         worker_ref
             .send("first".to_owned())
             .await
             .expect("first send");
         assert_eq!(out_rx.recv().await.as_deref(), Some("first"));
         worker_ref.send("quit".to_owned()).await.expect("quit send");
-        timeout(Duration::from_secs(1), first_task)
+        let (worker, first_exit) = timeout(Duration::from_secs(1), first_task)
             .await
             .expect("first run ended in time")
-            .expect("first run task joined")
-            .expect("first run exited cleanly");
+            .expect("first run task joined");
+        assert!(matches!(first_exit, IncarnationExit::Stopped));
 
         // The same ref rides into the next incarnation without re-minting.
-        let (_second_stop, second_task) =
-            start_actor_with_policy(worker.clone(), Restart::always());
+        let second_task = start_incarnation(worker);
         worker_ref
             .send("second".to_owned())
             .await
             .expect("second send");
         assert_eq!(out_rx.recv().await.as_deref(), Some("second"));
         worker_ref.send("quit".to_owned()).await.expect("quit send");
-        timeout(Duration::from_secs(1), second_task)
+        let (worker, second_exit) = timeout(Duration::from_secs(1), second_task)
             .await
             .expect("second run ended in time")
-            .expect("second run task joined")
-            .expect("second run exited cleanly");
+            .expect("second run task joined");
+        assert!(matches!(second_exit, IncarnationExit::Stopped));
 
-        // Hand-drivers own the terminate-binding obligation when no further
-        // run is coming.
-        worker.terminate_binding();
+        // Dropping the owner makes the binding terminal when no further
+        // incarnation is coming.
+        drop(worker);
         assert!(matches!(
             worker_ref.try_send("late".to_owned()),
             Err(SendError { actor_id, kind: SendErrorKind::Terminated, .. }) if actor_id == "worker"
@@ -2183,8 +2101,7 @@ mod runnable_actor {
 
         // Run 1: a poison message plus two messages queued behind it, all
         // accepted by the first incarnation's mailbox before it reads any.
-        let (_first_stop, first_task) =
-            start_actor_with_policy(worker.clone(), Restart::on_failure());
+        let first_task = start_incarnation(worker);
         started_rx.recv().await.expect("first incarnation started");
         worker_ref.send(0).await.expect("poison accepted");
         worker_ref
@@ -2197,18 +2114,19 @@ mod runnable_actor {
             .expect("second queued send accepted");
         release.notify_one();
 
-        let result = timeout(Duration::from_secs(1), first_task)
+        let (worker, first_exit) = timeout(Duration::from_secs(1), first_task)
             .await
             .expect("first run ended in time")
             .expect("first run task joined");
         assert!(matches!(
-            result,
-            Err(ActorRunError::Failed { actor_id, .. }) if actor_id == "worker"
+            first_exit,
+            IncarnationExit::Failed(ActorRunError::Failed { actor_id, .. })
+                if actor_id == "worker"
         ));
 
         // Run 2 binds a fresh mailbox: the accepted-but-unread messages died
         // with the first incarnation.
-        let (second_stop, second_task) = start_actor_with_policy(worker, Restart::on_failure());
+        let (second_stop, second_task) = start_actor(worker);
         started_rx.recv().await.expect("second incarnation started");
         release.notify_one();
         worker_ref
@@ -2278,10 +2196,7 @@ mod runnable_actor {
             }
         });
         let graph = builder.build();
-        let mut actors = graph
-            .into_nodes()
-            .into_iter()
-            .map(|node| node.into_runnable());
+        let mut actors = graph.into_nodes().into_iter().map(|node| node.into_host());
         let sink = actors.next().expect("sink exists");
         let forwarder = actors.next().expect("forwarder exists");
 
@@ -2364,10 +2279,7 @@ mod runnable_actor {
             }
         });
         let graph = builder.build();
-        let mut actors = graph
-            .into_nodes()
-            .into_iter()
-            .map(|node| node.into_runnable());
+        let mut actors = graph.into_nodes().into_iter().map(|node| node.into_host());
         let sink = actors.next().expect("sink exists");
         let forwarder = actors.next().expect("forwarder exists");
 

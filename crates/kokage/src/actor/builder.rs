@@ -9,7 +9,7 @@ use crate::actor::{
     binding::{BindingCore, MailboxMode},
     context::ActorRef,
     factory::ActorFactory,
-    graph::{ErasedActorFactory, RunnableActor, RunnableActorBuilder},
+    graph::{ActorHost, ErasedActorFactory, RunnableActor, RunnableActorBuilder},
     raw::RawActor,
 };
 
@@ -211,7 +211,7 @@ impl<M: Send + 'static> ActorSpec<M> {
     ///
     /// This borrows the declaration and can be called repeatedly. Mailbox
     /// configuration remains mutable until the declaration is consumed by a
-    /// placement API or [`into_runnable`](Self::into_runnable).
+    /// placement API or [`into_host`](Self::into_host).
     pub fn actor_ref(&self) -> ActorRef<M> {
         ActorRef::from_core(self.binding(), None)
     }
@@ -270,7 +270,7 @@ impl<M: Send + 'static> ActorSpec<M> {
             .get_or_init(|| Arc::new(BindingCore::new(Arc::clone(&self.actor_id))))
     }
 
-    /// Converts this declaration into the advanced custom-host actor.
+    /// Converts this declaration into an owning direct actor host.
     ///
     /// This conversion stores configuration without applying supervision-tree
     /// validation. Supervised placement rejects a zero mailbox capacity with
@@ -278,11 +278,13 @@ impl<M: Send + 'static> ActorSpec<M> {
     /// sees the same rejection as
     /// [`ActorRunError::ZeroMailboxCapacity`](crate::raw::ActorRunError::ZeroMailboxCapacity)
     /// when the run starts.
-    pub fn into_runnable(self) -> RunnableActor {
-        self.into_deferred_node()
+    pub fn into_host(self) -> ActorHost {
+        let actor = self
+            .into_deferred_node()
             .materialize(&RunnableActorBuilder::new())
             .actor
-            .expect("materialized actor declaration carries its runnable actor")
+            .expect("materialized actor declaration carries its runnable actor");
+        ActorHost::new(actor)
     }
 
     pub(crate) fn into_node(self, builder: &RunnableActorBuilder) -> ActorNode {
@@ -478,10 +480,10 @@ mod tests {
     }
 
     #[test]
-    fn actor_spec_applies_options_and_returns_runnable() {
+    fn actor_spec_applies_options_and_returns_host() {
         let spec = ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate());
         let actor_ref = spec.actor_ref();
-        let actor = spec.into_runnable();
+        let actor = spec.into_host();
         assert_eq!(actor_ref.id(), "worker");
         assert_eq!(actor.label(), "worker");
     }
@@ -492,30 +494,29 @@ mod tests {
         let actor_ref = spec.actor_ref();
         assert_eq!(actor_ref.stats().message_bytes_accepted, None);
 
-        let _actor = spec.message_size(String::len).into_runnable();
+        let _actor = spec.message_size(String::len).into_host();
 
         assert_eq!(actor_ref.stats().message_bytes_accepted, Some(0));
     }
 
     #[test]
-    fn into_runnable_stores_zero_capacity_without_supervisor_validation() {
+    fn into_host_stores_zero_capacity_without_supervisor_validation() {
         let actor = ActorSpec::new("worker", || OpaqueActor)
             .mailbox_capacity(0)
-            .into_runnable();
+            .into_host();
 
         assert_eq!(actor.label(), "worker");
     }
 
     #[tokio::test]
-    async fn run_until_rejects_zero_mailbox_capacity() {
+    async fn run_once_rejects_zero_mailbox_capacity() {
         let actor = ActorSpec::new("worker", || OpaqueActor)
             .mailbox_capacity(0)
-            .into_runnable();
+            .into_host();
 
         let result = actor
-            .run_until(
+            .run_once(
                 std::future::ready(()),
-                Default::default(),
                 Shutdown::drain_for(Duration::from_secs(1)),
             )
             .await;
@@ -565,7 +566,7 @@ mod tests {
         assert_eq!(spec.shutdown, None);
         assert_eq!(actor_ref.stats().message_bytes_accepted, None);
 
-        let _actor = spec.message_size(String::len).into_runnable();
+        let _actor = spec.message_size(String::len).into_host();
 
         assert_eq!(actor_ref.stats().message_bytes_accepted, Some(0));
     }

@@ -252,15 +252,11 @@ async fn constructor_panic_uses_the_actor_panic_path() {
         }
     }
 
-    let actor = ActorSpec::new("panics", PanickingFactory).into_runnable();
+    let actor = ActorSpec::new("panics", PanickingFactory).into_host();
 
     let joined = tokio::spawn(async move {
         actor
-            .run_until(
-                pending::<()>(),
-                Restart::never(),
-                Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND),
-            )
+            .run_once(pending::<()>(), Shutdown::drain_for(DEFAULT_SHUTDOWN_BOUND))
             .await
     })
     .await;

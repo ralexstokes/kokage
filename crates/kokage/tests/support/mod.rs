@@ -2,7 +2,7 @@
 
 use kokage::{
     ActorFactory, ActorRef, ActorSlot, ActorSpec, OrderedTree, RunningTree, ScopeRef,
-    raw::{RawActor, RunnableActor},
+    raw::{ActorHost, RawActor},
 };
 
 pub(crate) fn dynamic_root(runtime: &RunningTree) -> ScopeRef {
@@ -19,7 +19,7 @@ pub(crate) struct TreeBuilder {
 }
 
 pub(crate) struct RunnableBuilder {
-    actors: Vec<RunnableActor>,
+    actors: Vec<ActorHost>,
 }
 
 impl RunnableBuilder {
@@ -29,7 +29,7 @@ impl RunnableBuilder {
 
     pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
         let actor_ref = spec.actor_ref();
-        self.actors.push(spec.into_runnable());
+        self.actors.push(spec.into_host());
         actor_ref
     }
 
@@ -47,7 +47,7 @@ impl RunnableBuilder {
     }
 }
 
-pub(crate) struct RunnableActors(Vec<RunnableActor>);
+pub(crate) struct RunnableActors(Vec<ActorHost>);
 
 impl RunnableActors {
     pub(crate) fn into_nodes(self) -> Vec<RunnableNode> {
@@ -55,14 +55,14 @@ impl RunnableActors {
     }
 }
 
-pub(crate) struct RunnableNode(RunnableActor);
+pub(crate) struct RunnableNode(ActorHost);
 
 impl RunnableNode {
     pub(crate) fn label(&self) -> &str {
         self.0.label()
     }
 
-    pub(crate) fn into_runnable(self) -> RunnableActor {
+    pub(crate) fn into_host(self) -> ActorHost {
         self.0
     }
 }

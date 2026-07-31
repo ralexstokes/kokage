@@ -27,7 +27,7 @@ mod coverage_probe {
 
     mod raw {
         use kokage::raw::{
-            ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext, RunnableActor,
+            ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
         };
     }
 

@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `ActorHost` in the current scope
+ --> tests/ui/public-api/actor_host_clone.rs:4:27
+  |
+4 |     let _duplicate = host.clone();
+  |                           ^^^^^ method not found in `ActorHost`
