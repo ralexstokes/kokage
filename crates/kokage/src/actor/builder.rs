@@ -537,6 +537,7 @@ mod tests {
 
         assert_eq!(spec.actor_options.mailbox_capacity, None);
         assert!(spec.actor_options.size_hint.is_none());
+        assert_eq!(format!("{:?}", spec.actor_options.mailbox_mode), "Queue");
         assert_eq!(spec.restart, None);
         assert_eq!(spec.shutdown, None);
         assert_eq!(actor_ref.stats().message_bytes_accepted, None);
