@@ -372,33 +372,6 @@ impl MonitorHub {
     }
 }
 
-pub(crate) struct MonitorExitGuard {
-    hub: Arc<MonitorHub>,
-    reported: bool,
-}
-
-impl MonitorExitGuard {
-    pub(crate) fn new(hub: Arc<MonitorHub>) -> Self {
-        Self {
-            hub,
-            reported: false,
-        }
-    }
-
-    pub(crate) fn report(&mut self, status: ExitStatus) {
-        self.hub.exited(status);
-        self.reported = true;
-    }
-}
-
-impl Drop for MonitorExitGuard {
-    fn drop(&mut self) {
-        if !self.reported {
-            self.hub.exited(ExitStatus::Panicked { cancelled: false });
-        }
-    }
-}
-
 struct MembershipWatch {
     subject: Weak<MonitorHub>,
     cancellation: CancellationToken,

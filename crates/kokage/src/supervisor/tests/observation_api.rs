@@ -18,12 +18,13 @@ async fn lifecycle_observation_aligns_snapshot_before_stream_consumption() {
     let observation = handle.observe_lifecycle();
     let baseline = observation.snapshot.lifecycle_seq;
     assert!(observation.snapshot.child("worker").is_some());
-    let mut events = observation.events.direct_children();
+    let mut events = observation.events;
     let running = supervisor.build().expect("supervisor builds").spawn();
 
     let added_seq = timeout(WAIT, async {
         loop {
             let event = events.next().await.expect("lifecycle remains open");
+            assert!(event.scope_path.is_empty());
             if let LifecycleEventKind::ChildAdded {
                 seq, ref child_id, ..
             } = event.kind

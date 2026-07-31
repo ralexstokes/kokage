@@ -217,7 +217,7 @@ impl RunningTree {
         self.scope.subscribe_snapshots()
     }
 
-    /// Returns an aligned root snapshot and lifecycle stream.
+    /// Returns an aligned root snapshot and direct-child lifecycle stream.
     pub fn observe_lifecycle(&self) -> LifecycleObservation {
         self.scope.observe_lifecycle()
     }
@@ -436,7 +436,7 @@ impl ScopeRef {
         self.supervisor.shutdown_when_future_children_complete(ids)
     }
 
-    /// Returns a snapshot and lifecycle stream with gap-free registration.
+    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
     ///
     /// Initialize state from [`LifecycleObservation::snapshot`], then consume
     /// events whose direct-child sequence exceeds the snapshot's
@@ -447,9 +447,9 @@ impl ScopeRef {
 
     /// Returns the ordered lifecycle stream for this runtime's entire tree.
     ///
-    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
-    /// gap-free state-plus-stream setup. This lower-level method is useful when
-    /// only transitions after subscription are needed. Call
+    /// Use [`observe_lifecycle`](Self::observe_lifecycle) for a gap-free
+    /// direct-child state-plus-stream setup. This lower-level method is useful
+    /// when recursive transitions after subscription are needed. Call
     /// [`LifecycleWatch::direct_children`] for only this scope.
     pub fn watch_lifecycle(&self) -> LifecycleWatch {
         self.supervisor.watch_lifecycle()
@@ -863,10 +863,16 @@ pub(crate) fn actor_child_spec(
         let actor = child_guard.actor.clone();
         let supervisor = ScopeRef::new(ctx.supervisor(), Arc::clone(&actor_owner));
         async move {
+            let shutdown_token = ctx.shutdown_token().clone();
+            let abort_token = ctx.abort_token().clone();
+            let abort_after_grace = !shutdown.is_abort();
             actor
                 .run_until_ready(
-                    ctx.shutdown_token().cancelled(),
-                    ctx.abort_token().cancelled(),
+                    shutdown_token.cancelled(),
+                    async move {
+                        abort_token.cancelled().await;
+                        abort_after_grace
+                    },
                     restart,
                     mailbox_shutdown.drains(),
                     supervisor,

@@ -1742,9 +1742,13 @@ impl SupervisorHandle {
         }
     }
 
-    /// Returns a snapshot and lifecycle stream with gap-free registration.
+    /// Returns a snapshot and direct-child lifecycle stream with gap-free registration.
+    ///
+    /// Child sequences are local to each scope, so the aligned stream is
+    /// intentionally restricted to this scope. Use [`watch_lifecycle`](Self::watch_lifecycle)
+    /// when a recursive stream without an initial alignment boundary is needed.
     pub fn observe_lifecycle(&self) -> crate::supervisor::LifecycleObservation {
-        let events = self.watch_lifecycle();
+        let events = self.watch_lifecycle().direct_children();
         let snapshot = self.snapshot();
         crate::supervisor::LifecycleObservation { snapshot, events }
     }
@@ -1753,8 +1757,8 @@ impl SupervisorHandle {
     ///
     /// The baseline is creation time: earlier transitions are not replayed.
     /// Use [`observe_lifecycle`](Self::observe_lifecycle) for the common
-    /// gap-free state-plus-stream setup. This lower-level method is useful
-    /// when only transitions after subscription are needed.
+    /// gap-free direct-child state-plus-stream setup. This lower-level method
+    /// is useful when recursive transitions after subscription are needed.
     /// Pre-spawn snapshots already project configured children as `Starting`,
     /// so apply a later `Added` for that membership as an idempotent upsert
     /// keyed by `(child_id, lineage)`. Lineage allocation continues across

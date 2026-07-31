@@ -27,11 +27,13 @@ pub struct LifecycleEvent {
     pub kind: LifecycleEventKind,
 }
 
-/// Gap-free starting point for stateful lifecycle observation.
+/// Gap-free starting point for stateful direct-child lifecycle observation.
 ///
 /// The event subscription is installed before `snapshot` is read. Consumers
 /// can initialize from the snapshot, then discard direct-child events whose
-/// sequence is at most [`SupervisorSnapshot::lifecycle_seq`].
+/// sequence is at most [`SupervisorSnapshot::lifecycle_seq`]. The event stream
+/// is restricted to the observed scope because nested scopes have independent
+/// sequence boundaries.
 #[derive(Debug)]
 pub struct LifecycleObservation {
     /// Point-in-time state aligned with the event subscription.

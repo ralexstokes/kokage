@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crate::supervisor::{RestartPolicy, ScopePathSegment};
+use crate::supervisor::{ExitStatus, RestartPolicy, ScopePathSegment};
 use tokio::{
     sync::{Notify, mpsc, watch},
     time::{Instant, sleep_until},
@@ -876,6 +876,7 @@ impl<M> Clone for BindingState<M> {
 pub(crate) trait BindingLifecycle: Send + Sync {
     fn unbind(&self);
     fn terminate(&self);
+    fn report_exit(&self, status: ExitStatus);
     fn stats(&self) -> ActorStats;
 }
 
@@ -1035,6 +1036,10 @@ impl<M: Send + 'static> BindingLifecycle for BindingCore<M> {
 
     fn terminate(&self) {
         BindingCore::terminate(self);
+    }
+
+    fn report_exit(&self, status: ExitStatus) {
+        self.monitors.exited(status);
     }
 
     fn stats(&self) -> ActorStats {

@@ -7,7 +7,7 @@ use std::{any::Any, future::pending, panic::AssertUnwindSafe, sync::Arc, time::D
 use futures_util::FutureExt;
 use kokage::{
     ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitResult, ExitStatus, Guard,
-    MonitorEvent, Shutdown,
+    MonitorEvent, Shutdown, SupervisorError, Tree,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext},
 };
 use tokio::{
@@ -36,6 +36,21 @@ impl RawActor for Peer {
             Some(PeerMessage::Stop) | None => Ok(()),
             Some(PeerMessage::Panic) => panic!("deliberate peer panic"),
         }
+    }
+}
+
+#[derive(Clone)]
+struct UncooperativePeer {
+    started: mpsc::UnboundedSender<()>,
+}
+
+impl RawActor for UncooperativePeer {
+    type Msg = PeerMessage;
+
+    async fn run(&mut self, _ctx: RawContext<Self::Msg>) -> ExitResult {
+        self.started.send(()).expect("start receiver alive");
+        pending::<()>().await;
+        Ok(())
     }
 }
 
@@ -393,6 +408,80 @@ async fn watch_reports_clean_stop_as_normal() {
         .await
         .expect("observer task joined")
         .expect("observer stopped cleanly");
+}
+
+#[tokio::test]
+async fn supervised_graceful_shutdown_marks_monitor_exit_cancelled() {
+    let (peer_started_tx, _peer_started) = mpsc::unbounded_channel();
+    let peer_spec = ActorSpec::new("peer", move || Peer {
+        started: peer_started_tx.clone(),
+    });
+    let peer_ref = peer_spec.actor_ref();
+    let (observed_tx, mut observed) = mpsc::unbounded_channel();
+    let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
+    let mut tree = Tree::new();
+    tree.add_actor_spec(ActorSpec::new("observer", move || Observer {
+        peer: peer_ref.clone(),
+        observed: observed_tx.clone(),
+        mapped: None,
+        started: observer_started_tx.clone(),
+        watch_mode: WatchMode::Detach,
+    }));
+    tree.add_actor_spec(peer_spec);
+    let running = tree.spawn().expect("tree builds");
+    running.wait_started().await.expect("actors start");
+
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
+    running
+        .shutdown_and_wait()
+        .await
+        .expect("cooperative shutdown succeeds");
+    assert_eq!(
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: true }
+    );
+}
+
+async fn assert_supervised_grace_expiry_status(expected: ExitStatus) {
+    let policy = Shutdown::graceful_for(Duration::from_millis(10));
+    let (peer_started_tx, _peer_started) = mpsc::unbounded_channel();
+    let peer_spec = ActorSpec::new("peer", move || UncooperativePeer {
+        started: peer_started_tx.clone(),
+    })
+    .shutdown(policy);
+    let peer_ref = peer_spec.actor_ref();
+    let (observed_tx, mut observed) = mpsc::unbounded_channel();
+    let (observer_started_tx, _observer_started) = mpsc::unbounded_channel();
+    let mut tree = Tree::new();
+    tree.add_actor_spec(ActorSpec::new("observer", move || Observer {
+        peer: peer_ref.clone(),
+        observed: observed_tx.clone(),
+        mapped: None,
+        started: observer_started_tx.clone(),
+        watch_mode: WatchMode::Detach,
+    }));
+    tree.add_actor_spec(peer_spec);
+    let running = tree.spawn().expect("tree builds");
+    running.wait_started().await.expect("actors start");
+
+    assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
+    assert!(matches!(
+        running.shutdown_and_wait().await,
+        Err(SupervisorError::ShutdownTimedOut(_))
+    ));
+    assert_eq!(
+        expect_exited(next_event(&mut observed).await).status,
+        expected
+    );
+}
+
+#[tokio::test]
+async fn supervised_grace_expiry_reports_an_after_grace_abort_to_monitors() {
+    assert_supervised_grace_expiry_status(ExitStatus::Aborted {
+        after_grace: true,
+        cancelled: true,
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -1232,7 +1321,7 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
 }
 
 #[tokio::test]
-async fn shutdown_request_reports_normal_exit() {
+async fn shutdown_request_reports_cancelled_completion() {
     let mut fixture = fixture(WatchMode::Detach);
     let peer_stop = CancellationToken::new();
     let stop = peer_stop.clone();
@@ -1263,7 +1352,7 @@ async fn shutdown_request_reports_normal_exit() {
     peer_stop.cancel();
     assert_eq!(
         expect_exited(next_event(&mut fixture.observed).await).status,
-        ExitStatus::Completed { cancelled: false }
+        ExitStatus::Completed { cancelled: true }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -1503,7 +1592,13 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
         .expect("peer removed by abort");
     let notification = expect_exited(next_event(&mut observed).await);
     assert_eq!(notification.actor_id, "peer");
-    assert!(notification.status.is_failure());
+    assert_eq!(
+        notification.status,
+        ExitStatus::Aborted {
+            after_grace: false,
+            cancelled: true,
+        }
+    );
     assert_eq!(
         expect_removed(next_event(&mut observed).await, "peer"),
         Some(0),

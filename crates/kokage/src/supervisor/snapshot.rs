@@ -161,11 +161,12 @@ pub struct SupervisorSnapshot {
     /// Sequence of the last lifecycle event emitted when this snapshot was
     /// published.
     ///
-    /// For a gap-free state-plus-stream view, create a lifecycle watch first,
-    /// then read a snapshot, then discard watched events whose `seq` is less
-    /// than or equal to this value. A pre-spawn snapshot projects statically
-    /// configured children before their first `Added` transition; reducers
-    /// should apply `Added` as an idempotent membership upsert.
+    /// For a gap-free direct-child state-plus-stream view, use
+    /// [`ScopeRef::observe_lifecycle`](crate::ScopeRef::observe_lifecycle), then
+    /// discard watched events whose `seq` is less than or equal to this value.
+    /// A pre-spawn snapshot projects statically configured children before
+    /// their first `Added` transition; reducers should apply `Added` as an
+    /// idempotent membership upsert.
     #[cfg_attr(feature = "serde", serde(default))]
     pub lifecycle_seq: u64,
     /// Ordered list of child snapshots, matching the supervisor's child order.
@@ -338,26 +339,26 @@ pub enum SupervisorStateView {
 pub enum ExitStatus {
     /// The child returned `Ok(())`.
     Completed {
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
     /// The child returned an error.
     Failed {
         /// The error's `Display` output.
         message: String,
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
     /// The child task panicked.
     Panicked {
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
     /// The child task was aborted by the supervisor.
     Aborted {
         /// Whether cooperative shutdown exhausted its grace period first.
         after_grace: bool,
-        /// Whether the supervisor stopped this generation.
+        /// Whether shutdown was requested for this generation.
         cancelled: bool,
     },
 }
