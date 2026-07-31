@@ -288,16 +288,20 @@ async fn tree_handle_binds_to_the_spawned_runtime() {
 #[tokio::test]
 async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     let mut tree = Tree::new();
-    tree.add_subtree("ordered", Tree::new());
-    tree.add_subtree("dynamic", DynamicTree::new());
+    let ordered = tree.add_subtree("ordered", Tree::new());
+    let dynamic = tree.add_dynamic_subtree("dynamic", DynamicTree::new());
     let running_tree = tree.spawn().expect("mixed tree builds");
     let root = running_tree.scope();
-    let ordered = root.subtree("ordered").expect("ordered subtree handle");
-    let dynamic = root.subtree("dynamic").expect("dynamic subtree handle");
 
     assert_eq!(root.kind(), ScopeKind::Ordered);
     assert_eq!(ordered.kind(), ScopeKind::Ordered);
     assert_eq!(dynamic.kind(), ScopeKind::Dynamic);
+    assert_eq!(
+        dynamic.snapshot(),
+        root.subtree("dynamic")
+            .expect("dynamic subtree is traversable")
+            .snapshot()
+    );
 
     running_tree.shutdown().await.expect("runtime stops");
 

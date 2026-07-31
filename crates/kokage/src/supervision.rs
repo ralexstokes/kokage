@@ -425,12 +425,26 @@ impl Tree {
     ///         .shutdown(Shutdown::abort()),
     /// );
     /// ```
-    pub fn add_subtree(&mut self, id: impl Into<String>, tree: impl Into<SubtreeSpec>) {
-        self.add_subtree_spec(id, tree.into());
+    pub fn add_subtree(&mut self, id: impl Into<String>, tree: impl Into<SubtreeSpec>) -> ScopeRef {
+        self.add_subtree_spec(id, tree.into())
     }
 
-    /// Appends an explicitly configured subtree declaration.
-    pub fn add_subtree_spec(&mut self, id: impl Into<String>, tree: SubtreeSpec) {
+    /// Appends a dynamic nested scope and returns its mutation-capable handle.
+    ///
+    /// This is the typed counterpart to [`add_subtree`](Self::add_subtree).
+    /// Use it when the caller will add runtime children to the nested scope.
+    pub fn add_dynamic_subtree(
+        &mut self,
+        id: impl Into<String>,
+        tree: DynamicTree,
+    ) -> DynamicScopeRef {
+        let scope = tree.scope();
+        self.add_subtree(id, tree);
+        scope
+    }
+
+    /// Appends an explicitly configured subtree declaration and returns its scope handle.
+    pub fn add_subtree_spec(&mut self, id: impl Into<String>, tree: SubtreeSpec) -> ScopeRef {
         let id = id.into();
         let SubtreeSpec {
             kind,
@@ -439,10 +453,14 @@ impl Tree {
         } = tree;
         match kind {
             SubtreeKind::Ordered(tree) => {
+                let scope = tree.scope();
                 self.inner.add_subtree(id, tree.inner, restart, shutdown);
+                scope
             }
             SubtreeKind::Dynamic(tree) => {
+                let scope = tree.scope().into_scope();
                 self.inner.add_subtree(id, tree.inner, restart, shutdown);
+                scope
             }
         }
     }
