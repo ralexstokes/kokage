@@ -42,10 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     });
     tree.add_subtree("nested", nested);
-    let running = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     sleep(Duration::from_millis(300)).await;
-    running.shutdown().await?;
+    running_tree.shutdown().await?;
 
     Ok(())
 }

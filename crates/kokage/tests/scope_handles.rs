@@ -290,8 +290,8 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     let mut tree = Tree::new();
     tree.add_subtree("ordered", Tree::new());
     tree.add_subtree("dynamic", DynamicTree::new());
-    let runtime = tree.spawn().expect("mixed tree builds");
-    let root = runtime.scope();
+    let running_tree = tree.spawn().expect("mixed tree builds");
+    let root = running_tree.scope();
     let ordered = root.subtree("ordered").expect("ordered subtree handle");
     let dynamic = root.subtree("dynamic").expect("dynamic subtree handle");
 
@@ -299,7 +299,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
     assert_eq!(ordered.kind(), ScopeKind::Ordered);
     assert_eq!(dynamic.kind(), ScopeKind::Dynamic);
 
-    runtime.shutdown().await.expect("runtime stops");
+    running_tree.shutdown().await.expect("runtime stops");
 
     let dynamic_tree = DynamicTree::new();
     let pre_spawn = dynamic_tree.scope();
@@ -329,7 +329,7 @@ async fn dynamic_capability_tracks_root_and_nested_scope_kinds() {
 async fn dynamic_task_ref_waits_for_completion() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
-    let runtime = tree.spawn().expect("dynamic root builds");
+    let running_tree = tree.spawn().expect("dynamic root builds");
     let task = dynamic
         .add_task_spec(TaskSpec::new("future", |_| async { Ok(()) }))
         .await
@@ -340,14 +340,14 @@ async fn dynamic_task_ref_waits_for_completion() {
         .expect("task remains observable");
     assert!(exit.is_completed());
 
-    runtime.shutdown().await.expect("dynamic root stops");
+    running_tree.shutdown().await.expect("dynamic root stops");
 }
 
 #[tokio::test]
 async fn completed_dynamic_task_can_trigger_explicit_scope_shutdown() {
     let tree = DynamicTree::new();
     let dynamic = tree.scope();
-    let runtime = tree.spawn().expect("dynamic root builds");
+    let running_tree = tree.spawn().expect("dynamic root builds");
 
     let task = dynamic
         .add_task_spec(TaskSpec::new("future", |_| async { Ok(()) }))
@@ -355,7 +355,7 @@ async fn completed_dynamic_task_can_trigger_explicit_scope_shutdown() {
         .expect("future member added");
     task.wait().await.expect("task completion observed");
     dynamic.request_shutdown();
-    timeout(WAIT, runtime.wait())
+    timeout(WAIT, running_tree.wait())
         .await
         .expect("completion requests shutdown")
         .expect("dynamic root stops");
@@ -367,14 +367,14 @@ async fn pre_spawn_task_ref_observes_a_fast_child() {
     let task = tree.add_task_spec(TaskSpec::new("fast", |_| async { Ok(()) }));
     let scope = tree.scope();
 
-    let runtime = tree.spawn().expect("ordered tree builds");
+    let running_tree = tree.spawn().expect("ordered tree builds");
     let exit = timeout(WAIT, task.wait())
         .await
         .expect("fast completion remains observable")
         .expect("task ref remains available");
     assert!(exit.is_completed());
     scope.request_shutdown();
-    timeout(WAIT, runtime.wait())
+    timeout(WAIT, running_tree.wait())
         .await
         .expect("scope shutdown completes")
         .expect("scope stops cleanly");
@@ -382,11 +382,11 @@ async fn pre_spawn_task_ref_observes_a_fast_child() {
 
 #[tokio::test]
 async fn ordered_scope_has_no_dynamic_capability() {
-    let runtime = Tree::new().spawn().expect("ordered tree builds");
+    let running_tree = Tree::new().spawn().expect("ordered tree builds");
 
-    assert!(runtime.scope().dynamic().is_none());
+    assert!(running_tree.scope().dynamic().is_none());
 
-    runtime.shutdown().await.expect("runtime stops");
+    running_tree.shutdown().await.expect("runtime stops");
 }
 
 struct OrderedScopeProbe {
@@ -416,13 +416,13 @@ async fn ordered_context_scope_has_no_dynamic_capability() {
     });
     let mut tree = Tree::new();
     tree.add_actor_spec(probe);
-    let runtime = tree.spawn().expect("ordered tree builds");
+    let running_tree = tree.spawn().expect("ordered tree builds");
 
     timeout(WAIT, checked_rx.recv())
         .await
         .expect("scope probe runs")
         .expect("scope probe reports");
-    runtime.shutdown().await.expect("runtime stops");
+    running_tree.shutdown().await.expect("runtime stops");
 }
 
 struct StopScopeProbe {
@@ -456,9 +456,9 @@ async fn stop_context_scope_observes_and_controls_its_scope() {
     tree.add_actor_spec(ActorSpec::new("probe", move || StopScopeProbe {
         observed: observed_tx.clone(),
     }));
-    let runtime = tree.spawn().expect("ordered tree builds");
+    let running_tree = tree.spawn().expect("ordered tree builds");
 
-    runtime.shutdown().await.expect("runtime stops");
+    running_tree.shutdown().await.expect("runtime stops");
 
     let (kind, visible) = timeout(WAIT, observed_rx.recv())
         .await
@@ -483,8 +483,8 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
     }));
     let mut tree = Tree::new();
     tree.add_subtree("nested", nested_tree);
-    let runtime = tree.spawn().expect("tree builds and spawns");
-    let root = runtime.scope();
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    let root = running_tree.scope();
     let nested = root.subtree("nested").expect("nested runtime handle");
 
     assert_eq!(next_report(&mut lifecycle_rx).await, "started");
@@ -497,9 +497,9 @@ async fn dropping_every_root_and_nested_handle_leaves_the_owned_runtime_running(
         "dropping non-owning handles must leave the runtime alive"
     );
 
-    runtime.scope().request_shutdown();
+    running_tree.scope().request_shutdown();
     assert_eq!(next_report(&mut lifecycle_rx).await, "cancelled");
-    runtime.wait().await.expect("runtime stops cleanly");
+    running_tree.wait().await.expect("runtime stops cleanly");
 }
 
 #[tokio::test]
@@ -515,11 +515,11 @@ async fn dropping_runtime_requests_graceful_shutdown() {
             Ok(())
         }
     }));
-    let runtime = tree.spawn().expect("tree builds and spawns");
-    let handle = runtime.scope();
+    let running_tree = tree.spawn().expect("tree builds and spawns");
+    let handle = running_tree.scope();
 
     assert_eq!(next_report(&mut lifecycle_rx).await, "started");
-    drop(runtime);
+    drop(running_tree);
     assert_eq!(next_report(&mut lifecycle_rx).await, "cancelled");
     handle.wait().await.expect("owner drop drains runtime");
 }
@@ -855,8 +855,8 @@ async fn context_scope_add_task_reports_insertion_success() {
 #[tokio::test]
 async fn dynamic_context_scope_uses_task_refs_for_completion() {
     let (reports_tx, mut reports_rx) = mpsc::unbounded_channel();
-    let runtime = DynamicTree::new().spawn().expect("dynamic root builds");
-    support::dynamic_root(&runtime)
+    let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
+    support::dynamic_root(&running_tree)
         .add_actor_spec(ActorSpec::new("leader", move || DynamicCompletionLeader {
             reports: reports_tx.clone(),
         }))
@@ -865,7 +865,7 @@ async fn dynamic_context_scope_uses_task_refs_for_completion() {
 
     assert_eq!(next_report(&mut reports_rx).await, "inserted");
     assert_eq!(next_report(&mut reports_rx).await, "completed");
-    timeout(WAIT, runtime.wait())
+    timeout(WAIT, running_tree.wait())
         .await
         .expect("task completion requests shutdown")
         .expect("dynamic root stops");
@@ -896,19 +896,19 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
     let mut owned = Tree::new().strategy(Strategy::RestForOne);
     owned.add_actor_spec(leader);
     owned.add_subtree("children", children);
-    let mut runtime = Tree::new();
-    runtime.add_subtree("owned", owned);
-    assert_eq!(runtime.scope().snapshot().strategy, Strategy::OneForOne);
-    let handle = runtime.spawn().expect("ordered leader-owned scope builds");
+    let mut tree = Tree::new();
+    tree.add_subtree("owned", owned);
+    assert_eq!(tree.scope().snapshot().strategy, Strategy::OneForOne);
+    let running_tree = tree.spawn().expect("ordered leader-owned scope builds");
     assert_eq!(next_report(&mut reports_rx).await, "some");
     assert_eq!(next_report(&mut reports_rx).await, "ordered-children");
-    handle
+    running_tree
         .scope()
         .wait_started()
         .await
         .expect("ordered child starts");
     assert_eq!(starts.load(Ordering::SeqCst), 1);
-    let snapshot = handle.scope().snapshot();
+    let snapshot = running_tree.scope().snapshot();
     let inner = snapshot
         .child("owned")
         .and_then(|child| child.supervisor.as_deref())
@@ -919,7 +919,7 @@ async fn actor_with_ordered_scope_starts_after_leader_and_stops_before_it() {
         inner.child("worker").is_some(),
         "root.owned.children.worker exists"
     );
-    handle.shutdown().await.expect("runtime stops");
+    running_tree.shutdown().await.expect("runtime stops");
     assert!(child_stopped.load(Ordering::SeqCst));
 }
 
@@ -1075,9 +1075,13 @@ async fn sibling_scopes_may_reuse_the_same_local_actor_id() {
     tree.add_subtree("left", left);
     tree.add_subtree("right", right);
 
-    let runtime = tree.spawn().expect("sibling-local ids are independent");
-    runtime.scope().wait_started().await.expect("tree starts");
-    let snapshot = runtime.scope().snapshot();
+    let running_tree = tree.spawn().expect("sibling-local ids are independent");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("tree starts");
+    let snapshot = running_tree.scope().snapshot();
     for scope in ["left", "right"] {
         assert!(
             snapshot
@@ -1088,5 +1092,5 @@ async fn sibling_scopes_may_reuse_the_same_local_actor_id() {
             "{scope}.worker exists"
         );
     }
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }

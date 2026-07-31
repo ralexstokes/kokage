@@ -175,7 +175,7 @@ fn feed_spec(spec: ActorSpec<FeedMsg>) -> ActorSpec<FeedMsg> {
 }
 
 struct App {
-    runtime: kokage::RunningTree,
+    running_tree: kokage::RunningTree,
     venue_a_feed: ActorRef<FeedMsg>,
     venue_b_feed: ActorRef<FeedMsg>,
     router: ActorRef<RouterMsg>,
@@ -327,17 +327,20 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
     tree.add_actor_spec(control_actor);
     tree.add_actor_spec(health_actor);
 
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     let background_stop = CancellationToken::new();
-    let sampler = tokio::spawn(telemetry::sample(runtime.scope(), background_stop.clone()));
+    let sampler = tokio::spawn(telemetry::sample(
+        running_tree.scope(),
+        background_stop.clone(),
+    ));
     // The aggregate restart breaker is fed from the lifecycle stream's
     // cumulative counters rather than inferring restarts from event pairs.
     // Child transitions carry the venues supervisor's cumulative restart
     // counter. A `Lagged` marker carries no counter, so retain the last value
     // until the next child transition. The scope is direct children; nested
     // per-venue supervisors would each need their own lifecycle pump.
-    let venues_runtime = runtime
+    let venues_runtime = running_tree
         .scope()
         .subtree("venues")
         .expect("venues runtime subtree");
@@ -355,7 +358,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
         });
 
     Ok(App {
-        runtime,
+        running_tree,
         venue_a_feed,
         venue_b_feed,
         router,
@@ -373,7 +376,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
 }
 
 async fn phase_0(app: &App) -> Result<(), AnyError> {
-    tokio::time::timeout(INIT_TIMEOUT, app.runtime.scope().wait_started()).await??;
+    tokio::time::timeout(INIT_TIMEOUT, app.running_tree.scope().wait_started()).await??;
     assert_eq!(app.venue_a.feed_sessions(VENUE_A), 1);
     assert_eq!(app.venue_b.feed_sessions(VENUE_B), 1);
     assert_eq!(app.venue_a.gateway_sessions(VENUE_A), 1);
@@ -451,7 +454,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
     });
     let before_b = generation(app, "venue-b-feed");
     let venues = app
-        .runtime
+        .running_tree
         .scope()
         .subtree("venues")
         .expect("venues runtime subtree");
@@ -626,7 +629,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     });
     await_until(|| async {
         let stats = app
-            .runtime
+            .running_tree
             .scope()
             .subtree("venues")
             .expect("venue runtime subtree")
@@ -651,7 +654,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
     flood_stop.cancel();
     flood.await?;
     let feed_stats = app
-        .runtime
+        .running_tree
         .scope()
         .subtree("venues")
         .expect("venue runtime subtree")
@@ -672,7 +675,7 @@ async fn phase_6(app: &App) -> Result<(), AnyError> {
 async fn phase_7(app: &App) -> Result<(), AnyError> {
     app.health.send(HealthMsg::ResetBreaker).await?;
     let venues = app
-        .runtime
+        .running_tree
         .scope()
         .subtree("venues")
         .expect("venues runtime subtree");
@@ -725,8 +728,8 @@ async fn phase_8(app: App, latency: LatencyRecorder, metrics: Snapshotter) -> Re
     app.background_stop.cancel();
     app.sampler.await?;
     drop(app.lifecycle_watch);
-    let runtime_scope = app.runtime.scope();
-    tokio::time::timeout(Duration::from_secs(5), app.runtime.shutdown()).await??;
+    let runtime_scope = app.running_tree.scope();
+    tokio::time::timeout(Duration::from_secs(5), app.running_tree.shutdown()).await??;
 
     let latency = latency.snapshot();
     for series in [
@@ -874,7 +877,7 @@ fn both_health(status: &ReconcilerStatus, health: VenueHealth) -> bool {
 }
 
 fn generation(app: &App, child: &str) -> u64 {
-    app.runtime
+    app.running_tree
         .scope()
         .snapshot()
         .descendant(["venues", child])

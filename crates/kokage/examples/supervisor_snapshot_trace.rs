@@ -73,8 +73,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut tree = Tree::new();
     tree.add_actor_spec(frontend_spec);
     tree.add_actor_spec(worker_spec);
-    let runtime = tree.spawn()?;
-    let handle = runtime.scope();
+    let running_tree = tree.spawn()?;
+    let handle = running_tree.scope();
     let mut events = handle.lifecycle_events();
     let mut snapshots = handle.snapshots();
 
@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let snapshot = snapshots.changed().await?;
     println!("snapshot: {:?}", snapshot.state);
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     event_task.abort();
     Ok(())
 }

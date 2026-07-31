@@ -69,8 +69,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
         worker: worker.clone(),
     });
     let orders = tree.add_actor_spec(orders_spec);
-    let runtime = tree.spawn()?;
-    let handle = runtime.scope();
+    let running_tree = tree.spawn()?;
+    let handle = running_tree.scope();
 
     orders.send("business cards x100".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));
@@ -95,6 +95,6 @@ async fn run() -> Result<(), Box<dyn Error>> {
     orders.send("flyers x500".to_owned()).await?;
     println!("delivered {}", delivered_rx.recv().await.expect("delivery"));
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }

@@ -1617,27 +1617,27 @@ mod actor_host {
 
     #[tokio::test(start_paused = true)]
     async fn dynamic_actor_uses_its_supervisor_child_shutdown_grace() {
-        let runtime = DynamicTree::new().spawn().expect("dynamic runtime builds");
-        crate::support::dynamic_root(&runtime)
+        let running_tree = DynamicTree::new().spawn().expect("dynamic runtime builds");
+        crate::support::dynamic_root(&running_tree)
             .add_actor_spec(
                 ActorSpec::new("worker", || NeverStops)
                     .shutdown(Shutdown::graceful_for(Duration::from_millis(100))),
             )
             .await
             .expect("dynamic actor added");
-        runtime
+        running_tree
             .scope()
             .wait_started()
             .await
             .expect("dynamic actor started");
         assert!(matches!(
-            crate::support::dynamic_root(&runtime)
+            crate::support::dynamic_root(&running_tree)
                 .remove_child("worker")
                 .await,
             Err(ControlError::Failed(SupervisorError::ShutdownTimedOut(actor_id)))
                 if actor_id == "worker"
         ));
-        runtime.shutdown().await.expect("clean shutdown");
+        running_tree.shutdown().await.expect("clean shutdown");
     }
 
     #[derive(Clone)]

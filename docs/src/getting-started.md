@@ -91,12 +91,12 @@ impl Actor for Press {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = Tree::new();
     let press = tree.add_actor("press", || Press { jobs_done: 0 });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     press.send("100 business cards".to_owned()).await?;
     press.send("flyers, glossy".to_owned()).await?;
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
@@ -111,7 +111,7 @@ That short `main` demonstrates the two handle types you will use constantly:
   `send` waits for mailbox capacity, delivers the message, and — crucially —
   keeps working across supervised restarts of the actor. Clone it freely and
   hand copies to anyone who needs to talk to the press.
-- **[`RunningTree`]** (`runtime` above) *owns* the spawned tree. Keep it
+- **[`RunningTree`]** (`running_tree` above) *owns* the spawned tree. Keep it
   alive for as long as the application should run: dropping it requests a
   graceful shutdown. In particular, `let _ = tree.spawn()?;` shuts the tree
   down immediately — bind it to a real name.

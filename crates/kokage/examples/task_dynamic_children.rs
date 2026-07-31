@@ -3,11 +3,11 @@ use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let running_owner = DynamicTree::new().spawn()?;
-    let running = running_owner.scope();
-    let mut snapshots = running.snapshots();
+    let running_tree = DynamicTree::new().spawn()?;
+    let scope = running_tree.scope();
+    let mut snapshots = scope.snapshots();
 
-    running
+    scope
         .add_task("api", |ctx| async move {
             println!("api started in generation {}", ctx.generation());
             ctx.shutdown_token().cancelled().await;
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
 
-    running
+    scope
         .add_task("cache-warmer", |ctx| async move {
             println!("cache-warmer started in generation {}", ctx.generation());
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Let the child do visible work before demonstrating runtime removal.
     sleep(Duration::from_millis(150)).await;
 
-    running.remove_child("cache-warmer").await?;
+    scope.remove_child("cache-warmer").await?;
     timeout(
         Duration::from_secs(2),
         snapshots.wait_for(|snapshot| snapshot.child("cache-warmer").is_none()),
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("cache-warmer removed at runtime");
 
-    let nested = running
+    let nested = scope
         .add_dynamic_subtree("nested", DynamicTree::new())
         .await?;
     timeout(
@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await??;
     println!("nested-cache removed from nested supervisor");
 
-    running.shutdown().await?;
+    scope.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

@@ -23,8 +23,8 @@ where
 {
     let mut builder = Tree::new();
     let actor_ref = builder.add_actor_spec(ActorSpec::new("timer", factory));
-    let runtime = builder.strategy(Strategy::OneForOne);
-    (runtime, actor_ref)
+    let tree = builder.strategy(Strategy::OneForOne);
+    (tree, actor_ref)
 }
 
 struct OneShot {
@@ -50,10 +50,10 @@ impl Actor for OneShot {
 #[tokio::test(start_paused = true)]
 async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, actor_ref) = build_runtime(move || OneShot {
+    let (tree, actor_ref) = build_runtime(move || OneShot {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(
         timeout(Duration::from_secs(1), observed_rx.recv())
@@ -71,7 +71,7 @@ async fn keyed_timeout_fires_once_without_using_mailbox_capacity() {
     assert_eq!(stats.messages_accepted, 0);
     assert_eq!(stats.messages_received, 1);
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct MailboxOneShot {
@@ -95,10 +95,10 @@ impl Actor for MailboxOneShot {
 #[tokio::test(start_paused = true)]
 async fn context_send_after_delivers_once_through_the_self_mailbox() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, actor_ref) = build_runtime(move || MailboxOneShot {
+    let (tree, actor_ref) = build_runtime(move || MailboxOneShot {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("tick"));
     assert!(
@@ -111,7 +111,7 @@ async fn context_send_after_delivers_once_through_the_self_mailbox() {
     assert_eq!(stats.messages_accepted, 1);
     assert_eq!(stats.messages_received, 1);
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct ChainedTimeout {
@@ -143,11 +143,11 @@ impl Actor for ChainedTimeout {
 #[tokio::test(start_paused = true)]
 async fn rearming_a_timeout_from_its_own_handler_fires_it_again() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, actor_ref) = build_runtime(move || ChainedTimeout {
+    let (tree, actor_ref) = build_runtime(move || ChainedTimeout {
         ticks: 3,
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     for expected in 1..=3 {
         assert_eq!(
@@ -167,7 +167,7 @@ async fn rearming_a_timeout_from_its_own_handler_fires_it_again() {
     assert_eq!(stats.messages_accepted, 0);
     assert_eq!(stats.messages_received, 3);
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct CancelledTimer {
@@ -194,10 +194,10 @@ impl Actor for CancelledTimer {
 #[tokio::test(start_paused = true)]
 async fn clearing_a_keyed_timeout_prevents_delivery() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || CancelledTimer {
+    let (tree, _) = build_runtime(move || CancelledTimer {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert!(
         timeout(Duration::from_millis(60), observed_rx.recv())
@@ -206,7 +206,7 @@ async fn clearing_a_keyed_timeout_prevents_delivery() {
         "cancelled timer delivered a message"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 const REPLACEABLE: TimerKey = TimerKey::new("replaceable");
@@ -234,10 +234,10 @@ impl Actor for ReplaceableTimeout {
 #[tokio::test(start_paused = true)]
 async fn setting_a_timeout_replaces_the_previous_entry_at_its_key() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || ReplaceableTimeout {
+    let (tree, _) = build_runtime(move || ReplaceableTimeout {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(
         timeout(Duration::from_secs(1), observed_rx.recv())
@@ -247,7 +247,7 @@ async fn setting_a_timeout_replaces_the_previous_entry_at_its_key() {
     );
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,7 +295,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let (runtime, actor_ref) = build_runtime({
+    let (tree, actor_ref) = build_runtime({
         let release = release.clone();
         move || OrderedTimeout {
             started: started_tx.clone(),
@@ -304,7 +304,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
             replace: false,
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
     started_rx.recv().await.expect("actor started");
 
     actor_ref
@@ -322,7 +322,7 @@ async fn queued_pre_fire_message_retracts_an_elapsed_timeout() {
         "elapsed timeout survived a pre-fire clear"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -330,7 +330,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let (runtime, actor_ref) = build_runtime({
+    let (tree, actor_ref) = build_runtime({
         let release = release.clone();
         move || OrderedTimeout {
             started: started_tx.clone(),
@@ -339,7 +339,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
             replace: true,
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
     started_rx.recv().await.expect("actor started");
 
     actor_ref
@@ -358,7 +358,7 @@ async fn rearming_during_the_pre_fire_prefix_suppresses_the_old_entry() {
     );
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct KeyedTimeouts {
@@ -388,16 +388,16 @@ impl Actor for KeyedTimeouts {
 #[tokio::test(start_paused = true)]
 async fn keyed_timeouts_replace_per_key_and_remain_independent() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || KeyedTimeouts {
+    let (tree, _) = build_runtime(move || KeyedTimeouts {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("first"));
     assert_eq!(observed_rx.recv().await, Some("second"));
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct FarFutureTimers {
@@ -426,11 +426,11 @@ impl Actor for FarFutureTimers {
 #[tokio::test(start_paused = true)]
 async fn far_future_delays_saturate_instead_of_panicking() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, actor_ref) = build_runtime(move || FarFutureTimers {
+    let (tree, actor_ref) = build_runtime(move || FarFutureTimers {
         timers: Vec::new(),
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     actor_ref.send("ping").await.expect("actor alive");
     assert_eq!(
@@ -441,7 +441,7 @@ async fn far_future_delays_saturate_instead_of_panicking() {
     );
     assert!(observed_rx.try_recv().is_err());
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct IntervalActor {
@@ -471,12 +471,12 @@ impl Actor for IntervalActor {
 #[tokio::test(start_paused = true)]
 async fn self_interval_repeats_until_cancelled() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || IntervalActor {
+    let (tree, _) = build_runtime(move || IntervalActor {
         observed: observed_tx.clone(),
         timer: None,
         ticks: 0,
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     for expected in 1..=3 {
         assert_eq!(observed_rx.recv().await, Some(expected));
@@ -488,7 +488,7 @@ async fn self_interval_repeats_until_cancelled() {
         "interval continued after cancellation"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct SlowInterval {
@@ -526,7 +526,7 @@ impl Actor for SlowInterval {
 async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let release = Arc::new(Notify::new());
-    let (runtime, _) = build_runtime({
+    let (tree, _) = build_runtime({
         let release = release.clone();
         move || SlowInterval {
             observed: observed_tx.clone(),
@@ -536,7 +536,7 @@ async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
             timer: None,
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(10)));
     advance(Duration::from_millis(100)).await;
@@ -545,7 +545,7 @@ async fn interval_skips_missed_ticks_while_the_handler_is_slow() {
     assert_eq!(observed_rx.recv().await, Some(Duration::from_millis(120)));
     assert!(observed_rx.try_recv().is_err(), "missed ticks piled up");
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct RestartingTimer {
@@ -581,11 +581,11 @@ impl Actor for RestartingTimer {
 async fn restart_drops_the_previous_incarnations_timer_table() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
     let runs = Arc::new(AtomicUsize::new(0));
-    let (runtime, _) = build_runtime(move || RestartingTimer {
+    let (tree, _) = build_runtime(move || RestartingTimer {
         runs: runs.clone(),
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("new"));
     assert!(
@@ -595,7 +595,7 @@ async fn restart_drops_the_previous_incarnations_timer_table() {
         "a previous incarnation delivered a stale timer"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct Sink {
@@ -627,8 +627,8 @@ where
         observed: observed_tx.clone(),
     }));
     let scheduler_ref = builder.add_actor_spec(ActorSpec::new("scheduler", scheduler(sink_ref)));
-    let runtime = builder.strategy(Strategy::OneForOne);
-    (runtime, scheduler_ref, observed_rx)
+    let tree = builder.strategy(Strategy::OneForOne);
+    (tree, scheduler_ref, observed_rx)
 }
 
 struct CrossScheduler {
@@ -689,16 +689,16 @@ impl RawActor for RawCrossScheduler {
 
 #[tokio::test(start_paused = true)]
 async fn raw_context_can_schedule_cross_actor_timers() {
-    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, mut observed_rx) = build_cross_runtime(|target| {
         move || RawCrossScheduler {
             target: target.clone(),
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("raw-cross"));
     assert_eq!(observed_rx.recv().await, Some("raw-cross-tick"));
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct RawSelfScheduler {
@@ -723,24 +723,24 @@ impl RawActor for RawSelfScheduler {
 #[tokio::test(start_paused = true)]
 async fn raw_context_can_schedule_self_timers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let (runtime, _) = build_runtime(move || RawSelfScheduler {
+    let (tree, _) = build_runtime(move || RawSelfScheduler {
         observed: observed_tx.clone(),
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("raw-self"));
     assert_eq!(observed_rx.recv().await, Some("raw-self-tick"));
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
 async fn detached_send_after_delivers_through_the_public_target_ref() {
-    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, mut observed_rx) = build_cross_runtime(|target| {
         move || CrossScheduler {
             target: target.clone(),
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("cross"));
     assert!(
@@ -750,17 +750,17 @@ async fn detached_send_after_delivers_through_the_public_target_ref() {
         "one-shot cross-actor timer fired twice"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
 async fn dropped_send_after_guard_cancels_delivery() {
-    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, mut observed_rx) = build_cross_runtime(|target| {
         move || DroppedCrossScheduler {
             target: target.clone(),
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert!(
         timeout(Duration::from_millis(60), observed_rx.recv())
@@ -769,7 +769,7 @@ async fn dropped_send_after_guard_cancels_delivery() {
         "a dropped send-after guard delivered its message"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct RestartingCrossScheduler {
@@ -800,13 +800,13 @@ impl Actor for RestartingCrossScheduler {
 #[tokio::test(start_paused = true)]
 async fn restart_ends_cross_actor_timer_lifetime() {
     let runs = Arc::new(AtomicUsize::new(0));
-    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, mut observed_rx) = build_cross_runtime(|target| {
         move || RestartingCrossScheduler {
             target: target.clone(),
             runs: runs.clone(),
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert_eq!(observed_rx.recv().await, Some("new"));
     assert!(
@@ -816,7 +816,7 @@ async fn restart_ends_cross_actor_timer_lifetime() {
         "a previous scheduler incarnation delivered a stale message"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 struct CrossInterval {
@@ -895,13 +895,13 @@ impl Actor for CrossInterval {
 
 #[tokio::test(start_paused = true)]
 async fn cross_actor_interval_repeats_until_cancelled() {
-    let (runtime, scheduler_ref, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, scheduler_ref, mut observed_rx) = build_cross_runtime(|target| {
         move || CrossInterval {
             target: target.clone(),
             timer: None,
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     for _ in 1..=3 {
         assert_eq!(observed_rx.recv().await, Some("tick"));
@@ -914,23 +914,23 @@ async fn cross_actor_interval_repeats_until_cancelled() {
         "cross-actor interval continued after cancellation"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
 async fn detached_interval_keeps_delivering() {
-    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, mut observed_rx) = build_cross_runtime(|target| {
         move || DetachedCrossInterval {
             target: target.clone(),
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     for _ in 1..=3 {
         assert_eq!(observed_rx.recv().await, Some("detached-tick"));
     }
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
@@ -948,7 +948,7 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
             period: Duration::from_millis(10),
         }
     }));
-    let runtime = builder
+    let running_tree = builder
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");
@@ -967,20 +967,20 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
         "target termination is environmental, not explicit cancellation"
     );
 
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
 async fn zero_period_interval_is_finished_without_cancellation() {
     let (guard_tx, mut guard_rx) = mpsc::unbounded_channel();
-    let (runtime, _, _observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, _observed_rx) = build_cross_runtime(|target| {
         move || ReportedCrossInterval {
             target: target.clone(),
             guards: guard_tx.clone(),
             period: Duration::ZERO,
         }
     });
-    let runtime = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
     let guard = guard_rx.recv().await.expect("scheduler reports guard");
 
     assert!(guard.is_finished());
@@ -989,17 +989,17 @@ async fn zero_period_interval_is_finished_without_cancellation() {
         "invalid interval period did not explicitly cancel the guard"
     );
 
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test(start_paused = true)]
 async fn dropped_interval_guard_cancels_delivery() {
-    let (runtime, _, mut observed_rx) = build_cross_runtime(|target| {
+    let (tree, _, mut observed_rx) = build_cross_runtime(|target| {
         move || DroppedCrossInterval {
             target: target.clone(),
         }
     });
-    let handle = runtime.spawn().expect("runtime builds");
+    let running_tree = tree.spawn().expect("runtime builds");
 
     assert!(
         timeout(Duration::from_millis(50), observed_rx.recv())
@@ -1008,5 +1008,5 @@ async fn dropped_interval_guard_cancels_delivery() {
         "a dropped interval guard delivered a tick"
     );
 
-    handle.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }

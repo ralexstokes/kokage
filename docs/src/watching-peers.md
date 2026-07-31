@@ -73,14 +73,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         press: watched.clone(),
         log: log_tx.clone(),
     });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     println!("{}", log_rx.recv().await.expect("event")); // press up (run 0)
     press.send("jam".to_owned()).await?;
     println!("{}", log_rx.recv().await.expect("event")); // press down: failure
     println!("{}", log_rx.recv().await.expect("event")); // press up (run 1)
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

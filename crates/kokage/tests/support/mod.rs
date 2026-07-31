@@ -6,8 +6,8 @@ use kokage::{
 #[cfg(feature = "host")]
 use kokage::{ActorSpec, raw::ActorHost};
 
-pub(crate) fn dynamic_root(runtime: &RunningDynamicTree) -> DynamicScopeRef {
-    runtime.scope()
+pub(crate) fn dynamic_root(running_tree: &RunningDynamicTree) -> DynamicScopeRef {
+    running_tree.scope()
 }
 
 /// Small test fixture for incrementally assembling heterogeneous actor specs.

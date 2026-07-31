@@ -13,8 +13,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("worker shutting down");
         Ok(())
     });
-    let running = tree.spawn()?;
-    let mut events = running.scope().lifecycle_events();
+    let running_tree = tree.spawn()?;
+    let mut events = running_tree.scope().lifecycle_events();
 
     let observer = tokio::spawn(async move {
         while let Some(event) = events.next().await {
@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     sleep(Duration::from_millis(200)).await;
-    running.shutdown().await?;
+    running_tree.shutdown().await?;
     observer.await?;
 
     Ok(())

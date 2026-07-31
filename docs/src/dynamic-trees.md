@@ -25,8 +25,8 @@ impl Actor for Press {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = DynamicTree::new().spawn()?;
-    let scope = runtime.scope();
+    let running_tree = DynamicTree::new().spawn()?;
+    let scope = running_tree.scope();
 
     // A big client walks in: give them a dedicated press.
     let acme = scope
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Contract over: the press drains its queue and leaves the tree.
     scope.remove_child("acme-press").await?;
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
@@ -94,17 +94,17 @@ let sessions = dynamic_tree.scope(); // usable for wiring before spawn
 let mut shop = Tree::new();
 // ... static children: front desk, press room ...
 shop.add_subtree("sessions", dynamic_tree);
-let runtime = shop.spawn()?;
+let running_tree = shop.spawn()?;
 // `spawn` returns while children are still starting; wait for the tree to
 // come up before the dynamic scope can accept members.
-runtime.scope().wait_started().await?;
+running_tree.scope().wait_started().await?;
 
 // Later, as clients arrive:
 let session = sessions
     .add_actor("session-1", || Session)
     .await?;
 # let _ = session;
-# runtime.shutdown().await?;
+# running_tree.shutdown().await?;
 # Ok(())
 # }
 ```
@@ -127,7 +127,7 @@ factory is `FnOnce`, so it can consume owned inputs:
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let batch = DynamicTree::new();
 let scope = batch.scope();
-let runtime = batch.spawn()?;
+let running_tree = batch.spawn()?;
 
 let job = scope
     .spawn_once("job-42", |_ctx| async move { Ok(()) })
@@ -136,7 +136,7 @@ let job = scope
 let exit = job.wait().await?;
 assert!(exit.is_completed());
 scope.request_shutdown();
-runtime.wait().await?;
+running_tree.wait().await?;
 # Ok(())
 # }
 ```

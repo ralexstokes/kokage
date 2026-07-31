@@ -163,9 +163,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tree.add_subtree("pipeline", pipeline_runtime());
     tree.add_subtree("telemetry", telemetry_runtime());
     tree.add_subtree("dynamic", DynamicTree::new());
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
-    let console = ConsoleBuilder::for_runtime(&runtime.scope())
+    let console = ConsoleBuilder::for_runtime(&running_tree.scope())
         .bind(([127, 0, 0, 1], 0))
         .spawn()
         .await;
@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Periodically add a dynamic actor, feed it, and remove it again, so the
     // console shows children joining and leaving the tree.
-    let dynamic = runtime
+    let dynamic = running_tree
         .scope()
         .subtree("dynamic")
         .and_then(|scope| scope.dynamic())
@@ -229,7 +229,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     println!("shutting down");
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     if let Some(console) = console {
         console.shutdown();
     }

@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
-    let running = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     let app_shutdown = CancellationToken::new();
     app_shutdown
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .detach();
 
     app_shutdown.cancelled().await;
-    running.shutdown().await?;
+    running_tree.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

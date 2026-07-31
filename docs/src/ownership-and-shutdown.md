@@ -1,6 +1,6 @@
 # Ownership and Shutdown
 
-You have been typing `runtime.shutdown()` since chapter two. This
+You have been typing `running_tree.shutdown()` since chapter two. This
 chapter makes the machinery underneath precise: who owns a running tree, how
 stopping propagates, and how long anything is allowed to take on the way
 down.
@@ -24,7 +24,7 @@ Ownership here is literal Rust ownership:
 
 Everything else holds a [`ScopeRef`] — the cheap, cloneable, *non-owning*
 reference to a supervision scope, parallel to what `ActorRef` is for one
-actor. `runtime.scope()` gives you a cloneable root ref for observation and
+actor. `running_tree.scope()` gives you a cloneable root ref for observation and
 control. `scope.subtree("press-room")` navigates down, and trees hand refs out
 even before spawn. A `ScopeRef` never keeps the tree alive, and dropping one
 means nothing. What it does carry is *control capability*: observation
@@ -81,14 +81,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .mailbox_shutdown(MailboxShutdown::Drain);
     let mut tree = Tree::new();
     let press = tree.add_actor_spec(spec);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     for n in 1..=5 {
         press.send(format!("job {n}")).await?;
     }
 
     // All five jobs print before this returns.
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ctx.shutdown_token().cancelled().await;
         Ok(())
     });
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     let stop = CancellationToken::new();
     stop.cancel_when(async {
@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .detach();
 
     stop.cancelled().await;
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```

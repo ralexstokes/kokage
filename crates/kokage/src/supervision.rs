@@ -133,8 +133,8 @@ struct IdentityTree<const DYNAMIC: bool = false> {
 ///
 /// # #[cfg(feature = "serde")]
 /// assert_eq!(tree.outline().child_ids(), ["ingest", "workers"]);
-/// let runtime = tree.spawn()?;
-/// runtime.shutdown().await?;
+/// let running_tree = tree.spawn()?;
+/// running_tree.shutdown().await?;
 /// # Ok(())
 /// # }
 /// ```

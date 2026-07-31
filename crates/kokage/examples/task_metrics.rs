@@ -28,10 +28,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
     });
-    let running = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     sleep(Duration::from_millis(100)).await;
-    running.shutdown().await?;
+    running_tree.shutdown().await?;
 
     println!("# Prometheus snapshot");
     println!("{}", recorder.render());

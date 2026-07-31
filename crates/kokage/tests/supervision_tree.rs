@@ -329,12 +329,16 @@ async fn tree_placed_specs_inherit_the_scope_mailbox_default() {
     let mut tree = Tree::new().mailbox_capacity(9);
     tree.add_actor_spec(first);
     tree.add_actor_spec(direct);
-    let runtime = tree.spawn().expect("tree builds");
-    runtime.scope().wait_started().await.expect("actors start");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actors start");
 
     assert_eq!(first_actor.stats().mailbox_capacity, 9);
     assert_eq!(direct_actor.stats().mailbox_capacity, 9);
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -345,11 +349,15 @@ async fn nested_scope_does_not_inherit_parent_mailbox_default() {
     nested_tree.add_actor_spec(nested);
     let mut tree = Tree::new().mailbox_capacity(9);
     tree.add_subtree("nested", nested_tree);
-    let runtime = tree.spawn().expect("tree builds");
-    runtime.scope().wait_started().await.expect("actors start");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actors start");
 
     assert_eq!(nested_ref.stats().mailbox_capacity, 64);
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -366,12 +374,16 @@ async fn leader_owned_scope_declares_its_own_mailbox_default() {
     let mut tree = Tree::new();
     tree.add_actor_spec(peer);
     tree.add_subtree("owned", owned);
-    let runtime = tree.spawn().expect("tree builds");
-    runtime.scope().wait_started().await.expect("actors start");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actors start");
 
     assert_eq!(peer_ref.stats().mailbox_capacity, 64);
     assert_eq!(leader_ref.stats().mailbox_capacity, 9);
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[test]
@@ -404,8 +416,12 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
     let spec = spec.message_size(|message: &Vec<u8>| message.len());
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
-    let runtime = tree.spawn().expect("tree builds");
-    runtime.scope().wait_started().await.expect("actor starts");
+    let running_tree = tree.spawn().expect("tree builds");
+    running_tree
+        .scope()
+        .wait_started()
+        .await
+        .expect("actor starts");
 
     actor
         .try_send(vec![0; 4])
@@ -420,7 +436,7 @@ async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
     assert_eq!(stats.messages_conflated, 1);
     assert_eq!(stats.message_bytes_accepted, Some(7));
 
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[tokio::test]
@@ -439,7 +455,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
             .remove_when_done
     );
     let mut snapshots = tree.scope().snapshots();
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -458,7 +474,7 @@ async fn static_tree_actor_can_remove_itself_when_done() {
         }) if actor_id == "finite"
     ));
 
-    runtime.shutdown().await.expect("clean shutdown");
+    running_tree.shutdown().await.expect("clean shutdown");
 }
 
 #[test]

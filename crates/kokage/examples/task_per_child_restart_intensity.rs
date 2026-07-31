@@ -55,9 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Tree::new().default_restart(RestartPolicy::on_failure().limit(0, Duration::from_secs(1)));
     tree.add_task_spec(warm_cache);
     tree.add_task_spec(metrics);
-    let running_owner = tree.spawn()?;
-    let running = running_owner.scope();
-    let mut snapshots = running.snapshots();
+    let running_tree = tree.spawn()?;
+    let scope = running_tree.scope();
+    let mut snapshots = scope.snapshots();
     let scheduled = timeout(
         Duration::from_secs(2),
         snapshots.wait_for_child("warm-cache", |child| child.next_restart_in.is_some()),
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
 
-    running.shutdown().await?;
+    scope.shutdown().await?;
     println!("supervisor stopped");
 
     Ok(())

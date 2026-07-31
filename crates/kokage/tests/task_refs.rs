@@ -15,7 +15,7 @@ const WAIT: Duration = Duration::from_secs(3);
 async fn declared_ref_observes_fast_completion() {
     let mut tree = Tree::new();
     let task = tree.add_task("job", |_| async { Ok(()) });
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     let exit = timeout(WAIT, task.wait())
         .await
@@ -23,13 +23,13 @@ async fn declared_ref_observes_fast_completion() {
         .expect("task remains observable");
     assert_eq!(exit, ExitStatus::Completed { cancelled: false });
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
 async fn temporary_dynamic_ref_retains_removed_task_exit() {
-    let runtime = DynamicTree::new().spawn().expect("tree builds");
-    let task = runtime
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let task = running_tree
         .scope()
         .spawn_once("job", |_| async { Ok(()) })
         .await
@@ -42,15 +42,15 @@ async fn temporary_dynamic_ref_retains_removed_task_exit() {
     assert!(exit.is_completed());
     assert!(task.snapshot().is_none());
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
 async fn spawn_once_accepts_a_consuming_factory() {
-    let runtime = DynamicTree::new().spawn().expect("tree builds");
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let (observed_tx, observed_rx) = oneshot::channel();
     let payload = String::from("consumed exactly once");
-    let task = runtime
+    let task = running_tree
         .scope()
         .spawn_once("consuming-job", move |_| async move {
             observed_tx.send(payload).expect("receiver remains live");
@@ -69,15 +69,15 @@ async fn spawn_once_accepts_a_consuming_factory() {
             .expect("task remains observable")
             .is_completed()
     );
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
 async fn configured_one_shot_retains_a_consuming_factory() {
-    let runtime = DynamicTree::new().spawn().expect("tree builds");
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
     let (observed_tx, observed_rx) = oneshot::channel();
     let payload = String::from("configured and consumed");
-    let task = runtime
+    let task = running_tree
         .scope()
         .spawn_once_spec(
             OneShotTaskSpec::new("configured-job", move |ctx| async move {
@@ -106,13 +106,13 @@ async fn configured_one_shot_retains_a_consuming_factory() {
     assert_eq!(snapshot.restart_policy, RestartPolicy::never());
     assert!(!snapshot.remove_when_done);
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
 async fn temporary_dynamic_ref_retains_exit_after_sibling_churn() {
-    let runtime = DynamicTree::new().spawn().expect("tree builds");
-    let scope = runtime.scope();
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let scope = running_tree.scope();
     let task = scope
         .add_task_spec(TaskSpec::new("job", |_| async { Ok(()) }).temporary())
         .await
@@ -148,13 +148,13 @@ async fn temporary_dynamic_ref_retains_exit_after_sibling_churn() {
         .expect("task remains observable");
     assert!(exit.is_completed());
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
 async fn old_ref_does_not_follow_same_id_replacement() {
-    let runtime = DynamicTree::new().spawn().expect("tree builds");
-    let scope = runtime.scope();
+    let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let scope = running_tree.scope();
     let first = scope
         .add_task_spec(TaskSpec::new("job", |_| async { Ok(()) }).temporary())
         .await
@@ -193,7 +193,7 @@ async fn old_ref_does_not_follow_same_id_replacement() {
             .is_completed()
     );
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 #[tokio::test]
@@ -216,7 +216,7 @@ async fn task_ref_waits_through_a_restart() {
         })
         .restart(RestartPolicy::on_failure()),
     );
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     let exit = timeout(WAIT, task.wait())
         .await
@@ -225,7 +225,7 @@ async fn task_ref_waits_through_a_restart() {
     assert!(exit.is_completed());
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }
 
 async fn assert_task_ref_waits_through_group_restart(strategy: Strategy) {
@@ -276,7 +276,7 @@ async fn assert_task_ref_waits_through_group_restart(strategy: Strategy) {
             Ok(())
         }
     });
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     assert_eq!(
         timeout(WAIT, peer_started_rx.recv())
@@ -305,7 +305,7 @@ async fn assert_task_ref_waits_through_group_restart(strategy: Strategy) {
         Some(1)
     );
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
     assert!(
         peer_wait
             .await
@@ -333,7 +333,7 @@ async fn explicit_readiness_failure_is_reported() {
             .wait_for_ready()
             .restart(RestartPolicy::never()),
     );
-    let runtime = tree.spawn().expect("tree builds");
+    let running_tree = tree.spawn().expect("tree builds");
 
     assert_eq!(
         timeout(WAIT, task.wait_started())
@@ -350,5 +350,5 @@ async fn explicit_readiness_failure_is_reported() {
             .is_completed()
     );
 
-    runtime.shutdown().await.expect("tree stops");
+    running_tree.shutdown().await.expect("tree stops");
 }

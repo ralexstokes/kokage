@@ -274,7 +274,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
     }));
     let handle = tree.scope();
     let mut events = handle.lifecycle_events();
-    let runtime = tree.spawn().expect("task tree spawns");
+    let running_tree = tree.spawn().expect("task tree spawns");
 
     assert_eq!(
         timeout(EVENT_TIMEOUT, started_rx.recv())
@@ -307,7 +307,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             .is_running()
     );
 
-    runtime.shutdown().await.expect("shutdown succeeds");
+    running_tree.shutdown().await.expect("shutdown succeeds");
 }
 
 #[tokio::test]
@@ -329,7 +329,7 @@ async fn prelude_snapshots_walk_nested_task_children() {
     }));
     tree.add_subtree("nested", nested);
     let handle = tree.scope();
-    let runtime = tree.spawn().expect("nested task tree spawns");
+    let running_tree = tree.spawn().expect("nested task tree spawns");
 
     timeout(EVENT_TIMEOUT, leaf_started_rx.recv())
         .await
@@ -338,7 +338,7 @@ async fn prelude_snapshots_walk_nested_task_children() {
     let snapshot = handle.snapshot();
     assert!(snapshot.descendant(["nested", "leaf"]).is_some());
 
-    runtime.shutdown().await.expect("shutdown succeeds");
+    running_tree.shutdown().await.expect("shutdown succeeds");
 }
 
 #[test]

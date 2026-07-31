@@ -54,7 +54,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     .shutdown(Shutdown::graceful_for(std::time::Duration::from_secs(5)));
     let mut tree = Tree::new();
     let worker = tree.add_actor_spec(worker_spec);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
     worker.send(Msg::Hold).await?;
     started_rx.recv().await.expect("worker entered hold");
 
@@ -62,13 +62,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
         worker.send(Msg::Job(job)).await?;
     }
 
-    runtime.scope().request_shutdown();
+    running_tree.scope().request_shutdown();
     release.notify_one();
 
     for _ in 0..JOBS {
         println!("handled {}", handled_rx.recv().await.expect("drained job"));
     }
 
-    runtime.wait().await?;
+    running_tree.wait().await?;
     Ok(())
 }

@@ -84,11 +84,11 @@ impl Actor for Press {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tree = Tree::new();
     let press = tree.add_actor("press", || Press);
-    let runtime = tree.spawn()?;
+    let running_tree = tree.spawn()?;
 
     press.send("business cards x100".to_owned()).await?;
 
-    runtime.shutdown().await?;
+    running_tree.shutdown().await?;
     Ok(())
 }
 ```
