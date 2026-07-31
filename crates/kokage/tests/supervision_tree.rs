@@ -609,6 +609,63 @@ fn an_outline_round_trips_through_serde_with_scope_kinds() {
 
 #[cfg(feature = "serde")]
 #[test]
+fn outlines_migrate_legacy_restart_retention_to_actor_and_task_specs() {
+    let (graph, _ingest, _parse) = two_actor_tree();
+    let mut graph = graph;
+    graph.add_task(TaskSpec::new("clock", |_ctx| async { Ok(()) }).remove_when_done());
+    let mut value = serde_json::to_value(graph.outline()).expect("outline serializes");
+    let children = value["children"]
+        .as_array_mut()
+        .expect("outline children serialize as an array");
+
+    for child in children {
+        let kind = if child.get("Actor").is_some() {
+            "Actor"
+        } else {
+            "Task"
+        };
+        let Some(spec) = child.get_mut(kind) else {
+            continue;
+        };
+        if spec["remove_when_done"] == serde_json::Value::Bool(true) {
+            spec.as_object_mut()
+                .expect("child outline serializes as an object")
+                .remove("remove_when_done");
+            spec["restart"]["remove_when_done"] = serde_json::Value::Bool(true);
+        }
+    }
+
+    let decoded: kokage::observe::SupervisionOutline =
+        serde_json::from_value(value.clone()).expect("legacy outline deserializes");
+    assert!(matches!(
+        decoded.child("ingest"),
+        Some(ChildOutline::Actor {
+            remove_when_done: true,
+            ..
+        })
+    ));
+    assert!(matches!(
+        decoded.child("clock"),
+        Some(ChildOutline::Task {
+            remove_when_done: true,
+            ..
+        })
+    ));
+
+    value["children"][0]["Actor"]["remove_when_done"] = serde_json::Value::Bool(false);
+    let decoded: kokage::observe::SupervisionOutline =
+        serde_json::from_value(value).expect("new outline field takes precedence");
+    assert!(matches!(
+        decoded.child("ingest"),
+        Some(ChildOutline::Actor {
+            remove_when_done: false,
+            ..
+        })
+    ));
+}
+
+#[cfg(feature = "serde")]
+#[test]
 fn policy_enums_use_their_direct_wire_shape() {
     let restart = serde_json::to_value(Restart::on_failure()).expect("restart serializes");
     assert!(restart.get("remove_when_done").is_none());
