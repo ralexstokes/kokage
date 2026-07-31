@@ -10,8 +10,8 @@ use std::{
 };
 
 use kokage::{
-    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, Reply,
-    RestartPolicy, SendError, SendErrorKind, Tree,
+    ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, Mailbox, Reply, RestartPolicy,
+    SendError, SendErrorKind, Tree,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -77,7 +77,7 @@ async fn close_full_mailbox_during_bounded_send(
             fail: Arc::clone(&fail),
         }
     })
-    .mailbox_capacity(1)
+    .mailbox(Mailbox::queue(1))
     .restart(restart);
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
@@ -207,7 +207,7 @@ async fn full_mailbox_rejections_return_the_message() {
             release: release.clone(),
         }
     })
-    .mailbox_capacity(1);
+    .mailbox(Mailbox::queue(1));
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -281,7 +281,7 @@ async fn bounded_send_accepts_immediately_into_a_conflating_mailbox() {
             release: release.clone(),
         }
     })
-    .mailbox(MailboxMode::conflate());
+    .mailbox(Mailbox::latest());
     let actor = spec.actor_ref();
     let mut tree = Tree::new();
     tree.add_actor_spec(spec);
@@ -321,8 +321,7 @@ async fn bounded_keyed_conflation_rechecks_deadline_before_queue_mutation() {
             received: received_tx.clone(),
         }
     })
-    .mailbox_capacity(1)
-    .mailbox(MailboxMode::conflate_by_key({
+    .mailbox(Mailbox::latest_by_key(1, {
         let key_extractions = Arc::clone(&key_extractions);
         move |message: &String| {
             key_extractions.fetch_add(1, Ordering::SeqCst);

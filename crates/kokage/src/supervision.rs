@@ -267,11 +267,9 @@ macro_rules! tree_common_methods {
         /// inherit this value; configure each subtree explicitly when it needs
         /// a different default.
         ///
-        /// This is the FIFO queue capacity and the maximum number of distinct
-        /// unread keys for keyed conflation. Unkeyed conflation always has
-        /// capacity 1 and ignores this setting. Individual actors can override
-        /// it with
-        /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity).
+        /// This applies only to actors that do not select an explicit
+        /// [`Mailbox`](crate::Mailbox). Individual queue and keyed latest-wins
+        /// mailboxes carry their own capacities.
         /// The value is validated when the tree is spawned or dynamically
         /// inserted.
         #[must_use]

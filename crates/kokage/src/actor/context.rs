@@ -1625,7 +1625,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        MailboxMode, RestartPolicy,
+        Mailbox, RestartPolicy,
         actor::binding::{BindingGuard, mailbox},
     };
 
@@ -1634,7 +1634,7 @@ mod tests {
         let actor_id: Arc<str> = Arc::from("worker");
         let core = Arc::new(BindingCore::new(Arc::clone(&actor_id)));
         let actor = ActorRef::from_core(&core, None);
-        let (sender, mut receiver) = mailbox(&MailboxMode::conflate(), 1);
+        let (sender, mut receiver) = mailbox(&Mailbox::latest(), 1);
         let monitor_run = core.monitor_run();
         let _binding = BindingGuard::bind(
             Arc::clone(&core),

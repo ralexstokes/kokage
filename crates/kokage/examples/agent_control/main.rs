@@ -131,7 +131,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent, ScopeRef, Strategy,
+    ActorSlot, DynamicTree, Guard as OperationGuard, Mailbox, MonitorEvent, ScopeRef, Strategy,
     prelude::*,
 };
 use tokio::time::Instant;
@@ -263,16 +263,16 @@ async fn build_app() -> Result<App, AnyError> {
             let chat = chat.clone();
             move || Outbound::new(chat.clone())
         })
-        .mailbox_capacity(GATEWAY_MAILBOX);
+        .mailbox(Mailbox::queue(GATEWAY_MAILBOX));
     let progress_actor = progress_slot
         .define({
             let chat = chat.clone();
             move || Progress::new(chat.clone())
         })
-        .mailbox_capacity(GATEWAY_MAILBOX)
-        .mailbox(MailboxMode::conflate_by_key(|message: &ProgressMsg| {
-            message.chat()
-        }));
+        .mailbox(Mailbox::latest_by_key(
+            GATEWAY_MAILBOX,
+            |message: &ProgressMsg| message.chat(),
+        ));
     let inbound_actor = inbound_slot
         .define({
             let chat = chat.clone();
@@ -280,7 +280,7 @@ async fn build_app() -> Result<App, AnyError> {
             let router = router.clone();
             move || Inbound::new(chat.clone(), journal.clone(), router.clone())
         })
-        .mailbox_capacity(GATEWAY_MAILBOX);
+        .mailbox(Mailbox::queue(GATEWAY_MAILBOX));
     let journal_actor = journal_slot
         .define(Journal::default)
         .message_size(messages::journal_message_size);

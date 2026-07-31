@@ -128,7 +128,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, CancellationToken, Guard, MailboxMode, RestartPolicy, ScopeRef,
+    ActorSlot, CancellationToken, Guard, Mailbox, RestartPolicy, ScopeRef,
     observe::SupervisorSnapshotReceiver, prelude::*,
 };
 use metrics_util::debugging::Snapshotter;
@@ -179,8 +179,7 @@ const VENUE_MAILBOX: usize = 16;
 /// Both venue feeds share one configuration: the shallower venue mailbox,
 /// per-symbol conflation, and accepted-byte observation.
 fn feed_spec(spec: ActorSpec<FeedMsg>) -> ActorSpec<FeedMsg> {
-    spec.mailbox_capacity(VENUE_MAILBOX)
-        .mailbox(MailboxMode::conflate_by_key(feed_message_key))
+    spec.mailbox(Mailbox::latest_by_key(VENUE_MAILBOX, feed_message_key))
         .message_size(messages::feed_message_size)
 }
 
@@ -307,7 +306,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
             ledger: ledger.clone(),
             latency: latency.clone(),
         })
-        .mailbox_capacity(VENUE_MAILBOX);
+        .mailbox(Mailbox::queue(VENUE_MAILBOX));
     let venue_b_feed_actor = feed_spec(venue_b_feed_slot.define(VenueFeedFactory {
         venue: VENUE_B,
         exchange: venue_b.clone(),
@@ -321,7 +320,7 @@ async fn build_app(latency: LatencyRecorder) -> Result<App, AnyError> {
             ledger: ledger.clone(),
             latency: latency.clone(),
         })
-        .mailbox_capacity(VENUE_MAILBOX);
+        .mailbox(Mailbox::queue(VENUE_MAILBOX));
 
     let mut venues =
         Tree::new().default_restart(RestartPolicy::on_failure().limit(5, Duration::from_secs(10)));

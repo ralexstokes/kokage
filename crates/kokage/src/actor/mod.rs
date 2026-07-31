@@ -15,7 +15,7 @@ mod monitor;
 mod observability;
 mod raw;
 
-pub use binding::{ActorStats, MailboxMode, ScopedActorStats};
+pub use binding::{ActorStats, Mailbox, ScopedActorStats};
 pub(crate) use builder::{ActorNode, ActorOptionsValidationError};
 pub use builder::{ActorSlot, ActorSpec};
 pub use context::{ActorRef, Context, RawContext, Reply, StopContext, TimerKey};

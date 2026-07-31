@@ -918,7 +918,7 @@ impl ScopeRef {
     /// inserted and immediate startup was scheduled. The returned stable ref
     /// can be used immediately, while [`ScopeRef::wait_started`] retains
     /// the stronger readiness contract. A zero
-    /// [`ActorSpec::mailbox_capacity`](crate::ActorSpec::mailbox_capacity) is rejected with
+    /// A zero-capacity [`Mailbox::queue`](crate::Mailbox::queue) is rejected with
     /// [`ControlError::Rejected`].
     ///
     /// # Errors

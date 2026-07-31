@@ -12,7 +12,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorSlot, CallError, Context, ExitResult, MailboxMode, Reply, Shutdown,
+    Actor, ActorSlot, CallError, Context, ExitResult, Mailbox, Reply, Shutdown,
     raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -67,7 +67,7 @@ async fn conflate_keeps_only_the_newest_unread_message() {
                     received: received_tx.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
     );
     let graph = builder.build();
     let actor = graph
@@ -134,7 +134,7 @@ async fn awaited_conflating_sends_cooperate_with_peer_tasks() {
                     received: received_tx.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
     );
     let graph = builder.build();
     let actor = graph
@@ -205,7 +205,7 @@ async fn actor_options_combine_conflation_and_message_size_observation() {
                     received: received_tx.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate())
+            .mailbox(Mailbox::latest())
             .message_size(sized_snapshot_size),
     );
     let graph = builder.build();
@@ -272,8 +272,7 @@ async fn conflate_by_key_replaces_values_and_evicts_the_oldest_key_at_capacity()
                 received: received_tx.clone(),
             }
         })
-        .mailbox_capacity(2)
-        .mailbox(MailboxMode::conflate_by_key(|tick: &Tick| tick.symbol)),
+        .mailbox(Mailbox::latest_by_key(2, |tick: &Tick| tick.symbol)),
     );
     let graph = builder.build();
     let actor = graph
@@ -370,7 +369,7 @@ async fn replaced_call_reports_reply_dropped() {
                     received: received_tx.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
     );
     let graph = builder.build();
     let actor = graph
@@ -469,7 +468,7 @@ async fn draining_shutdown_handles_latest_message_after_shutdown() {
                     received: received_tx.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
     );
     let graph = builder.build();
     let actor = graph
@@ -521,7 +520,7 @@ async fn poisoned_key_match_lock_recovers_without_panicking_in_drop() {
                     received: received_tx.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate_by_key({
+            .mailbox(Mailbox::latest_by_key(64, {
                 let panic_once = Arc::clone(&panic_once);
                 move |value: &u64| {
                     assert!(

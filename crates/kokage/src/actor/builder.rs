@@ -6,7 +6,7 @@ use std::{
 use crate::supervisor::{MailboxShutdown, RestartPolicy, Shutdown};
 
 use crate::actor::{
-    binding::{BindingCore, MailboxMode},
+    binding::{BindingCore, Mailbox},
     context::ActorRef,
     factory::ActorFactory,
     graph::{ActorHost, ErasedActorFactory, RunnableActor, RunnableActorBuilder},
@@ -15,9 +15,8 @@ use crate::actor::{
 
 /// Internal mailbox portion of the public [`ActorSpec`] vocabulary.
 pub(crate) struct ActorOptions<M> {
-    pub(crate) mailbox_mode: MailboxMode<M>,
+    pub(crate) mailbox: Mailbox<M>,
     pub(crate) size_hint: Option<fn(&M) -> usize>,
-    pub(crate) mailbox_capacity: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,13 +61,7 @@ impl<M: Send + 'static> DeferredActorFactory for DeferredActorSpec<M> {
         if let Some(size_hint) = actor_options.size_hint {
             binding.set_message_size(size_hint);
         }
-        builder.actor_from_parts(
-            actor_id,
-            binding,
-            factory,
-            actor_options.mailbox_mode,
-            actor_options.mailbox_capacity,
-        )
+        builder.actor_from_parts(actor_id, binding, factory, actor_options.mailbox)
     }
 }
 
@@ -99,9 +92,8 @@ impl ActorOptionsValidationError {
 impl<M> Clone for ActorOptions<M> {
     fn clone(&self) -> Self {
         Self {
-            mailbox_mode: self.mailbox_mode.clone(),
+            mailbox: self.mailbox.clone(),
             size_hint: self.size_hint,
-            mailbox_capacity: self.mailbox_capacity,
         }
     }
 }
@@ -109,9 +101,8 @@ impl<M> Clone for ActorOptions<M> {
 impl<M> fmt::Debug for ActorOptions<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ActorOptions")
-            .field("mailbox_mode", &self.mailbox_mode)
+            .field("mailbox", &self.mailbox)
             .field("size_hint", &self.size_hint)
-            .field("mailbox_capacity", &self.mailbox_capacity)
             .finish()
     }
 }
@@ -120,33 +111,21 @@ impl<M> ActorOptions<M> {
     /// Creates options using a FIFO queue without message-size observation.
     pub fn new() -> Self {
         Self {
-            mailbox_mode: MailboxMode::queue(),
+            mailbox: Mailbox::inherited_queue(),
             size_hint: None,
-            mailbox_capacity: None,
         }
     }
 
     pub(crate) fn validate(&self) -> Result<(), ActorOptionsValidationError> {
-        if self.mailbox_capacity == Some(0) {
+        if self.mailbox.capacity_or(1) == 0 {
             return Err(ActorOptionsValidationError::ZeroMailboxCapacity);
         }
         Ok(())
     }
 
-    /// Overrides the hosting scope's mailbox capacity for this actor alone.
-    ///
-    /// Actors otherwise inherit the hosting runtime scope's default. The value
-    /// must be non-zero. It is the FIFO queue capacity and the maximum
-    /// number of distinct unread keys for keyed conflation; unkeyed conflation
-    /// always has capacity 1 and ignores it.
-    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.mailbox_capacity = Some(capacity);
-        self
-    }
-
-    /// Selects the actor's mailbox storage policy.
-    pub fn mailbox(mut self, mailbox_mode: MailboxMode<M>) -> Self {
-        self.mailbox_mode = mailbox_mode;
+    /// Configures the actor's mailbox storage and capacity.
+    pub fn mailbox(mut self, mailbox: Mailbox<M>) -> Self {
+        self.mailbox = mailbox;
         self
     }
 
@@ -218,16 +197,9 @@ impl<M: Send + 'static> ActorSpec<M> {
         ActorRef::from_core(self.binding(), None)
     }
 
-    /// Overrides the hosting scope's mailbox capacity for this actor.
+    /// Configures the actor's mailbox storage and capacity.
     #[must_use]
-    pub fn mailbox_capacity(mut self, capacity: usize) -> Self {
-        self.actor_options = self.actor_options.mailbox_capacity(capacity);
-        self
-    }
-
-    /// Selects the actor's mailbox storage policy.
-    #[must_use]
-    pub fn mailbox(mut self, mailbox: MailboxMode<M>) -> Self {
+    pub fn mailbox(mut self, mailbox: Mailbox<M>) -> Self {
         self.actor_options = self.actor_options.mailbox(mailbox);
         self
     }
@@ -453,7 +425,7 @@ impl<M: Send + 'static> ActorSlot<M> {
 mod tests {
     use std::time::Duration;
 
-    use super::{ActorSlot, ActorSpec, MailboxMode};
+    use super::{ActorSlot, ActorSpec, Mailbox};
     use crate::{Actor, Context, ExitResult, MailboxShutdown, RestartPolicy, Shutdown};
 
     struct OpaqueMessage;
@@ -473,7 +445,7 @@ mod tests {
     #[test]
     fn actor_spec_debug_does_not_bound_the_message_type() {
         let spec: ActorSpec<OpaqueMessage> =
-            ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate());
+            ActorSpec::new("worker", || OpaqueActor).mailbox(Mailbox::latest());
         assert!(format!("{spec:?}").contains("worker"));
     }
 
@@ -502,7 +474,7 @@ mod tests {
 
     #[test]
     fn actor_spec_applies_options_and_returns_host() {
-        let spec = ActorSpec::new("worker", || OpaqueActor).mailbox(MailboxMode::conflate());
+        let spec = ActorSpec::new("worker", || OpaqueActor).mailbox(Mailbox::latest());
         let actor_ref = spec.actor_ref();
         let actor = spec.into_host();
         assert_eq!(actor_ref.id(), "worker");
@@ -523,7 +495,7 @@ mod tests {
     #[test]
     fn into_host_stores_zero_capacity_without_supervisor_validation() {
         let actor = ActorSpec::new("worker", || OpaqueActor)
-            .mailbox_capacity(0)
+            .mailbox(Mailbox::queue(0))
             .into_host();
 
         assert_eq!(actor.label(), "worker");
@@ -532,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_rejects_zero_mailbox_capacity() {
         let actor = ActorSpec::new("worker", || OpaqueActor)
-            .mailbox_capacity(0)
+            .mailbox(Mailbox::queue(0))
             .into_host();
 
         let result = actor
@@ -590,9 +562,11 @@ mod tests {
         let actor_ref = slot.actor_ref();
         let spec = slot.define(|| StringActor);
 
-        assert_eq!(spec.actor_options.mailbox_capacity, None);
         assert!(spec.actor_options.size_hint.is_none());
-        assert_eq!(format!("{:?}", spec.actor_options.mailbox_mode), "Queue");
+        assert_eq!(
+            format!("{:?}", spec.actor_options.mailbox),
+            "Queue { capacity: None }"
+        );
         assert_eq!(spec.restart, None);
         assert_eq!(spec.shutdown, None);
         assert_eq!(actor_ref.stats().message_bytes_accepted, None);

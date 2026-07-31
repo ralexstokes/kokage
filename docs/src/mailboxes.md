@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let gate = gate.clone();
         move || SlowPress { gate: gate.clone() }
     })
-    .mailbox_capacity(1);
+    .mailbox(Mailbox::queue(1));
 
     let mut tree = Tree::new();
     let press = tree.add_actor_spec(spec);
@@ -93,7 +93,7 @@ for a whole tree:
 #     type Msg = String;
 #     async fn handle(&mut self, _job: String, _ctx: &mut Context<'_, Self>) -> ExitResult { Ok(()) }
 # }
-let spec = ActorSpec::new("press", || Press).mailbox_capacity(8);
+let spec = ActorSpec::new("press", || Press).mailbox(Mailbox::queue(8));
 let tree = Tree::new().mailbox_capacity(128); // default for actors in this tree
 # let _ = (spec, tree);
 ```
@@ -102,17 +102,17 @@ Small mailboxes surface overload early; large ones smooth bursts. Since
 `send` already blocks producers when the consumer is behind, capacity is
 about *how much burst you want to absorb*, not about correctness.
 
-## Storage policy: queue or conflate
+## Storage policy: queue or latest-wins
 
-Capacity is one axis; *what the mailbox keeps* is the other, chosen with
-[`MailboxMode`]:
+One [`Mailbox`] value chooses both what the mailbox keeps and how much it can
+hold:
 
-- `MailboxMode::queue()` — the default bounded FIFO described above.
-- `MailboxMode::conflate()` — a single latest-wins slot. Sends never wait;
+- `Mailbox::queue(capacity)` — the bounded FIFO described above.
+- `Mailbox::latest()` — a single latest-wins slot. Sends never wait;
   a newer message simply replaces an unread older one. Perfect for
   status-display style consumers where only the freshest value matters.
-- `MailboxMode::conflate_by_key(f)` — latest-wins *per key*, keeping one
-  unread message for each key up to `mailbox_capacity` keys (oldest key
+- `Mailbox::latest_by_key(capacity, f)` — latest-wins *per key*, keeping one
+  unread message for each key up to `capacity` keys (oldest key
   evicted).
 
 ```rust
@@ -130,12 +130,11 @@ struct Telemetry {
 
 // Keep only the freshest reading per press.
 let spec = ActorSpec::new("dashboard", || Dashboard)
-    .mailbox_capacity(16)
-    .mailbox(MailboxMode::conflate_by_key(|t: &Telemetry| t.press_id));
+    .mailbox(Mailbox::latest_by_key(16, |t: &Telemetry| t.press_id));
 # let _ = spec;
 ```
 
-Conflating mailboxes make no FIFO guarantee and apply no backpressure — and
+Latest-wins mailboxes make no FIFO guarantee and apply no backpressure — and
 they must **not** be combined with `call`: a conflated-away request takes its
 `Reply` with it, so the caller sees `ReplyDropped`.
 
@@ -158,4 +157,4 @@ acknowledgements are made of.
 [`try_send`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.try_send
 [`send_timeout`]: https://stokes.io/kokage/api/kokage/struct.ActorRef.html#method.send_timeout
 [`SendError`]: https://stokes.io/kokage/api/kokage/struct.SendError.html
-[`MailboxMode`]: https://stokes.io/kokage/api/kokage/struct.MailboxMode.html
+[`Mailbox`]: https://stokes.io/kokage/api/kokage/struct.Mailbox.html

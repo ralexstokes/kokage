@@ -61,7 +61,7 @@
 //! | [`ActorRef`] | Cloneable, restart-stable, typed mailbox sender. |
 //! | [`TaskRef`] | Cloneable, restart-stable task completion and readiness handle. |
 //! | [`Context`] / [`StopContext`] | Live and shutdown actor lifecycle capabilities. |
-//! | [`MailboxMode`] | FIFO or latest-wins storage policy selected per actor. |
+//! | [`Mailbox`] | FIFO or latest-wins storage policy selected per actor. |
 //! | [`Reply`] | One-shot response channel carried inside request messages. |
 //! | [`Guard`] | Cancel-on-drop ownership for watches, mailbox timers, offloads, and lifecycle/completion pumps; [`Guard::detach`] opts into fire-and-forget. |
 //! | [`raw::ActorHost`] | Owns one actor's direct execution and stable binding. |
@@ -281,7 +281,7 @@ pub mod observe {
 /// or use its fully qualified `kokage::ActorFactory` name.
 pub mod prelude {
     pub use crate::{
-        Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, MailboxMode,
+        Actor, ActorRef, ActorSpec, Context, DynamicTree, ExitResult, Guard, Mailbox,
         MailboxShutdown, MonitorEvent, Reply, RestartPolicy, Shutdown, StopContext, Strategy,
         TaskRef, TaskSpec, TimerKey, Tree,
         observe::{SupervisorSnapshot, SupervisorSnapshotReceiver},
@@ -293,7 +293,7 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BlockingCancelled, CallError, Context,
-    ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
+    ExitResult, Mailbox, MonitorEvent, OffloadDeadline, Reply, SendError, SendErrorKind,
     StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef, TaskError, TaskRef};

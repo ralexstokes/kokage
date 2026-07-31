@@ -21,8 +21,7 @@ use crate::{
     ScopeRef,
     actor::{
         binding::{
-            ActorStats, BindingCore, BindingGuard, BindingLifecycle, MailboxMode, MailboxRef,
-            mailbox,
+            ActorStats, BindingCore, BindingGuard, BindingLifecycle, Mailbox, MailboxRef, mailbox,
         },
         context::{ActorLifetime, ActorRef, RawContext},
         factory::ActorFactory,
@@ -62,7 +61,7 @@ pub(crate) trait ErasedActorFactory<M>: Send {
     fn into_runner(
         self: Box<Self>,
         binding: Arc<BindingCore<M>>,
-        mailbox_mode: MailboxMode<M>,
+        mailbox: Mailbox<M>,
     ) -> Arc<dyn ErasedRunner>;
 }
 
@@ -75,12 +74,12 @@ where
     fn into_runner(
         self: Box<Self>,
         binding: Arc<BindingCore<M>>,
-        mailbox_mode: MailboxMode<M>,
+        mailbox: Mailbox<M>,
     ) -> Arc<dyn ErasedRunner> {
         Arc::new(TypedRunner {
             factory: Arc::new(*self),
             binding,
-            mailbox_mode,
+            mailbox,
         })
     }
 }
@@ -88,7 +87,7 @@ where
 pub(crate) struct TypedRunner<F: ActorFactory> {
     pub(crate) factory: Arc<F>,
     pub(crate) binding: Arc<BindingCore<<F::Actor as RawActor>::Msg>>,
-    pub(crate) mailbox_mode: MailboxMode<<F::Actor as RawActor>::Msg>,
+    pub(crate) mailbox: Mailbox<<F::Actor as RawActor>::Msg>,
 }
 
 impl<F> ErasedRunner for TypedRunner<F>
@@ -98,12 +97,12 @@ where
     fn start(&self, start: RunnerStart) -> BoxedActorFuture {
         let factory = self.factory.clone();
         let binding = self.binding.clone();
-        let mailbox_mode = self.mailbox_mode.clone();
+        let mailbox_config = self.mailbox.clone();
 
         Box::pin(async move {
             let actor_shutdown = start.shutdown;
             let observability = start.observability;
-            let (sender, mailbox) = mailbox(&mailbox_mode, start.mailbox_capacity);
+            let (sender, mailbox) = mailbox(&mailbox_config, start.mailbox_capacity);
             let actor_id = binding.actor_id().clone();
             let incarnation = MailboxRef::new(actor_id.clone(), sender);
             let exit_report = ActorTaskExitGuard::new(start.exit_reporter);
@@ -896,15 +895,15 @@ impl RunnableActorBuilder {
         actor_id: Arc<str>,
         binding: Arc<BindingCore<M>>,
         factory: Box<dyn ErasedActorFactory<M>>,
-        mailbox_mode: MailboxMode<M>,
-        mailbox_capacity: Option<usize>,
+        mailbox: Mailbox<M>,
     ) -> RunnableActor {
-        let runner = factory.into_runner(Arc::clone(&binding), mailbox_mode);
+        let mailbox_capacity = mailbox.capacity_or(self.mailbox_capacity);
+        let runner = factory.into_runner(Arc::clone(&binding), mailbox);
         RunnableActor::new(RunnableActorParts {
             actor_id,
             binding_lifecycle: binding,
             runner,
-            mailbox_capacity: mailbox_capacity.unwrap_or(self.mailbox_capacity),
+            mailbox_capacity,
             observability: self.observability.clone(),
         })
     }

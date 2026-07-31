@@ -16,7 +16,7 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
-    DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MailboxShutdown, MonitorEvent,
+    DynamicTree, ExitResult, ExitStatus, Guard, Mailbox, MailboxShutdown, MonitorEvent,
     RestartPolicy, RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext,
     SupervisorError, TaskSpec, Tree,
     observe::{ChildMembershipView, SupervisorStateView},
@@ -1072,8 +1072,7 @@ async fn runtime_added_actor_can_observe_message_sizes() {
     let runtime = DynamicTree::new()
         .spawn()
         .expect("graphless runtime builds");
-    let sink_spec =
-        ActorSpec::new("sink", Drain::<SizedMessage>::new).mailbox(MailboxMode::conflate());
+    let sink_spec = ActorSpec::new("sink", Drain::<SizedMessage>::new).mailbox(Mailbox::latest());
     let sink = sink_spec.actor_ref();
     let second_ref = sink_spec.actor_ref();
     let sink_spec = sink_spec.message_size(sized_message_size);
@@ -1243,7 +1242,7 @@ async fn runtime_added_actor_uses_non_default_mailbox_options() {
                     release: release.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
         )
         .await
         .expect("conflating actor added");
@@ -1266,7 +1265,7 @@ async fn runtime_added_actor_can_override_mailbox_capacity() {
         .spawn()
         .expect("graphless runtime builds");
     let sink = support::dynamic_root(&runtime)
-        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(9))
+        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox(Mailbox::queue(9)))
         .await
         .expect("actor with a capacity override is added");
 
@@ -1282,7 +1281,7 @@ async fn runtime_added_actor_rejects_zero_mailbox_capacity() {
         .spawn()
         .expect("graphless runtime builds");
     let result = support::dynamic_root(&runtime)
-        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox_capacity(0))
+        .add_actor_spec(ActorSpec::new("sink", Drain::<u64>::new).mailbox(Mailbox::queue(0)))
         .await;
 
     assert!(matches!(

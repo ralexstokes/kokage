@@ -14,8 +14,7 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, Guard, MailboxMode, MailboxShutdown, OffloadDeadline, RestartPolicy, ScopeRef,
-    Shutdown,
+    ActorSlot, Guard, Mailbox, MailboxShutdown, OffloadDeadline, RestartPolicy, ScopeRef, Shutdown,
     prelude::*,
     raw::{RawActor, RawContext},
 };
@@ -798,7 +797,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
                     observed: observed.clone(),
                 }
             })
-            .mailbox(MailboxMode::conflate()),
+            .mailbox(Mailbox::latest()),
     );
     let runtime = graph.spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "conflating completion runtime startup").await;

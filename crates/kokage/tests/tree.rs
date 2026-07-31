@@ -15,7 +15,7 @@ use support::{ActorHostBuilder, ActorHosts};
 
 use kokage::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, BoxError, CallError, Context, ExitResult,
-    MailboxShutdown, Reply, SendError, SendErrorKind, Shutdown, StopContext,
+    Mailbox, MailboxShutdown, Reply, SendError, SendErrorKind, Shutdown, StopContext,
     raw::{ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
 
@@ -1064,8 +1064,9 @@ fn dropping_an_unplaced_actor_spec_terminates_its_ref() {
 #[tokio::test]
 async fn actors_can_declare_distinct_mailbox_capacities() {
     let mut builder = ActorHostBuilder::new();
-    let shallow = builder.actor(ActorSpec::new("shallow", Drain::<()>::new).mailbox_capacity(2));
-    let deep = builder.actor(ActorSpec::new("deep", Drain::<()>::new).mailbox_capacity(9));
+    let shallow =
+        builder.actor(ActorSpec::new("shallow", Drain::<()>::new).mailbox(Mailbox::queue(2)));
+    let deep = builder.actor(ActorSpec::new("deep", Drain::<()>::new).mailbox(Mailbox::queue(9)));
     let graph = builder.build();
 
     // Capacity is a property of the bound mailbox, so it is observable only
@@ -1256,7 +1257,7 @@ mod actor_host {
 
     use kokage::{
         Actor, ActorRef, ActorSlot, ActorSpec, BoxError, Context, ControlError, DynamicTree,
-        ExitResult, SendError, SendErrorKind, Shutdown, SupervisorError,
+        ExitResult, Mailbox, SendError, SendErrorKind, Shutdown, SupervisorError,
         raw::{
             ActorHost, ActorRunError, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext,
         },
@@ -1472,7 +1473,7 @@ mod actor_host {
                 received: received_tx.clone(),
             }
         })
-        .mailbox_capacity(2);
+        .mailbox(Mailbox::queue(2));
         let worker_ref = builder.actor(worker_spec);
         let graph = builder.build();
         let worker = single_actor(graph, "worker");
@@ -1523,7 +1524,7 @@ mod actor_host {
                 received: received_tx.clone(),
             }
         })
-        .mailbox_capacity(1);
+        .mailbox(Mailbox::queue(1));
         let worker_ref = worker_spec.actor_ref();
         let second_ref = worker_spec.actor_ref();
         let worker_spec = worker_spec.message_size(sized_payload_size);
@@ -2130,7 +2131,7 @@ mod actor_host {
                 incarnation: incarnation.clone(),
             }
         })
-        .mailbox_capacity(4);
+        .mailbox(Mailbox::queue(4));
         let worker_ref = builder.actor(worker_spec);
         let graph = builder.build();
         let worker = single_actor(graph, "worker");

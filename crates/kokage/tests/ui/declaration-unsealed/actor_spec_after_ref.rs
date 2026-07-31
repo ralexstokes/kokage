@@ -1,4 +1,4 @@
-use kokage::{Actor, ExitResult, ActorSpec, Context, MailboxMode};
+use kokage::{Actor, ExitResult, ActorSpec, Context, Mailbox};
 
 struct Idle;
 
@@ -19,7 +19,7 @@ fn main() {
     let first_ref = spec.actor_ref();
     let second_ref = spec.actor_ref();
     let spec = spec
-        .mailbox(MailboxMode::queue())
+        .mailbox(Mailbox::queue(16))
         .message_size(message_size);
     let mut tree = kokage::Tree::new();
     tree.add_actor_spec(spec);

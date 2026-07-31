@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use kokage::{
-    ActorSpec, BuildError, DynamicTree, MailboxMode, MailboxShutdown, RestartPolicy, Shutdown,
+    ActorSpec, BuildError, DynamicTree, Mailbox, MailboxShutdown, RestartPolicy, Shutdown,
     Strategy, SubtreeSpec, TaskSpec,
     observe::ScopeKind,
     prelude::*,
@@ -298,7 +298,7 @@ async fn actor_specs_can_be_placed_across_ordered_scope_levels() {
 #[test]
 fn tree_placement_rejects_zero_actor_mailbox_capacity() {
     let mut tree = Tree::new();
-    tree.add_actor_spec(ActorSpec::new("worker", || Worker).mailbox_capacity(0));
+    tree.add_actor_spec(ActorSpec::new("worker", || Worker).mailbox(Mailbox::queue(0)));
     let result = tree.spawn();
 
     assert!(matches!(
@@ -402,7 +402,7 @@ fn pre_spawn_projection_preserves_declared_restart_policies() {
 
 #[tokio::test]
 async fn tree_placed_specs_allow_message_size_configuration_after_actor_ref() {
-    let spec = ActorSpec::new("buffered", || Parked).mailbox(MailboxMode::conflate());
+    let spec = ActorSpec::new("buffered", || Parked).mailbox(Mailbox::latest());
     let actor = spec.actor_ref();
     let spec = spec.message_size(|message: &Vec<u8>| message.len());
     let mut tree = Tree::new();
