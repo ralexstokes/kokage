@@ -18,19 +18,82 @@ const _: () = assert!(LIFECYCLE_BUFFER_CAPACITY >= 2);
 
 /// One event in a supervisor tree's recursive lifecycle stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct LifecycleEvent {
     /// Path from the watched scope to the emitting scope.
     pub scope_path: Vec<ScopePathSegment>,
     /// Identity and counters shared by every direct-child transition.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Option::is_none")
-    )]
+    ///
+    /// This is present exactly when [`kind`](Self::kind) is a `Child*`
+    /// variant. With the `serde` feature, deserialization rejects envelopes
+    /// that do not preserve that invariant.
     pub child: Option<ChildLifecycleIdentity>,
     /// Transition that occurred in the emitting scope.
     pub kind: LifecycleEventKind,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for LifecycleEvent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(serde::Serialize)]
+        struct LifecycleEventWire<'a> {
+            scope_path: &'a [ScopePathSegment],
+            #[serde(skip_serializing_if = "Option::is_none")]
+            child: Option<&'a ChildLifecycleIdentity>,
+            kind: &'a LifecycleEventKind,
+        }
+
+        validate_child_identity(self.child.is_some(), &self.kind)
+            .map_err(serde::ser::Error::custom)?;
+        serde::Serialize::serialize(
+            &LifecycleEventWire {
+                scope_path: &self.scope_path,
+                child: self.child.as_ref(),
+                kind: &self.kind,
+            },
+            serializer,
+        )
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for LifecycleEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct LifecycleEventWire {
+            scope_path: Vec<ScopePathSegment>,
+            #[serde(default)]
+            child: Option<ChildLifecycleIdentity>,
+            kind: LifecycleEventKind,
+        }
+
+        let LifecycleEventWire {
+            scope_path,
+            child,
+            kind,
+        } = serde::Deserialize::deserialize(deserializer)?;
+        validate_child_identity(child.is_some(), &kind).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            scope_path,
+            child,
+            kind,
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+fn validate_child_identity(has_child: bool, kind: &LifecycleEventKind) -> Result<(), &'static str> {
+    match (has_child, kind.is_child_transition()) {
+        (false, true) => Err("child lifecycle transition is missing its identity"),
+        (true, false) => Err("supervisor and lag lifecycle events must not carry child identity"),
+        _ => Ok(()),
+    }
 }
 
 impl LifecycleEvent {
@@ -39,25 +102,35 @@ impl LifecycleEvent {
     /// Supervisor-level and lag markers are not aligned to a snapshot and
     /// return `None`.
     pub fn seq(&self) -> Option<u64> {
-        self.child.as_ref().map(|child| child.seq)
+        if self.kind.is_child_transition() {
+            self.child.as_ref().map(|child| child.seq)
+        } else {
+            None
+        }
     }
 
     /// Returns the emitting scope's cumulative restart count for a child
     /// transition or [`RestartIntensityExceeded`](LifecycleEventKind::RestartIntensityExceeded).
     /// Other supervisor-level events and lag markers return `None`.
     pub fn total_restarts(&self) -> Option<u64> {
-        match (self.child.as_ref(), &self.kind) {
-            (Some(child), _) => Some(child.total_restarts),
-            (None, LifecycleEventKind::RestartIntensityExceeded { total_restarts }) => {
+        match &self.kind {
+            LifecycleEventKind::ChildAdded
+            | LifecycleEventKind::ChildStarted { .. }
+            | LifecycleEventKind::ChildExited { .. }
+            | LifecycleEventKind::ChildRemoved
+            | LifecycleEventKind::ChildRestartScheduled { .. } => {
+                self.child.as_ref().map(|child| child.total_restarts)
+            }
+            LifecycleEventKind::RestartIntensityExceeded { total_restarts } => {
                 Some(*total_restarts)
             }
-            (None, _) => None,
+            _ => None,
         }
     }
 
     /// Returns whether this event is a direct-child transition.
     pub fn is_child_transition(&self) -> bool {
-        self.child.is_some()
+        self.kind.is_child_transition()
     }
 }
 
@@ -155,6 +228,23 @@ pub enum LifecycleEventKind {
         /// event.
         dropped: u64,
     },
+}
+
+impl LifecycleEventKind {
+    fn is_child_transition(&self) -> bool {
+        match self {
+            Self::ChildAdded
+            | Self::ChildStarted { .. }
+            | Self::ChildExited { .. }
+            | Self::ChildRemoved
+            | Self::ChildRestartScheduled { .. } => true,
+            Self::SupervisorStarted
+            | Self::SupervisorStopping
+            | Self::SupervisorStopped
+            | Self::RestartIntensityExceeded { .. }
+            | Self::Lagged { .. } => false,
+        }
+    }
 }
 
 /// Lifecycle stream created by
@@ -739,13 +829,28 @@ mod tests {
         );
 
         let value = serde_json::to_value(&event).expect("event serializes");
-        assert_eq!(value["child"]["seq"], 7);
-        assert_eq!(value["child"]["child_id"], "worker");
-        assert_eq!(value["child"]["lineage"], 11);
-        assert_eq!(value["child"]["total_restarts"], 13);
-        assert_eq!(value["child"]["child_restart_count"], 2);
-        assert_eq!(value["kind"]["ChildStarted"]["generation"], 1);
-        assert!(value["kind"]["ChildStarted"].get("child_id").is_none());
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "scope_path": [{
+                    "id": "nested",
+                    "lineage": 3,
+                    "generation": 5,
+                }],
+                "child": {
+                    "seq": 7,
+                    "child_id": "worker",
+                    "lineage": 11,
+                    "total_restarts": 13,
+                    "child_restart_count": 2,
+                },
+                "kind": {
+                    "ChildStarted": {
+                        "generation": 1,
+                    },
+                },
+            })
+        );
         assert_eq!(
             serde_json::from_value::<LifecycleEvent>(value).expect("event deserializes"),
             event
@@ -753,10 +858,119 @@ mod tests {
 
         let supervisor = LifecycleEvent::local(LifecycleEventKind::SupervisorStarted);
         let value = serde_json::to_value(&supervisor).expect("event serializes");
-        assert!(value.get("child").is_none());
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "scope_path": [],
+                "kind": "SupervisorStarted",
+            })
+        );
         assert_eq!(
             serde_json::from_value::<LifecycleEvent>(value).expect("event deserializes"),
             supervisor
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_rejects_child_kind_and_identity_mismatches() {
+        let child_kinds = [
+            serde_json::json!("ChildAdded"),
+            serde_json::json!({ "ChildStarted": { "generation": 1 } }),
+            serde_json::json!({
+                "ChildExited": {
+                    "generation": 1,
+                    "exit": { "Completed": { "cancelled": false } },
+                },
+            }),
+            serde_json::json!("ChildRemoved"),
+            serde_json::json!({
+                "ChildRestartScheduled": {
+                    "generation": 1,
+                    "delay": { "secs": 2, "nanos": 0 },
+                },
+            }),
+        ];
+        for kind in child_kinds {
+            let error = serde_json::from_value::<LifecycleEvent>(serde_json::json!({
+                "scope_path": [],
+                "kind": kind,
+            }))
+            .expect_err("child kinds require identity");
+            assert!(
+                error
+                    .to_string()
+                    .contains("child lifecycle transition is missing its identity")
+            );
+        }
+
+        let error = serde_json::from_value::<LifecycleEvent>(serde_json::json!({
+            "scope_path": [],
+            "child": {
+                "seq": 7,
+                "child_id": "worker",
+                "lineage": 11,
+                "total_restarts": 13,
+                "child_restart_count": 2,
+            },
+            "kind": "SupervisorStarted",
+        }))
+        .expect_err("supervisor kinds omit child identity");
+        assert!(
+            error
+                .to_string()
+                .contains("supervisor and lag lifecycle events must not carry child identity")
+        );
+
+        let error = serde_json::to_value(LifecycleEvent::local(LifecycleEventKind::ChildAdded))
+            .expect_err("serialization enforces child identity");
+        assert!(
+            error
+                .to_string()
+                .contains("child lifecycle transition is missing its identity")
+        );
+
+        let error = serde_json::to_value(LifecycleEvent::local_child(
+            ChildLifecycleIdentity {
+                seq: 7,
+                child_id: "worker".to_owned(),
+                lineage: 11,
+                total_restarts: 13,
+                child_restart_count: 2,
+            },
+            LifecycleEventKind::SupervisorStarted,
+        ))
+        .expect_err("serialization rejects identity on a supervisor event");
+        assert!(
+            error
+                .to_string()
+                .contains("supervisor and lag lifecycle events must not carry child identity")
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_rejects_legacy_child_payload_instead_of_losing_identity() {
+        let legacy = serde_json::json!({
+            "scope_path": [],
+            "kind": {
+                "ChildStarted": {
+                    "seq": 7,
+                    "child_id": "worker",
+                    "lineage": 11,
+                    "total_restarts": 13,
+                    "child_restart_count": 2,
+                    "generation": 1,
+                },
+            },
+        });
+
+        let error = serde_json::from_value::<LifecycleEvent>(legacy)
+            .expect_err("the old child-event shape is intentionally incompatible");
+        assert!(
+            error
+                .to_string()
+                .contains("child lifecycle transition is missing its identity")
         );
     }
 }
