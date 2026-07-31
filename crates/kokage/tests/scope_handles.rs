@@ -442,6 +442,59 @@ async fn subtree_removal_rejects_a_foreign_parent_membership() {
 }
 
 #[tokio::test]
+async fn task_removal_rejects_a_same_id_and_lineage_from_another_scope() {
+    let first_tree = DynamicTree::new().spawn().expect("first root builds");
+    let first = first_tree.scope();
+    let first_task = first
+        .add_task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("first task added");
+
+    let second_tree = DynamicTree::new().spawn().expect("second root builds");
+    let second = second_tree.scope();
+    let second_task = second
+        .add_task("worker", |ctx| async move {
+            ctx.shutdown_token().cancelled().await;
+            Ok(())
+        })
+        .await
+        .expect("second task added");
+
+    assert_eq!(
+        first
+            .snapshot()
+            .child("worker")
+            .expect("first task is visible")
+            .lineage,
+        second
+            .snapshot()
+            .child("worker")
+            .expect("second task is visible")
+            .lineage
+    );
+    assert!(matches!(
+        second.remove_task(&first_task).await,
+        Err(ControlError::UnknownChildId(id)) if id == "worker"
+    ));
+    assert!(first.snapshot().child("worker").is_some());
+    assert!(second.snapshot().child("worker").is_some());
+
+    first
+        .remove_task(&first_task)
+        .await
+        .expect("first task removed by its scope");
+    second
+        .remove_task(&second_task)
+        .await
+        .expect("second task removed by its scope");
+    first_tree.shutdown().await.expect("first root stops");
+    second_tree.shutdown().await.expect("second root stops");
+}
+
+#[tokio::test]
 async fn actor_removal_reports_an_unavailable_stopped_scope() {
     let running_tree = DynamicTree::new().spawn().expect("dynamic root builds");
     let scope = running_tree.scope();
