@@ -536,12 +536,11 @@ impl Actor for StopScopeProbe {
 #[tokio::test]
 async fn stop_context_scope_observes_and_controls_its_scope() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let runtime = OrderedTree::new()
-        .actor(ActorSpec::new("probe", move || StopScopeProbe {
-            observed: observed_tx.clone(),
-        }))
-        .spawn()
-        .expect("ordered tree builds");
+    let mut tree = OrderedTree::new();
+    tree.add_actor(ActorSpec::new("probe", move || StopScopeProbe {
+        observed: observed_tx.clone(),
+    }));
+    let runtime = tree.spawn().expect("ordered tree builds");
 
     runtime.shutdown_and_wait().await.expect("runtime stops");
 

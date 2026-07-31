@@ -27,10 +27,8 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let echo = ActorSpec::new("echo", || Echo);
-//! let echo_ref = echo.actor_ref();
 //! let mut tree = OrderedTree::new();
-//! tree.add_actor(echo);
+//! let echo_ref = tree.add_actor(ActorSpec::new("echo", || Echo));
 //! let runtime = tree.spawn()?;
 //!
 //! echo_ref.send("hello".to_owned()).await?;
