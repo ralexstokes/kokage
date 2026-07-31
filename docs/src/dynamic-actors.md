@@ -72,11 +72,11 @@ There is an intentional race boundary: a send may be accepted after removal is
 requested but before the actor observes cancellation.
 `Shutdown::drain_for` handles that accepted prefix if its bound permits;
 `Shutdown::discard_after_current` drops any of the prefix still queued. Once
-intake closes, `try_send` can return `SendErrorKind::NotRunning`, while an
-awaited `send` waits for the final disposition and returns
+intake closes, `try_send` can fail with `SendErrorKind::NotRunning`, while an
+awaited `send` waits for the final disposition and fails with
 `SendErrorKind::Terminated`. The `SendError` carrier returns the rejected
 message for retry or rerouting; `send_timeout` also returns an unaccepted
-message with `SendErrorKind::TimedOut` when its capacity/restart bound expires.
+message, with `SendErrorKind::TimedOut` when its capacity/restart bound expires.
 Applications that cannot lose already accepted work still need an explicit
 [ownership protocol](ownership-transitions.md).
 
