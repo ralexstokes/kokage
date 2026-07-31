@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use kokage::{
-    DynamicTree, OneShotTaskSpec, RestartPolicy, Shutdown, Strategy, TaskError, TaskSpec, Tree,
+    BuildError, ControlError, DynamicTree, OneShotTaskSpec, RestartPolicy, Shutdown, Strategy,
+    TaskError, TaskSpec, Tree,
     observe::{ChildStateView, ExitStatus},
 };
 use tokio::{
@@ -75,10 +76,10 @@ async fn spawn_once_accepts_a_consuming_factory() {
 #[tokio::test]
 async fn configured_one_shot_retains_a_consuming_factory() {
     let running_tree = DynamicTree::new().spawn().expect("tree builds");
+    let scope = running_tree.scope();
     let (observed_tx, observed_rx) = oneshot::channel();
     let payload = String::from("configured and consumed");
-    let task = running_tree
-        .scope()
+    let task = scope
         .spawn_once_spec(
             OneShotTaskSpec::new("configured-job", move |ctx| async move {
                 ctx.mark_ready();
@@ -105,6 +106,29 @@ async fn configured_one_shot_retains_a_consuming_factory() {
     let snapshot = task.snapshot().expect("terminal membership is retained");
     assert_eq!(snapshot.restart_policy, RestartPolicy::never());
     assert!(!snapshot.remove_when_done);
+
+    assert!(matches!(
+        scope.spawn_once("configured-job", |_| async { Ok(()) }).await,
+        Err(ControlError::Rejected(BuildError::DuplicateChildId(id)))
+            if id == "configured-job"
+    ));
+    scope
+        .remove_task(&task)
+        .await
+        .expect("retained terminal membership is removed explicitly");
+    assert!(task.snapshot().is_none());
+
+    let replacement = scope
+        .spawn_once("configured-job", |_| async { Ok(()) })
+        .await
+        .expect("the id can be reused after explicit removal");
+    assert!(
+        replacement
+            .wait()
+            .await
+            .expect("replacement remains observable")
+            .is_completed()
+    );
 
     running_tree.shutdown().await.expect("tree stops");
 }

@@ -147,7 +147,11 @@ running_tree.wait().await?;
 Use `scope.spawn_once_spec(OneShotTaskSpec::new(...))` when the same consuming
 factory needs a custom shutdown policy, readiness gate, or retained terminal
 membership. Restart settings are deliberately unavailable because the factory
-cannot create a second incarnation.
+cannot create a second incarnation. Select `.retain_when_done()` when
+scope-level snapshot observers must discover the terminal state without an
+existing `TaskRef`. A retained membership keeps its child id occupied until
+`scope.remove_task(&job).await?` removes it or the scope shuts down; the
+`TaskRef` retains the terminal outcome whether or not the membership is kept.
 
 `TaskRef::wait` skips exits followed by the task's restart policy and returns
 the terminal `ExitStatus`. Use `tokio::try_join!` or a task set when several

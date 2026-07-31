@@ -266,8 +266,13 @@ impl OneShotTaskSpec {
 
     /// Keeps the terminal membership visible after the one-shot task exits.
     ///
-    /// The default removes it after completion. The returned [`TaskRef`](crate::TaskRef)
-    /// retains the terminal outcome either way.
+    /// This is useful when scope-level snapshot observers need to discover the
+    /// terminal state without already holding its [`TaskRef`](crate::TaskRef).
+    /// The retained membership continues to occupy its child id until it is
+    /// passed to [`DynamicScopeRef::remove_task`](crate::DynamicScopeRef::remove_task)
+    /// or the scope shuts down. The default removes the membership after
+    /// completion; the returned `TaskRef` retains the terminal outcome either
+    /// way.
     #[must_use]
     pub fn retain_when_done(self) -> Self {
         Self {
