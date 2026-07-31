@@ -337,11 +337,11 @@ pub enum SupervisorStateView {
     Stopped,
 }
 
-/// Public details of a child generation's exit.
+/// Public observational details of an actor or supervised child exit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
-pub enum ChildExitView {
+pub enum ExitStatus {
     /// The child returned `Ok(())`.
     Completed {
         /// Whether the supervisor stopped this generation.
@@ -368,7 +368,7 @@ pub enum ChildExitView {
     },
 }
 
-impl ChildExitView {
+impl ExitStatus {
     pub(crate) fn new(status: ExitKind, cancelled: bool) -> Self {
         match status {
             ExitKind::Completed => Self::Completed { cancelled },
@@ -379,6 +379,11 @@ impl ChildExitView {
                 cancelled,
             },
         }
+    }
+
+    /// Returns whether the exit represents a failure.
+    pub fn is_failure(&self) -> bool {
+        !matches!(self, Self::Completed { .. })
     }
 
     /// Returns whether the child completed successfully.
@@ -433,12 +438,12 @@ pub enum ChildStateView {
     /// The child has been created but its task has not yet started running.
     Starting {
         /// Exit of the preceding generation, when this is a restart.
-        previous_exit: Option<ChildExitView>,
+        previous_exit: Option<ExitStatus>,
     },
     /// The child task is running.
     Running {
         /// Exit of the preceding generation, when this is a restart.
-        previous_exit: Option<ChildExitView>,
+        previous_exit: Option<ExitStatus>,
     },
     /// The child is in the process of being stopped (token cancelled, waiting
     /// for exit).
@@ -446,19 +451,19 @@ pub enum ChildStateView {
         /// Whether this generation reported readiness before stopping began.
         started: bool,
         /// Exit of the preceding generation, when this generation is a restart.
-        previous_exit: Option<ChildExitView>,
+        previous_exit: Option<ExitStatus>,
     },
     /// The child has exited.
     Stopped {
         /// Whether this generation reported readiness before it stopped.
         started: bool,
         /// Exit of this generation, or `None` if it was never spawned.
-        exit: Option<ChildExitView>,
+        exit: Option<ExitStatus>,
     },
     /// The child stopped permanently before reporting readiness.
     StartupAborted {
         /// Exit of this generation.
-        exit: ChildExitView,
+        exit: ExitStatus,
     },
 }
 
@@ -475,7 +480,7 @@ impl ChildStateView {
     }
 
     /// Returns the newest observed exit, if any.
-    pub fn last_exit(&self) -> Option<&ChildExitView> {
+    pub fn last_exit(&self) -> Option<&ExitStatus> {
         match self {
             Self::Starting { previous_exit }
             | Self::Running { previous_exit }

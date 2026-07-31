@@ -37,15 +37,15 @@ impl<M> SendError<M> {
         self.message
     }
 
-    /// Drops the message payload and returns a non-generic rejection.
+    /// Drops the message payload and returns a boxed delivery error.
     ///
     /// This is useful when an application error must be `Send + Sync` but the
     /// message itself is not `Sync`.
-    pub fn discard(self) -> SendRejection {
-        SendRejection {
+    pub fn into_boxed(self) -> crate::BoxError {
+        Box::new(ErasedSendError {
             actor_id: self.actor_id,
             kind: self.kind,
-        }
+        })
     }
 }
 
@@ -97,39 +97,31 @@ impl SendErrorKind {
     }
 }
 
-/// A delivery rejection without the rejected message.
-///
-/// Use [`SendError::discard`] when an application error needs the reason and
-/// target id but must not inherit the message's `Send` or `Sync` bounds.
-#[derive(Debug, Clone, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct SendRejection {
-    /// Stable id of the target actor.
-    pub actor_id: String,
-    /// Reason the message was not accepted.
-    pub kind: SendErrorKind,
+#[derive(Debug)]
+struct ErasedSendError {
+    actor_id: String,
+    kind: SendErrorKind,
 }
 
-impl fmt::Display for SendRejection {
+impl fmt::Display for ErasedSendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt_with_actor(&self.actor_id, f)
     }
 }
 
-impl Error for SendRejection {}
+impl Error for ErasedSendError {}
 
 /// Errors returned by [`ActorRef::call`](crate::ActorRef::call).
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CallError {
-    /// The request message could not be delivered.
-    ///
-    /// Calls use an awaited send internally, so the current implementation
-    /// produces only [`SendErrorKind::Terminated`] in the rejection's
-    /// [`kind`](SendRejection::kind) field. Other delivery reasons remain part
-    /// of the non-exhaustive carrier for composition.
-    #[error(transparent)]
-    Send(#[from] SendRejection),
+    /// The target actor terminated before accepting the request.
+    #[error("actor `{actor_id}` terminated before accepting the call")]
+    #[non_exhaustive]
+    Terminated {
+        /// Target actor id.
+        actor_id: String,
+    },
     /// The timeout expired before the actor replied.
     #[error("call to actor `{actor_id}` timed out")]
     #[non_exhaustive]
@@ -148,7 +140,7 @@ pub enum CallError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SendError, SendErrorKind, SendRejection};
+    use super::{SendError, SendErrorKind};
 
     struct Opaque;
 
@@ -156,7 +148,6 @@ mod tests {
     fn generic_delivery_errors_do_not_format_the_message() {
         fn assert_error<E: std::error::Error>() {}
         assert_error::<SendError<Opaque>>();
-        assert_error::<SendRejection>();
 
         for (kind, display) in [
             (
@@ -181,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn discarding_retains_the_target_and_rejection() {
+    fn payload_erasure_retains_the_target_and_rejection() {
         for kind in [
             SendErrorKind::NotRunning,
             SendErrorKind::Full,
@@ -194,16 +185,8 @@ mod tests {
                 kind,
             };
             let carrier_display = error.to_string();
-            let rejection = error.discard();
-            assert_eq!(
-                rejection,
-                SendRejection {
-                    actor_id: "worker".to_owned(),
-                    kind,
-                }
-            );
-            // The payload-free projection formats exactly like its carrier.
-            assert_eq!(rejection.to_string(), carrier_display);
+            let erased = error.into_boxed();
+            assert_eq!(erased.to_string(), carrier_display);
         }
     }
 }

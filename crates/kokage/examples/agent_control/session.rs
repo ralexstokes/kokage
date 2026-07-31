@@ -322,8 +322,8 @@ impl Actor for Session {
                     .entry(task)
                     .or_default()
                     .push(event.clone());
-                if let kokage::MonitorEvent::Exited { reason, .. } = &event
-                    && *reason == kokage::ExitReason::Failure
+                if let kokage::MonitorEvent::Exited { status, .. } = &event
+                    && status.is_failure()
                 {
                     if let Some(active) = self.active.as_mut()
                         && active.task == task

@@ -21,40 +21,18 @@ use crate::actor::{
 
 /// A point-in-time snapshot of one actor's message and mailbox statistics.
 ///
-/// Sample these stats either through [`ActorRef::stats`](crate::ActorRef::stats)
-/// or [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
+/// Sample these stats through [`ActorRef::stats`](crate::ActorRef::stats).
 /// Message counters accumulate for the lifetime of the actor binding and
 /// therefore survive restarts. Outstanding-work gauges and mailbox fields
 /// describe the currently bound incarnation and are zero while no mailbox is
 /// bound. Enabling the `serde` feature implements `Serialize` and
-/// `Deserialize` for this type and [`ScopePathSegment`].
+/// `Deserialize` for this type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ActorStats {
     /// Actor id used to correlate these stats with supervisor snapshots.
     pub actor_id: String,
-    /// Identity path of the nested scopes containing this actor when sampled
-    /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
-    ///
-    /// A direct child of the sampled runtime has an empty path. Each nested
-    /// segment includes the scope child's lineage and generation
-    /// so identical actor ids and local lineages in sibling or restarted
-    /// subtrees remain distinguishable. Samples taken from `ActorRef::stats`
-    /// have no supervisor context and report `None`. The element type is the
-    /// public [`ScopePathSegment`].
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub scope_path: Option<Vec<ScopePathSegment>>,
-    /// Identity of the actor's current supervisor membership, when sampled
-    /// through [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats).
-    ///
-    /// Pair this with [`actor_id`](Self::actor_id) and
-    /// [`scope_path`](Self::scope_path) to distinguish a removed
-    /// actor from a later actor added under the same id, including actors with
-    /// identical local identities in different subtrees. Samples taken from
-    /// `ActorRef::stats` have no supervisor membership and report `None`.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub lineage: Option<u64>,
     /// Messages delivered to the actor for handling.
     ///
     /// This includes actor-local continuations, timer events, and offload
@@ -98,29 +76,63 @@ pub struct ActorStats {
     pub mailbox_capacity: usize,
 }
 
+/// Actor statistics paired with their current supervision membership.
+///
+/// Returned by [`ScopeRef::actor_stats`](crate::ScopeRef::actor_stats). A
+/// direct child of the sampled scope has an empty `scope_path`; nested path
+/// segments carry the subtree lineage and generation needed to distinguish
+/// identical local actor ids in different or restarted subtrees.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ScopedActorStats {
+    /// Identity path of the nested scopes containing the actor.
+    pub scope_path: Vec<ScopePathSegment>,
+    /// Identity of the actor's current supervisor membership.
+    pub lineage: u64,
+    /// Actor-local counters, gauges, and mailbox data.
+    pub stats: ActorStats,
+}
+
+impl std::ops::Deref for ScopedActorStats {
+    type Target = ActorStats;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stats
+    }
+}
+
+impl std::ops::DerefMut for ScopedActorStats {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stats
+    }
+}
+
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::{ActorStats, ScopePathSegment};
+    use super::{ActorStats, ScopePathSegment, ScopedActorStats};
     use serde_json::json;
 
     #[test]
-    fn actor_stats_round_trip_with_scope_identity() {
-        let stats = ActorStats {
-            actor_id: "worker".into(),
-            scope_path: Some(vec![ScopePathSegment {
+    fn scoped_actor_stats_round_trip() {
+        let stats = ScopedActorStats {
+            scope_path: vec![ScopePathSegment {
                 id: "workers".into(),
                 lineage: 7,
                 generation: 2,
-            }]),
-            lineage: Some(11),
-            messages_received: 13,
-            messages_accepted: 17,
-            messages_conflated: 3,
-            message_bytes_accepted: Some(1_024),
-            sends_rejected: 1,
-            outstanding_offloads: 2,
-            mailbox_depth: 5,
-            mailbox_capacity: 32,
+            }],
+            lineage: 11,
+            stats: ActorStats {
+                actor_id: "worker".into(),
+                messages_received: 13,
+                messages_accepted: 17,
+                messages_conflated: 3,
+                message_bytes_accepted: Some(1_024),
+                sends_rejected: 1,
+                outstanding_offloads: 2,
+                mailbox_depth: 5,
+                mailbox_capacity: 32,
+            },
         };
 
         let value = serde_json::to_value(&stats).expect("actor stats serialize");
@@ -128,7 +140,8 @@ mod serde_tests {
             value["scope_path"],
             json!([{"id": "workers", "lineage": 7, "generation": 2}])
         );
-        let decoded: ActorStats = serde_json::from_value(value).expect("actor stats deserialize");
+        let decoded: ScopedActorStats =
+            serde_json::from_value(value).expect("actor stats deserialize");
         assert_eq!(decoded, stats);
     }
 
@@ -136,8 +149,6 @@ mod serde_tests {
     fn actor_stats_omit_absent_optional_fields() {
         let stats = ActorStats {
             actor_id: "worker".into(),
-            scope_path: None,
-            lineage: None,
             messages_received: 0,
             messages_accepted: 0,
             messages_conflated: 0,
@@ -149,8 +160,6 @@ mod serde_tests {
         };
 
         let value = serde_json::to_value(stats).expect("actor stats serialize");
-        assert!(value.get("scope_path").is_none());
-        assert!(value.get("lineage").is_none());
         assert!(value.get("message_bytes_accepted").is_none());
     }
 }
@@ -220,8 +229,6 @@ impl ActorStatsCounters {
     ) -> ActorStats {
         ActorStats {
             actor_id: actor_id.to_owned(),
-            scope_path: None,
-            lineage: None,
             messages_received: self.messages_received.load(Ordering::Relaxed),
             messages_accepted: self.messages_accepted.load(Ordering::Relaxed),
             messages_conflated: self.messages_conflated.load(Ordering::Relaxed),

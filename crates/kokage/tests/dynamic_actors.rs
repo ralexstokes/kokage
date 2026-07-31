@@ -16,7 +16,7 @@ use std::{
 
 use kokage::{
     Actor, ActorRef, ActorSlot, ActorSpec, BoxError, BuildError, Context, ControlError,
-    DynamicTree, ExitReason, ExitResult, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart,
+    DynamicTree, ExitResult, ExitStatus, Guard, MailboxMode, MonitorEvent, OrderedTree, Restart,
     RunningTree, ScopeRef, SendError, SendErrorKind, Shutdown, StopContext, SupervisorError,
     TaskSpec,
     observe::ChildMembershipView,
@@ -335,13 +335,9 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
             .find(|stats| stats.actor_id == "sink")
             .expect("sink stats available")
             .lineage,
-        Some(initial_lineage)
+        initial_lineage
     );
-    assert_eq!(
-        sink.stats().lineage,
-        None,
-        "standalone ref stats have no supervisor context"
-    );
+    assert_eq!(sink.stats().actor_id, "sink");
 
     support::dynamic_root(&runtime)
         .remove_child("sink")
@@ -383,8 +379,7 @@ async fn graphless_runtime_adds_removes_and_readds_actors() {
         .into_iter()
         .find(|stats| stats.actor_id == "sink")
         .expect("replacement stats available")
-        .lineage
-        .expect("runtime stats include supervisor membership");
+        .lineage;
     assert_eq!(replacement_lineage, replacement_snapshot_lineage);
     assert!(replacement_lineage > initial_lineage);
 
@@ -742,7 +737,11 @@ async fn explicit_terminal_removal_preserves_monitor_order_and_reuses_id() {
     target.send(()).await.expect("clean stop requested");
     assert!(matches!(
         next_monitor_event(&mut observed_rx).await,
-        MonitorEvent::Exited { ref actor_id, reason: ExitReason::Normal, .. }
+        MonitorEvent::Exited {
+            ref actor_id,
+            status: ExitStatus::Completed { .. },
+            ..
+        }
             if actor_id == "temporary"
     ));
     assert!(matches!(

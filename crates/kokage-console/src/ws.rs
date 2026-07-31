@@ -3,7 +3,9 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use kokage::observe::{ActorStats, LifecycleEvent, SupervisorSnapshot, SupervisorSnapshotReceiver};
+use kokage::observe::{
+    LifecycleEvent, ScopedActorStats, SupervisorSnapshot, SupervisorSnapshotReceiver,
+};
 use tokio::time::{self, Duration};
 
 use crate::server::AppState;
@@ -61,7 +63,7 @@ fn event_message(event: LifecycleEvent) -> Message {
     )
 }
 
-fn stats_message(stats: &[ActorStats]) -> Message {
+fn stats_message(stats: &[ScopedActorStats]) -> Message {
     Message::Text(
         serde_json::json!({ "type": "actor_stats", "data": stats })
             .to_string()
@@ -81,7 +83,7 @@ async fn send_event(socket: &mut WebSocket, event: LifecycleEvent) -> bool {
 async fn send_stats(
     socket: &mut WebSocket,
     state: &AppState,
-    last_sent: &mut Vec<ActorStats>,
+    last_sent: &mut Vec<ScopedActorStats>,
 ) -> bool {
     let stats = (state.stats)();
     if stats == *last_sent {

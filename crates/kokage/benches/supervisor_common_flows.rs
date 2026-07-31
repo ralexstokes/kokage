@@ -270,12 +270,10 @@ async fn wait_for_restart_count(events: &mut LifecycleWatch, expected: usize) ->
 async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
-            && event
-                .child
-                .as_ref()
-                .is_some_and(|child| child.child_id == id)
-        {
+        if matches!(
+            event.kind,
+            LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == id
+        ) {
             return;
         }
     }
@@ -284,12 +282,10 @@ async fn wait_for_named_child_started(events: &mut LifecycleWatch, id: &str) {
 async fn wait_for_named_child_removed(events: &mut LifecycleWatch, id: &str) {
     loop {
         let event = events.next().await.expect("lifecycle stream");
-        if matches!(event.kind, LifecycleEventKind::ChildRemoved)
-            && event
-                .child
-                .as_ref()
-                .is_some_and(|child| child.child_id == id)
-        {
+        if matches!(
+            event.kind,
+            LifecycleEventKind::ChildRemoved { ref child_id, .. } if child_id == id
+        ) {
             return;
         }
     }

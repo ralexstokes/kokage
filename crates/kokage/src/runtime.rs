@@ -6,7 +6,8 @@ use std::{
 use crate::{
     ActorRef, ActorSpec,
     actor::{
-        ActorNode, ActorOptionsValidationError, ActorStats, RunnableActor, RunnableActorBuilder,
+        ActorNode, ActorOptionsValidationError, RunnableActor, RunnableActorBuilder,
+        ScopedActorStats,
     },
     supervisor::{
         __private::{self, AttachedChildIdentity, guard_from_tokens},
@@ -382,12 +383,12 @@ impl ScopeRef {
     /// raw child removal, same-id replacement, or a subtree restart that drops
     /// incarnation-local dynamic children by construction.
     ///
-    /// Unlike [`ActorRef::stats`], each returned sample populates
-    /// [`ActorStats::scope_path`] and [`ActorStats::lineage`] from the
-    /// current runtime membership. Message-size totals remain `None` unless
+    /// Unlike [`ActorRef::stats`], each returned [`ScopedActorStats`] pairs
+    /// actor-local stats with the current scope path and lineage. Message-size
+    /// totals remain `None` unless
     /// observation was enabled with
     /// [`ActorSpec::message_size`](crate::ActorSpec::message_size).
-    pub fn actor_stats(&self) -> Vec<ActorStats> {
+    pub fn actor_stats(&self) -> Vec<ScopedActorStats> {
         let mut runtime_owners = HashMap::from([(Vec::new(), Arc::clone(&self.actors))]);
         let mut stats = Vec::new();
 
@@ -405,11 +406,11 @@ impl ScopeRef {
 
             match &attachment.kind {
                 RuntimeAttachmentKind::Actor(actor) => {
-                    let mut actor_stats = actor.stats();
-                    actor_stats.scope_path =
-                        Some(scope_path.iter().map(scope_path_segment).collect());
-                    actor_stats.lineage = Some(child.lineage);
-                    stats.push(actor_stats);
+                    stats.push(ScopedActorStats {
+                        scope_path: scope_path.iter().map(scope_path_segment).collect(),
+                        lineage: child.lineage,
+                        stats: actor.stats(),
+                    });
                 }
                 RuntimeAttachmentKind::Subtree(subtree) => {
                     runtime_owners.insert(attached.path().to_vec(), Arc::clone(subtree));

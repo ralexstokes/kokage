@@ -93,7 +93,7 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
     let added = timeout(EVENT_TIMEOUT, async {
         loop {
             let event = lifecycle.next().await.expect("watch remains open");
-            if matches!(event.kind, LifecycleEventKind::ChildAdded) {
+            if matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) {
                 break event;
             }
         }
@@ -110,21 +110,22 @@ async fn watch_before_spawn_observes_first_added_and_started_after_declared_base
     })
     .await
     .expect("Started arrives");
-    assert!(matches!(&added.kind, LifecycleEventKind::ChildAdded));
+    assert!(matches!(&added.kind, LifecycleEventKind::ChildAdded { .. }));
     assert!(matches!(
         started.kind,
         LifecycleEventKind::ChildStarted { generation: 0, .. }
     ));
-    assert_eq!(added.seq(), Some(baseline.lifecycle_seq + 1));
-    assert_eq!(
-        added
-            .child
-            .as_ref()
-            .expect("child transition carries identity")
-            .lineage,
-        declared.lineage
-    );
-    assert_eq!(started.seq(), added.seq().map(|seq| seq + 1));
+    let (added_seq, added_lineage) = match &added.kind {
+        LifecycleEventKind::ChildAdded { seq, lineage, .. } => (*seq, *lineage),
+        other => panic!("expected ChildAdded, got {other:?}"),
+    };
+    let started_seq = match started.kind {
+        LifecycleEventKind::ChildStarted { seq, .. } => seq,
+        other => panic!("expected ChildStarted, got {other:?}"),
+    };
+    assert_eq!(added_seq, baseline.lifecycle_seq + 1);
+    assert_eq!(added_lineage, declared.lineage);
+    assert_eq!(started_seq, added_seq + 1);
 
     spawned
         .shutdown_and_wait()

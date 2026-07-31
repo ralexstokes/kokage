@@ -27,6 +27,17 @@ enum SinkMsg {
     Barrier(oneshot::Sender<()>),
 }
 
+fn child_seq(event: &LifecycleEvent) -> u64 {
+    match event.kind {
+        LifecycleEventKind::ChildAdded { seq, .. }
+        | LifecycleEventKind::ChildStarted { seq, .. }
+        | LifecycleEventKind::ChildExited { seq, .. }
+        | LifecycleEventKind::ChildRemoved { seq, .. }
+        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => seq,
+        _ => panic!("expected child lifecycle event: {event:?}"),
+    }
+}
+
 struct Sink {
     generation: u64,
     observed: mpsc::UnboundedSender<(u64, LifecycleEvent)>,
@@ -229,8 +240,8 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
         &first[2].1.kind,
         LifecycleEventKind::ChildStarted { generation: 1, .. }
     ));
-    assert_eq!(first[1].1.seq(), first[0].1.seq().map(|seq| seq + 1));
-    assert_eq!(first[2].1.seq(), first[1].1.seq().map(|seq| seq + 1));
+    assert_eq!(child_seq(&first[1].1), child_seq(&first[0].1) + 1);
+    assert_eq!(child_seq(&first[2].1), child_seq(&first[1].1) + 1);
     assert_eq!(first[0].0, 0);
     assert_eq!(first[1].0, 0);
     assert_eq!(first[2].0, 0);
@@ -244,9 +255,9 @@ async fn retained_lifecycle_pump_forwards_events_without_replay_after_target_res
     assert_eq!(second[0].0, 1);
     assert_eq!(second[1].0, 1);
     assert_eq!(second[2].0, 1);
-    assert_eq!(second[0].1.seq(), first[2].1.seq().map(|seq| seq + 1));
-    assert_eq!(second[1].1.seq(), second[0].1.seq().map(|seq| seq + 1));
-    assert_eq!(second[2].1.seq(), second[1].1.seq().map(|seq| seq + 1));
+    assert_eq!(child_seq(&second[0].1), child_seq(&first[2].1) + 1);
+    assert_eq!(child_seq(&second[1].1), child_seq(&second[0].1) + 1);
+    assert_eq!(child_seq(&second[2].1), child_seq(&second[1].1) + 1);
     assert!(!guard.is_cancelled());
     assert!(!guard.is_finished());
     guard.detach();
@@ -382,13 +393,11 @@ async fn context_scope_can_start_a_lifecycle_pump_from_on_start() {
         scheduled.kind,
         LifecycleEventKind::ChildRestartScheduled { .. }
     ));
-    assert_eq!(
-        scheduled
-            .child
-            .expect("child transition carries identity")
-            .child_id,
-        "crasher"
-    );
+    assert!(matches!(
+        scheduled.kind,
+        LifecycleEventKind::ChildRestartScheduled { ref child_id, .. }
+            if child_id == "crasher"
+    ));
 
     let handle = runtime.scope();
     shutdown_runtime(&handle, "context-scope lifecycle pump shutdown").await;

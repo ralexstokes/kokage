@@ -211,17 +211,15 @@ async fn runtime_handle_enumerates_actor_stats() {
     let stats = handle.scope().actor_stats();
     assert_eq!(stats.len(), 1);
     assert_eq!(stats[0].actor_id, worker_ref.id());
-    assert_eq!(stats[0].scope_path, Some(Vec::new()));
+    assert_eq!(stats[0].scope_path, Vec::new());
     assert_eq!(
         stats[0].lineage,
-        Some(
-            handle
-                .scope()
-                .snapshot()
-                .child(worker_ref.id())
-                .expect("worker snapshot available")
-                .lineage
-        )
+        handle
+            .scope()
+            .snapshot()
+            .child(worker_ref.id())
+            .expect("worker snapshot available")
+            .lineage
     );
     assert_eq!(stats[0].messages_accepted, 1);
     assert_eq!(stats[0].messages_received, 1);
@@ -269,7 +267,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
         .scope()
         .actor_stats()
         .into_iter()
-        .map(|stats| stats.actor_id)
+        .map(|stats| stats.stats.actor_id)
         .collect::<Vec<_>>();
     assert_eq!(actor_ids, ["root-worker", "nested-worker", "leaf-worker"]);
 
@@ -290,13 +288,13 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
             .find(|stats| stats.actor_id == "nested-worker")
             .expect("nested actor stats available")
             .lineage,
-        Some(nested_lineage)
+        nested_lineage
     );
     assert_eq!(
         subtree
             .actor_stats()
             .into_iter()
-            .map(|stats| stats.actor_id)
+            .map(|stats| stats.stats.actor_id)
             .collect::<Vec<_>>(),
         [nested_ref.id(), leaf_ref.id()]
     );
@@ -306,7 +304,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
             .expect("recursive actor-aware subtree")
             .actor_stats()
             .into_iter()
-            .map(|stats| stats.actor_id)
+            .map(|stats| stats.stats.actor_id)
             .collect::<Vec<_>>(),
         [leaf_ref.id()]
     );
@@ -339,7 +337,7 @@ async fn supervision_tree_composes_subtrees_with_recursive_actor_stats() {
         .lineage;
     assert!(
         handle.scope().actor_stats().iter().any(|stats| {
-            stats.actor_id == "dynamic-worker" && stats.lineage == Some(dynamic_lineage)
+            stats.actor_id == "dynamic-worker" && stats.lineage == dynamic_lineage
         }),
         "parent stats recursively include actors added through a subtree handle"
     );
@@ -397,17 +395,11 @@ async fn dynamic_subtree_preserves_static_and_dynamic_actor_metadata() {
         root.scope()
             .actor_stats()
             .into_iter()
-            .map(|stats| stats.actor_id)
+            .map(|stats| stats.stats.actor_id)
             .collect::<Vec<_>>(),
         [static_ref.id(), dynamic_ref.id()]
     );
-    assert!(
-        root.scope()
-            .actor_stats()
-            .iter()
-            .all(|stats| stats.lineage.is_some()),
-        "builder-created and dynamically added actors both have bound lineages"
-    );
+    assert_eq!(root.scope().actor_stats().len(), 2);
 
     root.shutdown_and_wait().await.expect("clean shutdown");
 }
@@ -511,15 +503,12 @@ async fn recursive_stats_distinguish_duplicate_actor_ids_in_sibling_subtrees() {
     let stats = handle.scope().actor_stats();
     assert_eq!(stats.len(), 2);
     assert!(stats.iter().all(|stats| stats.actor_id == "worker"));
-    assert!(stats.iter().all(|stats| stats.lineage == Some(0)));
+    assert!(stats.iter().all(|stats| stats.lineage == 0));
 
     let paths = stats
         .iter()
         .map(|stats| {
-            let path = stats
-                .scope_path
-                .as_ref()
-                .expect("runtime stats carry a scope path");
+            let path = &stats.scope_path;
             assert_eq!(path.len(), 1);
             (path[0].id.as_str(), path[0].lineage, path[0].generation)
         })
@@ -542,7 +531,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
         .actor_stats()
         .into_iter()
         .find(|stats| stats.actor_id == "worker")
-        .and_then(|stats| stats.lineage)
+        .map(|stats| stats.lineage)
         .expect("tracked lineage available");
 
     let sampler_handle = handle.scope();
@@ -551,8 +540,7 @@ async fn raw_same_id_replacement_cannot_inherit_tracked_actor_stats() {
             for stats in sampler_handle.actor_stats() {
                 if stats.actor_id == "worker" {
                     assert_eq!(
-                        stats.lineage,
-                        Some(tracked_lineage),
+                        stats.lineage, tracked_lineage,
                         "a replacement membership must never receive the old actor's counters"
                     );
                 }
@@ -639,9 +627,7 @@ async fn recursive_stats_prune_dynamic_actors_lost_on_subtree_restart() {
                 if stats.actor_id != "dynamic-worker" {
                     continue;
                 }
-                let path = stats
-                    .scope_path
-                    .expect("nested actor stats carry their scope path");
+                let path = stats.scope_path;
                 assert_eq!(
                     path[0].generation, old_generation,
                     "an old incarnation's attachment cache must not be traversed through the new incarnation"

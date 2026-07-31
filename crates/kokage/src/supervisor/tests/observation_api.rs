@@ -29,12 +29,10 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
                 .next()
                 .await
                 .expect("recursive watch remains open");
-            if matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
-                && event
-                    .child
-                    .as_ref()
-                    .is_some_and(|child| child.child_id == "leaf")
-            {
+            if matches!(
+                event.kind,
+                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "leaf"
+            ) {
                 break event;
             }
         }
@@ -48,12 +46,10 @@ async fn lifecycle_is_recursive_by_default_and_direct_children_is_a_depth_filter
         loop {
             let event = direct.next().await.expect("direct watch remains open");
             assert!(event.scope_path.is_empty());
-            if matches!(event.kind, LifecycleEventKind::ChildStarted { .. })
-                && event
-                    .child
-                    .as_ref()
-                    .is_some_and(|child| child.child_id == "nested")
-            {
+            if matches!(
+                event.kind,
+                LifecycleEventKind::ChildStarted { ref child_id, .. } if child_id == "nested"
+            ) {
                 break event;
             }
         }

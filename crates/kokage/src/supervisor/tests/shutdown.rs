@@ -516,11 +516,8 @@ async fn dynamic_children_escalate_at_their_own_grace_deadlines() {
 
     while let Some(event) = next_lifecycle_event(&mut lifecycle, "dynamic child timeout exit").await
     {
-        if let LifecycleEventKind::ChildExited { exit, .. } = event.kind
-            && event
-                .child
-                .as_ref()
-                .is_some_and(|child| child.child_id == "short")
+        if let LifecycleEventKind::ChildExited { child_id, exit, .. } = event.kind
+            && child_id == "short"
         {
             assert!(exit.timed_out());
             return;
@@ -589,11 +586,8 @@ async fn cooperative_remove_child_times_out_with_stuck_child_name() {
         let event = next_lifecycle_event(&mut lifecycle, "drop-triggered child exit")
             .await
             .expect("keeper keeps scope live");
-        if let LifecycleEventKind::ChildExited { exit, .. } = event.kind
-            && event
-                .child
-                .as_ref()
-                .is_some_and(|child| child.child_id == "stubborn")
+        if let LifecycleEventKind::ChildExited { child_id, exit, .. } = event.kind
+            && child_id == "stubborn"
         {
             assert!(exit.timed_out());
             break;
@@ -827,13 +821,8 @@ async fn ordered_shutdown_waits_for_each_later_sibling_before_cancelling_the_pre
             .next()
             .await
             .expect("staged lifecycle exits remain available");
-        if let LifecycleEventKind::ChildExited { .. } = event.kind {
-            exited.push(
-                event
-                    .child
-                    .expect("child transition carries identity")
-                    .child_id,
-            );
+        if let LifecycleEventKind::ChildExited { child_id, .. } = event.kind {
+            exited.push(child_id);
         }
     }
     assert_eq!(exited, ["third", "second", "first"]);

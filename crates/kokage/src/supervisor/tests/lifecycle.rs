@@ -19,29 +19,107 @@ fn failure(message: &'static str) -> crate::supervisor::BoxError {
     Box::new(io::Error::other(message))
 }
 
+#[derive(Clone, Copy)]
+struct TestChildIdentity<'a> {
+    seq: u64,
+    child_id: &'a str,
+    lineage: u64,
+    total_restarts: u64,
+    child_restart_count: u64,
+}
+
+fn try_child_identity(event: &LifecycleEvent) -> Option<TestChildIdentity<'_>> {
+    let (seq, child_id, lineage, total_restarts, child_restart_count) = match &event.kind {
+        LifecycleEventKind::ChildAdded {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+        }
+        | LifecycleEventKind::ChildStarted {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            ..
+        }
+        | LifecycleEventKind::ChildExited {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            ..
+        }
+        | LifecycleEventKind::ChildRemoved {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+        }
+        | LifecycleEventKind::ChildRestartScheduled {
+            seq,
+            child_id,
+            lineage,
+            total_restarts,
+            child_restart_count,
+            ..
+        } => (
+            *seq,
+            child_id.as_str(),
+            *lineage,
+            *total_restarts,
+            *child_restart_count,
+        ),
+        _ => return None,
+    };
+    Some(TestChildIdentity {
+        seq,
+        child_id,
+        lineage,
+        total_restarts,
+        child_restart_count,
+    })
+}
+
 fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
-    event
-        .child
-        .as_ref()
-        .is_some_and(|child| child.child_id == child_id)
+    try_child_identity(event).is_some_and(|child| child.child_id == child_id)
 }
 
-fn child_identity(event: &LifecycleEvent) -> &crate::supervisor::ChildLifecycleIdentity {
-    event
-        .child
-        .as_ref()
-        .expect("child transition carries identity")
+fn child_identity(event: &LifecycleEvent) -> TestChildIdentity<'_> {
+    try_child_identity(event).expect("child transition carries identity")
 }
 
-/// The envelope carries child identity exactly for `Child*` kinds. Asserting
-/// it on every polled event covers locally emitted and recursively forwarded
-/// transitions alike.
 fn assert_envelope_invariant(event: &LifecycleEvent) {
     assert_eq!(
-        event.child.is_some(),
-        event.is_child_transition(),
-        "child identity is carried exactly by child transitions: {event:?}"
+        try_child_identity(event).is_some(),
+        event.is_child_transition()
     );
+}
+
+trait LifecycleEventTestExt {
+    fn seq(&self) -> Option<u64>;
+    fn total_restarts(&self) -> Option<u64>;
+}
+
+impl LifecycleEventTestExt for LifecycleEvent {
+    fn seq(&self) -> Option<u64> {
+        try_child_identity(self).map(|child| child.seq)
+    }
+
+    fn total_restarts(&self) -> Option<u64> {
+        try_child_identity(self)
+            .map(|child| child.total_restarts)
+            .or_else(|| match self.kind {
+                LifecycleEventKind::RestartIntensityExceeded { total_restarts } => {
+                    Some(total_restarts)
+                }
+                _ => None,
+            })
+    }
 }
 
 async fn next_matching(
@@ -91,13 +169,13 @@ async fn pre_spawn_watch_aligns_added_and_started_with_the_projected_snapshot() 
     let running = builder.build().expect("supervisor builds").spawn();
 
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 0 }
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -137,13 +215,14 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
     timeout(WAIT, async {
         while transitions.len() < 3 {
             let event = watch.next().await.expect("watch remains open");
-            let Some(child) = event.child.as_ref() else {
+            let Some(child) = try_child_identity(&event) else {
                 continue;
             };
             match &event.kind {
                 LifecycleEventKind::ChildExited {
                     generation: 0,
                     exit,
+                    ..
                 } if child.child_id == "flaky" => {
                     assert!(exit.failure_message().is_some());
                     assert!(!exit.cancelled());
@@ -169,7 +248,9 @@ async fn restart_transitions_preserve_exit_schedule_start_order_and_exit_shape()
                         child.child_restart_count,
                     ));
                 }
-                LifecycleEventKind::ChildStarted { generation: 1 } if child.child_id == "flaky" => {
+                LifecycleEventKind::ChildStarted { generation: 1, .. }
+                    if child.child_id == "flaky" =>
+                {
                     transitions.push((
                         "started",
                         child.seq,
@@ -308,7 +389,7 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     let restarted = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 1 }
+            LifecycleEventKind::ChildStarted { generation: 1, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -323,13 +404,13 @@ async fn nested_sequences_and_counters_continue_across_ancestor_recreation() {
     })
     .await;
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 0 }
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -363,7 +444,7 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
         .await
         .expect("child is added");
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
@@ -385,7 +466,8 @@ async fn dynamic_removal_emits_cancelled_exit_before_removed_for_one_lineage() {
     })
     .await;
     let removed = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildRemoved) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildRemoved { .. })
+            && child_id_is(event, "worker")
     })
     .await;
     assert!(matches!(
@@ -434,7 +516,7 @@ async fn readiness_gated_child_started_is_emitted_only_after_ready() {
     let started = next_matching(&mut watch, |event| {
         matches!(
             event.kind,
-            LifecycleEventKind::ChildStarted { generation: 0 }
+            LifecycleEventKind::ChildStarted { generation: 0, .. }
         ) && child_id_is(event, "worker")
     })
     .await;
@@ -468,7 +550,8 @@ async fn cooperative_remove_publishes_removed_before_the_command_reply() {
     let removal = tokio::spawn(async move { dynamic.remove_child("worker").await });
 
     let removed = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildRemoved) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildRemoved { .. })
+            && child_id_is(event, "worker")
     })
     .await;
     timeout(WAIT, removal)
@@ -533,12 +616,7 @@ async fn shutdown_drains_in_reverse_and_the_watch_closes_after_staged_events() {
         while let Some(event) = watch.next().await {
             assert_envelope_invariant(&event);
             match event.kind {
-                LifecycleEventKind::ChildExited { .. } => exited.push(
-                    event
-                        .child
-                        .expect("child transition carries identity")
-                        .child_id,
-                ),
+                LifecycleEventKind::ChildExited { child_id, .. } => exited.push(child_id),
                 LifecycleEventKind::SupervisorStopped => stopped = true,
                 _ => {}
             }
@@ -851,7 +929,7 @@ async fn group_revivable_nested_watch_stays_open_and_resumes() {
 
     crash_sibling.notify_one();
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {
@@ -952,7 +1030,7 @@ async fn nested_watch_survives_restartable_ancestor_reincarnation() {
 
     crash_middle.notify_one();
     let added = next_matching(&mut watch, |event| {
-        matches!(event.kind, LifecycleEventKind::ChildAdded) && child_id_is(event, "worker")
+        matches!(event.kind, LifecycleEventKind::ChildAdded { .. }) && child_id_is(event, "worker")
     })
     .await;
     let started = next_matching(&mut watch, |event| {

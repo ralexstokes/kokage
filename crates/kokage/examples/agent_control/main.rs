@@ -131,8 +131,8 @@ use std::{
 };
 
 use kokage::{
-    ActorSlot, DynamicTree, ExitReason, Guard as OperationGuard, MailboxMode, MonitorEvent,
-    ScopeRef, Strategy, prelude::*,
+    ActorSlot, DynamicTree, Guard as OperationGuard, MailboxMode, MonitorEvent, ScopeRef, Strategy,
+    prelude::*,
 };
 use tokio::time::Instant;
 
@@ -143,6 +143,19 @@ use guard::Guard;
 use journal::Journal;
 use messages::*;
 use model::{ModelClient, ScriptedModel};
+
+fn lifecycle_total_restarts(event: &kokage::observe::LifecycleEvent) -> Option<u64> {
+    use kokage::observe::LifecycleEventKind;
+    match &event.kind {
+        LifecycleEventKind::ChildAdded { total_restarts, .. }
+        | LifecycleEventKind::ChildStarted { total_restarts, .. }
+        | LifecycleEventKind::ChildExited { total_restarts, .. }
+        | LifecycleEventKind::ChildRemoved { total_restarts, .. }
+        | LifecycleEventKind::ChildRestartScheduled { total_restarts, .. }
+        | LifecycleEventKind::RestartIntensityExceeded { total_restarts } => Some(*total_restarts),
+        _ => None,
+    }
+}
 use router::RouterFactory;
 use telemetry::LatencyRecorder;
 use tool_host::ToolHost;
@@ -303,7 +316,7 @@ async fn build_app() -> Result<App, AnyError> {
     let sessions = sessions_mount.clone();
     let mut bridge_restarts = gateway.snapshot().total_restarts;
     let lifecycle_watch = gateway.watch_lifecycle_to(&guard, move |event| {
-        if let Some(total) = event.total_restarts() {
+        if let Some(total) = lifecycle_total_restarts(&event) {
             bridge_restarts = total;
         }
         GuardMsg::BridgeRestarts {
@@ -407,10 +420,7 @@ async fn phase_2(app: &App) -> Result<(), AnyError> {
             events.iter().any(|event| {
                 matches!(
                     event,
-                    MonitorEvent::Exited {
-                        reason: ExitReason::Failure,
-                        ..
-                    }
+                    MonitorEvent::Exited { status, .. } if status.is_failure()
                 )
             })
         })

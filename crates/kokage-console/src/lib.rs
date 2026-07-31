@@ -40,12 +40,12 @@ use std::{io, net::SocketAddr, sync::Arc};
 
 use kokage::{
     ScopeRef,
-    observe::{ActorStats, LifecycleWatch, SupervisorSnapshotReceiver},
+    observe::{LifecycleWatch, ScopedActorStats, SupervisorSnapshotReceiver},
 };
 use thiserror::Error;
 use tokio::sync::watch;
 
-type StatsSource = Arc<dyn Fn() -> Vec<ActorStats> + Send + Sync>;
+type StatsSource = Arc<dyn Fn() -> Vec<ScopedActorStats> + Send + Sync>;
 type LifecycleSource = Arc<dyn Fn() -> LifecycleWatch + Send + Sync>;
 
 /// Errors returned while validating or starting a console server.
@@ -126,7 +126,7 @@ impl ConsoleBuilder {
     /// Sets the pull source sampled for per-actor stats.
     pub fn actor_stats(
         mut self,
-        source: impl Fn() -> Vec<ActorStats> + Send + Sync + 'static,
+        source: impl Fn() -> Vec<ScopedActorStats> + Send + Sync + 'static,
     ) -> Self {
         self.stats = Arc::new(source);
         self

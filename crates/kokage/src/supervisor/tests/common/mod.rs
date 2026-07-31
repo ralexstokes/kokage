@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::supervisor::{
-    BoxError, ChildExitView, ChildSnapshot, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
+    BoxError, ChildSnapshot, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
     Restart, SupervisorError, SupervisorHandle, SupervisorSnapshot, SupervisorSnapshotReceiver,
     TaskSpec,
 };
@@ -32,13 +32,13 @@ pub enum ExitStatusView {
     Aborted { after_grace: bool },
 }
 
-impl From<ChildExitView> for ExitStatusView {
-    fn from(exit: ChildExitView) -> Self {
+impl From<ExitStatus> for ExitStatusView {
+    fn from(exit: ExitStatus) -> Self {
         match exit {
-            ChildExitView::Completed { .. } => Self::Completed,
-            ChildExitView::Failed { message, .. } => Self::Failed(message),
-            ChildExitView::Panicked { .. } => Self::Panicked,
-            ChildExitView::Aborted { after_grace, .. } => Self::Aborted { after_grace },
+            ExitStatus::Completed { .. } => Self::Completed,
+            ExitStatus::Failed { message, .. } => Self::Failed(message),
+            ExitStatus::Panicked { .. } => Self::Panicked,
+            ExitStatus::Aborted { after_grace, .. } => Self::Aborted { after_grace },
         }
     }
 }
@@ -251,34 +251,21 @@ impl EventWatch {
     }
 
     fn convert(&mut self, event: LifecycleEvent) -> Result<Option<ObservedEvent>, EventRecvError> {
-        // Every supervisor test streams through here, so this is where the
-        // envelope invariant is checked against live runtime emissions rather
-        // than hand-built events.
-        assert_eq!(
-            event.child.is_some(),
-            event.is_child_transition(),
-            "child identity is carried exactly by child transitions: {event:?}"
-        );
         let LifecycleEvent {
             scope_path: path,
-            child,
             kind,
         } = event;
-        let child_id = || {
-            child
-                .as_ref()
-                .expect("child transition carries identity")
-                .child_id
-                .clone()
-        };
         let mut pending = None;
         let leaf = match kind {
             LifecycleEventKind::SupervisorStarted => ObservedEvent::SupervisorStarted,
             LifecycleEventKind::SupervisorStopping => ObservedEvent::SupervisorStopping,
             LifecycleEventKind::SupervisorStopped => ObservedEvent::SupervisorStopped,
-            LifecycleEventKind::ChildAdded => return Ok(None),
-            LifecycleEventKind::ChildStarted { generation } => {
-                let child_id = child_id();
+            LifecycleEventKind::ChildAdded { .. } => return Ok(None),
+            LifecycleEventKind::ChildStarted {
+                child_id,
+                generation,
+                ..
+            } => {
                 // This compatibility shim preserves the removed test-event
                 // shape. It deliberately assumes runtime generations are
                 // contiguous when synthesizing `ChildRestarted`. If that
@@ -296,19 +283,29 @@ impl EventWatch {
                     generation,
                 }
             }
-            LifecycleEventKind::ChildExited { generation, exit } => ObservedEvent::ChildExited {
-                id: child_id(),
+            LifecycleEventKind::ChildExited {
+                child_id,
+                generation,
+                exit,
+                ..
+            } => ObservedEvent::ChildExited {
+                id: child_id,
                 generation,
                 status: exit.into(),
             },
-            LifecycleEventKind::ChildRemoved => ObservedEvent::ChildRemoved { id: child_id() },
-            LifecycleEventKind::ChildRestartScheduled { generation, delay } => {
-                ObservedEvent::ChildRestartScheduled {
-                    id: child_id(),
-                    generation,
-                    delay,
-                }
+            LifecycleEventKind::ChildRemoved { child_id, .. } => {
+                ObservedEvent::ChildRemoved { id: child_id }
             }
+            LifecycleEventKind::ChildRestartScheduled {
+                child_id,
+                generation,
+                delay,
+                ..
+            } => ObservedEvent::ChildRestartScheduled {
+                id: child_id,
+                generation,
+                delay,
+            },
             LifecycleEventKind::RestartIntensityExceeded { .. } => {
                 ObservedEvent::RestartIntensityExceeded
             }

@@ -47,11 +47,6 @@ fn print_event(event: &LifecycleEvent) {
         .collect::<Vec<_>>()
         .join("/");
     let scope = if path.is_empty() { "root" } else { &path };
-    let child_id = event
-        .child
-        .as_ref()
-        .map_or("<missing child identity>", |child| child.child_id.as_str());
-
     match &event.kind {
         LifecycleEventKind::SupervisorStarted => {
             println!("{scope}: supervisor started");
@@ -62,19 +57,33 @@ fn print_event(event: &LifecycleEvent) {
         LifecycleEventKind::SupervisorStopped => {
             println!("{scope}: supervisor stopped");
         }
-        LifecycleEventKind::ChildAdded => {
+        LifecycleEventKind::ChildAdded { child_id, .. } => {
             println!("{scope}: child added: {child_id}")
         }
-        LifecycleEventKind::ChildStarted { generation } => {
+        LifecycleEventKind::ChildStarted {
+            child_id,
+            generation,
+            ..
+        } => {
             println!("{scope}: child started: {child_id} generation={generation}")
         }
-        LifecycleEventKind::ChildExited { generation, exit } => {
+        LifecycleEventKind::ChildExited {
+            child_id,
+            generation,
+            exit,
+            ..
+        } => {
             println!("{scope}: child exited: {child_id} generation={generation} exit={exit:?}")
         }
-        LifecycleEventKind::ChildRemoved => {
+        LifecycleEventKind::ChildRemoved { child_id, .. } => {
             println!("{scope}: child removed: {child_id}");
         }
-        LifecycleEventKind::ChildRestartScheduled { generation, delay } => {
+        LifecycleEventKind::ChildRestartScheduled {
+            child_id,
+            generation,
+            delay,
+            ..
+        } => {
             println!(
                 "{scope}: child restart scheduled: {child_id} generation={generation} delay={delay:?}"
             );

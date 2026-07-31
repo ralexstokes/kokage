@@ -32,15 +32,15 @@ use crate::supervisor::{
     scope::{ScopeKind, ScopePathSegment},
     shutdown::Shutdown,
     snapshot::{
-        ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView,
-        NestedSnapshotNotification, NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
+        ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus, NestedSnapshotNotification,
+        NestedSnapshotState, SupervisorSnapshot, SupervisorStateView,
     },
     strategy::Strategy,
 };
 
 use super::{
     child_runtime::{ChildRuntime, RuntimeChildState},
-    exit::ExitStatus,
+    exit::RuntimeExitStatus,
 };
 
 /// Slab key for a child entry. Stable across restarts but invalidated when the
@@ -1463,8 +1463,10 @@ impl SupervisorRuntime {
                     key: meta.key,
                     lineage: meta.lineage,
                     generation: meta.generation,
-                    status: self
-                        .classify_child_exit(&meta, ExitStatus::from_child_result(envelope.result)),
+                    status: self.classify_child_exit(
+                        &meta,
+                        RuntimeExitStatus::from_child_result(envelope.result),
+                    ),
                 })
             }
             Err(err) => {
@@ -1490,7 +1492,7 @@ impl SupervisorRuntime {
     /// Both conditions are latched decisions rather than clock reads: a child
     /// that finished inside its grace keeps its real exit status even when the
     /// join is dequeued after the deadline has passed.
-    fn classify_child_exit(&self, meta: &TaskMeta, status: ExitStatus) -> ExitStatus {
+    fn classify_child_exit(&self, meta: &TaskMeta, status: RuntimeExitStatus) -> RuntimeExitStatus {
         if self.children.get(meta.key).is_some_and(|entry| {
             entry.lineage == meta.lineage
                 && entry.runtime.generation == meta.generation
@@ -1500,13 +1502,18 @@ impl SupervisorRuntime {
                         .as_ref()
                         .is_some_and(|pending| !pending.policy.is_abort() && pending.grace_expired))
         }) {
-            ExitStatus::ShutdownTimedOut
+            RuntimeExitStatus::ShutdownTimedOut
         } else {
             status
         }
     }
 
-    pub(crate) fn record_exit(&mut self, key: ChildKey, generation: u64, status: &ExitStatus) {
+    pub(crate) fn record_exit(
+        &mut self,
+        key: ChildKey,
+        generation: u64,
+        status: &RuntimeExitStatus,
+    ) {
         // Read before the entry is mutated: the flag belongs to the generation
         // that just exited, and a respawn installs a fresh one.
         let cancelled = self.children[key].runtime.completion.is_cancelled();
@@ -1529,7 +1536,7 @@ impl SupervisorRuntime {
             key,
             ChildLifecycleEvent::Exited {
                 generation,
-                exit: ChildExitView::new(status.view(), cancelled),
+                exit: ExitStatus::new(status.view(), cancelled),
             },
         );
         self.send_event(RuntimeEvent::ChildExited {
@@ -1930,7 +1937,7 @@ impl SupervisorRuntime {
             let last_exit = entry
                 .last_exit
                 .clone()
-                .map(|status| ChildExitView::new(status, entry.last_exit_cancelled));
+                .map(|status| ExitStatus::new(status, entry.last_exit_cancelled));
             children.push(ChildSnapshot {
                 id: entry.id.clone(),
                 lineage: entry.lineage,
@@ -2031,13 +2038,13 @@ fn complete_command<T>(
     }
 }
 
-fn classify_join_error(err: JoinError) -> ExitStatus {
+fn classify_join_error(err: JoinError) -> RuntimeExitStatus {
     // Tokio reports aborts and cancellation through `is_cancelled`; any other
     // join error is treated as a panic from the child task.
     if err.is_cancelled() {
-        ExitStatus::Aborted
+        RuntimeExitStatus::Aborted
     } else {
-        ExitStatus::Panicked
+        RuntimeExitStatus::Panicked
     }
 }
 
@@ -2045,7 +2052,7 @@ pub(crate) struct ClassifiedExit {
     pub(crate) key: ChildKey,
     lineage: u64,
     pub(crate) generation: u64,
-    pub(crate) status: ExitStatus,
+    pub(crate) status: RuntimeExitStatus,
 }
 
 enum GroupRespawnDisposition {

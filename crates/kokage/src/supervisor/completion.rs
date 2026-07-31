@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::supervisor::{
-    CancellationToken, ChildExitView, CompletionOnDrop, Guard, LifecycleEvent, LifecycleEventKind,
+    CancellationToken, CompletionOnDrop, ExitStatus, Guard, LifecycleEvent, LifecycleEventKind,
     ScopeKind,
     handle::SupervisorHandle,
     snapshot::{ChildMembershipView, ChildSnapshot, ChildStateView, SupervisorSnapshot},
@@ -151,7 +151,7 @@ impl CompletionWatch {
     /// Waits until every named child is simultaneously completed.
     ///
     /// A child counts as completed once its current generation has exited with
-    /// [`ChildExitView::Completed`] and no restart is pending for it. Any
+    /// [`ExitStatus::Completed`] and no restart is pending for it. Any
     /// later start un-completes it, so a child that is restarted — including by
     /// a sibling-driven group restart — must complete again. Failed exits never
     /// count, matching the rule that failures follow the restart policy rather
@@ -224,10 +224,12 @@ async fn reduce_completion(
             // A dropped prefix may have contained transitions for awaited
             // children, so edge-derived state has to be rebuilt from state.
             baseline = set.realign(&handle.snapshot());
-        } else if event.scope_path.is_empty() && event.seq().is_some_and(|seq| seq > baseline) {
+        } else if event.scope_path.is_empty()
+            && child_sequence(&event.kind).is_some_and(|seq| seq > baseline)
+        {
             let needs_realign = matches!(
                 &event.kind,
-                LifecycleEventKind::ChildAdded | LifecycleEventKind::ChildExited { .. }
+                LifecycleEventKind::ChildAdded { .. } | LifecycleEventKind::ChildExited { .. }
             );
             set.apply(&event);
             if needs_realign {
@@ -304,19 +306,24 @@ impl CompletionSet {
     }
 
     fn apply(&mut self, event: &LifecycleEvent) {
-        let Some(child) = event.child.as_ref() else {
-            return;
-        };
-        let transition = match &event.kind {
-            LifecycleEventKind::ChildAdded | LifecycleEventKind::ChildStarted { .. } => {
-                CompletionTransition::Running
+        let (child_id, lineage, transition) = match &event.kind {
+            LifecycleEventKind::ChildAdded {
+                child_id, lineage, ..
             }
-            LifecycleEventKind::ChildExited { exit, .. } => CompletionTransition::Exited(exit),
-            LifecycleEventKind::ChildRemoved => CompletionTransition::Removed,
+            | LifecycleEventKind::ChildStarted {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Running),
+            LifecycleEventKind::ChildExited {
+                child_id,
+                lineage,
+                exit,
+                ..
+            } => (child_id, *lineage, CompletionTransition::Exited(exit)),
+            LifecycleEventKind::ChildRemoved {
+                child_id, lineage, ..
+            } => (child_id, *lineage, CompletionTransition::Removed),
             _ => return,
         };
-        let child_id = &child.child_id;
-        let lineage = child.lineage;
         if !self.awaits(child_id) {
             return;
         }
@@ -394,9 +401,20 @@ impl CompletionSet {
     }
 }
 
+fn child_sequence(kind: &LifecycleEventKind) -> Option<u64> {
+    match kind {
+        LifecycleEventKind::ChildAdded { seq, .. }
+        | LifecycleEventKind::ChildStarted { seq, .. }
+        | LifecycleEventKind::ChildExited { seq, .. }
+        | LifecycleEventKind::ChildRemoved { seq, .. }
+        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => Some(*seq),
+        _ => None,
+    }
+}
+
 enum CompletionTransition<'a> {
     Running,
-    Exited(&'a ChildExitView),
+    Exited(&'a ExitStatus),
     Removed,
 }
 
@@ -420,10 +438,7 @@ fn is_completed(child: &ChildSnapshot) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::supervisor::{
-        ChildExitView, ChildLifecycleIdentity, Strategy, event::ExitKind,
-        snapshot::SupervisorStateView,
-    };
+    use crate::supervisor::{ExitStatus, Strategy, event::ExitKind, snapshot::SupervisorStateView};
 
     enum TestLifecycleKind {
         Added,
@@ -449,30 +464,43 @@ mod tests {
         kind: TestLifecycleKind,
     ) -> LifecycleEvent {
         let kind = match kind {
-            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded,
-            TestLifecycleKind::Started { generation } => {
-                LifecycleEventKind::ChildStarted { generation }
-            }
-            TestLifecycleKind::Exited {
-                generation,
-                reason,
-                cancelled,
-            } => LifecycleEventKind::ChildExited {
-                generation,
-                exit: ChildExitView::new(reason, cancelled),
-            },
-            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved,
-        };
-        LifecycleEvent::local_child(
-            ChildLifecycleIdentity {
+            TestLifecycleKind::Added => LifecycleEventKind::ChildAdded {
                 seq,
                 child_id: child_id.to_owned(),
                 lineage,
                 total_restarts: 0,
                 child_restart_count: 0,
             },
-            kind,
-        )
+            TestLifecycleKind::Started { generation } => LifecycleEventKind::ChildStarted {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+            },
+            TestLifecycleKind::Exited {
+                generation,
+                reason,
+                cancelled,
+            } => LifecycleEventKind::ChildExited {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+                generation,
+                exit: ExitStatus::new(reason, cancelled),
+            },
+            TestLifecycleKind::Removed => LifecycleEventKind::ChildRemoved {
+                seq,
+                child_id: child_id.to_owned(),
+                lineage,
+                total_restarts: 0,
+                child_restart_count: 0,
+            },
+        };
+        LifecycleEvent::local(kind)
     }
 
     fn completed(seq: u64, child_id: &str) -> LifecycleEvent {
@@ -601,7 +629,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitKind::Completed, false)),
+                exit: Some(ExitStatus::new(ExitKind::Completed, false)),
             },
         );
         let seq = set.realign(&snapshot(vec![source]));
@@ -617,7 +645,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitKind::Completed, false)),
+                exit: Some(ExitStatus::new(ExitKind::Completed, false)),
             },
         );
         source.next_restart_in = Some(std::time::Duration::from_millis(10));
@@ -633,7 +661,7 @@ mod tests {
             0,
             ChildStateView::Stopped {
                 started: true,
-                exit: Some(ChildExitView::new(ExitKind::Completed, true)),
+                exit: Some(ExitStatus::new(ExitKind::Completed, true)),
             },
         );
         set.realign(&snapshot(vec![source]));
@@ -647,7 +675,7 @@ mod tests {
             "source",
             0,
             ChildStateView::StartupAborted {
-                exit: ChildExitView::new(ExitKind::Completed, false),
+                exit: ExitStatus::new(ExitKind::Completed, false),
             },
         );
 

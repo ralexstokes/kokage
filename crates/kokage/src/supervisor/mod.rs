@@ -73,7 +73,7 @@ pub use context::TaskContext;
 pub use error::{BuildError, ControlError, SupervisorError};
 pub use guard::Guard;
 pub use handle::{DynamicSupervisorHandle, SupervisorHandle};
-pub use lifecycle::{ChildLifecycleIdentity, LifecycleEvent, LifecycleEventKind, LifecycleWatch};
+pub use lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleWatch};
 pub use owner::{RunningSupervisor, Supervisor};
 #[cfg(feature = "serde")]
 pub(crate) use restart::RestartWire;
@@ -81,7 +81,7 @@ pub use restart::{Backoff, Restart};
 pub use scope::{ScopeKind, ScopePathSegment};
 pub use shutdown::Shutdown;
 pub use snapshot::{
-    ChildExitView, ChildMembershipView, ChildSnapshot, ChildStateView, SnapshotRecvError,
+    ChildMembershipView, ChildSnapshot, ChildStateView, ExitStatus, SnapshotRecvError,
     SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
 };
 pub use strategy::Strategy;

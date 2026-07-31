@@ -453,7 +453,9 @@ impl<M> ActorRef<M> {
             let (sender, receiver) = oneshot::channel();
             self.send(message(Reply { sender }))
                 .await
-                .map_err(SendError::discard)?;
+                .map_err(|error| CallError::Terminated {
+                    actor_id: error.actor_id,
+                })?;
             receiver.await.map_err(|_| CallError::ReplyDropped {
                 actor_id: self.actor_id.to_string(),
             })

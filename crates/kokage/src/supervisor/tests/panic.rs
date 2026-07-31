@@ -104,7 +104,7 @@ async fn abort_mode_group_peer_reports_aborted_exit_status() {
     let peer = common::wait_for_child_running(&mut snapshots, "abort-peer", 1).await;
     assert!(matches!(
         peer.state.last_exit(),
-        Some(crate::supervisor::ChildExitView::Aborted {
+        Some(crate::supervisor::ExitStatus::Aborted {
             after_grace: false,
             ..
         })

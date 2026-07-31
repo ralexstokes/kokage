@@ -20,8 +20,8 @@ mod coverage_probe {
     mod advanced_root {
         use kokage::{
             ActorFactory, ActorSlot, Backoff, BlockingCancelled, BoxError, BuildError, CallError,
-            CancellationToken, ControlError, ExitReason, OffloadDeadline, RunningTree, ScopeRef,
-            SendError, SendErrorKind, SendRejection, SubtreeSpec, SupervisorError, TaskContext,
+            CancellationToken, ControlError, ExitStatus, OffloadDeadline, RunningTree, ScopeRef,
+            SendError, SendErrorKind, SubtreeSpec, SupervisorError, TaskContext,
         };
     }
 
@@ -33,9 +33,9 @@ mod coverage_probe {
 
     mod observe {
         use kokage::observe::{
-            ActorStats, ChildExitView, ChildLifecycleIdentity, ChildMembershipView, ChildOutline,
-            ChildSnapshot, ChildStateView, CompletionError, CompletionOutcome, LifecycleEvent,
-            LifecycleEventKind, LifecycleWatch, ScopeKind, ScopePathSegment, SupervisionOutline,
+            ActorStats, ChildMembershipView, ChildOutline, ChildSnapshot, ChildStateView,
+            CompletionError, CompletionOutcome, ExitStatus, LifecycleEvent, LifecycleEventKind,
+            LifecycleWatch, ScopeKind, ScopePathSegment, ScopedActorStats, SupervisionOutline,
             SupervisorSnapshot, SupervisorStateView,
         };
     }
@@ -68,10 +68,24 @@ fn root_actor_slot_constructs_a_cyclic_declaration() {
 const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn child_id_is(event: &LifecycleEvent, child_id: &str) -> bool {
-    event
-        .child
-        .as_ref()
-        .is_some_and(|child| child.child_id == child_id)
+    match &event.kind {
+        LifecycleEventKind::ChildAdded {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildStarted {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildExited {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildRemoved {
+            child_id: observed, ..
+        }
+        | LifecycleEventKind::ChildRestartScheduled {
+            child_id: observed, ..
+        } => observed == child_id,
+        _ => false,
+    }
 }
 
 async fn named_task(ctx: kokage::TaskContext) -> kokage::ExitResult {
@@ -88,11 +102,11 @@ fn root_task_surface_supports_a_named_factory_from_the_single_crate() {
 fn actor_stats_and_lifecycle_events_share_scope_path_segments() {
     #[allow(dead_code)]
     fn assign_shared_path(
-        stats: &mut kokage::observe::ActorStats,
+        stats: &mut kokage::observe::ScopedActorStats,
         event: &mut kokage::observe::LifecycleEvent,
         path: Vec<kokage::observe::ScopePathSegment>,
     ) {
-        stats.scope_path = Some(path.clone());
+        stats.scope_path = path.clone();
         event.scope_path = path;
     }
 }
@@ -203,7 +217,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { generation: 0 }
+                LifecycleEventKind::ChildStarted { generation: 0, .. }
             ) && child_id_is(&event, "worker")
             {
                 break event;
@@ -214,7 +228,7 @@ async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     .expect("timed out waiting for started event");
     assert!(matches!(
         started.kind,
-        LifecycleEventKind::ChildStarted { generation: 0 }
+        LifecycleEventKind::ChildStarted { generation: 0, .. }
     ));
     assert!(child_id_is(&started, "worker"));
 
@@ -284,7 +298,7 @@ async fn prelude_observes_raw_task_events_and_snapshots() {
             let event = events.next().await.expect("lifecycle remains open");
             if matches!(
                 event.kind,
-                LifecycleEventKind::ChildStarted { generation: 0 }
+                LifecycleEventKind::ChildStarted { generation: 0, .. }
             ) && child_id_is(&event, "worker")
             {
                 break;

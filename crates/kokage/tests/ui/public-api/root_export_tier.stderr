@@ -27,11 +27,11 @@ help: a similar name exists in the module
 19 | use kokage::ActorStatus;
    |                      +
 
-error[E0432]: unresolved import `kokage::ChildExitView`
+error[E0432]: unresolved import `kokage::ScopedActorStats`
   --> tests/ui/public-api/root_export_tier.rs:20:5
    |
-20 | use kokage::ChildExitView;
-   |     ^^^^^^^^^^^^^^^^^^^^^ no `ChildExitView` in the root
+20 | use kokage::ScopedActorStats;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ no `ScopedActorStats` in the root
 
 error[E0432]: unresolved import `kokage::ChildMembershipView`
   --> tests/ui/public-api/root_export_tier.rs:21:5

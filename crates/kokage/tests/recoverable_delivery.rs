@@ -11,7 +11,7 @@ use std::{
 
 use kokage::{
     ActorRef, ActorSpec, Backoff, BoxError, CallError, ExitResult, MailboxMode, OrderedTree, Reply,
-    Restart, SendError, SendErrorKind, SendRejection,
+    Restart, SendError, SendErrorKind,
     raw::{RawActor, RawContext},
 };
 use tokio::sync::{Notify, mpsc};
@@ -484,11 +484,7 @@ async fn terminated_delivery_errors_return_the_message_and_call_stays_non_generi
         .expect_err("terminated actor rejects call delivery");
     assert!(matches!(
         call_error,
-        CallError::Send(SendRejection {
-            actor_id,
-            kind: SendErrorKind::Terminated,
-            ..
-        }) if actor_id == "worker"
+        CallError::Terminated { actor_id, .. } if actor_id == "worker"
     ));
 }
 
@@ -497,7 +493,7 @@ struct NotSync {
 }
 
 // Compile probe: `NotSync` is `Send` but not `Sync`, so the payload-bearing
-// error cannot enter `BoxError`. Discarding the message makes the common actor
+// error cannot enter `BoxError`. Erasing the message makes the common actor
 // handler error path available without imposing a `Sync` bound on the message.
 #[allow(dead_code)]
 async fn non_sync_message_can_discard_before_question_mark(
@@ -508,7 +504,7 @@ async fn non_sync_message_can_discard_before_question_mark(
             _value: Cell::new(1),
         })
         .await
-        .map_err(SendError::discard)?;
+        .map_err(SendError::into_boxed)?;
     actor
         .send_timeout(
             NotSync {
@@ -517,6 +513,6 @@ async fn non_sync_message_can_discard_before_question_mark(
             Duration::from_secs(1),
         )
         .await
-        .map_err(SendError::discard)?;
+        .map_err(SendError::into_boxed)?;
     Ok(())
 }

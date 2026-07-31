@@ -256,13 +256,13 @@ pub mod raw {
 /// streams returned by that handle without injecting them into the crate root.
 pub mod observe {
     pub use crate::{
-        actor::ActorStats,
+        actor::{ActorStats, ScopedActorStats},
         supervision::{ChildOutline, SupervisionOutline},
         supervisor::{
-            ChildExitView, ChildLifecycleIdentity, ChildMembershipView, ChildSnapshot,
-            ChildStateView, CompletionError, CompletionOutcome, CompletionWatch, LifecycleEvent,
-            LifecycleEventKind, LifecycleWatch, ScopeKind, ScopePathSegment, SnapshotRecvError,
-            SupervisorSnapshot, SupervisorSnapshotReceiver, SupervisorStateView,
+            ChildMembershipView, ChildSnapshot, ChildStateView, CompletionError, CompletionOutcome,
+            CompletionWatch, ExitStatus, LifecycleEvent, LifecycleEventKind, LifecycleWatch,
+            ScopeKind, ScopePathSegment, SnapshotRecvError, SupervisorSnapshot,
+            SupervisorSnapshotReceiver, SupervisorStateView,
         },
     };
 }
@@ -292,12 +292,12 @@ pub use kokage_derive::ActorFactory;
 
 pub use actor::{
     Actor, ActorFactory, ActorRef, ActorSlot, ActorSpec, ActorStatus, BlockingCancelled, CallError,
-    Context, ExitReason, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError,
-    SendErrorKind, SendRejection, StopContext, TimerKey,
+    Context, ExitResult, MailboxMode, MonitorEvent, OffloadDeadline, Reply, SendError,
+    SendErrorKind, StopContext, TimerKey,
 };
 pub use runtime::{RunningTree, ScopeRef};
 pub use supervision::{DynamicTree, OrderedTree, SubtreeSpec};
 pub use supervisor::{
-    Backoff, BoxError, BuildError, CancellationToken, ControlError, Guard, Restart, Shutdown,
-    Strategy, SupervisorError, TaskContext, TaskSpec,
+    Backoff, BoxError, BuildError, CancellationToken, ControlError, ExitStatus, Guard, Restart,
+    Shutdown, Strategy, SupervisorError, TaskContext, TaskSpec,
 };

@@ -6,7 +6,7 @@ use std::{any::Any, future::pending, panic::AssertUnwindSafe, sync::Arc, time::D
 
 use futures_util::FutureExt;
 use kokage::{
-    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitReason, ExitResult, Guard,
+    ActorFactory, ActorRef, ActorSlot, ActorSpec, DynamicTree, ExitResult, ExitStatus, Guard,
     MonitorEvent, Shutdown,
     raw::{ActorHost, DEFAULT_SHUTDOWN_BOUND, IncarnationExit, RawActor, RawContext},
 };
@@ -256,7 +256,7 @@ fn started_event(actor_id: &str, generation: u64) -> MonitorEvent {
 struct TestExit {
     actor_id: String,
     generation: u64,
-    reason: ExitReason,
+    status: ExitStatus,
 }
 
 fn expect_exited(event: MonitorEvent) -> TestExit {
@@ -264,11 +264,11 @@ fn expect_exited(event: MonitorEvent) -> TestExit {
         MonitorEvent::Exited {
             actor_id,
             generation,
-            reason,
+            status,
         } => TestExit {
             actor_id,
             generation,
-            reason,
+            status,
         },
         other => panic!("expected Exited, got {other:?}"),
     }
@@ -322,7 +322,7 @@ async fn watch_reports_panicked_peer_as_failure() {
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.actor_id, "peer");
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, ExitReason::Failure);
+    assert!(notification.status.is_failure());
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
         Some(0),
@@ -369,8 +369,8 @@ async fn watch_reports_clean_stop_as_normal() {
         .await
         .expect("stop command sent");
     assert_eq!(
-        expect_exited(next_event(&mut fixture.observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -489,8 +489,8 @@ async fn watch_survives_observer_restart_without_duplicate_registration() {
     });
     started(&mut fixture.observer_started).await;
     assert_eq!(
-        expect_exited(next_event(&mut fixture.observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -658,7 +658,10 @@ async fn replacement_incarnation_keeps_the_membership_owned_mapper() {
         registration, 0,
         "replacement mapper did not replace the watch"
     );
-    assert_eq!(expect_exited(event).reason, ExitReason::Normal);
+    assert_eq!(
+        expect_exited(event).status,
+        ExitStatus::Completed { cancelled: false }
+    );
     let (registration, event) = recv_test_event(&mut observed, "tagged terminal event").await;
     assert_eq!(registration, 0);
     assert_eq!(expect_removed(event, "peer"), Some(0));
@@ -808,7 +811,10 @@ async fn repeated_watch_calls_alias_until_cancelled() {
         .expect("peer stop sent");
     let (registration, event) = recv_test_event(&mut observed, "replacement exited event").await;
     assert_eq!(registration, 2);
-    assert_eq!(expect_exited(event).reason, ExitReason::Normal);
+    assert_eq!(
+        expect_exited(event).status,
+        ExitStatus::Completed { cancelled: false }
+    );
     let (registration, event) = recv_test_event(&mut observed, "replacement terminal event").await;
     assert_eq!(registration, 2);
     assert_eq!(expect_removed(event, "peer"), Some(0));
@@ -934,8 +940,8 @@ async fn subject_membership_removal_delivers_terminal_then_ends_watch() {
         .await
         .expect("peer stop sent");
     assert_eq!(
-        expect_exited(next_event(&mut observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut observed).await, "peer"),
@@ -1030,7 +1036,7 @@ async fn watch_survives_peer_restart_without_reregistration() {
         .expect("panic command sent");
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, ExitReason::Failure);
+    assert!(notification.status.is_failure());
     let (peer, first_exit) = first_task.await.expect("first peer task joined");
     assert!(first_exit.is_err(), "first peer incarnation panicked");
 
@@ -1053,7 +1059,10 @@ async fn watch_survives_peer_restart_without_reregistration() {
         .expect("stop command sent");
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 1);
-    assert_eq!(notification.reason, ExitReason::Normal);
+    assert_eq!(
+        notification.status,
+        ExitStatus::Completed { cancelled: false }
+    );
 
     second_task
         .await
@@ -1131,7 +1140,10 @@ async fn pre_start_watch_attaches_to_first_incarnation() {
         .expect("stop command sent");
     let notification = expect_exited(next_event(&mut fixture.observed).await);
     assert_eq!(notification.generation, 0);
-    assert_eq!(notification.reason, ExitReason::Normal);
+    assert_eq!(
+        notification.status,
+        ExitStatus::Completed { cancelled: false }
+    );
 
     peer_task
         .await
@@ -1168,8 +1180,8 @@ async fn shutdown_request_reports_normal_exit() {
 
     peer_stop.cancel();
     assert_eq!(
-        expect_exited(next_event(&mut fixture.observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut fixture.observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
     assert_eq!(
         expect_removed(next_event(&mut fixture.observed).await, "peer"),
@@ -1310,8 +1322,8 @@ async fn cancelling_watch_cannot_retract_accepted_events() {
     gate.notify_one();
     assert_eq!(next_event(&mut observed).await, started_event("peer", 0));
     assert_eq!(
-        expect_exited(next_event(&mut observed).await).reason,
-        ExitReason::Normal
+        expect_exited(next_event(&mut observed).await).status,
+        ExitStatus::Completed { cancelled: false }
     );
 
     peer_task
@@ -1394,7 +1406,7 @@ async fn supervisor_abort_delivers_failure_exited_then_removed() {
         .expect("peer removed by abort");
     let notification = expect_exited(next_event(&mut observed).await);
     assert_eq!(notification.actor_id, "peer");
-    assert_eq!(notification.reason, ExitReason::Failure);
+    assert!(notification.status.is_failure());
     assert_eq!(
         expect_removed(next_event(&mut observed).await, "peer"),
         Some(0),

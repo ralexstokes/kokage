@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use crate::supervisor::CancellationToken;
+use crate::supervisor::{CancellationToken, ExitStatus};
 use tokio::sync::{Notify, futures::Notified};
 
 /// Maximum number of undelivered events staged for a single watch.
@@ -44,16 +44,6 @@ impl Finished {
     }
 }
 
-/// The reason carried by a [`MonitorEvent::Exited`] notification.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ExitReason {
-    /// The actor stopped cleanly or as part of an orderly shutdown.
-    Normal,
-    /// The actor failed, panicked, or was aborted.
-    Failure,
-}
-
 /// Lifecycle transition of a watched logical actor.
 ///
 /// Delivered by [`RawContext::watch`](crate::raw::RawContext::watch). Events
@@ -80,7 +70,7 @@ pub enum MonitorEvent {
         /// restart.
         generation: u64,
         /// How the watched incarnation exited.
-        reason: ExitReason,
+        status: ExitStatus,
     },
     /// One or more transitions were dropped because the observer could not
     /// keep up (its mailbox stayed full while the target churned), and the
@@ -315,13 +305,13 @@ impl MonitorHub {
         state.watchers.retain(|watcher| watcher.notify(&started));
     }
 
-    pub(crate) fn exited(&self, reason: ExitReason) {
+    pub(crate) fn exited(&self, status: ExitStatus) {
         let mut state = self.state();
         let Lifecycle::Running(generation) = state.lifecycle else {
             return;
         };
         state.lifecycle = Lifecycle::Exited(generation);
-        let exited = self.exited_event(generation, reason);
+        let exited = self.exited_event(generation, status);
         state.watchers.retain(|watcher| watcher.notify(&exited));
     }
 
@@ -330,7 +320,13 @@ impl MonitorHub {
         let (exited, generation) = match state.lifecycle {
             Lifecycle::Pending => (None, None),
             Lifecycle::Running(generation) => (
-                Some(self.exited_event(generation, ExitReason::Failure)),
+                Some(self.exited_event(
+                    generation,
+                    ExitStatus::Aborted {
+                        after_grace: false,
+                        cancelled: true,
+                    },
+                )),
                 Some(generation),
             ),
             Lifecycle::Exited(generation) => (None, Some(generation)),
@@ -356,11 +352,11 @@ impl MonitorHub {
         }
     }
 
-    fn exited_event(&self, generation: u64, reason: ExitReason) -> MonitorEvent {
+    fn exited_event(&self, generation: u64, status: ExitStatus) -> MonitorEvent {
         MonitorEvent::Exited {
             actor_id: self.actor_id.clone(),
             generation,
-            reason,
+            status,
         }
     }
 
@@ -389,8 +385,8 @@ impl MonitorExitGuard {
         }
     }
 
-    pub(crate) fn report(&mut self, reason: ExitReason) {
-        self.hub.exited(reason);
+    pub(crate) fn report(&mut self, status: ExitStatus) {
+        self.hub.exited(status);
         self.reported = true;
     }
 }
@@ -398,7 +394,7 @@ impl MonitorExitGuard {
 impl Drop for MonitorExitGuard {
     fn drop(&mut self) {
         if !self.reported {
-            self.hub.exited(ExitReason::Failure);
+            self.hub.exited(ExitStatus::Panicked { cancelled: false });
         }
     }
 }
@@ -488,7 +484,10 @@ mod tests {
         MonitorEvent::Exited {
             actor_id: "peer".to_owned(),
             generation,
-            reason: ExitReason::Failure,
+            status: ExitStatus::Failed {
+                message: "boom".to_owned(),
+                cancelled: false,
+            },
         }
     }
 

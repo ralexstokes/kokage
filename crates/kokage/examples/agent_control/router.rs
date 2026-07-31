@@ -86,9 +86,20 @@ enum MountEventDisposition {
 fn mount_event_disposition(alignment_seq: u64, event: &LifecycleEvent) -> MountEventDisposition {
     event_disposition(
         alignment_seq,
-        event.seq().unwrap_or(0),
+        lifecycle_seq(event).unwrap_or(0),
         matches!(&event.kind, LifecycleEventKind::Lagged { .. }),
     )
+}
+
+fn lifecycle_seq(event: &LifecycleEvent) -> Option<u64> {
+    match &event.kind {
+        LifecycleEventKind::ChildAdded { seq, .. }
+        | LifecycleEventKind::ChildStarted { seq, .. }
+        | LifecycleEventKind::ChildExited { seq, .. }
+        | LifecycleEventKind::ChildRemoved { seq, .. }
+        | LifecycleEventKind::ChildRestartScheduled { seq, .. } => Some(*seq),
+        _ => None,
+    }
 }
 
 fn event_disposition(alignment_seq: u64, event_seq: u64, lagged: bool) -> MountEventDisposition {
@@ -313,14 +324,12 @@ impl Actor for Router {
                         self.reconcile_mount_snapshot(ctx);
                     }
                     MountEventDisposition::Apply => {
-                        self.alignment_seq = event
-                            .seq()
+                        self.alignment_seq = lifecycle_seq(&event)
                             .expect("only child transitions have an alignment sequence");
-                        if matches!(event.kind, LifecycleEventKind::ChildAdded)
-                            && let Some(child) = event.child
-                            && !self.routes_subtree(&child.child_id)
+                        if let LifecycleEventKind::ChildAdded { child_id, .. } = event.kind
+                            && !self.routes_subtree(&child_id)
                         {
-                            self.pipeline_sweep(child.child_id, ctx);
+                            self.pipeline_sweep(child_id, ctx);
                         }
                     }
                     MountEventDisposition::Ignore => {}
