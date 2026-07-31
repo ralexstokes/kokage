@@ -187,13 +187,13 @@ impl LifecycleWatch {
     /// ordinary mailbox policy.
     ///
     /// Apply [`LifecycleWatch::direct_children`] before this method when only
-    /// the watched scope's own events should be delivered. The pump follows
-    /// the target through ordinary actor restarts, but never replays events to
-    /// Lag markers are forwarded as well; supervisor-level transitions are
-    /// skipped. The pump follows the target through ordinary actor restarts,
-    /// but never replays events to a fresh incarnation. It stops when the
-    /// returned guard is dropped or cancelled, when this stream ends, or when
-    /// the target permanently terminates.
+    /// the watched scope's own events should be delivered. Lag markers are
+    /// forwarded as well; supervisor-level transitions are skipped. The pump
+    /// follows the target through ordinary actor restarts, but delivery is
+    /// at-most-once: an event accepted by one incarnation is never replayed to
+    /// its replacement. The pump stops when the returned guard is dropped or
+    /// cancelled, when this stream ends, or when the target permanently
+    /// terminates.
     pub fn forward_to<M, F>(self, target: &ActorRef<M>, map: F) -> Guard
     where
         M: Send + 'static,
