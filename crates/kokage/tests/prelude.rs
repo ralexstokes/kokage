@@ -1,7 +1,3 @@
-mod support;
-
-use support::TreeBuilder;
-
 use std::time::Duration;
 
 use kokage::{
@@ -185,13 +181,12 @@ impl Actor for BlockingWorker {
 #[tokio::test]
 async fn umbrella_prelude_supports_blocking_and_supervisor_helpers() {
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut graph = TreeBuilder::new();
-    let worker = graph.actor(ActorSpec::new("worker", move || BlockingWorker {
+    let mut graph = OrderedTree::new();
+    let worker = graph.add_actor(ActorSpec::new("worker", move || BlockingWorker {
         observed: observed_tx.clone(),
     }));
 
     let handle = graph
-        .build()
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");

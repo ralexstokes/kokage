@@ -1,11 +1,5 @@
 //! Recursive supervision-tree declarations and lowering.
 
-#[cfg(feature = "serde")]
-mod support;
-
-#[cfg(feature = "serde")]
-use support::TreeBuilder;
-
 use std::{sync::Arc, time::Duration};
 
 use tokio::{
@@ -58,10 +52,10 @@ impl RawActor for Parked {
 
 #[cfg(feature = "serde")]
 fn two_actor_tree() -> (OrderedTree, ActorRef<Reply<u32>>, ActorRef<Reply<u32>>) {
-    let mut builder = TreeBuilder::new();
-    let ingest = builder.actor(ActorSpec::new("ingest", || Worker).remove_when_done());
-    let parse = builder.actor(ActorSpec::new("parse", || Worker));
-    (builder.build(), ingest, parse)
+    let mut builder = OrderedTree::new();
+    let ingest = builder.add_actor(ActorSpec::new("ingest", || Worker).remove_when_done());
+    let parse = builder.add_actor(ActorSpec::new("parse", || Worker));
+    (builder, ingest, parse)
 }
 
 #[test]

@@ -1,7 +1,3 @@
-mod support;
-
-use support::TreeBuilder;
-
 use std::{
     io,
     sync::{
@@ -80,9 +76,9 @@ async fn supervised_actors_restart_only_the_failed_actor() {
     let worker_starts = Arc::new(AtomicUsize::new(0));
     let (failed_tx, failed_rx) = oneshot::channel();
 
-    let mut builder = TreeBuilder::new();
+    let mut builder = OrderedTree::new();
     let failed = oneshot_slot(failed_tx);
-    let worker_ref = builder.actor(ActorSpec::new("worker", {
+    let worker_ref = builder.add_actor(ActorSpec::new("worker", {
         let worker_starts = worker_starts.clone();
         move || Worker {
             observed: observed_tx.clone(),
@@ -90,7 +86,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
             failed: failed.clone(),
         }
     }));
-    let frontend_ref = builder.actor(ActorSpec::new("frontend", {
+    let frontend_ref = builder.add_actor(ActorSpec::new("frontend", {
         let worker_ref = worker_ref.clone();
         let frontend_starts = frontend_starts.clone();
         move || Frontend {
@@ -98,7 +94,7 @@ async fn supervised_actors_restart_only_the_failed_actor() {
             starts: frontend_starts.clone(),
         }
     }));
-    let graph = builder.build();
+    let graph = builder;
 
     let handle = graph
         .strategy(Strategy::OneForOne)
@@ -237,11 +233,11 @@ async fn send_to_cleanly_exiting_transient_returns_actor_terminated_promptly() {
     let (exited_tx, exited_rx) = oneshot::channel();
     let exited = oneshot_slot(exited_tx);
 
-    let mut builder = TreeBuilder::new();
-    let worker_ref = builder.actor(ActorSpec::new("worker", move || NotifyCleanExit {
+    let mut builder = OrderedTree::new();
+    let worker_ref = builder.add_actor(ActorSpec::new("worker", move || NotifyCleanExit {
         exited: exited.clone(),
     }));
-    let graph = builder.build();
+    let graph = builder;
 
     let handle = graph
         .strategy(Strategy::OneForOne)

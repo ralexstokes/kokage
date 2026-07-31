@@ -74,17 +74,13 @@ impl TreeBuilder {
         }
     }
 
-    pub(crate) fn actor<M: Send + 'static>(&mut self, spec: ActorSpec<M>) -> ActorRef<M> {
-        self.tree.add_actor(spec)
-    }
-
     pub(crate) fn define<M, F>(&mut self, slot: ActorSlot<M>, factory: F) -> ActorRef<M>
     where
         M: Send + 'static,
         F: ActorFactory,
         F::Actor: RawActor<Msg = M>,
     {
-        self.actor(slot.define(factory))
+        self.tree.add_actor(slot.define(factory))
     }
 
     pub(crate) fn mailbox_capacity(&mut self, capacity: usize) -> &mut Self {

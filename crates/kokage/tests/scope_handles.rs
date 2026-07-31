@@ -1,7 +1,5 @@
 mod support;
 
-use support::TreeBuilder;
-
 use std::{
     sync::{
         Arc,
@@ -1130,9 +1128,9 @@ async fn one_for_all_opt_in_recycles_leader_when_inner_scope_fails() {
 
 #[tokio::test]
 async fn consuming_a_tree_builder_preserves_issued_actor_refs() {
-    let mut builder = TreeBuilder::new();
-    let actor_ref = builder.actor(ActorSpec::new("actor", || Idle));
-    let tree = builder.build();
+    let mut builder = OrderedTree::new();
+    let actor_ref = builder.add_actor(ActorSpec::new("actor", || Idle));
+    let tree = builder;
 
     let spawned = tree.spawn().expect("tree builds and spawns");
     spawned.scope().wait_started().await.expect("tree starts");

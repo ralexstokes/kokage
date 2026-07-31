@@ -1,7 +1,3 @@
-mod support;
-
-use support::TreeBuilder;
-
 use std::{
     io,
     sync::{
@@ -25,10 +21,9 @@ fn build_runtime<F>(factory: F) -> (OrderedTree, ActorRef<<F::Actor as RawActor>
 where
     F: ActorFactory,
 {
-    let mut builder = TreeBuilder::new();
-    let actor_ref = builder.actor(ActorSpec::new("timer", factory));
-    let graph = builder.build();
-    let runtime = graph.strategy(Strategy::OneForOne);
+    let mut builder = OrderedTree::new();
+    let actor_ref = builder.add_actor(ActorSpec::new("timer", factory));
+    let runtime = builder.strategy(Strategy::OneForOne);
     (runtime, actor_ref)
 }
 
@@ -587,13 +582,12 @@ where
     F: ActorFactory,
 {
     let (observed_tx, observed_rx) = mpsc::unbounded_channel();
-    let mut builder = TreeBuilder::new();
-    let sink_ref = builder.actor(ActorSpec::new("sink", move || Sink {
+    let mut builder = OrderedTree::new();
+    let sink_ref = builder.add_actor(ActorSpec::new("sink", move || Sink {
         observed: observed_tx.clone(),
     }));
-    let scheduler_ref = builder.actor(ActorSpec::new("scheduler", scheduler(sink_ref)));
-    let graph = builder.build();
-    let runtime = graph.strategy(Strategy::OneForOne);
+    let scheduler_ref = builder.add_actor(ActorSpec::new("scheduler", scheduler(sink_ref)));
+    let runtime = builder.strategy(Strategy::OneForOne);
     (runtime, scheduler_ref, observed_rx)
 }
 
@@ -905,8 +899,8 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
     let target_slot = ActorSlot::new("terminated-target");
     let target = target_slot.actor_ref();
     drop(target_slot);
-    let mut builder = TreeBuilder::new();
-    builder.actor(ActorSpec::new("scheduler", {
+    let mut builder = OrderedTree::new();
+    builder.add_actor(ActorSpec::new("scheduler", {
         let target = target.clone();
         move || ReportedCrossInterval {
             target: target.clone(),
@@ -915,7 +909,6 @@ async fn target_termination_finishes_interval_without_cancelling_it() {
         }
     }));
     let runtime = builder
-        .build()
         .strategy(Strategy::OneForOne)
         .spawn()
         .expect("runtime builds");

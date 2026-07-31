@@ -1,7 +1,3 @@
-mod support;
-
-use support::TreeBuilder;
-
 use std::{
     io,
     sync::{
@@ -12,7 +8,7 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, Restart, ScopeRef,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, Restart, ScopeRef,
     observe::SupervisorSnapshotReceiver,
 };
 
@@ -78,15 +74,14 @@ async fn derive_clones_durable_configuration_and_defaults_each_incarnation() {
     assert_factory::<DerivedActorFactory>();
 
     let starts = Arc::new(AtomicUsize::new(0));
-    let mut builder = TreeBuilder::new();
-    let actor_ref = builder.actor(ActorSpec::new(
+    let mut builder = OrderedTree::new();
+    let actor_ref = builder.add_actor(ActorSpec::new(
         "derived",
         DerivedActorFactory {
             starts: starts.clone(),
         },
     ));
     let handle = builder
-        .build()
         .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");

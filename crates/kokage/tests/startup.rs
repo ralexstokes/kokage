@@ -1,7 +1,5 @@
 mod support;
 
-use support::TreeBuilder;
-
 use std::{sync::Arc, time::Duration};
 
 use kokage::{
@@ -108,22 +106,22 @@ async fn actor_on_start_can_await_add_task_on_its_own_dynamic_supervisor() {
 async fn actors_gate_sequential_start_on_on_start_and_run_continuations_first() {
     let order = Arc::new(Mutex::new(Vec::new()));
     let release = Arc::new(Notify::new());
-    let mut graph = TreeBuilder::new();
+    let mut graph = OrderedTree::new();
     let first_order = order.clone();
     let first_release = release.clone();
-    let first = graph.actor(ActorSpec::new("Probe", move || Probe {
+    let first = graph.add_actor(ActorSpec::new("Probe", move || Probe {
         name: "first",
         order: first_order.clone(),
         release: Some(first_release.clone()),
     }));
     let second_order = order.clone();
-    graph.actor(ActorSpec::new("Probe-2", move || Probe {
+    graph.add_actor(ActorSpec::new("Probe-2", move || Probe {
         name: "second",
         order: second_order.clone(),
         release: None,
     }));
 
-    let handle = graph.build().spawn().unwrap();
+    let handle = graph.spawn().unwrap();
 
     first.send("mailbox").await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -172,13 +170,9 @@ impl Actor for FailsOnStart {
 
 #[tokio::test]
 async fn failed_actor_start_disarms_readiness_without_panicking() {
-    let mut graph = TreeBuilder::new();
-    graph.actor(ActorSpec::new("FailsOnStart", || FailsOnStart));
-    let handle = graph
-        .build()
-        .default_restart(Restart::never())
-        .spawn()
-        .unwrap();
+    let mut graph = OrderedTree::new();
+    graph.add_actor(ActorSpec::new("FailsOnStart", || FailsOnStart));
+    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
             .await
@@ -235,18 +229,18 @@ async fn drain_drops_continuations_queued_by_drained_messages() {
     let handled = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let mut graph = TreeBuilder::new();
+    let mut graph = OrderedTree::new();
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.actor(ActorSpec::new("DrainContinuation", move || {
+    let actor = graph.add_actor(ActorSpec::new("DrainContinuation", move || {
         DrainContinuation {
             handled: actor_handled.clone(),
             started: actor_started.clone(),
             release: actor_release.clone(),
         }
     }));
-    let handle = graph.build().spawn().unwrap();
+    let handle = graph.spawn().unwrap();
     handle.scope().wait_started().await.unwrap();
     actor.send("hold").await.unwrap();
     started.notified().await;
@@ -262,18 +256,18 @@ async fn external_shutdown_drops_a_continuation_queued_by_an_in_flight_handler()
     let handled = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let mut graph = TreeBuilder::new();
+    let mut graph = OrderedTree::new();
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.actor(ActorSpec::new("DrainContinuation", move || {
+    let actor = graph.add_actor(ActorSpec::new("DrainContinuation", move || {
         DrainContinuation {
             handled: actor_handled.clone(),
             started: actor_started.clone(),
             release: actor_release.clone(),
         }
     }));
-    let handle = graph.build().spawn().unwrap();
+    let handle = graph.spawn().unwrap();
 
     actor.send("hold-and-continue").await.unwrap();
     started.notified().await;
@@ -334,12 +328,12 @@ fn drain_phase_probe_graph(
     observed: &HandleCalls,
     started: &Arc<Notify>,
     release: &Arc<Notify>,
-) -> (TreeBuilder, ActorRef<&'static str>) {
-    let mut graph = TreeBuilder::new();
+) -> (OrderedTree, ActorRef<&'static str>) {
+    let mut graph = OrderedTree::new();
     let observed = observed.clone();
     let started = started.clone();
     let release = release.clone();
-    let actor = graph.actor(ActorSpec::new("DrainPhaseProbe", move || DrainPhaseProbe {
+    let actor = graph.add_actor(ActorSpec::new("DrainPhaseProbe", move || DrainPhaseProbe {
         observed: observed.clone(),
         started: started.clone(),
         release: release.clone(),
@@ -353,7 +347,7 @@ async fn status_separates_the_drain_phase_from_ordinary_handling() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
-    let handle = graph.build().spawn().unwrap();
+    let handle = graph.spawn().unwrap();
     handle.scope().wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
@@ -378,11 +372,7 @@ async fn status_is_draining_after_a_self_stop_that_never_shuts_the_graph_down() 
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let (graph, actor) = drain_phase_probe_graph(&observed, &started, &release);
-    let handle = graph
-        .build()
-        .default_restart(Restart::never())
-        .spawn()
-        .unwrap();
+    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
     handle.scope().wait_started().await.unwrap();
 
     actor.send("stop").await.unwrap();
@@ -440,13 +430,13 @@ impl Actor for OverlappingStopProbe {
 #[tokio::test]
 async fn status_carves_local_stop_during_graph_shutdown() {
     let (observed, mut statuses) = mpsc::unbounded_channel();
-    let mut graph = TreeBuilder::new();
-    let actor = graph.actor(ActorSpec::new("OverlappingStopProbe", move || {
+    let mut graph = OrderedTree::new();
+    let actor = graph.add_actor(ActorSpec::new("OverlappingStopProbe", move || {
         OverlappingStopProbe {
             observed: observed.clone(),
         }
     }));
-    let handle = graph.build().spawn().unwrap();
+    let handle = graph.spawn().unwrap();
     handle.scope().wait_started().await.unwrap();
 
     actor.send("hold").await.unwrap();
@@ -497,8 +487,8 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
-    let mut graph = TreeBuilder::new();
-    let actor = graph.actor(
+    let mut graph = OrderedTree::new();
+    let actor = graph.add_actor(
         ActorSpec::new("StopsOnStart", {
             let started = started.clone();
             let release = release.clone();
@@ -511,11 +501,7 @@ async fn on_start_context_stop_drops_mailbox_and_continuations_then_runs_on_stop
         })
         .shutdown(Shutdown::discard_after_current(Duration::from_secs(5))),
     );
-    let handle = graph
-        .build()
-        .default_restart(Restart::never())
-        .spawn()
-        .unwrap();
+    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -541,8 +527,8 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let events = Arc::new(Mutex::new(Vec::new()));
-    let mut graph = TreeBuilder::new();
-    let actor = graph.actor(
+    let mut graph = OrderedTree::new();
+    let actor = graph.add_actor(
         ActorSpec::new("StopsOnStart", {
             let started = started.clone();
             let release = release.clone();
@@ -555,11 +541,7 @@ async fn on_start_context_stop_with_drain_handles_the_queued_mailbox_only() {
         })
         .shutdown(Shutdown::drain_for(Duration::from_secs(5))),
     );
-    let handle = graph
-        .build()
-        .default_restart(Restart::never())
-        .spawn()
-        .unwrap();
+    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
 
     started.notified().await;
     actor.send("mailbox").await.unwrap();
@@ -593,13 +575,9 @@ impl RawActor for PromptRaw {
 
 #[tokio::test]
 async fn prompt_raw_actor_delivers_readiness_before_completion() {
-    let mut graph = TreeBuilder::new();
-    graph.actor(ActorSpec::new("PromptRaw", || PromptRaw));
-    let handle = graph
-        .build()
-        .default_restart(Restart::never())
-        .spawn()
-        .unwrap();
+    let mut graph = OrderedTree::new();
+    graph.add_actor(ActorSpec::new("PromptRaw", || PromptRaw));
+    let handle = graph.default_restart(Restart::never()).spawn().unwrap();
     tokio::time::timeout(Duration::from_secs(1), handle.scope().wait_started())
         .await
         .unwrap()
@@ -654,16 +632,16 @@ async fn an_actor_that_sets_no_policy_drains_its_queued_mailbox() {
     let handled = Arc::new(Mutex::new(Vec::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let mut graph = TreeBuilder::new();
+    let mut graph = OrderedTree::new();
     let actor_handled = handled.clone();
     let actor_started = started.clone();
     let actor_release = release.clone();
-    let actor = graph.actor(ActorSpec::new("DefaultPolicy", move || DefaultPolicy {
+    let actor = graph.add_actor(ActorSpec::new("DefaultPolicy", move || DefaultPolicy {
         handled: actor_handled.clone(),
         started: actor_started.clone(),
         release: actor_release.clone(),
     }));
-    let handle = graph.build().spawn().unwrap();
+    let handle = graph.spawn().unwrap();
     handle.scope().wait_started().await.unwrap();
 
     // Park the handler so the next sends land in the mailbox rather than being

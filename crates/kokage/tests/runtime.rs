@@ -1341,10 +1341,10 @@ impl Actor for StuckDrainActor {
 async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
     let handling_gate = Arc::new(Notify::new());
     let release_gate = Arc::new(Notify::new());
-    let mut graph = TreeBuilder::new();
+    let mut graph = OrderedTree::new();
     let worker_slot = ActorSlot::new("worker");
     let worker = worker_slot.actor_ref();
-    graph.actor(
+    graph.add_actor(
         worker_slot
             .define({
                 let handling_gate = handling_gate.clone();
@@ -1356,7 +1356,7 @@ async fn shutdown_drain_for_bounds_the_whole_actor_drain() {
             })
             .shutdown(Shutdown::drain_for(Duration::from_millis(20))),
     );
-    let handle = graph.build().spawn().expect("runtime builds");
+    let handle = graph.spawn().expect("runtime builds");
 
     worker
         .send(StuckDrainMsg::Gate)
