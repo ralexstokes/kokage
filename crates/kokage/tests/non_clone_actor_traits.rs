@@ -1,7 +1,3 @@
-mod support;
-
-use support::TreeBuilder;
-
 use std::{
     cell::Cell,
     future::pending,
@@ -14,7 +10,8 @@ use std::{
 };
 
 use kokage::{
-    Actor, ActorFactory, ActorSpec, Context, ExitResult, Reply, Restart, ScopeRef, Shutdown,
+    Actor, ActorFactory, ActorSpec, Context, ExitResult, OrderedTree, Reply, Restart, ScopeRef,
+    Shutdown,
     observe::SupervisorSnapshotReceiver,
     raw::{DEFAULT_SHUTDOWN_BOUND, RawActor, RawContext},
 };
@@ -139,15 +136,14 @@ impl ActorFactory for NonCloneHandlerFactory {
 #[tokio::test]
 async fn non_clone_actor_factory_constructs_fresh_state_per_incarnation() {
     let constructions = Arc::new(AtomicUsize::new(0));
-    let mut builder = TreeBuilder::new();
-    let actor_ref = builder.actor(ActorSpec::new(
+    let mut builder = OrderedTree::new();
+    let actor_ref = builder.add_actor(ActorSpec::new(
         "handler",
         NonCloneHandlerFactory {
             constructions: constructions.clone(),
         },
     ));
     let handle = builder
-        .build()
         .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");
@@ -210,8 +206,8 @@ impl RawActor for NonCloneRaw {
 async fn non_clone_raw_actor_factory_is_reused_for_restart() {
     let constructions = Arc::new(AtomicUsize::new(0));
     let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
-    let mut builder = TreeBuilder::new();
-    let actor_ref = builder.actor(ActorSpec::new("raw", {
+    let mut builder = OrderedTree::new();
+    let actor_ref = builder.add_actor(ActorSpec::new("raw", {
         let constructions = constructions.clone();
         move || NonCloneRaw {
             _guard: Mutex::new(()),
@@ -220,7 +216,6 @@ async fn non_clone_raw_actor_factory_is_reused_for_restart() {
         }
     }));
     let handle = builder
-        .build()
         .default_restart(Restart::on_failure())
         .spawn()
         .expect("runtime builds");
@@ -285,9 +280,9 @@ impl Actor for DefaultActor {
 
 #[tokio::test]
 async fn default_constructor_path_is_an_actor_factory() {
-    let mut builder = TreeBuilder::new();
-    let actor_ref = builder.actor(ActorSpec::new("DefaultActor", DefaultActor::default));
-    let handle = builder.build().spawn().expect("runtime builds");
+    let mut builder = OrderedTree::new();
+    let actor_ref = builder.add_actor(ActorSpec::new("DefaultActor", DefaultActor::default));
+    let handle = builder.spawn().expect("runtime builds");
 
     handle.scope().wait_started().await.expect("actor starts");
     actor_ref.send(()).await.expect("default actor is running");

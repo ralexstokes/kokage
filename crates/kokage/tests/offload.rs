@@ -636,11 +636,10 @@ async fn shutdown_case(policy: Shutdown) -> Vec<&'static str> {
     let release = Arc::new(Notify::new());
     let entered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = TreeBuilder::new();
-    graph.mailbox_capacity(1);
+    let mut graph = OrderedTree::new().mailbox_capacity(1);
     let actor_slot = ActorSlot::new("ShutdownActor");
     let actor = actor_slot.actor_ref();
-    graph.actor(
+    graph.add_actor(
         actor_slot
             .define({
                 let release = release.clone();
@@ -653,7 +652,7 @@ async fn shutdown_case(policy: Shutdown) -> Vec<&'static str> {
             })
             .shutdown(policy),
     );
-    let runtime = graph.build().spawn().unwrap();
+    let runtime = graph.spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "draining-offload runtime startup").await;
     actor.send(DrainMsg::Start).await.unwrap();
     wait_notification(&entered, "draining actor handler entry").await;
@@ -754,7 +753,7 @@ async fn offload_completion_bypasses_mailbox_backpressure() {
             observed: observed.clone(),
         }
     });
-    let runtime = graph.build().spawn().unwrap();
+    let runtime = graph.spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "backpressure runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(&offload_registered, "backpressure offload registration").await;
@@ -783,10 +782,10 @@ async fn offload_completion_does_not_participate_in_conflation() {
     let offload_release = Arc::new(Notify::new());
     let offload_registered = Arc::new(Notify::new());
     let (observed, mut receiver) = mpsc::unbounded_channel();
-    let mut graph = TreeBuilder::new();
+    let mut graph = OrderedTree::new();
     let actor_slot = ActorSlot::new("conflating-offload");
     let actor = actor_slot.actor_ref();
-    graph.actor(
+    graph.add_actor(
         actor_slot
             .define({
                 let handler_release = handler_release.clone();
@@ -801,7 +800,7 @@ async fn offload_completion_does_not_participate_in_conflation() {
             })
             .mailbox(MailboxMode::conflate()),
     );
-    let runtime = graph.build().spawn().unwrap();
+    let runtime = graph.spawn().unwrap();
     wait_runtime_started(&runtime.scope(), "conflating completion runtime startup").await;
     actor.send(BackpressureMsg::Start).await.unwrap();
     wait_notification(
